@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 import numpy as np
 import scipy as sc
 from typing import List, Tuple, Callable
@@ -113,7 +116,9 @@ def solver(
                     break
 
                 # precondition residual
-                residual = np.divide(residual, hdiag - mu)
+                precond = hdiag - mu
+                precond[abs(precond) < 1e-10] = 1e-10
+                residual = np.divide(residual, precond)
 
                 # orthogonalize to previous trial vectors
                 red_space_basis.append(gram_schmidt(residual, red_space_basis))
@@ -157,6 +162,9 @@ def solver(
         u @= sc.linalg.expm(unpack(n_kappa * kappa, norb))
 
     print("-------------------------------------------")
+
+    if np.min(hdiag) < -CONV_TOL:
+        raise RuntimeError("Orbital optimization has converged to saddle point!")
 
     return u
 
@@ -291,7 +299,7 @@ if __name__ == "__main__":
     # mo_coeff = mo_coeff @ u
 
     # initialize pyscf localization object
-    fb = lo.PM(mol, mo_coeff)
+    fb = lo.Boys(mol, mo_coeff)
 
     # cost function
     func = fb.cost_function
