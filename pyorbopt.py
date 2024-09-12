@@ -83,7 +83,9 @@ def solver(
             # loop over micro iterations
             for imicro in range(N_MICRO):
                 # perform bisection
-                mu, solution, red_solution = bisection(aug_hess, g, trust_radius, basis_arr)
+                solution, red_solution, mu = bisection(
+                    aug_hess, g, trust_radius, basis_arr
+                )
 
                 # calculate residual
                 residual = g + red_solution.T @ np.vstack(h_basis) - mu * solution
@@ -96,7 +98,7 @@ def solver(
                     initial_residual_norm = residual_norm
                     initial_residual = False
 
-                # determine reduction factor depending on whether local region is 
+                # determine reduction factor depending on whether local region is
                 # reached
                 red_factor = GLOBAL_RED_FACTOR if mu != 0.0 else LOCAL_RED_FACTOR
 
@@ -123,7 +125,9 @@ def solver(
                 basis_arr = np.vstack(red_space_basis)
 
                 # construct new augmented Hessian
-                new_aug_hess = np.zeros(2 * (len(red_space_basis) + 1,), dtype=np.float64)
+                new_aug_hess = np.zeros(
+                    2 * (len(red_space_basis) + 1,), dtype=np.float64
+                )
                 new_aug_hess[:-1, :-1] = aug_hess
                 new_aug_hess[1:, -1] = new_aug_hess[-1, 1:] = basis_arr @ h_basis[-1]
                 aug_hess = new_aug_hess
@@ -136,8 +140,18 @@ def solver(
         # get new orbital transformation
         kappa = solution
 
+        # prepare functions for line search
+        if direction == "min":
+            func_eval = lambda n_kappa: func(
+                u @ sc.linalg.expm(unpack(n_kappa * kappa, norb))
+            )
+        elif direction == "max":
+            func_eval = lambda n_kappa: -func(
+                u @ sc.linalg.expm(unpack(n_kappa * kappa, norb))
+            )
+
         # conduct a line search along the direction given by kappa
-        n_kappa = line_search(func, u, kappa, norb, direction, f)
+        n_kappa = sc.optimize.golden(func_eval, brack=(0.0, 1.0), tol=1e-3)
 
         # get orbital rotation matrix
         u @= sc.linalg.expm(unpack(n_kappa * kappa, norb))
@@ -165,7 +179,7 @@ def bisection(
     grad: np.ndarray,
     trust_radius: float,
     red_space_basis: List[np.ndarray],
-) -> Tuple[float, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     this function performs bisection to find the parameter alpha that matches the
     desired trust radius
@@ -176,7 +190,7 @@ def bisection(
         grad: np.ndarray,
         alpha: float,
         red_space_basis: np.ndarray,
-    ):
+    ) -> Tuple[np.ndarray, np.ndarray, float]:
         """
         this function returns the lowest eigenvector for an augmented Hessian
         """
@@ -198,137 +212,39 @@ def bisection(
 
         return solution, lowest_eigenvec[1:] / alpha, lowest_eigenvalue
 
-    def get_ah_lowest_eigenvec_norm(
+    def get_ah_lowest_eigenvec_norm_trust_radius_diff(
+        alpha: float,
         aug_hess: np.ndarray,
         grad: np.ndarray,
-        alpha: float,
         red_space_basis: np.ndarray,
-    ):
+    ) -> float:
         """
         this function returns the norm of the lowest eigenvector for an augmented
         Hessian
         """
         solution, _, _ = get_ah_lowest_eigenvec(aug_hess, grad, alpha, red_space_basis)
 
-        return np.linalg.norm(solution)
+        return np.linalg.norm(solution) - trust_radius
 
-    # define lower and upper values for parameter alpha that ensures step size
-    lower_alpha = 1e-4
-    upper_alpha = 1e6
-
-    # get trust radius for lower and upper alpha values
-    lower_alpha_eigenvec_norm = get_ah_lowest_eigenvec_norm(
-        aug_hess, grad, lower_alpha, red_space_basis
-    )
-    upper_alpha_eigenvec_norm = get_ah_lowest_eigenvec_norm(
-        aug_hess, grad, upper_alpha, red_space_basis
-    )
-
-    # check if targeted trust radius is outside the bracketing range
-    if np.sign(lower_alpha_eigenvec_norm - trust_radius) == np.sign(
-        upper_alpha_eigenvec_norm - trust_radius
-    ):
+    # find root through bisection
+    try:
+        alpha = sc.optimize.bisect(
+            get_ah_lowest_eigenvec_norm_trust_radius_diff,
+            1e-4,
+            1e6,
+            args=(aug_hess, grad, red_space_basis),
+        )
+    # targeted trust radius is likely outside the bracketing range
+    except ValueError:
         # solve Newton equations in reduced space without level shift
         red_grad = np.zeros(len(red_space_basis))
         red_grad[0] = np.linalg.norm(grad)
         red_solution = np.linalg.solve(aug_hess[1:, 1:], -red_grad)
         solution = red_solution.T @ red_space_basis
-        return 0.0, solution, red_solution
+        return solution, red_solution, 0.0
 
-    # get middle alpha
-    middle_alpha = np.sqrt(upper_alpha * lower_alpha)
-    middle_solution, red_solution, mu = get_ah_lowest_eigenvec(
-        aug_hess, grad, middle_alpha, red_space_basis
-    )
-    middle_alpha_eigenvec_norm = np.linalg.norm(middle_solution)
-
-    # perform bisection
-    while np.abs(middle_alpha_eigenvec_norm - trust_radius) > 1e-3:
-        # targeted trust radius is in upper bracket
-        if np.sign(lower_alpha_eigenvec_norm - trust_radius) == np.sign(
-            middle_alpha_eigenvec_norm - trust_radius
-        ):
-            lower_alpha = middle_alpha
-            lower_alpha_eigenvec_norm = middle_alpha_eigenvec_norm
-        # targeted trust radius is in upper bracket
-        else:
-            upper_alpha = middle_alpha
-            upper_alpha_eigenvec_norm = middle_alpha_eigenvec_norm
-
-        # get new middle alpha
-        middle_alpha = np.sqrt(upper_alpha * lower_alpha)
-        middle_solution, red_solution, mu = get_ah_lowest_eigenvec(
-            aug_hess, grad, middle_alpha, red_space_basis
-        )
-        middle_alpha_eigenvec_norm = np.linalg.norm(middle_solution)
-
-    return mu, middle_solution, red_solution
-
-
-def line_search(
-    func: Callable[[np.ndarray], float],
-    u: np.ndarray,
-    kappa: np.ndarray,
-    norb: int,
-    direction: str,
-    f: float,
-) -> float:
-    """
-    this function conducts a line search along the direction given by kappa
-    """
-    # evaluate function
-    prev_f = f
-    f = func(u @ sc.linalg.expm(unpack(kappa, norb)))
-
-    # initialize n_kappa
-    n_kappa = 1.0
-
-    # find multiple of kappa where cost function starts to increase
-    while (direction == "min" and f < prev_f) or (direction == "max" and f > prev_f):
-        # increment kappa
-        n_kappa += 1.0
-
-        # evaluate function again
-        prev_f = f
-        f = func(u @ sc.linalg.expm(unpack(n_kappa * kappa, norb)))
-
-    # initialize upper and lower bound and distance between them
-    upper = n_kappa
-    lower = max(0, n_kappa - 2)
-    dist = upper - lower
-
-    # generate potential lower and upper bounds
-    pot_lower_bound = upper - dist * INV_GOLDEN_RATIO
-    pot_upper_bound = lower + dist * INV_GOLDEN_RATIO
-
-    # evaluate function at potential lower and upper bounds
-    lower_func = func(u @ sc.linalg.expm(unpack(pot_lower_bound * kappa, norb)))
-    upper_func = func(u @ sc.linalg.expm(unpack(pot_upper_bound * kappa, norb)))
-
-    # loop until optimum is found
-    for _ in range(MAX_LINE_SEARCH_DEPTH):
-        if (direction == "min" and lower_func < upper_func) or (
-            direction == "max" and lower_func > upper_func
-        ):
-            upper = pot_upper_bound
-            dist = upper - lower
-            if dist < 1e-3:
-                break
-            pot_upper_bound = pot_lower_bound
-            upper_func = lower_func
-            pot_lower_bound = upper - dist * INV_GOLDEN_RATIO
-            lower_func = func(u @ sc.linalg.expm(unpack(pot_lower_bound * kappa, norb)))
-        else:
-            lower = pot_lower_bound
-            dist = upper - lower
-            if dist < 1e-3:
-                break
-            pot_lower_bound = pot_upper_bound
-            lower_func = upper_func
-            pot_upper_bound = lower + dist * INV_GOLDEN_RATIO
-            upper_func = func(u @ sc.linalg.expm(unpack(pot_upper_bound * kappa, norb)))
-
-    return (upper + lower) / 2
+    # return level-shifted solution
+    return get_ah_lowest_eigenvec(aug_hess, grad, alpha, red_space_basis)
 
 
 def unpack(vector: np.ndarray, norb: int):
@@ -360,12 +276,12 @@ if __name__ == "__main__":
     mf = mol.RHF().run()
 
     # canonical initial guess
-    mo_coeff = mf.mo_coeff[:, :min(mol.nelec)]
+    mo_coeff = mf.mo_coeff[:, : min(mol.nelec)]
 
     # atomic initial guess
     # u = lo.boys.atomic_init_guess(mol, mo_coeff)
     # mo_coeff = mo_coeff @ u
-    
+
     # generate random shift
     # dr = np.cos(np.arange((norb-1)*norb//2)) * 1e-3
     # idx = np.tril_indices(norb, -1)
