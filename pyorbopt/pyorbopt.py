@@ -3,19 +3,15 @@ from __future__ import annotations
 
 import numpy as np
 import scipy as sc
-from typing import List, Tuple, Callable
-from pyscf import gto, lo
+from typing import List, Tuple, Callable, Optional, Union
 
 
 CONS_TRUST_RADIUS = 0.4
 CONV_TOL = 1e-5
-N_MACRO = 100
-N_MICRO = 50
+N_MACRO = 150
+N_MICRO = 100
 GLOBAL_RED_FACTOR = 0.05
 LOCAL_RED_FACTOR = 0.005
-
-INV_GOLDEN_RATIO = (np.sqrt(5) - 1) / 2
-MAX_LINE_SEARCH_DEPTH = 25
 
 
 def solver(
@@ -25,43 +21,106 @@ def solver(
     hess_x: Callable[[np.ndarray, np.ndarray], np.ndarray],
     norb: int,
     direction: str,
+    line_search: str = "brent",
+    line_search_orb_order: int = 4,
 ) -> np.ndarray:
     # initialize orbital rotation matrices
     u = np.eye(norb, dtype=np.float64)
 
-    print("-------------------------------------------")
-    print(" Iteration | Cost function | Gradient norm ")
-    print("-------------------------------------------")
+    # initialize total number of Hessian linear transformations
+    tot_hx = 0
+
+    # initialize list for function evaluations per macro iteration
+    func_its = []
+
+    # starting trust radius
+    trust_radius = CONS_TRUST_RADIUS
+
+    # inititalize boolean for convergence of macro iterations
+    macro_converged = False
+
+    # calculate initial cost function
+    f = func(u)
+
+    # calculate initial gradient
+    g = grad(u)
+
+    # print header
+    print(97 * "-")
+    print(
+        " Iteration | Cost function | Gradient norm | Level shift "
+        "|   Micro    | Trust radius | Step size "
+    )
+    print(
+        "           |               |               |             "
+        "| iterations |              |           "
+    )
+    print(97 * "-")
+    mu: float
+    imicro: int
+    n_kappa: float
 
     for imacro in range(N_MACRO):
-        # calculate cost function
-        f = func(u)
-
-        # calculate gradient
-        g = grad(u)
+        # add cost function
+        func_its.append(f)
 
         # calculate gradient norm
         g_norm = np.linalg.norm(g)
 
-        # log results
-        print(f"     {imacro:>3d}   |   {f:>1.2e}    |    {g_norm:>1.2e}   ")
-
-        # check for convergence
-        if g_norm < CONV_TOL:
-            break
-
         # calculate Hessian diagonal
         hdiag = hess_diag(u)
+
+        # check for saddle point
+        if g_norm / norb < CONV_TOL and min(hess_diag(u)) < -CONV_TOL:
+            print("Reached saddle point. Applying small random perturbation.")
+
+            # generate small, random rotation
+            kappa = np.random.random((norb - 1) * norb // 2) * 1e-3
+            u = sc.linalg.expm(unpack(kappa, norb))
+
+            # recalculate gradient
+            g = grad(u)
+
+            # recalculate gradient norm
+            g_norm = np.linalg.norm(g)
+
+            # recalculate Hessian diagonal
+            hdiag = hess_diag(u)
+
+        # log results
+        if imacro == 0:
+            mu_str = f"{'-':^9}"
+            imicro_str = f"{'-':>3}"
+            trust_radius_str = f"{'-':^8}"
+            stepsize_str = f"{'-':^8}"
+
+        else:
+            mu_str = f"{mu:>9.2e}"
+            imicro_str = f"{imicro:>3d}"
+            trust_radius_str = f"{trust_radius:>8.2e}"
+            stepsize_str = f"{n_kappa * np.linalg.norm(kappa):>8.2e}"
+        print(
+            f"     {imacro:>3d}   |    {f:>8.2e}   |    {g_norm  / norb:>8.2e}   "
+            f"|  {mu_str}  |      {imicro_str}   |    {trust_radius_str}  "
+            f"|  {stepsize_str} "
+        )
+
+        # check for convergence
+        if g_norm / norb < CONV_TOL:
+            macro_converged = True
+            break
 
         # generate trial vectors
         red_space_basis = [g / g_norm]
         trial = -g - hess_x(u, g) / g_norm
         red_space_basis.append(gram_schmidt(trial, red_space_basis))
+        ntrial_start = 2
         trial = np.zeros_like(g, dtype=np.float64)
         min_idx = np.argmin(hdiag)
         if hdiag[min_idx] < 0.0:
             trial[min_idx] = 1.0
             red_space_basis.append(gram_schmidt(trial, red_space_basis))
+            ntrial_start += 1
 
         # initialize boolean for the calculation of the initial residual
         initial_residual = True
@@ -76,9 +135,6 @@ def solver(
         aug_hess = np.zeros(2 * (len(red_space_basis) + 1,), dtype=np.float64)
         for j, vec in enumerate(h_basis, start=1):
             aug_hess[1:, j] = basis_arr @ vec
-
-        # starting trust radius
-        trust_radius = CONS_TRUST_RADIUS
 
         # decrease trust radius until micro iterations converge
         micro_converged = False
@@ -112,7 +168,7 @@ def solver(
                 ):
                     micro_converged = True
                     break
-                elif imicro >= 5 and residual_norm > 0.1 * initial_residual_norm:
+                elif imicro >= 5 and residual_norm > 0.9 * initial_residual_norm:
                     break
 
                 # precondition residual
@@ -137,10 +193,33 @@ def solver(
                 new_aug_hess[1:, -1] = new_aug_hess[-1, 1:] = basis_arr @ h_basis[-1]
                 aug_hess = new_aug_hess
 
-            # decreast trust radius if micro iterations are unable to converge
+            # decrease trust radius if micro iterations are unable to converge
             if not micro_converged:
-                print("Micro iterations are unable to converge. Halving trust radius.")
+                aug_hess = aug_hess[: ntrial_start + 1, : ntrial_start + 1]
+                red_space_basis = red_space_basis[:ntrial_start]
+                h_basis = h_basis[:ntrial_start]
+                basis_arr = basis_arr[:ntrial_start]
+                initial_residual = True
                 trust_radius /= 2
+                tot_hx += len(red_space_basis)
+                if trust_radius < 0.001:
+                    print("Trust radius too small.")
+                    if (
+                        imacro > 4
+                        and abs(func_its[-1] - func_its[-5]) < 1e-4 * func_its[-1]
+                    ):
+                        print("Cost function has converged.")
+                        macro_converged = True
+                    break
+            else:
+                trust_radius = min(2 * trust_radius, CONS_TRUST_RADIUS)
+
+        # check if macroiterations have converged
+        if macro_converged or not micro_converged:
+            break
+
+        # increment total number of Hessian linear transformations
+        tot_hx += len(red_space_basis)
 
         # get new orbital transformation
         kappa = solution
@@ -154,17 +233,50 @@ def solver(
             func_eval = lambda n_kappa: -func(
                 u @ sc.linalg.expm(unpack(n_kappa * kappa, norb))
             )
+        grad_eval = lambda n_kappa: grad(
+            u @ sc.linalg.expm(unpack(n_kappa * kappa, norb))
+        )
+
+        # get maximum frequency, period and upper bound for minimum
+        omega_max = max(abs(np.linalg.eig(unpack(kappa, norb))[0]))
+        period = 2 * np.pi / (line_search_orb_order * omega_max)
+        upper_bound = period / 2
 
         # conduct a line search along the direction given by kappa
-        n_kappa = sc.optimize.golden(func_eval, brack=(0.0, 1.0), tol=1e-3)
+        if line_search == "golden":
+            # perform golden section line search
+            n_kappa, f, g = golden_search((0, upper_bound), func_eval, grad_eval)
+        elif line_search == "brent":
+            # perform Brent's line search
+            n_kappa, f, g = brent_search((0, upper_bound), func_eval, grad_eval)
+        elif line_search == "cubic":
+            # perform cubic interpolation line search
+            n_kappa, f, g = cubic_search(
+                (0, upper_bound),
+                func_eval,
+                grad_eval,
+                kappa,
+                initial_f=f if direction == "min" else -f,
+                initial_g=g,
+            )
+        else:
+            raise ValueError("Unknown line search method.")
+
+        # get correct function value
+        if direction == "max":
+            f = -f
 
         # get orbital rotation matrix
         u @= sc.linalg.expm(unpack(n_kappa * kappa, norb))
 
-    print("-------------------------------------------")
+    if not macro_converged:
+        raise RuntimeError("Orbital optimization has not converged!")
 
     if np.min(hdiag) < -CONV_TOL:
         raise RuntimeError("Orbital optimization has converged to saddle point!")
+
+    print(97 * "-")
+    print(f"Total number of Hessian linear transformations: {tot_hx}")
 
     return u
 
@@ -186,7 +298,7 @@ def bisection(
     aug_hess: np.ndarray,
     grad: np.ndarray,
     trust_radius: float,
-    red_space_basis: List[np.ndarray],
+    red_space_basis: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     this function performs bisection to find the parameter alpha that matches the
@@ -225,7 +337,7 @@ def bisection(
         aug_hess: np.ndarray,
         grad: np.ndarray,
         red_space_basis: np.ndarray,
-    ) -> float:
+    ) -> Union[float, np.floating]:
         """
         this function returns the norm of the lowest eigenvector for an augmented
         Hessian
@@ -267,61 +379,114 @@ def unpack(vector: np.ndarray, norb: int):
     return matrix - matrix.conj().T
 
 
-if __name__ == "__main__":
-    # prepare molecule
-    mol = gto.M(
-        verbose=1,
-        atom="""
-        O	 0.0000000	 0.0000000	 0.0000000
-        H	 0.7569685	 0.0000000	-0.5858752
-        H	-0.7569685	 0.0000000	-0.5858752
-        """,
-        unit="Angstrom",
-        basis="cc-pvdz",
+def golden_search(
+    brack: Tuple[float, float],
+    func_eval: Callable[[float], float],
+    grad_eval: Callable[[float], np.ndarray],
+) -> Tuple[float, float, np.ndarray]:
+    """
+    this function performs a golden-section line search
+    """
+    # perform golden-section line search
+    n_kappa, f, _ = sc.optimize.golden(
+        func_eval, brack=brack, tol=1e-2, full_output=True
     )
 
-    # run HF calculation
-    mf = mol.RHF().run()
+    # calculate gradient
+    g = grad_eval(n_kappa)
 
-    # canonical initial guess
-    mo_coeff = mf.mo_coeff[:, : min(mol.nelec)]
+    return n_kappa, f, g
 
-    # atomic initial guess
-    # u = lo.boys.atomic_init_guess(mol, mo_coeff)
-    # mo_coeff = mo_coeff @ u
 
-    # generate random shift
-    # dr = np.cos(np.arange((norb-1)*norb//2)) * 1e-3
-    # idx = np.tril_indices(norb, -1)
-    # mat = np.zeros((norb,norb))
-    # mat[idx] = dr
-    # u = sc.linalg.expm(mat - mat.conj().T)
-    # mo_coeff = mo_coeff @ u
+def brent_search(
+    brack: Tuple[float, float],
+    func_eval: Callable[[float], float],
+    grad_eval: Callable[[float], np.ndarray],
+) -> Tuple[float, float, np.ndarray]:
+    """
+    this function performs a Brent's line search
+    """
+    # perform golden-section line search
+    n_kappa, f, _, _ = sc.optimize.brent(
+        func_eval, brack=brack, tol=1e-2, full_output=True
+    )
 
-    # initialize pyscf localization object
-    fb = lo.Boys(mol, mo_coeff)
+    # calculate gradient
+    g = grad_eval(n_kappa)
 
-    # cost function
-    func = fb.cost_function
+    return n_kappa, f, g
 
-    # gradient function
-    def grad(u):
-        return fb.get_grad(u)
 
-    # hessian diagonal function
-    def hess_diag(u):
-        return fb.gen_g_hop(u)[2]
+def cubic_search(
+    brack: Tuple[float, float],
+    func_eval: Callable[[float], float],
+    grad_eval: Callable[[float], np.ndarray],
+    kappa: np.ndarray,
+    initial_f: Optional[float] = None,
+    initial_g: Optional[np.ndarray] = None,
+) -> Tuple[float, float, np.ndarray]:
+    """
+    this function performs a cubic interpolation line search
+    """
+    # get function value at current point
+    f1 = func_eval(brack[0]) if initial_f is None else initial_f
 
-    # hessian linear transformation function
-    def hess_x(u, x):
-        return fb.gen_g_hop(u)[1](x)
+    # get gradient at current point
+    g1 = grad_eval(brack[0]) if initial_g is None else initial_g
 
-    # decide whether to maximize or minimize
-    direction = "max" if isinstance(fb, lo.PM) else "min"
+    # get directional derivative in search direction, factor 2 comes from multiplying
+    # the unpacked matrices
+    g1 = 2 * g1.T @ kappa
 
-    # call solver
-    u = solver(func, grad, hess_diag, hess_x, min(mol.nelec), direction)
+    # calculate cost function at upper bound
+    f2 = func_eval(brack[1])
 
-    # call pyscf solver
-    fb.verbose = 4
-    loc_orb = fb.kernel(mo_coeff)
+    # calculate gradient in search direction at upper bound
+    g2 = 2 * grad_eval(brack[1]).T @ kappa
+
+    # ensure lower and higher function values are assigned correctly
+    if f1 < f2:
+        n_kappa_low, f_low, g_low = brack[0], f1, g1
+        n_kappa_high, f_high, g_high = brack[1], f2, g2
+    else:
+        n_kappa_low, f_low, g_low = brack[1], f2, g2
+        n_kappa_high, f_high, g_high = brack[0], f1, g1
+
+    while True:
+        # perform cubic extrapolation
+        d1 = g_low + g_high + 3 * (f_low - f_high) / (n_kappa_high - n_kappa_low)
+        d2 = np.sign(n_kappa_high - n_kappa_low) * np.sqrt(d1**2 - g_low * g_high)
+        n_kappa = n_kappa_high - (n_kappa_high - n_kappa_low) * (g_high + d2 - d1) / (
+            g_high - g_low + 2 * d2
+        )
+
+        # calculate cost function at new point
+        f = func_eval(n_kappa)
+
+        # calculate gradient at new point
+        g = grad_eval(n_kappa)
+
+        # get directional derivative in search direction
+        g_kappa = 2 * g.T @ kappa
+
+        # new point is higher than lowest function evaluation,
+        if f >= f_low:
+            # set new point to higher function evaluation
+            n_kappa_high, f_high, g_high = n_kappa, f, g_kappa
+        # new point is lowest function evaluation
+        else:
+            # check convergence
+            if abs(g_kappa) <= 1e-2 * -g1:
+                break
+            # set higher function evaluation to previous lowest function evaluation if
+            # minimum is still bracketed
+            if g_kappa * (n_kappa_high - n_kappa_low) >= 0:
+                n_kappa_high, f_high, g_high = n_kappa_low, f_low, g_low
+            # set new point to lowest function evaluation
+            n_kappa_low, f_low, g_low = n_kappa, f, g_kappa
+
+        # check if last step is valid
+        if n_kappa_low == n_kappa_high:
+            break
+
+    return n_kappa, f, g
