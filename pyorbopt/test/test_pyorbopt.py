@@ -10,7 +10,6 @@ from pyorbopt.pyorbopt import solver
 
 if TYPE_CHECKING:
     from pyscf import gto, scf
-    from typing import Callable
 
 
 test_cases_solver_loc = [
@@ -110,7 +109,7 @@ def test_solver_loc(
         return loc.gen_g_hop(u)[2]
 
     # hessian linear transformation function
-    def hess_x(u: np.ndarray, x: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
+    def hess_x(u: np.ndarray, x: np.ndarray) -> np.ndarray:
         return loc.gen_g_hop(u)[1](x)
 
     # number of parameters
@@ -196,19 +195,25 @@ def test_solver_hf(
         return matrix - matrix.T
 
     # energy function
-    def func(u: np.ndarray) -> np.ndarray:
-        if mo_occ.ndim == 2:
-            u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-        rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+    def func(u: np.ndarray) -> float:
+        if mo_occ.ndim == 1:
+            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+        else:
+            rot_mo_coeff = hf.rotate_mo(
+                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+            )
         dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
         vhf = hf._scf.get_veff(mol, dm)
         return hf._scf.energy_tot(dm, h1e, vhf)
 
     # gradient function
     def grad(u: np.ndarray) -> np.ndarray:
-        if mo_occ.ndim == 2:
-            u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-        rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+        if mo_occ.ndim == 1:
+            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+        else:
+            rot_mo_coeff = hf.rotate_mo(
+                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+            )
         dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
         vhf = hf._scf.get_veff(mol, dm)
         fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
@@ -216,19 +221,25 @@ def test_solver_hf(
 
     # hessian diagonal function
     def hess_diag(u: np.ndarray) -> np.ndarray:
-        if mo_occ.ndim == 2:
-            u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-        rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+        if mo_occ.ndim == 1:
+            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+        else:
+            rot_mo_coeff = hf.rotate_mo(
+                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+            )
         dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
         vhf = hf._scf.get_veff(mol, dm)
         fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
         return hf.gen_g_hop(rot_mo_coeff, mo_occ, fock_ao)[2]
 
     # hessian linear transformation function
-    def hess_x(u: np.ndarray, x: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
-        if mo_occ.ndim == 2:
-            u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-        rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+    def hess_x(u: np.ndarray, x: np.ndarray) -> np.ndarray:
+        if mo_occ.ndim == 1:
+            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+        else:
+            rot_mo_coeff = hf.rotate_mo(
+                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+            )
         dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
         vhf = hf._scf.get_veff(mol, dm)
         fock_ao = hf.get_fock(h1e, s1e, vhf, dm)

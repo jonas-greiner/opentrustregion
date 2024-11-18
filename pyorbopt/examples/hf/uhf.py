@@ -66,9 +66,9 @@ def unpack(kappa):
 
 # energy function
 def func(u):
-    if mo_occ.ndim == 2:
-        u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-    rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+    rot_mo_coeff = hf.rotate_mo(
+        mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+    )
     dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
     vhf = hf._scf.get_veff(mol, dm)
     return hf._scf.energy_tot(dm, h1e, vhf)
@@ -76,9 +76,9 @@ def func(u):
 
 # gradient function
 def grad(u):
-    if mo_occ.ndim == 2:
-        u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-    rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+    rot_mo_coeff = hf.rotate_mo(
+        mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+    )
     dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
     vhf = hf._scf.get_veff(mol, dm)
     fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
@@ -89,7 +89,9 @@ def grad(u):
 def hess_diag(u):
     if mo_occ.ndim == 2:
         u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-    rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+    rot_mo_coeff = hf.rotate_mo(
+        mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+    )
     dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
     vhf = hf._scf.get_veff(mol, dm)
     fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
@@ -98,9 +100,9 @@ def hess_diag(u):
 
 # hessian linear transformation function
 def hess_x(u, x):
-    if mo_occ.ndim == 2:
-        u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-    rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
+    rot_mo_coeff = hf.rotate_mo(
+        mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+    )
     dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
     vhf = hf._scf.get_veff(mol, dm)
     fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
