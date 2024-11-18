@@ -15,17 +15,18 @@ LOCAL_RED_FACTOR = 0.005
 
 
 def solver(
+    unpack: Callable[[np.ndarray], np.ndarray],
     func: Callable[[np.ndarray], float],
     grad: Callable[[np.ndarray], np.ndarray],
     hess_diag: Callable[[np.ndarray], np.ndarray],
     hess_x: Callable[[np.ndarray, np.ndarray], np.ndarray],
-    norb: int,
+    n_param: int,
     direction: str,
     line_search: str = "brent",
     line_search_orb_order: int = 4,
 ) -> np.ndarray:
     # initialize orbital rotation matrices
-    u = np.eye(norb, dtype=np.float64)
+    kappa = np.zeros(n_param, dtype=np.float64)
 
     # initialize total number of Hessian linear transformations
     tot_hx = 0
@@ -39,6 +40,9 @@ def solver(
     # inititalize boolean for convergence of macro iterations
     macro_converged = False
 
+    # construct orbital rotation
+    u = sc.linalg.expm(unpack(kappa))
+
     # calculate initial cost function
     f = func(u)
 
@@ -46,16 +50,16 @@ def solver(
     g = grad(u)
 
     # print header
-    print(97 * "-")
+    print(102 * "-")
     print(
-        " Iteration | Cost function | Gradient norm | Level shift "
+        " Iteration | Objective function | Gradient norm | Level shift "
         "|   Micro    | Trust radius | Step size "
     )
     print(
-        "           |               |               |             "
+        "           |                    |               |             "
         "| iterations |              |           "
     )
-    print(97 * "-")
+    print(102 * "-")
     mu: float
     imicro: int
     n_kappa: float
@@ -71,12 +75,12 @@ def solver(
         hdiag = hess_diag(u)
 
         # check for saddle point
-        if g_norm / norb < CONV_TOL and min(hess_diag(u)) < -CONV_TOL:
+        if g_norm < CONV_TOL and min(hess_diag(u)) < -CONV_TOL:
             print("Reached saddle point. Applying small random perturbation.")
 
             # generate small, random rotation
-            kappa = np.random.random((norb - 1) * norb // 2) * 1e-3
-            u = sc.linalg.expm(unpack(kappa, norb))
+            kappa = np.random.random(n_param) * 1e-3
+            u = sc.linalg.expm(unpack(kappa))
 
             # recalculate gradient
             g = grad(u)
@@ -93,20 +97,19 @@ def solver(
             imicro_str = f"{'-':>3}"
             trust_radius_str = f"{'-':^8}"
             stepsize_str = f"{'-':^8}"
-
         else:
             mu_str = f"{mu:>9.2e}"
             imicro_str = f"{imicro:>3d}"
             trust_radius_str = f"{trust_radius:>8.2e}"
             stepsize_str = f"{n_kappa * np.linalg.norm(kappa):>8.2e}"
         print(
-            f"     {imacro:>3d}   |    {f:>8.2e}   |    {g_norm  / norb:>8.2e}   "
+            f"     {imacro:>3d}   |    {f:> 8.6e}   |    {g_norm:>8.2e}   "
             f"|  {mu_str}  |      {imicro_str}   |    {trust_radius_str}  "
             f"|  {stepsize_str} "
         )
 
         # check for convergence
-        if g_norm / norb < CONV_TOL:
+        if g_norm < CONV_TOL:
             macro_converged = True
             break
 
@@ -227,18 +230,16 @@ def solver(
         # prepare functions for line search
         if direction == "min":
             func_eval = lambda n_kappa: func(
-                u @ sc.linalg.expm(unpack(n_kappa * kappa, norb))
+                u @ sc.linalg.expm(unpack(n_kappa * kappa))
             )
         elif direction == "max":
             func_eval = lambda n_kappa: -func(
-                u @ sc.linalg.expm(unpack(n_kappa * kappa, norb))
+                u @ sc.linalg.expm(unpack(n_kappa * kappa))
             )
-        grad_eval = lambda n_kappa: grad(
-            u @ sc.linalg.expm(unpack(n_kappa * kappa, norb))
-        )
+        grad_eval = lambda n_kappa: grad(u @ sc.linalg.expm(unpack(n_kappa * kappa)))
 
         # get maximum frequency, period and upper bound for minimum
-        omega_max = max(abs(np.linalg.eig(unpack(kappa, norb))[0]))
+        omega_max = max(abs(np.linalg.eig(unpack(kappa))[0]))
         period = 2 * np.pi / (line_search_orb_order * omega_max)
         upper_bound = period / 2
 
@@ -267,7 +268,7 @@ def solver(
             f = -f
 
         # get orbital rotation matrix
-        u @= sc.linalg.expm(unpack(n_kappa * kappa, norb))
+        u @= sc.linalg.expm(unpack(n_kappa * kappa))
 
     if not macro_converged:
         raise RuntimeError("Orbital optimization has not converged!")
@@ -275,7 +276,7 @@ def solver(
     if np.min(hdiag) < -CONV_TOL:
         raise RuntimeError("Orbital optimization has converged to saddle point!")
 
-    print(97 * "-")
+    print(102 * "-")
     print(f"Total number of Hessian linear transformations: {tot_hx}")
 
     return u
@@ -367,18 +368,6 @@ def bisection(
     return get_ah_lowest_eigenvec(aug_hess, grad, alpha, red_space_basis)
 
 
-def unpack(vector: np.ndarray, norb: int):
-    """
-    this function unpacks a vector describing the unique parameters of an antihermitian
-    matrix
-    """
-    matrix = np.zeros(2 * (norb,))
-    idx = np.tril_indices(norb, -1)
-    matrix[idx] = vector
-
-    return matrix - matrix.conj().T
-
-
 def golden_search(
     brack: Tuple[float, float],
     func_eval: Callable[[float], float],
@@ -455,7 +444,13 @@ def cubic_search(
     while True:
         # perform cubic extrapolation
         d1 = g_low + g_high + 3 * (f_low - f_high) / (n_kappa_high - n_kappa_low)
-        d2 = np.sign(n_kappa_high - n_kappa_low) * np.sqrt(d1**2 - g_low * g_high)
+        radicand = d1**2 - g_low * g_high
+        if radicand < 0.0:
+            if radicand > -1e-16:
+                radicand = np.abs(radicand)
+            else:
+                raise RuntimeError("Error in cubic extrapolation!")
+        d2 = np.sign(n_kappa_high - n_kappa_low) * np.sqrt(radicand)
         n_kappa = n_kappa_high - (n_kappa_high - n_kappa_low) * (g_high + d2 - d1) / (
             g_high - g_low + 2 * d2
         )

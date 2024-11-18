@@ -24,7 +24,7 @@ def mol(system: str) -> gto.Mole:
     """
     this fixture constructs the mol object
     """
-    if system == "h2o":
+    if "h2o" in system:
         mol = gto.Mole()
         mol.build(
             atom="""
@@ -36,6 +36,9 @@ def mol(system: str) -> gto.Mole:
             symmetry="C2v",
             verbose=0,
         )
+        if "+" in system:
+            mol.charge = 1
+            mol.spin = 1
 
     return mol
 
