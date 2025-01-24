@@ -1,7 +1,7 @@
 import numpy as np
 from pyscf import gto, scf
 
-from pyorbopt.pyorbopt import solver
+from pyorbopt.pyorbopt import OrbOpt
 
 mol = gto.Mole()
 mol.build(
@@ -68,37 +68,33 @@ def func(u):
     return hf._scf.energy_tot(dm, h1e, vhf)
 
 
-# gradient function
-def grad(u):
+# energy and gradient function
+def func_grad(u):
     rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
     dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
     vhf = hf._scf.get_veff(mol, dm)
-    fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
-    return hf.get_grad(rot_mo_coeff, mo_occ, fock_ao)
+    fock = hf.get_fock(h1e, s1e, vhf, dm)
+
+    return hf._scf.energy_tot(dm, h1e, vhf), hf.get_grad(rot_mo_coeff, mo_occ, fock)
 
 
-# hessian diagonal function
-def hess_diag(u):
+# energy, gradient, Hessian diagonal and Hessian linear transformation function
+def func_grad_hdiag_hess_x(u):
     rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
     dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
     vhf = hf._scf.get_veff(mol, dm)
-    fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
-    return hf.gen_g_hop(rot_mo_coeff, mo_occ, fock_ao)[2]
+    fock = hf.get_fock(h1e, s1e, vhf, dm)
 
+    g, hess_x, hdiag = hf.gen_g_hop(rot_mo_coeff, mo_occ, fock)
 
-# hessian linear transformation function
-def hess_x(u, x):
-    if mo_occ.ndim == 2:
-        u = (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-    rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
-    dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
-    vhf = hf._scf.get_veff(mol, dm)
-    fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
-    return hf.gen_g_hop(rot_mo_coeff, mo_occ, fock_ao)[1](x)
+    return hf._scf.energy_tot(dm, h1e, vhf), g, hdiag, hess_x
 
 
 # number of parameters
 n_param = np.count_nonzero(mask)
 
 # call solver
-u = solver(unpack, func, grad, hess_diag, hess_x, n_param, "min", "cubic")
+orbopt = OrbOpt(verbose=2)
+u = orbopt.solver(
+    unpack, func, func_grad, func_grad_hdiag_hess_x, n_param, "min", line_search="cubic"
+)

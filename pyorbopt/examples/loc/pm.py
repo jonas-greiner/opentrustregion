@@ -1,7 +1,7 @@
 import numpy as np
 from pyscf import gto, scf, lo
 
-from pyorbopt.pyorbopt import solver
+from pyorbopt.pyorbopt import OrbOpt
 
 mol = gto.Mole()
 mol.build(
@@ -51,20 +51,26 @@ for mo_coeff in orbs:
     # cost function
     func = loc.cost_function
 
-    # gradient function
-    def grad(u):
-        return loc.get_grad(u)
+    # cost and gradient function
+    def func_grad(u):
+        return loc.cost_function(u), loc.get_grad(u)
 
-    # hessian diagonal function
-    def hess_diag(u):
-        return loc.gen_g_hop(u)[2]
-
-    # hessian linear transformation function
-    def hess_x(u, x):
-        return loc.gen_g_hop(u)[1](x)
+    # energy, gradient, Hessian diagonal and Hessian linear transformation function
+    def func_grad_hdiag_hess_x(u):
+        grad, hess_x, hdiag = loc.gen_g_hop(u)
+        return loc.cost_function(u), grad, hdiag, hess_x
 
     # number of parameters
     n_param = (norb - 1) * norb // 2
 
     # call solver
-    u = solver(unpack, func, grad, hess_diag, hess_x, n_param, "max", "cubic")
+    orbopt = OrbOpt(verbose=2)
+    u = orbopt.solver(
+        unpack,
+        func,
+        func_grad,
+        func_grad_hdiag_hess_x,
+        n_param,
+        "max",
+        line_search="cubic",
+    )

@@ -6,9 +6,11 @@ import numpy as np
 from pyscf import scf, lo
 from typing import TYPE_CHECKING
 
-from pyorbopt.pyorbopt import solver
+from pyorbopt.pyorbopt import OrbOpt
 
 if TYPE_CHECKING:
+    from typing import Tuple, Callable
+
     from pyscf import gto, scf
 
 
@@ -100,17 +102,16 @@ def test_solver_loc(
     # cost function
     func = loc.cost_function
 
-    # gradient function
-    def grad(u: np.ndarray) -> np.ndarray:
-        return loc.get_grad(u)
+    # cost and gradient function
+    def func_grad(u: np.ndarray) -> Tuple[float, np.ndarray]:
+        return loc.cost_function(u), loc.get_grad(u)
 
-    # hessian diagonal function
-    def hess_diag(u: np.ndarray) -> np.ndarray:
-        return loc.gen_g_hop(u)[2]
-
-    # hessian linear transformation function
-    def hess_x(u: np.ndarray, x: np.ndarray) -> np.ndarray:
-        return loc.gen_g_hop(u)[1](x)
+    # energy, gradient, Hessian diagonal and Hessian linear transformation function
+    def func_grad_hdiag_hess_x(
+        u: np.ndarray,
+    ) -> Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
+        grad, hess_x, hdiag = loc.gen_g_hop(u)
+        return loc.cost_function(u), grad, hdiag, hess_x
 
     # number of parameters
     n_param = (norb - 1) * norb // 2
@@ -119,7 +120,16 @@ def test_solver_loc(
     direction = "max" if isinstance(loc, lo.PM) else "min"
 
     # call solver
-    u = solver(unpack, func, grad, hess_diag, hess_x, n_param, direction, line_search)
+    orbopt = OrbOpt()
+    u = orbopt.solver(
+        unpack,
+        func,
+        func_grad,
+        func_grad_hdiag_hess_x,
+        n_param,
+        direction,
+        line_search=line_search,
+    )
 
     assert loc.cost_function(u) == pytest.approx(ref_cost_function)
 
@@ -206,8 +216,8 @@ def test_solver_hf(
         vhf = hf._scf.get_veff(mol, dm)
         return hf._scf.energy_tot(dm, h1e, vhf)
 
-    # gradient function
-    def grad(u: np.ndarray) -> np.ndarray:
+    # energy and gradient function
+    def func_grad(u: np.ndarray) -> Tuple[float, np.ndarray]:
         if mo_occ.ndim == 1:
             rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
         else:
@@ -216,11 +226,13 @@ def test_solver_hf(
             )
         dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
         vhf = hf._scf.get_veff(mol, dm)
-        fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
-        return hf.get_grad(rot_mo_coeff, mo_occ, fock_ao)
+        fock = hf.get_fock(h1e, s1e, vhf, dm)
+        return hf._scf.energy_tot(dm, h1e, vhf), hf.get_grad(rot_mo_coeff, mo_occ, fock)
 
-    # hessian diagonal function
-    def hess_diag(u: np.ndarray) -> np.ndarray:
+    # energy, gradient, Hessian diagonal and Hessian linear transformation function
+    def func_grad_hdiag_hess_x(
+        u: np.ndarray,
+    ) -> Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
         if mo_occ.ndim == 1:
             rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
         else:
@@ -229,21 +241,9 @@ def test_solver_hf(
             )
         dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
         vhf = hf._scf.get_veff(mol, dm)
-        fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
-        return hf.gen_g_hop(rot_mo_coeff, mo_occ, fock_ao)[2]
-
-    # hessian linear transformation function
-    def hess_x(u: np.ndarray, x: np.ndarray) -> np.ndarray:
-        if mo_occ.ndim == 1:
-            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
-        else:
-            rot_mo_coeff = hf.rotate_mo(
-                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-            )
-        dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
-        vhf = hf._scf.get_veff(mol, dm)
-        fock_ao = hf.get_fock(h1e, s1e, vhf, dm)
-        return hf.gen_g_hop(rot_mo_coeff, mo_occ, fock_ao)[1](x)
+        fock = hf.get_fock(h1e, s1e, vhf, dm)
+        g, hess_x, hdiag = hf.gen_g_hop(rot_mo_coeff, mo_occ, fock)
+        return hf._scf.energy_tot(dm, h1e, vhf), g, hdiag, hess_x
 
     # number of parameters
     if mo_occ.ndim == 1:
@@ -252,6 +252,15 @@ def test_solver_hf(
         n_param = np.count_nonzero(maska) + np.count_nonzero(maskb)
 
     # call solver
-    u = solver(unpack, func, grad, hess_diag, hess_x, n_param, "min", line_search)
+    orbopt = OrbOpt()
+    u = orbopt.solver(
+        unpack,
+        func,
+        func_grad,
+        func_grad_hdiag_hess_x,
+        n_param,
+        "min",
+        line_search=line_search,
+    )
 
     assert func(u) == pytest.approx(ref_energy)
