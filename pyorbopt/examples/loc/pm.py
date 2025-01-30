@@ -49,16 +49,17 @@ for mo_coeff in orbs:
         return matrix - matrix.conj().T
 
     # cost function
-    func = loc.cost_function
+    def func(u):
+        return -loc.cost_function(u)
 
     # cost and gradient function
     def func_grad(u):
-        return loc.cost_function(u), loc.get_grad(u)
+        return -loc.cost_function(u), -loc.get_grad(u)
 
     # energy, gradient, Hessian diagonal and Hessian linear transformation function
     def func_grad_hdiag_hess_x(u):
         grad, hess_x, hdiag = loc.gen_g_hop(u)
-        return loc.cost_function(u), grad, hdiag, hess_x
+        return -loc.cost_function(u), -grad, -hdiag, -hess_x
 
     # number of parameters
     n_param = (norb - 1) * norb // 2
@@ -71,6 +72,5 @@ for mo_coeff in orbs:
         func_grad,
         func_grad_hdiag_hess_x,
         n_param,
-        "max",
         line_search="cubic",
     )

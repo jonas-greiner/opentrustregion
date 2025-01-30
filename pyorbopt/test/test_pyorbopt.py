@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 import numpy as np
+import scipy as sc
 from pyscf import scf, lo
 from typing import TYPE_CHECKING
 
@@ -15,50 +16,28 @@ if TYPE_CHECKING:
 
 
 test_cases_solver_loc = [
-    ("h2o", lo.PM, "occ", "can", "golden", 4.101528606990511),
-    ("h2o", lo.PM, "occ", "can", "brent", 4.101528606990511),
-    ("h2o", lo.PM, "occ", "can", "cubic", 4.101528606990511),
-    ("h2o", lo.PM, "occ", "atomic", "golden", 4.101528606990511),
-    ("h2o", lo.PM, "occ", "atomic", "brent", 4.101528606990511),
-    ("h2o", lo.PM, "occ", "atomic", "cubic", 4.101528606990511),
-    ("h2o", lo.Boys, "occ", "can", "golden", 6.890557872084965),
-    ("h2o", lo.Boys, "occ", "can", "brent", 6.890557872084965),
-    ("h2o", lo.Boys, "occ", "can", "cubic", 6.890557872084965),
-    ("h2o", lo.Boys, "occ", "atomic", "golden", 6.890557872084965),
-    ("h2o", lo.Boys, "occ", "atomic", "brent", 6.890557872084965),
-    ("h2o", lo.Boys, "occ", "atomic", "cubic", 6.890557872084965),
-    ("h2o", lo.PM, "virt", "can", "golden", 7.101376595160159),
-    ("h2o", lo.PM, "virt", "can", "brent", 7.101376595160159),
-    ("h2o", lo.PM, "virt", "can", "cubic", 7.101376595160159),
-    ("h2o", lo.PM, "virt", "atomic", "golden", 7.101376595160159),
-    ("h2o", lo.PM, "virt", "atomic", "brent", 7.101376595160159),
-    ("h2o", lo.PM, "virt", "atomic", "cubic", 7.101376595160159),
-    ("h2o", lo.Boys, "virt", "can", "golden", 27.42565864888862),
-    ("h2o", lo.Boys, "virt", "can", "brent", 27.42565864888862),
-    ("h2o", lo.Boys, "virt", "can", "cubic", 27.42565864888862),
-    ("h2o", lo.Boys, "virt", "atomic", "golden", 27.42565864888862),
-    ("h2o", lo.Boys, "virt", "atomic", "brent", 27.42565864888862),
-    ("h2o", lo.Boys, "virt", "atomic", "cubic", 27.42565864888862),
+    ("h2o", lo.PM, "occ", "can", 4.101528606990511),
+    ("h2o", lo.PM, "occ", "atomic", 4.101528606990511),
+    ("h2o", lo.Boys, "occ", "can", 6.890557872084965),
+    ("h2o", lo.Boys, "occ", "atomic", 6.890557872084965),
+    ("h2o", lo.PM, "virt", "can", 7.101376595160159),
+    ("h2o", lo.PM, "virt", "atomic", 7.101376595160159),
+    ("h2o", lo.Boys, "virt", "can", 27.42565864888862),
+    ("h2o", lo.Boys, "virt", "atomic", 27.42565864888862),
 ]
 
 test_cases_solver_hf = [
-    ("h2o", scf.hf_symm.RHF, "golden", -75.98399811804387),
-    ("h2o", scf.hf_symm.RHF, "brent", -75.98399811804387),
-    ("h2o", scf.hf_symm.RHF, "cubic", -75.98399811804387),
-    ("h2o+", scf.hf_symm.ROHF, "golden", -75.57838419175835),
-    ("h2o+", scf.hf_symm.ROHF, "brent", -75.57838419175835),
-    ("h2o+", scf.hf_symm.ROHF, "cubic", -75.57838419175835),
-    ("h2o+", scf.uhf_symm.UHF, "golden", -75.5805066388706),
-    ("h2o+", scf.uhf_symm.UHF, "brent", -75.5805066388706),
-    ("h2o+", scf.uhf_symm.UHF, "cubic", -75.5805066388706),
+    ("h2o", scf.hf_symm.RHF, -75.98399811804387),
+    ("h2o+", scf.hf_symm.ROHF, -75.57838419175835),
+    ("h2o+", scf.uhf_symm.UHF, -75.5805066388706),
 ]
 
 
 @pytest.mark.parametrize(
-    argnames="system, orbs, space, guess, line_search, ref_cost_function",
+    argnames="system, orbs, space, guess, ref_cost_function",
     argvalues=test_cases_solver_loc,
     ids=[
-        "-".join([case[0], case[1].__name__, case[2], case[3], case[4]])
+        "-".join([case[0], case[1].__name__, case[2], case[3]])
         for case in test_cases_solver_loc
     ],
     indirect=["system"],
@@ -69,7 +48,6 @@ def test_solver_loc(
     orbs: lo.OrbitalLocalizer,
     space: str,
     guess: str,
-    line_search: str,
     ref_cost_function: float,
 ) -> None:
     """
@@ -100,51 +78,44 @@ def test_solver_loc(
         return matrix - matrix.conj().T
 
     # cost function
-    func = loc.cost_function
+    def func(kappa: np.ndarray) -> float:
+        u = sc.linalg.expm(unpack(kappa))
+        if isinstance(loc, lo.PM):
+            return -loc.cost_function(u)
+        else:
+            return loc.cost_function(u)
 
-    # cost and gradient function
-    def func_grad(u: np.ndarray) -> Tuple[float, np.ndarray]:
-        return loc.cost_function(u), loc.get_grad(u)
-
-    # energy, gradient, Hessian diagonal and Hessian linear transformation function
-    def func_grad_hdiag_hess_x(
-        u: np.ndarray,
+    # cost function, gradient, Hessian diagonal and Hessian linear transformation
+    # function
+    def update_orbs(
+        kappa: np.ndarray,
     ) -> Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
+        u = sc.linalg.expm(unpack(kappa))
+        func = loc.cost_function(u)
         grad, hess_x, hdiag = loc.gen_g_hop(u)
-        return loc.cost_function(u), grad, hdiag, hess_x
+        loc.mo_coeff = mo_coeff @ u
+        if isinstance(loc, lo.PM):
+            return -func, -grad, -hdiag, lambda x: -hess_x(x)
+        else:
+            return func, grad, hdiag, hess_x
 
     # number of parameters
     n_param = (norb - 1) * norb // 2
 
-    # decide whether to maximize or minimize
-    direction = "max" if isinstance(loc, lo.PM) else "min"
-
     # call solver
-    orbopt = OrbOpt()
-    u = orbopt.solver(
-        unpack,
-        func,
-        func_grad,
-        func_grad_hdiag_hess_x,
-        n_param,
-        direction,
-        line_search=line_search,
-    )
+    orbopt = OrbOpt(verbose=3)
+    u = orbopt.solver(func, update_orbs, n_param)
 
     assert loc.cost_function(u) == pytest.approx(ref_cost_function)
 
 
 @pytest.mark.parametrize(
-    argnames="system, scf_class, line_search, ref_energy",
+    argnames="system, scf_class, ref_energy",
     argvalues=test_cases_solver_hf,
-    ids=[
-        "-".join([case[0], case[1].__name__, case[2]]) for case in test_cases_solver_hf
-    ],
+    ids=["-".join([case[0], case[1].__name__]) for case in test_cases_solver_hf],
     indirect=["system"],
 )
-def test_solver_hf(
-    mol: gto.Mole, scf_class: scf.SCF, line_search: str, ref_energy: float
-) -> None:
+def test_solver_hf(mol: gto.Mole, scf_class: scf.SCF, ref_energy: float) -> None:
     """
     this function tests the solver for orbital localization
     """
@@ -154,113 +125,130 @@ def test_solver_hf(
     hf.verbose = 4
     hf.kernel()
 
-    # initialize object for second-order optimization
-    hf = scf_class(mol).newton()
+    class HFWrapper:
+        def __init__(self, mol):
+            # initialize mol object
+            self.mol = mol
 
-    # get one-electron Hamiltonian
-    h1e = hf._scf.get_hcore(mol)
+            # initialize object for second-order optimization
+            self.hf = scf_class(mol).newton()
 
-    # get one-electron overlap
-    s1e = hf._scf.get_ovlp(mol)
+            # get one-electron Hamiltonian
+            self.h1e = hf._scf.get_hcore(mol)
 
-    # get initial guess
-    dm = hf.get_init_guess(hf._scf.mol, hf.init_guess)
+            # get one-electron overlap
+            self.s1e = hf._scf.get_ovlp(mol)
 
-    # generate hf potential
-    vhf = hf._scf.get_veff(mol, dm)
+            # get initial guess
+            dm = hf.get_init_guess(hf._scf.mol, hf.init_guess)
 
-    # get Fock matrix for initial guess
-    fock = hf.get_fock(h1e, s1e, vhf, dm)
+            # generate hf potential
+            vhf = hf._scf.get_veff(mol, dm)
 
-    # solve generalized eigenvalue problem
-    mo_energy, mo_coeff = hf.eig(fock, s1e)
+            # get Fock matrix for initial guess
+            fock = hf.get_fock(h1e=self.h1e, s1e=self.s1e, vhf=vhf, dm=dm)
 
-    # get orbital occupation
-    mo_occ = hf.get_occ(mo_energy, mo_coeff)
+            # solve generalized eigenvalue problem
+            mo_energy, self.mo_coeff = hf.eig(fock, self.s1e)
 
-    # get indices of all mixed occupation combinations
-    if mo_occ.ndim == 1:
-        occidxa = mo_occ > 0
-        occidxb = mo_occ == 2
-        viridxa = ~occidxa
-        viridxb = ~occidxb
-        mask = (viridxa[:, None] & occidxa) | (viridxb[:, None] & occidxb)
-    else:
-        occidxa = mo_occ[0] == 1
-        occidxb = mo_occ[1] == 1
-        viridxa = ~occidxa
-        viridxb = ~occidxb
-        maska = viridxa[:, None] & occidxa
-        maskb = viridxb[:, None] & occidxb
+            # get orbital occupation
+            self.mo_occ = hf.get_occ(mo_energy, self.mo_coeff)
 
-    # unpack matrix
-    def unpack(kappa: np.ndarray) -> np.ndarray:
-        if mo_occ.ndim == 1:
-            matrix = np.zeros(2 * (mol.nao,), dtype=np.float64)
-            matrix[mask] = kappa
-        else:
-            matrix = np.zeros(2 * (2 * mol.nao,), dtype=np.float64)
-            matrix[: mol.nao, : mol.nao][maska] = kappa[: np.count_nonzero(maska)]
-            matrix[mol.nao :, mol.nao :][maskb] = kappa[np.count_nonzero(maska) :]
-        return matrix - matrix.T
+            # get indices of all mixed occupation combinations
+            if self.mo_occ.ndim == 1:
+                occidxa = self.mo_occ > 0
+                occidxb = self.mo_occ == 2
+                viridxa = ~occidxa
+                viridxb = ~occidxb
+                self.mask = (viridxa[:, None] & occidxa) | (viridxb[:, None] & occidxb)
+            else:
+                occidxa = self.mo_occ[0] == 1
+                occidxb = self.mo_occ[1] == 1
+                viridxa = ~occidxa
+                viridxb = ~occidxb
+                self.maska = viridxa[:, None] & occidxa
+                self.maskb = viridxb[:, None] & occidxb
 
-    # energy function
-    def func(u: np.ndarray) -> float:
-        if mo_occ.ndim == 1:
-            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
-        else:
-            rot_mo_coeff = hf.rotate_mo(
-                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
+        # unpack matrix
+        def unpack(self, kappa: np.ndarray) -> np.ndarray:
+            if self.mo_occ.ndim == 1:
+                matrix = np.zeros(2 * (self.mol.nao,), dtype=np.float64)
+                matrix[self.mask] = kappa
+            else:
+                matrix = np.zeros(2 * (2 * self.mol.nao,), dtype=np.float64)
+                matrix[: self.mol.nao, : mol.nao][self.maska] = kappa[
+                    : np.count_nonzero(self.maska)
+                ]
+                matrix[self.mol.nao :, self.mol.nao :][self.maskb] = kappa[
+                    np.count_nonzero(self.maska) :
+                ]
+            return matrix - matrix.T
+
+        # energy function
+        def func(self, kappa: np.ndarray) -> float:
+            u = sc.linalg.expm(self.unpack(kappa))
+            if self.mo_occ.ndim == 1:
+                rot_mo_coeff = self.hf.rotate_mo(self.mo_coeff, u)
+            else:
+                rot_mo_coeff = self.hf.rotate_mo(
+                    self.mo_coeff,
+                    (
+                        u[: self.mol.nao, : self.mol.nao],
+                        u[self.mol.nao :, self.mol.nao :],
+                    ),
+                )
+            dm = self.hf.make_rdm1(rot_mo_coeff, self.mo_occ)
+            vhf = self.hf._scf.get_veff(mol, dm=dm)
+            return self.hf._scf.energy_tot(dm=dm, h1e=self.h1e, vhf=vhf)
+
+        # energy, gradient, Hessian diagonal and Hessian linear transformation function
+        def update_orbs(
+            self,
+            kappa: np.ndarray,
+        ) -> Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
+            u = sc.linalg.expm(self.unpack(kappa))
+            if self.mo_occ.ndim == 1:
+                self.mo_coeff = self.hf.rotate_mo(self.mo_coeff, u)
+            else:
+                self.mo_coeff = self.hf.rotate_mo(
+                    self.mo_coeff,
+                    (
+                        u[: self.mol.nao, : self.mol.nao],
+                        u[self.mol.nao :, self.mol.nao :],
+                    ),
+                )
+            dm = self.hf.make_rdm1(self.mo_coeff, self.mo_occ)
+            vhf = self.hf._scf.get_veff(mol, dm=dm)
+            fock = self.hf.get_fock(h1e=self.h1e, s1e=self.s1e, vhf=vhf, dm=dm)
+            g, hess_x, hdiag = self.hf.gen_g_hop(self.mo_coeff, self.mo_occ, fock)
+            return (
+                self.hf._scf.energy_tot(dm=dm, h1e=self.h1e, vhf=vhf),
+                g,
+                hdiag,
+                hess_x,
             )
-        dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
-        vhf = hf._scf.get_veff(mol, dm)
-        return hf._scf.energy_tot(dm, h1e, vhf)
 
-    # energy and gradient function
-    def func_grad(u: np.ndarray) -> Tuple[float, np.ndarray]:
-        if mo_occ.ndim == 1:
-            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
-        else:
-            rot_mo_coeff = hf.rotate_mo(
-                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-            )
-        dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
-        vhf = hf._scf.get_veff(mol, dm)
-        fock = hf.get_fock(h1e, s1e, vhf, dm)
-        return hf._scf.energy_tot(dm, h1e, vhf), hf.get_grad(rot_mo_coeff, mo_occ, fock)
-
-    # energy, gradient, Hessian diagonal and Hessian linear transformation function
-    def func_grad_hdiag_hess_x(
-        u: np.ndarray,
-    ) -> Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
-        if mo_occ.ndim == 1:
-            rot_mo_coeff = hf.rotate_mo(mo_coeff, u)
-        else:
-            rot_mo_coeff = hf.rotate_mo(
-                mo_coeff, (u[: mol.nao, : mol.nao], u[mol.nao :, mol.nao :])
-            )
-        dm = hf.make_rdm1(rot_mo_coeff, mo_occ)
-        vhf = hf._scf.get_veff(mol, dm)
-        fock = hf.get_fock(h1e, s1e, vhf, dm)
-        g, hess_x, hdiag = hf.gen_g_hop(rot_mo_coeff, mo_occ, fock)
-        return hf._scf.energy_tot(dm, h1e, vhf), g, hdiag, hess_x
+    hf_wrapper = HFWrapper(mol)
 
     # number of parameters
-    if mo_occ.ndim == 1:
-        n_param = np.count_nonzero(mask)
+    if hf_wrapper.mo_occ.ndim == 1:
+        n_param = np.count_nonzero(hf_wrapper.mask)
     else:
-        n_param = np.count_nonzero(maska) + np.count_nonzero(maskb)
+        n_param = np.count_nonzero(hf_wrapper.maska) + np.count_nonzero(
+            hf_wrapper.maskb
+        )
 
     # call solver
-    orbopt = OrbOpt()
-    u = orbopt.solver(
-        unpack,
-        func,
-        func_grad,
-        func_grad_hdiag_hess_x,
+    orbopt = OrbOpt(verbose=3)
+    orbopt.solver(
+        hf_wrapper.func,
+        hf_wrapper.update_orbs,
         n_param,
-        "min",
-        line_search=line_search,
+        conv_tol=1e-8,
+        n_random_trial_vectors=2,
     )
+    print(hf_wrapper.func(np.zeros(n_param)))
+    print(hf_wrapper.update_orbs(np.zeros(n_param))[0])
+    print(np.linalg.norm(hf_wrapper.update_orbs(np.zeros(n_param))[1]))
 
-    assert func(u) == pytest.approx(ref_energy)
+    assert hf_wrapper.func(np.zeros(n_param)) == pytest.approx(ref_energy)
