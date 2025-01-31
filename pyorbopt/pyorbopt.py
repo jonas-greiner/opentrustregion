@@ -111,7 +111,7 @@ class OrbOpt:
                 stepsize_str = f"{np.linalg.norm(kappa):>8.2e}"
                 stable = True
             else:
-                mu_str = f"{mu:>9.2e}"
+                mu_str = f"{-mu:>9.2e}"
                 imicro_str = f"{imicro:>3d}"
                 trust_radius_str = f"{trust_radius:>8.2e}"
                 stepsize_str = f"{np.linalg.norm(kappa):>8.2e}"
@@ -126,13 +126,30 @@ class OrbOpt:
                 if stability:
                     stable, kappa = self.stability(g, hdiag, hess_x)
                     if not stable:
-                        self.logger.warning(
-                            "Reached saddle point. This is likely due to symmetry and "
-                            "can be avoided by increasing the number of random trial "
-                            "vectors. The algorithm will continue by moving along "
-                            "eigenvector direction corresponding to negative "
-                            "eigenvalue."
-                        )
+                        # logarithmic line search
+                        for n_kappa in np.logspace(0, -10, 11, dtype=np.float64):
+                            if func(n_kappa * kappa) < f:
+                                kappa *= n_kappa
+                                break
+                        else:
+                            raise RuntimeError(
+                                "Line search was unable to find lower objective "
+                                "function along unstable mode."
+                            )
+                        if imacro == 0:
+                            self.logger.warning(
+                                "Started at saddle point. The algorithm will continue "
+                                "by moving along eigenvector direction corresponding "
+                                "to negative eigenvalue."
+                            )
+                        else:
+                            self.logger.warning(
+                                "Reached saddle point. This is likely due to symmetry and "
+                                "can be avoided by increasing the number of random trial "
+                                "vectors. The algorithm will continue by moving along "
+                                "eigenvector direction corresponding to negative "
+                                "eigenvalue."
+                            )
                         continue
                     else:
                         macro_converged = True
@@ -247,12 +264,7 @@ class OrbOpt:
                     or ratio < 0.0
                     or np.any(np.abs(solution) > np.pi / 4)
                 ):
-                    aug_hess = aug_hess[: ntrial_start + 1, : ntrial_start + 1]
-                    red_space_basis = red_space_basis[:ntrial_start]
-                    h_basis = h_basis[:ntrial_start]
-                    basis_arr = basis_arr[:ntrial_start]
                     trust_radius *= 0.7
-                    self.tot_hx += len(red_space_basis)
                     accept_step = False
                     if trust_radius < 1e-10:
                         self.logger.error("Trust radius too small.")
@@ -307,7 +319,6 @@ class OrbOpt:
         g: np.ndarray,
         hdiag: np.ndarray,
         hess_x: Callable[[np.ndarray], np.ndarray],
-        perturb: float = 1e-2,
         conv_tol: float = 1e-4,
         n_random_trial_vectors: int = 20,
         n_iter: int = 100,
@@ -387,7 +398,7 @@ class OrbOpt:
         if stable:
             return stable, np.zeros_like(solution)
         else:
-            return stable, perturb * solution
+            return stable, solution
 
     def _generate_trial_vectors(
         self,
