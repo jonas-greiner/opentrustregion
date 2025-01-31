@@ -33,8 +33,9 @@ def mol(system: str) -> gto.Mole:
                 H	-0.7569685	 0.0000000	-0.5858752
             """,
             basis="631g",
-            symmetry="C2v",
+            symmetry="C2v" if "symm" in system else False,
             verbose=0,
+            cart=True,
         )
         if "+" in system:
             mol.charge = 1

@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import pytest
 import numpy as np
-import scipy as sc
-from pyscf import scf, lo
+from pyscf import scf, lo, soscf
 from typing import TYPE_CHECKING
 
 from pyorbopt.pyorbopt import OrbOpt
@@ -27,9 +26,12 @@ test_cases_solver_loc = [
 ]
 
 test_cases_solver_hf = [
-    ("h2o", scf.hf_symm.RHF, -75.98399811804387),
-    ("h2o+", scf.hf_symm.ROHF, -75.57838419175835),
-    ("h2o+", scf.uhf_symm.UHF, -75.5805066388706),
+    ("h2o", scf.hf.RHF, -75.98399811804387),
+    ("h2o+", scf.rohf.ROHF, -75.57838419175835),
+    ("h2o+", scf.uhf.UHF, -75.5805066388706),
+    ("h2o_symm", scf.hf_symm.RHF, -75.98399811804387),
+    ("h2o+_symm", scf.hf_symm.ROHF, -75.57838419175835),
+    ("h2o+_symm", scf.uhf_symm.UHF, -75.5805066388706),
 ]
 
 
@@ -79,7 +81,7 @@ def test_solver_loc(
 
     # cost function
     def func(kappa: np.ndarray) -> float:
-        u = sc.linalg.expm(unpack(kappa))
+        u = soscf.ciah.expmat(unpack(kappa))
         if isinstance(loc, lo.PM):
             return -loc.cost_function(u)
         else:
@@ -90,12 +92,14 @@ def test_solver_loc(
     def update_orbs(
         kappa: np.ndarray,
     ) -> Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
-        u = sc.linalg.expm(unpack(kappa))
+        u = soscf.ciah.expmat(unpack(kappa))
         func = loc.cost_function(u)
         grad, hess_x, hdiag = loc.gen_g_hop(u)
-        loc.mo_coeff = mo_coeff @ u
+        loc.mo_coeff = loc.mo_coeff @ u
+        # pyscf pipek mezey functions are written as minimizers so only flip the sign
+        # of the cost function
         if isinstance(loc, lo.PM):
-            return -func, -grad, -hdiag, lambda x: -hess_x(x)
+            return -func, grad, hdiag, lambda x: hess_x(x)
         else:
             return func, grad, hdiag, hess_x
 
@@ -103,8 +107,8 @@ def test_solver_loc(
     n_param = (norb - 1) * norb // 2
 
     # call solver
-    orbopt = OrbOpt(verbose=3)
-    u = orbopt.solver(func, update_orbs, n_param)
+    orbopt = OrbOpt()
+    u = orbopt.solver(func, update_orbs, n_param, line_search=True)
 
     assert loc.cost_function(u) == pytest.approx(ref_cost_function)
 
@@ -119,11 +123,6 @@ def test_solver_hf(mol: gto.Mole, scf_class: scf.SCF, ref_energy: float) -> None
     """
     this function tests the solver for orbital localization
     """
-    hf = scf_class(mol).newton()
-    hf.conv_tol = 1.0e-10
-
-    hf.verbose = 4
-    hf.kernel()
 
     class HFWrapper:
         def __init__(self, mol):
@@ -134,25 +133,25 @@ def test_solver_hf(mol: gto.Mole, scf_class: scf.SCF, ref_energy: float) -> None
             self.hf = scf_class(mol).newton()
 
             # get one-electron Hamiltonian
-            self.h1e = hf._scf.get_hcore(mol)
+            self.h1e = self.hf._scf.get_hcore(mol)
 
             # get one-electron overlap
-            self.s1e = hf._scf.get_ovlp(mol)
+            self.s1e = self.hf._scf.get_ovlp(mol)
 
             # get initial guess
-            dm = hf.get_init_guess(hf._scf.mol, hf.init_guess)
+            dm = self.hf.get_init_guess(self.hf._scf.mol, self.hf.init_guess)
 
             # generate hf potential
-            vhf = hf._scf.get_veff(mol, dm)
+            vhf = self.hf._scf.get_veff(mol, dm)
 
             # get Fock matrix for initial guess
-            fock = hf.get_fock(h1e=self.h1e, s1e=self.s1e, vhf=vhf, dm=dm)
+            fock = self.hf.get_fock(self.h1e, self.s1e, vhf, dm)
 
             # solve generalized eigenvalue problem
-            mo_energy, self.mo_coeff = hf.eig(fock, self.s1e)
+            mo_energy, self.mo_coeff = self.hf.eig(fock, self.s1e)
 
             # get orbital occupation
-            self.mo_occ = hf.get_occ(mo_energy, self.mo_coeff)
+            self.mo_occ = self.hf.get_occ(mo_energy, self.mo_coeff)
 
             # get indices of all mixed occupation combinations
             if self.mo_occ.ndim == 1:
@@ -186,7 +185,7 @@ def test_solver_hf(mol: gto.Mole, scf_class: scf.SCF, ref_energy: float) -> None
 
         # energy function
         def func(self, kappa: np.ndarray) -> float:
-            u = sc.linalg.expm(self.unpack(kappa))
+            u = soscf.ciah.expmat(self.unpack(kappa))
             if self.mo_occ.ndim == 1:
                 rot_mo_coeff = self.hf.rotate_mo(self.mo_coeff, u)
             else:
@@ -198,15 +197,15 @@ def test_solver_hf(mol: gto.Mole, scf_class: scf.SCF, ref_energy: float) -> None
                     ),
                 )
             dm = self.hf.make_rdm1(rot_mo_coeff, self.mo_occ)
-            vhf = self.hf._scf.get_veff(mol, dm=dm)
-            return self.hf._scf.energy_tot(dm=dm, h1e=self.h1e, vhf=vhf)
+            vhf = self.hf._scf.get_veff(mol, dm)
+            return self.hf._scf.energy_tot(dm, self.h1e, vhf)
 
         # energy, gradient, Hessian diagonal and Hessian linear transformation function
         def update_orbs(
             self,
             kappa: np.ndarray,
         ) -> Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
-            u = sc.linalg.expm(self.unpack(kappa))
+            u = soscf.ciah.expmat(self.unpack(kappa))
             if self.mo_occ.ndim == 1:
                 self.mo_coeff = self.hf.rotate_mo(self.mo_coeff, u)
             else:
@@ -218,15 +217,10 @@ def test_solver_hf(mol: gto.Mole, scf_class: scf.SCF, ref_energy: float) -> None
                     ),
                 )
             dm = self.hf.make_rdm1(self.mo_coeff, self.mo_occ)
-            vhf = self.hf._scf.get_veff(mol, dm=dm)
-            fock = self.hf.get_fock(h1e=self.h1e, s1e=self.s1e, vhf=vhf, dm=dm)
+            vhf = self.hf._scf.get_veff(mol, dm)
+            fock = self.hf.get_fock(self.h1e, self.s1e, vhf, dm)
             g, hess_x, hdiag = self.hf.gen_g_hop(self.mo_coeff, self.mo_occ, fock)
-            return (
-                self.hf._scf.energy_tot(dm=dm, h1e=self.h1e, vhf=vhf),
-                g,
-                hdiag,
-                hess_x,
-            )
+            return (self.hf._scf.energy_tot(dm, self.h1e, vhf), g, hdiag, hess_x)
 
     hf_wrapper = HFWrapper(mol)
 
@@ -239,16 +233,12 @@ def test_solver_hf(mol: gto.Mole, scf_class: scf.SCF, ref_energy: float) -> None
         )
 
     # call solver
-    orbopt = OrbOpt(verbose=3)
+    orbopt = OrbOpt()
     orbopt.solver(
         hf_wrapper.func,
         hf_wrapper.update_orbs,
         n_param,
-        conv_tol=1e-8,
-        n_random_trial_vectors=2,
+        n_random_trial_vectors=0 if mol.symmetry else 1,
     )
-    print(hf_wrapper.func(np.zeros(n_param)))
-    print(hf_wrapper.update_orbs(np.zeros(n_param))[0])
-    print(np.linalg.norm(hf_wrapper.update_orbs(np.zeros(n_param))[1]))
 
     assert hf_wrapper.func(np.zeros(n_param)) == pytest.approx(ref_energy)

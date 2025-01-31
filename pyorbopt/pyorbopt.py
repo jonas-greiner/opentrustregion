@@ -43,8 +43,16 @@ class OrbOpt:
         global_red_factor: float = 1e-3,
         local_red_factor: float = 1e-4,
     ):
-        # initialize orbital rotation matrices
+        # initialize orbital rotation matrix
         kappa = np.zeros(n_param, dtype=np.float64)
+
+        # check that number of random trial vectors is below number of parameters
+        if n_random_trial_vectors > n_param // 2:
+            n_random_trial_vectors = n_param // 2
+            self.logger.warning(
+                "Number of random trial vectors should be smaller than half the number "
+                f"of parameters. Setting to {n_random_trial_vectors}."
+            )
 
         # initialize starting trust radius
         trust_radius = start_trust_radius
@@ -73,8 +81,13 @@ class OrbOpt:
         for imacro in range(n_macro):
             # calculate cost function, gradient and Hessian diagonal
             f, g, hdiag, hess_x = update_orbs(kappa)
-            self.logger.info(f)
-            self.logger.info(np.linalg.norm(g))
+
+            # sanity check for array size
+            if imacro == 0 and g.size != n_param:
+                raise ValueError(
+                    "Size of gradient array returned by function update_orbs does not "
+                    "equal number of parameters"
+                )
 
             # add cost function
             self.func_its.append(float(f))
@@ -154,12 +167,9 @@ class OrbOpt:
                     # do a Newton step if the model is positive definite and the step is within the trust region
                     newton_step = False
                     eigvals = np.linalg.eigvalsh(aug_hess[1:, 1:])
-                    print(f"{min(eigvals)=}")
                     if min(eigvals) > -1e-5:
-                        solution, red_solution, mu = _newton_step(
-                            aug_hess, g, basis_arr
-                        )
-                        print(f"Newton step norm {np.linalg.norm(solution)}")
+                        solution, red_solution = _newton_step(aug_hess, g, basis_arr)
+                        mu = 0.0
                         if np.linalg.norm(solution) < trust_radius:
                             newton_step = True
 
@@ -391,7 +401,7 @@ class OrbOpt:
         """
         red_space_basis = [g / g_norm]
         min_idx = np.argmin(hdiag)
-        if n_random_trial_vectors > 1 and hdiag[min_idx] < 0.0:
+        if hdiag[min_idx] < 0.0:
             trial = np.zeros_like(g, dtype=np.float64)
             trial[min_idx] = 1.0
             red_space_basis.append(_gram_schmidt(trial, red_space_basis))
@@ -450,9 +460,6 @@ def _bisection(
         # finish construction of augmented Hessian
         aug_hess[0, 1] = aug_hess[1, 0] = alpha * np.linalg.norm(grad)
 
-        # make sure augmented Hessian is symmetric
-        aug_hess = 0.5 * (aug_hess + aug_hess.T)
-
         # diagonalize augmented Hessian
         eigenvalues, eigenvecs = np.linalg.eigh(aug_hess)
 
@@ -486,10 +493,9 @@ def _bisection(
     alpha = sc.optimize.bisect(
         get_ah_lowest_eigenvec_norm_trust_radius_diff,
         1e-4,
-        1e16,
+        1e6,
         args=(aug_hess, grad, red_space_basis),
     )
-    print(f"{alpha}=")
 
     # return level-shifted solution
     return get_ah_lowest_eigenvec(aug_hess, grad, alpha, red_space_basis)
@@ -497,7 +503,7 @@ def _bisection(
 
 def _newton_step(
     aug_hess: np.ndarray, grad: np.ndarray, red_space_basis: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray, float]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     this function performs bisection to find the parameter alpha that matches the
     desired trust radius
@@ -507,7 +513,7 @@ def _newton_step(
     red_grad[0] = np.linalg.norm(grad)
     red_solution = np.linalg.solve(aug_hess[1:, 1:], -red_grad)
     solution = red_solution.T @ red_space_basis
-    return solution, red_solution, 0.0
+    return solution, red_solution
 
 
 def _create_logger(verbosity: int):

@@ -1,5 +1,5 @@
 import numpy as np
-from pyscf import gto, scf, lo
+from pyscf import gto, scf, lo, soscf
 
 from pyorbopt.pyorbopt import OrbOpt
 
@@ -49,28 +49,24 @@ for mo_coeff in orbs:
         return matrix - matrix.conj().T
 
     # cost function
-    def func(u):
+    def func(kappa):
+        u = soscf.ciah.expmat(unpack(kappa))
         return -loc.cost_function(u)
 
-    # cost and gradient function
-    def func_grad(u):
-        return -loc.cost_function(u), -loc.get_grad(u)
-
-    # energy, gradient, Hessian diagonal and Hessian linear transformation function
-    def func_grad_hdiag_hess_x(u):
+    # cost function, gradient, Hessian diagonal and Hessian linear transformation
+    # function
+    def update_orbs(kappa):
+        u = soscf.ciah.expmat(unpack(kappa))
+        func = loc.cost_function(u)
         grad, hess_x, hdiag = loc.gen_g_hop(u)
-        return -loc.cost_function(u), -grad, -hdiag, -hess_x
+        loc.mo_coeff = loc.mo_coeff @ u
+        # pyscf pipek mezey functions are written as minimizers so only flip the sign
+        # of the cost function
+        return -func, grad, hdiag, lambda x: hess_x(x)
 
     # number of parameters
     n_param = (norb - 1) * norb // 2
 
     # call solver
     orbopt = OrbOpt(verbose=2)
-    u = orbopt.solver(
-        unpack,
-        func,
-        func_grad,
-        func_grad_hdiag_hess_x,
-        n_param,
-        line_search="cubic",
-    )
+    u = orbopt.solver(func, update_orbs, n_param, line_search=True)
