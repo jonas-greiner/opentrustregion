@@ -127,7 +127,7 @@ class OrbOpt:
                     stable, kappa = self.stability(g, hdiag, hess_x)
                     if not stable:
                         # logarithmic line search
-                        for n_kappa in np.logspace(0, -10, 11, dtype=np.float64):
+                        for n_kappa in np.logspace(0, -10, 21, dtype=np.float64):
                             if func(n_kappa * kappa) < f:
                                 kappa *= n_kappa
                                 break
