@@ -3,3 +3,17 @@ __pycache__/
 
 # IDEs
 .vscode/
+
+# Libraries
+*.so
+*.dylib
+
+# Module files
+*.mod
+
+# OS files
+.DS_Store
+
+# Distribution / packaging
+build/
+*.egg-info/

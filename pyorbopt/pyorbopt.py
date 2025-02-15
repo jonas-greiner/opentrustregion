@@ -112,7 +112,7 @@ class OrbOpt:
                 stable = True
             else:
                 mu_str = f"{-mu:>9.2e}"
-                imicro_str = f"{imicro:>3d}"
+                imicro_str = f"{imicro + 1:>3d}"
                 trust_radius_str = f"{trust_radius:>8.2e}"
                 stepsize_str = f"{np.linalg.norm(kappa):>8.2e}"
             self.logger.info(
@@ -159,7 +159,7 @@ class OrbOpt:
                     break
 
             # generate trial vectors
-            red_space_basis, ntrial_start = self._generate_trial_vectors(
+            red_space_basis = self._generate_trial_vectors(
                 n_random_trial_vectors, g, g_norm, hdiag
             )
 
@@ -196,8 +196,11 @@ class OrbOpt:
                             aug_hess, g, trust_radius, basis_arr
                         )
 
+                    # calculate Hessian linear transformation of solution
+                    h_solution = red_solution.T @ np.vstack(h_basis)
+
                     # calculate residual
-                    residual = g + red_solution.T @ np.vstack(h_basis) - mu * solution
+                    residual = g + h_solution - mu * solution
 
                     # get residual norm
                     residual_norm = np.linalg.norm(residual)
@@ -250,15 +253,11 @@ class OrbOpt:
                 new_f = func(solution)
 
                 # calculate ratio of evaluated function and predicted function
-                ratio = (new_f - f) / (
-                    solution.T @ g
-                    + 0.5
-                    * (red_solution.T @ basis_arr).T
-                    @ (red_solution @ np.vstack(h_basis))
-                )
+                ratio = (new_f - f) / (solution.T @ (g + 0.5 * h_solution))
 
-                # decrease trust radius if micro iterations are unable to converge or
-                # if function value has not decreased or if individual orbitals change too much
+                # decrease trust radius if micro iterations are unable to converge, if
+                # function value has not decreased or if individual orbitals change too
+                # much
                 if (
                     not micro_converged
                     or ratio < 0.0
@@ -338,7 +337,7 @@ class OrbOpt:
         # generate trial vectors
         red_space_basis = self._generate_trial_vectors(
             n_random_trial_vectors, g, g_norm, hdiag
-        )[0]
+        )
 
         # calculate linear transformation of basis vectors
         h_basis = [full_hess_x(vec) for vec in red_space_basis]
@@ -351,7 +350,7 @@ class OrbOpt:
         for j, vec in enumerate(h_basis):
             red_space_hess[:, j] = basis_arr @ vec
 
-        # loop over micro iterations
+        # loop over iterations
         for _ in range(n_iter):
             # solve reduced space problem
             eigenvalues, eigenvecs = np.linalg.eig(red_space_hess)
@@ -388,8 +387,11 @@ class OrbOpt:
             # construct new reduced space Hessian
             red_space_hess = _extend_symm_mat(red_space_hess, basis_arr @ h_basis[-1])
 
+        # increment total number of Hessian linear transformations
+        self.tot_hx += len(red_space_basis)
+
         # determine if saddle point
-        stable = not eigenvalues[idx] < -1e-3
+        stable = eigenvalues[idx] > -1e-3
         if not stable:
             self.logger.warning(
                 f"Solution not stable. Lowest eigenvalue: {eigenvalues[idx]}"
@@ -406,7 +408,7 @@ class OrbOpt:
         g: np.ndarray,
         g_norm: any_float,
         hdiag: np.ndarray,
-    ) -> Tuple[List[np.ndarray], int]:
+    ) -> List[np.ndarray]:
         """
         this function generates trial vectors
         """
@@ -422,7 +424,7 @@ class OrbOpt:
                 trial = 2 * self.rng.random(size=g.size) - 1
             red_space_basis.append(_gram_schmidt(trial, red_space_basis))
 
-        return red_space_basis, len(red_space_basis)
+        return red_space_basis
 
 
 def _extend_symm_mat(old_mat: np.ndarray, vector: np.ndarray) -> np.ndarray:
@@ -516,8 +518,8 @@ def _newton_step(
     aug_hess: np.ndarray, grad: np.ndarray, red_space_basis: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    this function performs bisection to find the parameter alpha that matches the
-    desired trust radius
+    this function performs a Newton step by solving the Newton equations in reduced
+    space without a level shift
     """
     # solve Newton equations in reduced space without level shift
     red_grad = np.zeros(len(red_space_basis))
