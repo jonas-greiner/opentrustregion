@@ -1,8 +1,9 @@
 module c_interface
 
-    use trustorbopt, only: rp, ip
-    use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, &
-                                    c_funptr, c_f_pointer, c_f_procpointer, c_associated
+    use trustorbopt, only: rp, ip, standard_solver => solver, &
+                           standard_stability_check => stability_check
+    use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_funptr, &
+                                              c_f_pointer, c_f_procpointer, c_associated
 
     implicit none
 
@@ -50,6 +51,48 @@ module c_interface
             set_default_c_ptr_logical
     end interface
 
+    ! interfaces for solver and stability subroutines, different routines can be
+    ! injected, for example for testing
+    interface
+        subroutine solver_type(update_orbs, obj_func, n_param, stability, line_search, &
+                               conv_tol, n_random_trial_vectors, start_trust_radius, &
+                               n_macro, n_micro, global_red_factor, local_red_factor, &
+                               verbose, seed)
+
+            use trustorbopt, only: rp, ip, update_orbs_type, obj_func_type
+
+            procedure(update_orbs_type), intent(in), pointer :: update_orbs
+            procedure(obj_func_type), intent(in), pointer :: obj_func
+            integer(ip), intent(in) :: n_param
+            logical, intent(in), optional :: stability, line_search
+            real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
+                                              global_red_factor, local_red_factor
+            integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
+                                                 n_micro, verbose, seed
+
+        end subroutine solver_type
+    end interface
+
+    interface
+        subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, conv_tol, &
+                                        n_random_trial_vectors, n_iter, verbose)
+
+            use trustorbopt, only: rp, ip, hess_x_type
+
+            real(rp), intent(in) :: grad(:), h_diag(:)
+            procedure(hess_x_type), pointer, intent(in) :: hess_x
+            logical, intent(out) :: stable
+            real(rp), intent(out) :: kappa(:)
+            real(rp), intent(in), optional :: conv_tol
+            integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
+
+        end subroutine stability_check_type
+    end interface
+
+    procedure(solver_type), pointer :: solver => standard_solver
+    procedure(stability_check_type), pointer :: stability_check => &
+        standard_stability_check
+
 contains
 
     subroutine solver_c_wrapper(update_orbs_c_ptr, obj_func_c_ptr, n_param_c, &
@@ -71,7 +114,7 @@ contains
                                solver_n_macro_default, solver_n_micro_default, &
                                solver_global_red_factor_default, &
                                solver_local_red_factor_default, &
-                               solver_verbose_default, solver_seed_default, solver
+                               solver_verbose_default, solver_seed_default
 
         type(c_funptr), intent(in) :: update_orbs_c_ptr, obj_func_c_ptr
         integer(c_long), value, intent(in) :: n_param_c
@@ -125,25 +168,23 @@ contains
 
     end subroutine solver_c_wrapper
 
-    subroutine stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_ptr, &
-                                         n_param_c, stable_c, kappa_c, &
-                                         conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                                         n_iter_c_ptr, verbose_c_ptr) &
-        bind(C, name="stability_check")
+    subroutine stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_ptr, n_param_c, &
+                                         stable_c, kappa_c, conv_tol_c_ptr, &
+                                         n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
+                                         verbose_c_ptr) bind(C, name="stability_check")
         !
         ! this subroutine wraps the stability check subroutine to convert C variables
         ! to Fortran variables
         !
         use trustorbopt, only: hess_x_type, stability_conv_tol_default, &
                                stability_n_random_trial_vectors_default, &
-                               stability_n_iter_default, stability_verbose_default, &
-                               stability_check
+                               stability_n_iter_default, stability_verbose_default
 
+        integer(c_long), value, intent(in) :: n_param_c
         real(c_double), intent(in), dimension(n_param_c) :: grad_c, h_diag_c
         type(c_funptr), intent(in) :: hess_x_c_ptr
         logical(c_bool), intent(out) :: stable_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
-        integer(c_long), value, intent(in) :: n_param_c
         type(c_ptr), value, intent(in) :: conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr

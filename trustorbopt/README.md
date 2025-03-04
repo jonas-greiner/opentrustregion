@@ -14,11 +14,19 @@ cmake ..
 cmake --build .
 ```
 
+The installation can be tested by running the ```testsuite``` executable in the ```build``` directory.
+
 ### Python Usage
 To install the library for use with Python:
 
 ```sh
 pip install .
+```
+
+The installation can be tested by running
+
+```sh
+python3 setup.py test
 ```
 
 ## Usage

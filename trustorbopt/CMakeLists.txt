@@ -46,5 +46,36 @@ set_source_files_properties(src/trustorbopt.f90 PROPERTIES Fortran_PREPROCESS ON
 # link against BLAS and LAPACK
 target_link_libraries(trustorbopt PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
 
-# set position-independent code for shared libraries
-set_target_properties(trustorbopt PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# create test executable
+add_executable(
+    testsuite
+    tests/testsuite.f90
+    tests/trustorbopt_unit_tests.f90
+    tests/c_interface_unit_tests.f90
+    tests/trustorbopt_mock.f90
+    tests/c_interface_mock.f90
+    tests/trustorbopt_system_tests.f90
+)
+target_link_libraries(
+    testsuite 
+    PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} trustorbopt
+)
+
+# get the absolute path to the test data directory and add it as a definition so the
+# Fortran code can access it
+set(TEST_DATA_PATH "${CMAKE_SOURCE_DIR}/tests/data")
+add_definitions(-DTEST_DATA_PATH=\"${TEST_DATA_PATH}\")
+target_compile_definitions(testsuite PRIVATE TEST_DATA_PATH="${TEST_DATA_PATH}")
+
+# enable preprocessing
+set_source_files_properties(
+    tests/testsuite.f90 
+    tests/trustorbopt_system_tests.f90 
+    PROPERTIES Fortran_PREPROCESS ON)
+
+# find python for testing
+find_package(Python3 COMPONENTS Interpreter NumPy)
+if (Python3_Interpreter_FOUND AND Python3_NumPy_FOUND)
+    set(PYTHON_TEST_SCRIPT "${CMAKE_SOURCE_DIR}/tests/python_interface_unit_tests.py")
+    target_compile_definitions(testsuite PRIVATE PYTHON_TEST_SCRIPT="${PYTHON_TEST_SCRIPT}")
+endif()

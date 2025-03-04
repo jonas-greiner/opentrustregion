@@ -14,11 +14,11 @@ if TYPE_CHECKING:
 # import dynamic library and define result and argument types
 ext = "dylib" if sys.platform == "darwin" else "so"
 with resources.path("pytrustorbopt", "libtrustorbopt." + ext) as lib_path:
-    ff = CDLL(str(lib_path))
+    libtrustorbopt = CDLL(str(lib_path))
 
 
-def solver_interface(
-    func: Callable[[np.ndarray], float],
+def solver_py_interface(
+    obj_func: Callable[[np.ndarray], float],
     update_orbs: Callable[
         [np.ndarray],
         Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]],
@@ -58,8 +58,11 @@ def solver_interface(
         gradient, Hessian diagonal and returns a procedure function to the Hessian
         linear transformation
         """
-        # function needs to be defined as a global variable to ensure that it is not
-        # garbage collected when the current function completes
+        # variables need to be defined as a global to ensure that they are not garbage
+        # collected when the current function completes
+        global grad
+        global h_diag
+        global hx
         global hess_x_interface
 
         # convert orbital rotation matrix pointer to numpy array
@@ -78,8 +81,11 @@ def solver_interface(
             # convert trial vector pointer to numpy array
             x = np.ctypeslib.as_array(x_ptr[0], shape=(n_param,))
 
-            # perform linear transformation and convert numpy array to pointer
-            hx_ptr[0] = hess_x(x).ctypes.data_as(POINTER(c_double))
+            # perform linear transformation
+            hx = hess_x(x)
+
+            # convert numpy array to pointer
+            hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
         # store the function pointer in hess_x_ptr
         hess_x_ptr[0] = hess_x_interface
@@ -92,11 +98,11 @@ def solver_interface(
         # convert orbital rotation matrix pointer to numpy array
         kappa = np.ctypeslib.as_array(kappa_ptr[0], shape=(n_param,))
 
-        return func(kappa)
+        return obj_func(kappa)
 
     # define result and argument types
-    ff.solver.restype = None
-    ff.solver.argtypes = [
+    libtrustorbopt.solver.restype = None
+    libtrustorbopt.solver.argtypes = [
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
         c_long,
@@ -114,7 +120,7 @@ def solver_interface(
     ]
 
     # call Fortran function
-    ff.solver(
+    libtrustorbopt.solver(
         update_orbs_interface,
         obj_func_interface,
         n_param,
@@ -136,7 +142,7 @@ def solver_interface(
     )
 
 
-def stability_check_interface(
+def stability_check_py_interface(
     grad: np.ndarray,
     h_diag: np.ndarray,
     hess_x: Callable[[np.ndarray], np.ndarray],
@@ -144,6 +150,7 @@ def stability_check_interface(
     conv_tol: Optional[float] = None,
     n_random_trial_vectors: Optional[int] = None,
     n_iter: Optional[int] = None,
+    verbose: Optional[int] = None,
 ) -> Tuple[bool, np.ndarray]:
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating data to the relevant data
@@ -160,8 +167,8 @@ def stability_check_interface(
         hx_ptr[0] = hess_x(x).ctypes.data_as(POINTER(c_double))
 
     # define result and argument types
-    ff.stability_check.restype = None
-    ff.stability_check.argtypes = [
+    libtrustorbopt.stability_check.restype = None
+    libtrustorbopt.stability_check.argtypes = [
         POINTER(c_double),
         POINTER(c_double),
         POINTER(hess_x_interface_type),
@@ -171,6 +178,7 @@ def stability_check_interface(
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_long),
+        POINTER(c_long),
     ]
 
     # initialize return variables
@@ -178,7 +186,7 @@ def stability_check_interface(
     kappa = np.empty(n_param, dtype=np.float64)
 
     # call Fortran function
-    ff.stability_check(
+    libtrustorbopt.stability_check(
         grad.ctypes.data_as(POINTER(c_double)),
         h_diag.ctypes.data_as(POINTER(c_double)),
         hess_x_interface,
@@ -192,6 +200,7 @@ def stability_check_interface(
             else byref(c_long(n_random_trial_vectors))
         ),
         None if n_iter is None else byref(c_long(n_iter)),
+        None if verbose is None else byref(c_long(verbose)),
     )
 
     return bool(stable), kappa

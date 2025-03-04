@@ -1,6 +1,7 @@
 module trustorbopt
 
-    use, intrinsic :: iso_fortran_env, only: int32, int64, real64
+    use, intrinsic :: iso_fortran_env, only: int32, int64, real64, &
+                                             stdout => output_unit, stderr => error_unit
 
     implicit none
 
@@ -56,13 +57,13 @@ module trustorbopt
 
     ! interfaces for callback functions
     abstract interface
-        subroutine update_orbs_type(kappa, func, grad, h_diag, hess_x)
+        subroutine update_orbs_type(kappa, func, grad, h_diag, hess_x_funptr)
             import :: rp
 
             real(rp), intent(in) :: kappa(:)
 
             real(rp), intent(out) :: func, grad(:), h_diag(:)
-            procedure(hess_x_type), pointer, intent(out) :: hess_x
+            procedure(hess_x_type), pointer, intent(out) :: hess_x_funptr
         end subroutine update_orbs_type
     end interface
 
@@ -100,8 +101,8 @@ contains
         logical, intent(in), optional :: stability, line_search
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
-        integer(ip), intent(in), optional :: n_macro, n_micro, verbose, seed
-        integer(ip), intent(inout), optional :: n_random_trial_vectors
+        integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
+                                             verbose, seed
 
         type(solver_settings_type) :: settings
         real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, residual_norm, &
@@ -116,7 +117,7 @@ contains
                    micro_converged, newton
         integer(ip) :: imacro, imicro, i, ntrial, initial_imicro
         integer(ip), parameter :: stability_n_points = 21
-        procedure(hess_x_type), pointer :: hess_x
+        procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), external :: dnrm2, ddot
 
         ! initialize settings
@@ -134,8 +135,8 @@ contains
         ! check that number of random trial vectors is below number of parameters
         if (settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
-            if (settings%verbose > 1) write (*, '(A, I0, A)') " Number of random "// &
-                "trial vectors should be smaller than half the number of "// &
+            if (settings%verbose > 1) write (stderr, '(A, I0, A)') " Number of "// &
+                "random trial vectors should be smaller than half the number of "// &
                 "parameters. Setting to ", settings%n_random_trial_vectors, "."
         end if
 
@@ -144,17 +145,17 @@ contains
 
         ! print header
         if (settings%verbose > 2) then
-            write (*, *) repeat("-", 101)
-            write (*, *) " Iteration | Objective function | Gradient RMS |", &
+            write (stdout, *) repeat("-", 101)
+            write (stdout, *) " Iteration | Objective function | Gradient RMS |", &
                 " Level shift |   Micro    | Trust radius | Step size "
-            write (*, *) "           |                    |              |", &
+            write (stdout, *) "           |                    |              |", &
                 "             | iterations |              |           "
-            write (*, *) repeat("-", 101)
+            write (stdout, *) repeat("-", 101)
         end if
 
         do imacro = 1, settings%n_macro
             ! calculate cost function, gradient and Hessian diagonal
-            call update_orbs(kappa, func, grad, h_diag, hess_x)
+            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
 
             ! sanity check for array size
             if (imacro == 1 .and. size(grad) /= n_param) then
@@ -171,27 +172,27 @@ contains
             ! log results
             if (settings%verbose > 2) then
                 if (imacro == 1) then
-                    write (*, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, 1PE8.2, '// &
-                           '3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", 8X, "-", '// &
-                           '5X, "|", 6X, "-", 3X)') imacro - 1, func, grad_rms
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, '// &
+                           '1PE8.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
+                           '8X, "-", 5X, "|", 6X, "-", 3X)') imacro - 1, func, grad_rms
                 else if (.not. stable) then
-                    write (*, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, 1PE8.2, '// &
-                           '3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", 8X, "-", '// &
-                           '5X, "|", 2X, 1PE8.2)') imacro - 1, func, grad_rms, &
-                        dnrm2(n_param, kappa, 1)
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, '// &
+                           '1PE8.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
+                           '8X, "-", 5X, "|", 2X, 1PE8.2)') imacro - 1, func, &
+                        grad_rms, dnrm2(n_param, kappa, 1)
                     stable = .true.
                 else
-                    write (*, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, 1PE8.2, '// &
-                           '3X, "|", 2X, 1PE9.2, 2X, "|", 6X, I3, 3X, "|", 4X, '// &
-                           '1PE8.2, 2X, "|", 2X, 1PE8.2)') imacro - 1, func, grad_rms, &
-                        -mu, imicro, trust_radius, dnrm2(n_param, kappa, 1)
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, '// &
+                           '1PE8.2, 3X, "|", 2X, 1PE9.2, 2X, "|", 6X, I3, 3X, "|", '// &
+                           '4X, 1PE8.2, 2X, "|", 2X, 1PE8.2)') imacro - 1, func, &
+                        grad_rms, -mu, imicro, trust_radius, dnrm2(n_param, kappa, 1)
                 end if
             end if
 
             ! check for convergence and stability
             if (grad_rms < settings%conv_tol) then
                 if (settings%stability) then
-                    call stability_check(grad, h_diag, hess_x, stable, kappa, &
+                    call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, &
                                          verbose=settings%verbose)
                     if (.not. stable) then
                         ! logarithmic line search
@@ -209,20 +210,22 @@ contains
                                 "objective function along unstable mode."
                         else if (imacro == 1) then
                             if (settings%verbose > 1) then
-                                write (*, *) "Started at saddle point. The "// &
+                                write (stderr, *) "Started at saddle point. The "// &
                                     "algorithm will continue by moving along "// &
                                     "eigenvector direction "
-                                write (*, *) "corresponding to negative eigenvalue."
+                                write (stderr, *) "corresponding to negative "// &
+                                    "eigenvalue."
                             end if
                         else
                             if (settings%verbose > 1) then
-                                write (*, *) "Reached saddle point. This is "// &
+                                write (stderr, *) "Reached saddle point. This is "// &
                                     "likely due to symmetry and can be avoided by "// &
                                     "increasing the number of "
-                                write (*, *) "random trial vectors. The algorithm "// &
-                                    "will continue by moving along eigenvector "
-                                write (*, *) "direction corresponding to negative "// &
-                                    "eigenvalue."
+                                write (stderr, *) "random trial vectors. The "// &
+                                    "algorithm will continue by moving along "// &
+                                    "eigenvector "
+                                write (stderr, *) "direction corresponding to "// &
+                                    "negative eigenvalue."
                             end if
                         end if
                         cycle
@@ -246,7 +249,7 @@ contains
             ! calculate linear transformations of basis vectors
             allocate (h_basis(n_param, ntrial))
             do i = 1, ntrial
-                h_basis(:, i) = hess_x(red_space_basis(:, i))
+                h_basis(:, i) = hess_x_funptr(red_space_basis(:, i))
             end do
 
             ! construct augmented Hessian in reduced space
@@ -301,7 +304,7 @@ contains
                     ! get normalized solution vector
                     solution_normalized = solution/dnrm2(n_param, solution, 1)
 
-                    ! reset initial residual norm if state changes
+                    ! reset initial residual norm if solution changes
                     if (ddot(n_param, last_solution_normalized, 1, &
                              solution_normalized, 1)**2 < 0.5d0) then
                         initial_imicro = imicro
@@ -309,7 +312,7 @@ contains
                     end if
 
                     ! check if micro iterations have converged
-                    if (residual_norm < max(red_factor*grad_norm, 1e-12)) then
+                    if (residual_norm < max(red_factor*grad_norm, 1d-12)) then
                         micro_converged = .true.
                         exit
                     else if (imicro - initial_imicro >= 5 .and. &
@@ -334,7 +337,7 @@ contains
                     call add_column(red_space_basis, basis_vec)
 
                     ! add linear transformation of new basis vector
-                    call add_column(h_basis, hess_x(basis_vec))
+                    call add_column(h_basis, hess_x_funptr(basis_vec))
 
                     ! construct new augmented Hessian
                     allocate (red_hess_vec(size(red_space_basis, 2) + 1))
@@ -409,21 +412,22 @@ contains
 
         ! finish logging
         if (settings%verbose > 2) then
-            write (*, *) repeat("-", 101)
-            write (*, '(A, I0)') " Total number of Hessian linear transformations: ", &
-                tot_hess_x
-            write (*, '(A, I0)') " Total number of orbital updates: ", tot_orb_update
+            write (stdout, *) repeat("-", 101)
+            write (stdout, '(A, I0)') " Total number of Hessian linear "// &
+                "transformations: ", tot_hess_x
+            write (stdout, '(A, I0)') " Total number of orbital updates: ", &
+                tot_orb_update
         end if
 
     end subroutine solver
 
-    subroutine stability_check(grad, h_diag, hess_x, stable, kappa, conv_tol, &
+    subroutine stability_check(grad, h_diag, hess_x_funptr, stable, kappa, conv_tol, &
                                n_random_trial_vectors, n_iter, verbose)
         !
         ! this subroutine performs a stability check
         !
         real(rp), intent(in) :: grad(:), h_diag(:)
-        procedure(hess_x_type), pointer, intent(in) :: hess_x
+        procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
         logical, intent(out) :: stable
         real(rp), intent(out) :: kappa(:)
         real(rp), intent(in), optional :: conv_tol
@@ -445,6 +449,14 @@ contains
 
         ! get number of parameters
         n_param = size(grad)
+
+        ! check that number of random trial vectors is below number of parameters
+        if (settings%n_random_trial_vectors > n_param/2) then
+            settings%n_random_trial_vectors = n_param/2
+            if (settings%verbose > 1) write (stderr, '(A, I0, A)') " Number of "// &
+                "random trial vectors should be smaller than half the number of "// &
+                "parameters. Setting to ", settings%n_random_trial_vectors, "."
+        end if
 
         ! get quantities for full Hessian
         full_grad = 2.d0*grad
@@ -539,8 +551,8 @@ contains
         else
             kappa = solution
             if (settings%verbose > 1) then
-                write (*, '(A, F0.2)') " Solution not stable. Lowest eigenvalue: ", &
-                    eigval
+                write (stderr, '(A, F0.2)') " Solution not stable. Lowest "// &
+                    "eigenvalue: ", eigval
             end if
         end if
 
@@ -554,7 +566,7 @@ contains
 
             real(rp) :: full_hess_x(size(x))
 
-            full_hess_x = 2.d0*hess_x(x)
+            full_hess_x = 2.d0*hess_x_funptr(x)
 
         end function full_hess_x
 
@@ -597,9 +609,12 @@ contains
         call dsysv("U", nred, 1, red_hess, nred, ipiv, red_space_solution, nred, work, &
                    lwork, info)
 
+        ! deallocate work array
+        deallocate (work)
+
         ! check for errors
         if (info /= 0) then
-            write (*, '(A, I0)') " Error in DSYSV, info = ", info
+            write (stderr, '(A, I0)') " Error in DSYSV, info = ", info
             error stop "Linear solver failed"
         end if
 
@@ -611,7 +626,7 @@ contains
     end subroutine newton_step
 
     subroutine bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                         red_space_solution, mu)
+                         red_space_solution, mu, error_flag)
         !
         ! this subroutine performs bisection to find the parameter alpha that matches
         ! the desired trust radius
@@ -619,6 +634,7 @@ contains
         real(rp), intent(inout) :: aug_hess(:, :)
         real(rp), intent(in) :: grad_norm, red_space_basis(:, :), trust_radius
         real(rp), intent(out) :: solution(:), red_space_solution(:), mu
+        character(:), intent(out), allocatable, optional :: error_flag
 
         real(rp) :: lower_alpha, middle_alpha, upper_alpha, lower_trust_dist, &
                     middle_trust_dist, upper_trust_dist
@@ -635,8 +651,14 @@ contains
         upper_trust_dist = dnrm2(size(solution), solution, 1) - trust_radius
 
         ! check if trust region is within bracketing range
-        if ((lower_trust_dist*upper_trust_dist) > 0.d0) error stop &
-            "Target trust region outside of bracketing range."
+        if ((lower_trust_dist*upper_trust_dist) > 0.d0) then
+            call raise_error(error_flag, "Target trust region outside of "// &
+                             "bracketing range.")
+            solution = 0.d0
+            red_space_solution = 0.d0
+            mu = 0.d0
+            return
+        end if
 
         ! get middle alpha
         middle_alpha = sqrt(upper_alpha*lower_alpha)
@@ -790,7 +812,7 @@ contains
 
         end do
 
-        ! check if minumum is bracketed
+        ! check if miniumum is bracketed
         if (.not. (((f_b < f_c .and. f_b <= f_a) .or. (f_b < f_a .and. f_b <= f_c)) &
                    .and. ((n_a < n_b .and. n_b < n_c) .or. &
                           (n_c < n_b .and. n_b < n_a)))) &
@@ -892,9 +914,12 @@ contains
         ! perform eigendecomposition
         call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
 
+        ! deallocate work array
+        deallocate (work)
+
         ! check for successful execution
         if (info /= 0) then
-            write (*, '(A, I0)') " Error in DSYEV, info = ", info
+            write (stderr, '(A, I0)') " Error in DSYEV, info = ", info
             error stop "Eigendecomposition failed"
         end if
 
@@ -931,9 +956,12 @@ contains
         ! compute eigenvalues
         call dsyev("N", "U", n, temp, n, eigvals, work, lwork, info)
 
+        ! deallocate work array
+        deallocate (work)
+
         ! check for successful execution
         if (info /= 0) then
-            write (*, '(A, I0)') " Error in DSYEV, info = ", info
+            write (stderr, '(A, I0)') " Error in DSYEV, info = ", info
             error stop "Eigendecomposition failed"
         end if
 
@@ -1003,16 +1031,29 @@ contains
 
     end function generate_trial_vectors
 
-    function gram_schmidt(vector, space) result(orth_vector)
+    function gram_schmidt(vector, space, error_flag) result(orth_vector)
         !
         ! this function orthonormalizes a vector with respect to a vector space
         !
         real(rp), intent(in) :: vector(:), space(:, :)
+        character(:), intent(out), allocatable, optional :: error_flag
 
         real(rp) :: orth_vector(size(vector))
 
         integer(ip) :: i
         real(rp), external :: ddot, dnrm2
+
+        if (dnrm2(size(vector), vector, 1) <= 1.d-12) then
+            call raise_error(error_flag, "Vector passed to Gram-Schmidt procedure "// &
+                             "is numerically zero.")
+            orth_vector = 0.d0
+            return
+        else if (size(space, 2) > size(space, 1) - 1) then
+            call raise_error(error_flag, "Number of vectors in Gram-Schmidt "// &
+                             "procedure larger than dimension of vector space.")
+            orth_vector = 0.d0
+            return
+        end if
 
         orth_vector = vector
         do i = 1, size(space, 2)
@@ -1122,5 +1163,20 @@ contains
         end if
 
     end function set_default_logical
+
+    subroutine raise_error(error_flag, error_msg)
+        !
+        ! this function raises an error
+        !
+        character(*) :: error_msg
+        character(:), intent(out), allocatable, optional :: error_flag
+
+        if (present(error_flag)) then
+            error_flag = error_msg
+        else
+            error stop error_msg
+        end if
+
+    end subroutine raise_error
 
 end module trustorbopt

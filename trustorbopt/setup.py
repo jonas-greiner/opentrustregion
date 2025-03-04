@@ -1,7 +1,7 @@
 import os
 import sys
 import subprocess
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Command
 from setuptools.command.build import build
 
 
@@ -30,6 +30,17 @@ class CMakeBuild(build):
         super().run()
 
 
+class RunTests(Command):
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        subprocess.check_call(["./build/testsuite"])
+
+
 setup(
     name="pytrustorbopt",
     version="0.1",
@@ -39,6 +50,6 @@ setup(
     packages=find_packages(),
     package_data={"pytrustorbopt": ["libtrustorbopt." + ext]},
     include_package_data=True,
-    cmdclass={"build": CMakeBuild},
+    cmdclass={"build": CMakeBuild, "test": RunTests},
     install_requires=["numpy"],
 )
