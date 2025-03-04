@@ -3,6 +3,7 @@ import sys
 import subprocess
 from setuptools import setup, find_packages, Command
 from setuptools.command.build import build
+from setuptools.command.build_ext import build_ext as _build_ext
 
 
 ext = "dylib" if sys.platform == "darwin" else "so"
@@ -41,6 +42,15 @@ class RunTests(Command):
         subprocess.check_call(["./build/testsuite"])
 
 
+class build_ext(_build_ext):
+    def finalize_options(self):
+        super().finalize_options()
+        import numpy
+
+        # ensure numpy can be found during build process
+        self.include_dirs.append(numpy.get_include())
+
+
 setup(
     name="pytrustorbopt",
     version="0.1",
@@ -50,6 +60,6 @@ setup(
     packages=find_packages(),
     package_data={"pytrustorbopt": ["libtrustorbopt." + ext]},
     include_package_data=True,
-    cmdclass={"build": CMakeBuild, "test": RunTests},
-    install_requires=["numpy"],
+    cmdclass={"build": CMakeBuild, "test": RunTests, "build_ext": build_ext},
+    setup_requires=["numpy"],
 )

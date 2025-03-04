@@ -21,9 +21,7 @@ program testsuite
     implicit none
 
     integer(ip) :: failures = 0, python_failures
-#ifdef PYTHON_TEST_SCRIPT
-    character(len=*), parameter :: cmd = PYTHON_TEST_SCRIPT
-#endif
+    character(256) :: executable
 
     ! run all tests and print results
     write (stdout, *) repeat("-", 50)
@@ -64,7 +62,10 @@ program testsuite
     write (stdout, *) "Running unit tests for Python interface..."
     write (stdout, *) repeat("-", 50)
 
-    call execute_command_line(cmd, exitstat=python_failures)
+    call get_command(command=executable)
+    call execute_command_line("python3 "// &
+                              PYTHON_TEST_SCRIPT &
+                              //" "//trim(executable), exitstat=python_failures)
     failures = failures + python_failures
 #endif
 

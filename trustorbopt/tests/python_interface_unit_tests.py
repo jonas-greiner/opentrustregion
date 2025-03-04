@@ -4,9 +4,9 @@ from unittest.mock import patch
 import numpy as np
 from pytrustorbopt import solver_py_interface, stability_check_py_interface
 
-# load mock library
+# load calling executable
 ext = "dylib" if sys.platform == "darwin" else "so"
-libtests = CDLL("testsuite")
+libtests = CDLL(sys.argv[1])
 
 # set signature for functions which extracts the test results
 libtests.test_solver_result.restypes = c_bool
