@@ -20,7 +20,7 @@ program testsuite
 
     implicit none
 
-    integer(ip) :: failures = 0, python_failure
+    integer(ip) :: failures = 0, python_failures
 #ifdef PYTHON_TEST_SCRIPT
     character(len=*), parameter :: cmd = PYTHON_TEST_SCRIPT
 #endif
