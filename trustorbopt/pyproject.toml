@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=60.0.0", "wheel", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytrustorbopt"
+version = "0.1.0"
+description = "Python interface to trustorbopt Fortran library"
+authors = [{ name = "Jonas Greiner", email = "jongr@kemi.dtu.dk" }]

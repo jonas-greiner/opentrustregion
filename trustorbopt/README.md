@@ -26,7 +26,7 @@ pip install .
 The installation can be tested by running
 
 ```sh
-python3 setup.py test
+python3 -m pytrustorbopt.testsuite
 ```
 
 ## Usage

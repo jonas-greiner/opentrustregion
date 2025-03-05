@@ -1,65 +1,37 @@
 import os
 import sys
 import subprocess
-from setuptools import setup, find_packages, Command
-from setuptools.command.build import build
-from setuptools.command.build_ext import build_ext as _build_ext
-
+import pathlib
+import shutil
+from setuptools import setup, find_packages
+from setuptools.command.build_py import build_py
 
 ext = "dylib" if sys.platform == "darwin" else "so"
+lib_file = f"libtrustorbopt.{ext}"
+package_dir = pathlib.Path(__file__).parent.absolute()
+build_dir = package_dir / "build"
 
 
-class CMakeBuild(build):
+class CMakeBuild(build_py):
     def run(self):
-        # create build directory
-        build_dir = os.path.abspath("build")
+        # ensure build directory exists
         os.makedirs(build_dir, exist_ok=True)
 
-        # run CMake configuration step
+        # run CMake configure & build
         subprocess.check_call(["cmake", ".."], cwd=build_dir)
-
-        # run CMake build step
         subprocess.check_call(["cmake", "--build", "."], cwd=build_dir)
 
-        # copy the built library into the package directory
-        lib_file = "libtrustorbopt." + ext
-        src_lib_path = os.path.join(build_dir, lib_file)
-        dest_lib_path = os.path.join(os.path.abspath("pytrustorbopt"), lib_file)
-        subprocess.check_call(["cp", src_lib_path, dest_lib_path])
+        # copy built binaries to package directory
+        shutil.copy(build_dir / lib_file, package_dir / "pytrustorbopt" / lib_file)
+        shutil.copy(build_dir / "testsuite", package_dir / "pytrustorbopt/testsuite")
 
         # run steps in parent class
         super().run()
 
 
-class RunTests(Command):
-    def initialize_options(self):
-        pass
-
-    def finalize_options(self):
-        pass
-
-    def run(self):
-        subprocess.check_call(["./build/testsuite"])
-
-
-class build_ext(_build_ext):
-    def finalize_options(self):
-        super().finalize_options()
-        import numpy
-
-        # ensure numpy can be found during build process
-        self.include_dirs.append(numpy.get_include())
-
-
 setup(
-    name="pytrustorbopt",
-    version="0.1",
-    author="Jonas Greiner",
-    author_email="jongr@kemi.dtu.dk",
-    description="Python interface to trustorbopt Fortran library",
     packages=find_packages(),
-    package_data={"pytrustorbopt": ["libtrustorbopt." + ext]},
     include_package_data=True,
-    cmdclass={"build": CMakeBuild, "test": RunTests, "build_ext": build_ext},
-    setup_requires=["numpy"],
+    package_data={"pytrustorbopt": [lib_file, "testsuite"]},
+    cmdclass={"build_py": CMakeBuild},
 )
