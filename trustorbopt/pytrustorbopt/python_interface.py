@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-
+import os
 import sys
 import numpy as np
 from importlib import resources
@@ -10,11 +10,20 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional
 
-
-# import dynamic library and define result and argument types
+# load the trustorbopt library
 ext = "dylib" if sys.platform == "darwin" else "so"
-with resources.path("pytrustorbopt", "libtrustorbopt." + ext) as lib_path:
-    libtrustorbopt = CDLL(str(lib_path))
+try:
+    with resources.path("pytrustorbopt", f"libtrustorbopt.{ext}") as lib_path:
+        libtrustorbopt = CDLL(str(lib_path))
+# fallback location if installation was not through setup.py
+except OSError:
+    try:
+        fallback_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "../build", f"libtrustorbopt.{ext}")
+        )
+        libtrustorbopt = CDLL(fallback_path)
+    except OSError:
+        raise FileNotFoundError("Cannot find trustorbopt library.")
 
 
 def solver_py_interface(

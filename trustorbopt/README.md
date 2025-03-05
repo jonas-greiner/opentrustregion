@@ -14,7 +14,7 @@ cmake ..
 cmake --build .
 ```
 
-The installation can be tested by running the ```testsuite``` executable in the ```build``` directory.
+The installation can be tested by running the ```testsuite.py``` file in the ```pytrustorbopt``` directory.
 
 ### Python Usage
 To install the library for use with Python:

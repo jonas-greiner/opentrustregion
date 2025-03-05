@@ -1,9 +1,278 @@
-import subprocess
+import os
 import sys
+import unittest
 from importlib import resources
+from ctypes import CDLL, c_bool
+from unittest.mock import patch
 
-with resources.path("pytrustorbopt", "testsuite") as exe_path:
-    if not exe_path.exists():
-        print("Error: Testsuite executable not found.")
-        sys.exit(1)
-    subprocess.check_call([str(exe_path)])
+# check if numpy is available
+try:
+    import numpy as np
+
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+
+# check if pytrustorbopt is installed or import module in same directory
+try:
+    from pytrustorbopt import solver_py_interface, stability_check_py_interface
+except ImportError:
+    from python_interface import solver_py_interface, stability_check_py_interface
+
+# load the testsuite library
+ext = "dylib" if sys.platform == "darwin" else "so"
+try:
+    with resources.path("pytrustorbopt", f"libtestsuite.{ext}") as lib_path:
+        libtestsuite = CDLL(str(lib_path))
+# fallback location if installation was not through setup.py
+except OSError:
+    try:
+        fallback_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "../build", f"libtestsuite.{ext}")
+        )
+        libtestsuite = CDLL(fallback_path)
+    except OSError:
+        raise FileNotFoundError("Cannot find testsuite library.")
+
+
+# define all tests
+fortran_tests = {
+    "trustorbopt_tests": [
+        "raise_error",
+        "set_default",
+        "init_solver_settings",
+        "init_stability_settings",
+        "init_rng",
+        "gram_schmidt",
+        "generate_trial_vectors",
+        "add_column",
+        "extend_symm_matrix",
+        "min_eigval",
+        "symm_mat_min_eig",
+        "bracket",
+        "newton_step",
+        "bisection",
+        "solver",
+        "stability_check",
+    ],
+    "c_interface_tests": [
+        "solver_c_wrapper",
+        "stability_check_c_wrapper",
+        "update_orbs_c_wrapper",
+        "hess_x_c_wrapper",
+        "obj_func_c_wrapper",
+        "set_default_c_ptr",
+    ],
+    "system_tests": ["h2o_atomic_fb", "h2o_saddle_fb"],
+}
+
+# define return type of Fortran functions
+for tests in fortran_tests.values():
+    for test in tests:
+        getattr(libtestsuite, f"test_{test}").restype = c_bool
+
+
+# define function to add tests to test classes
+def add_tests(cls):
+
+    def create_test(func_name):
+        def test(self):
+            result = getattr(libtestsuite, func_name)()
+            if result:
+                print(f" {func_name} PASSED")
+            self.assertTrue(result, f"{func_name} failed")
+
+        return test
+
+    for func_name in cls.tests:
+        setattr(cls, f"test_{func_name}", create_test(f"test_{func_name}"))
+
+    return cls
+
+
+@add_tests
+class TrustOrbOptTests(unittest.TestCase):
+    """
+    this class contains unit tests for trustorbopt
+    """
+
+    tests = fortran_tests["trustorbopt_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print(50 * "-")
+        print("Running unit tests for trustorbopt...")
+        print(50 * "-")
+        return super().setUpClass()
+
+
+@add_tests
+class CInterfaceTests(unittest.TestCase):
+    """
+    this class contains unit tests for the C interface
+    """
+
+    tests = fortran_tests["c_interface_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print(50 * "-")
+        print("Running unit tests for C interface...")
+        print(50 * "-")
+        return super().setUpClass()
+
+
+@unittest.skipUnless(NUMPY_AVAILABLE, "NumPy not available.")
+class PyInterfaceTests(unittest.TestCase):
+    """
+    this class contains unit tests for the Python interface
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        print(50 * "-")
+        print("Running unit tests for Python interface...")
+        print(50 * "-")
+        return super().setUpClass()
+
+    # replace original library with mock library
+    @patch(
+        "pytrustorbopt.python_interface.libtrustorbopt.solver", libtestsuite.mock_solver
+    )
+    def test_solver_py_interface(self):
+        """
+        this function tests the solver python interface
+        """
+
+        def mock_obj_func(kappa):
+            """
+            this function is a mock function for the objective function
+            """
+            return np.sum(kappa)
+
+        def mock_update_orbs(kappa):
+            """
+            this function is a mock function for the orbital update function
+            """
+            func = np.sum(kappa)
+            grad = 2 * kappa
+            h_diag = 3 * kappa
+
+            def hess_x(x):
+                return 4 * x
+
+            return func, grad, h_diag, hess_x
+
+        # call solver python interface without optional arguments
+        solver_py_interface(mock_obj_func, mock_update_orbs, 3)
+
+        # call solver python interface with optional arguments
+        solver_py_interface(
+            mock_obj_func,
+            mock_update_orbs,
+            3,
+            stability=False,
+            line_search=True,
+            conv_tol=1e-3,
+            n_random_trial_vectors=5,
+            start_trust_radius=0.2,
+            n_macro=300,
+            n_micro=200,
+            global_red_factor=1e-2,
+            local_red_factor=1e-3,
+            verbose=3,
+            seed=33,
+        )
+
+        self.assertTrue(libtestsuite.test_solver_result(), "solver_py_interface failed")
+        print("test_solver_py_interface PASSED")
+
+    # replace original library with mock library
+    @patch(
+        "pytrustorbopt.python_interface.libtrustorbopt.stability_check",
+        libtestsuite.mock_stability_check,
+    )
+    def test_stability_check_py_interface(self):
+        """
+        this function tests the stability check python interface
+        """
+        grad = np.full(3, 2.0, dtype=np.float64)
+        h_diag = np.full(3, 3.0, dtype=np.float64)
+
+        def hess_x(x):
+            return 4 * x
+
+        # call stability check python interface without optional arguments
+        stable, kappa = stability_check_py_interface(grad, h_diag, hess_x, 3)
+
+        if stable:
+            print(
+                "test_stability_check_py_interface failed: Returned stability boolean "
+                "wrong."
+            )
+        self.assertFalse(
+            stable,
+            "test_stability_check_py_interface failed: Returned stability boolean "
+            "wrong.",
+        )
+        if not np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)):
+            print("test_stability_check_py_interface failed: Returned direction wrong.")
+        self.assertTrue(
+            np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)),
+            "test_stability_check_py_interface failed: Returned direction wrong.",
+        )
+
+        # call stability check python interface with optional arguments
+        stable, kappa = stability_check_py_interface(
+            grad,
+            h_diag,
+            hess_x,
+            3,
+            conv_tol=1e-3,
+            n_random_trial_vectors=3,
+            n_iter=50,
+            verbose=3,
+        )
+
+        # check if returned variables are correct
+        if stable:
+            print(
+                "test_stability_check_py_interface failed: Returned stability boolean "
+                "wrong."
+            )
+        self.assertFalse(
+            stable,
+            "test_stability_check_py_interface failed: Returned stability boolean "
+            "wrong.",
+        )
+        if not np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)):
+            print("test_stability_check_py_interface failed: Returned direction wrong.")
+        self.assertTrue(
+            np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)),
+            "test_stability_check_py_interface failed: Returned direction wrong.",
+        )
+        self.assertTrue(
+            libtestsuite.test_stability_check_result(),
+            "stability_check_py_interface failed",
+        )
+        print("test_stability_check_py_interface PASSED")
+
+
+@add_tests
+class SystemTests(unittest.TestCase):
+    """
+    this class contains system tests for trustorbopt
+    """
+
+    tests = fortran_tests["system_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print(50 * "-")
+        print("Running system tests for trustorbopt...")
+        print(50 * "-")
+        return super().setUpClass()
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=0)

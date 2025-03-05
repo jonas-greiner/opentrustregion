@@ -1,6 +1,7 @@
 module trustorbopt_system_tests
 
     use trustorbopt, only: rp, ip, stderr
+    use iso_c_binding, only: c_bool
 
     implicit none
 
@@ -17,7 +18,7 @@ module trustorbopt_system_tests
 
 contains
 
-    logical function test_h2o_atomic_fb()
+    logical(c_bool) function test_h2o_atomic_fb() bind(C)
         !
         ! this function tests the Foster-Boys localization on water
         !
@@ -86,7 +87,7 @@ contains
         if (.not. stable) then
             write (stderr, *) "test_h2o_atomic_fb failed: Stability check did not "// &
                 "converge to minimum."
-            test_h2o_atomic_fb = .true.
+            test_h2o_atomic_fb = .false.
         end if
 
         ! deallocate arrays
@@ -101,7 +102,7 @@ contains
 
     end function test_h2o_atomic_fb
 
-    logical function test_h2o_saddle_fb()
+    logical(c_bool) function test_h2o_saddle_fb() bind(C)
         !
         ! this function tests the Foster-Boys localization on water starting from a
         ! saddle point
@@ -171,7 +172,7 @@ contains
         if (.not. stable) then
             write (stderr, *) "test_h2o_saddle_fb failed: Stability check did not "// &
                 "converge to minimum."
-            test_h2o_saddle_fb = .true.
+            test_h2o_saddle_fb = .false.
         end if
 
         ! deallocate arrays

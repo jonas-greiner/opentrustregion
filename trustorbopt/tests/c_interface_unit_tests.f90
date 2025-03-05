@@ -62,7 +62,7 @@ contains
 
     end function mock_obj_func
 
-    logical function test_solver_c_wrapper()
+    logical(c_bool) function test_solver_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the solver
         !
@@ -134,7 +134,7 @@ contains
 
     end function test_solver_c_wrapper
 
-    logical function test_stability_check_c_wrapper()
+    logical(c_bool) function test_stability_check_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the stability check
         !
@@ -208,7 +208,7 @@ contains
 
     end function test_stability_check_c_wrapper
 
-    logical function test_update_orbs_c_wrapper()
+    logical(c_bool) function test_update_orbs_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the orbital update
         !
@@ -264,7 +264,7 @@ contains
 
     end function test_update_orbs_c_wrapper
 
-    logical function test_hess_x_c_wrapper()
+    logical(c_bool) function test_hess_x_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the Hessian linear transformation
         !
@@ -290,7 +290,7 @@ contains
 
     end function test_hess_x_c_wrapper
 
-    logical function test_obj_func_c_wrapper()
+    logical(c_bool) function test_obj_func_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the Hessian linear transformation
         !
@@ -316,7 +316,7 @@ contains
 
     end function test_obj_func_c_wrapper
 
-    logical function test_set_default_c_ptr()
+    logical(c_bool) function test_set_default_c_ptr() bind(C)
         !
         ! this function tests the function that sets default values for variables
         !

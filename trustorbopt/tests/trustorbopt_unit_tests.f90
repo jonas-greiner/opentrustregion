@@ -1,6 +1,7 @@
 module trustorbopt_unit_tests
 
     use trustorbopt, only: rp, ip, stderr
+    use iso_c_binding, only: c_bool
 
     implicit none
 
@@ -99,7 +100,7 @@ contains
 
     end subroutine hartmann6d_hessian
 
-    logical function test_solver()
+    logical(c_bool) function test_solver() bind(C)
         !
         ! this function tests the solver subroutine
         !
@@ -225,7 +226,7 @@ contains
 
     end function test_solver
 
-    logical function test_stability_check()
+    logical(c_bool) function test_stability_check() bind(C)
         !
         ! this function tests the stability check subroutine
         !
@@ -304,7 +305,7 @@ contains
 
     end function test_stability_check
 
-    logical function test_newton_step()
+    logical(c_bool) function test_newton_step() bind(C)
         !
         ! this function tests the Newton step subroutine
         !
@@ -359,7 +360,7 @@ contains
 
     end function test_newton_step
 
-    logical function test_bisection()
+    logical(c_bool) function test_bisection() bind(C)
         !
         ! this function tests the bisection subroutine
         !
@@ -448,7 +449,7 @@ contains
 
     end function test_bisection
 
-    logical function test_bracket()
+    logical(c_bool) function test_bracket() bind(C)
         !
         ! this function tests the bisection subroutine
         !
@@ -482,7 +483,7 @@ contains
 
     end function test_bracket
 
-    logical function test_extend_symm_matrix()
+    logical(c_bool) function test_extend_symm_matrix() bind(C)
         !
         ! this function tests the subroutine for extending a symmetric matrix
         !
@@ -523,7 +524,7 @@ contains
 
     end function test_extend_symm_matrix
 
-    logical function test_add_column()
+    logical(c_bool) function test_add_column() bind(C)
         !
         ! this function tests the subroutine for adding a column to a matrix
         !
@@ -564,7 +565,7 @@ contains
 
     end function test_add_column
 
-    logical function test_symm_mat_min_eig()
+    logical(c_bool) function test_symm_mat_min_eig() bind(C)
         !
         ! this function tests the subroutine for determining the minimum eigenvalue and
         ! corresponding eigenvector for a symmetric matrix
@@ -598,7 +599,7 @@ contains
 
     end function test_symm_mat_min_eig
 
-    logical function test_min_eigval()
+    logical(c_bool) function test_min_eigval() bind(C)
         !
         ! this function tests the function for determining the minimum eigenvalue for
         ! a symmetric matrix
@@ -624,7 +625,7 @@ contains
 
     end function test_min_eigval
 
-    logical function test_init_rng()
+    logical(c_bool) function test_init_rng() bind(C)
         !
         ! this function tests the initialization subroutine for the random number
         ! generator
@@ -675,7 +676,7 @@ contains
 
     end function test_init_rng
 
-    logical function test_generate_trial_vectors()
+    logical(c_bool) function test_generate_trial_vectors() bind(C)
         !
         ! this function tests the function which generates trial vectors for the
         ! Davidson procedure
@@ -762,7 +763,7 @@ contains
 
     end function test_generate_trial_vectors
 
-    logical function test_gram_schmidt()
+    logical(c_bool) function test_gram_schmidt() bind(C)
         !
         ! this function tests the Gram-Schmidt function which orthonormalizes a vector
         ! to a given basis
@@ -826,7 +827,7 @@ contains
 
     end function test_gram_schmidt
 
-    logical function test_init_solver_settings()
+    logical(c_bool) function test_init_solver_settings() bind(C)
         !
         ! this function tests the subroutine which initializes the solver settings
         !
@@ -889,7 +890,7 @@ contains
 
     end function test_init_solver_settings
 
-    logical function test_init_stability_settings()
+    logical(c_bool) function test_init_stability_settings() bind(C)
         !
         ! this function tests the subroutine which initializes the stability check
         ! settings
@@ -933,7 +934,7 @@ contains
 
     end function test_init_stability_settings
 
-    logical function test_set_default()
+    logical(c_bool) function test_set_default() bind(C)
         !
         ! this function tests the subroutine which sets default values
         !
@@ -986,7 +987,7 @@ contains
 
     end function test_set_default
 
-    logical function test_raise_error()
+    logical(c_bool) function test_raise_error() bind(C)
         !
         ! this function tests the subroutine for raising errors
         !

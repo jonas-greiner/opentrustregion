@@ -7,7 +7,8 @@ from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py
 
 ext = "dylib" if sys.platform == "darwin" else "so"
-lib_file = f"libtrustorbopt.{ext}"
+libtrustorbopt_file = f"libtrustorbopt.{ext}"
+libtestsuite_file = f"libtestsuite.{ext}"
 package_dir = pathlib.Path(__file__).parent.absolute()
 build_dir = package_dir / "build"
 
@@ -22,8 +23,14 @@ class CMakeBuild(build_py):
         subprocess.check_call(["cmake", "--build", "."], cwd=build_dir)
 
         # copy built binaries to package directory
-        shutil.copy(build_dir / lib_file, package_dir / "pytrustorbopt" / lib_file)
-        shutil.copy(build_dir / "testsuite", package_dir / "pytrustorbopt/testsuite")
+        shutil.copy(
+            build_dir / libtrustorbopt_file,
+            package_dir / "pytrustorbopt" / libtrustorbopt_file,
+        )
+        shutil.copy(
+            build_dir / libtestsuite_file,
+            package_dir / "pytrustorbopt" / libtestsuite_file,
+        )
 
         # run steps in parent class
         super().run()
@@ -32,6 +39,6 @@ class CMakeBuild(build_py):
 setup(
     packages=find_packages(),
     include_package_data=True,
-    package_data={"pytrustorbopt": [lib_file, "testsuite"]},
+    package_data={"pytrustorbopt": [libtrustorbopt_file, libtestsuite_file]},
     cmdclass={"build_py": CMakeBuild},
 )
