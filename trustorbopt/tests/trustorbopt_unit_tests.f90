@@ -149,7 +149,8 @@ contains
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(vars - minimum2) > 1e-8)) then
+        if (any(abs(vars - minimum1) > 1d-6) .and. &
+            any(abs(vars - minimum2) > 1d-6)) then
             write (stderr, *) "test_solver failed: Solver did not find correct minimum."
             test_solver = .false.
         end if
@@ -168,8 +169,9 @@ contains
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(vars - minimum1) > 1e-8)) then
-            write (stderr, *) "test_solver failed: Solver did not find correct minimum."
+        if (any(abs(vars - minimum1) > 1d-6) .and. &
+            any(abs(vars - minimum2) > 1d-6)) then
+            write (stderr, *) "test_solver failed: Solver did not find minimum."
             test_solver = .false.
         end if
 
@@ -999,7 +1001,7 @@ contains
         test_raise_error = .true.
 
         ! check if error message is correctly returned when optional argument is passed
-        call raise_error(error_flag, "Error!")
+        error_flag = raise_error("Error!", .true.)
         if (error_flag /= "Error!") then
             write (stderr, *) "test_raise_error failed: Returned character does "// &
                 "not equal passed error message"

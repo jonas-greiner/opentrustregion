@@ -188,7 +188,10 @@ contains
     end function test_h2o_saddle_fb
 
     real(rp) function obj_func(kappa)
-
+        !
+        ! this function calculates the Foster-Boys orbital localization objective 
+        ! function
+        !
         real(rp), intent(in) :: kappa(:)
 
         real(rp), dimension(n_mo, n_mo) :: kappa_full, u
@@ -313,64 +316,68 @@ contains
         ! get function pointer to Hessian linear transformation
         hess_x_funptr => hess_x
 
-    contains
-
-        function hess_x(x)
-
-            real(rp), intent(in) :: x(:)
-            real(rp) :: hess_x(n_param)
-
-            real(rp) :: x_full(n_mo, n_mo), hess_x_full(n_mo, n_mo), tmp2(3, n_mo), &
-                        tmp3(3, n_mo, n_mo)
-            integer(ip) :: xyz1, i1, j1, idx1
-
-            ! unpack trial vector
-            x_full = 0.0
-            idx1 = 1
-            do i1 = 2, n_mo
-                do j1 = 1, i1 - 1
-                    x_full(i1, j1) = x(idx1)
-                    x_full(j1, i1) = -x(idx1)
-                    idx1 = idx1 + 1
-                end do
-            end do
-
-            ! construct intermediates
-            do xyz1 = 1, 3
-                do i1 = 1, n_mo
-                    tmp2(xyz1, i1) = sum(x_full(:, i1)*r_mo_ints(xyz1, i1, :))
-                    do j1 = 1, n_mo
-                        tmp3(xyz1, i1, j1) = sum(x_full(:, j1)*r_mo_ints(xyz1, i1, :))
-                    end do
-                end do
-            end do
-
-            ! construct Hessian linear transformation
-            hess_x_full = matmul(transpose(x_full), transpose(rii_rij_rjj_rji))
-            do i1 = 1, n_mo
-                do j1 = 1, n_mo
-                    hess_x_full(i1, j1) = hess_x_full(i1, j1) + &
-                                          2*sum(r_mo_ints(:, j1, i1)*tmp2(:, j1) - &
-                                                r_mo_ints(:, i1, i1)*tmp3(:, j1, i1) - &
-                                                r_mo_ints(:, j1, i1)*tmp2(:, i1))
-                end do
-            end do
-
-            ! extract lower triagonal
-            idx1 = 1
-            do i1 = 2, n_mo
-                do j1 = 1, i1 - 1
-                    hess_x(idx1) = -(hess_x_full(i1, j1) - hess_x_full(j1, i1))
-                    idx1 = idx1 + 1
-                end do
-            end do
-
-        end function hess_x
-
     end subroutine update_orbs
 
-    function exp_asymm_mat(mat)
+    function hess_x(x)
+        !
+        ! this function performs the Hessian linear transformation for Foster-Boys 
+        ! orbital localization, it cannot be defined within update_orbs as it would 
+        ! otherwise go out of scope when that subroutine returns
+        !
+        real(rp), intent(in) :: x(:)
+        real(rp) :: hess_x(n_param)
 
+        real(rp) :: x_full(n_mo, n_mo), hess_x_full(n_mo, n_mo), tmp2(3, n_mo), &
+                    tmp3(3, n_mo, n_mo)
+        integer(ip) :: xyz1, i1, j1, idx1
+
+        ! unpack trial vector
+        x_full = 0.0
+        idx1 = 1
+        do i1 = 2, n_mo
+            do j1 = 1, i1 - 1
+                x_full(i1, j1) = x(idx1)
+                x_full(j1, i1) = -x(idx1)
+                idx1 = idx1 + 1
+            end do
+        end do
+
+        ! construct intermediates
+        do xyz1 = 1, 3
+            do i1 = 1, n_mo
+                tmp2(xyz1, i1) = sum(x_full(:, i1)*r_mo_ints(xyz1, i1, :))
+                do j1 = 1, n_mo
+                    tmp3(xyz1, i1, j1) = sum(x_full(:, j1)*r_mo_ints(xyz1, i1, :))
+                end do
+            end do
+        end do
+
+        ! construct Hessian linear transformation
+        hess_x_full = matmul(transpose(x_full), transpose(rii_rij_rjj_rji))
+        do i1 = 1, n_mo
+            do j1 = 1, n_mo
+                hess_x_full(i1, j1) = hess_x_full(i1, j1) + &
+                                      2*sum(r_mo_ints(:, j1, i1)*tmp2(:, j1) - &
+                                            r_mo_ints(:, i1, i1)*tmp3(:, j1, i1) - &
+                                            r_mo_ints(:, j1, i1)*tmp2(:, i1))
+            end do
+        end do
+
+        ! extract lower triagonal
+        idx1 = 1
+        do i1 = 2, n_mo
+            do j1 = 1, i1 - 1
+                hess_x(idx1) = -(hess_x_full(i1, j1) - hess_x_full(j1, i1))
+                idx1 = idx1 + 1
+            end do
+        end do
+
+    end function hess_x
+
+    function exp_asymm_mat(mat)
+        !
+        ! this function calculates the matrix exponential of an asymmetric matrix
+        !
         real(rp), intent(in) :: mat(:, :)
         real(rp) :: exp_asymm_mat(size(mat, 1), size(mat, 2))
 
@@ -379,6 +386,7 @@ contains
         real(rp) :: eigvals(size(mat, 1)), rwork(3*size(mat, 1) - 2)
         complex(rp) :: tmp(size(mat, 1), size(mat, 2)), &
                        eigvecs(size(mat, 1), size(mat, 2))
+        external :: zheev
 
         ! size of matrix
         n = size(mat, 1)

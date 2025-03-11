@@ -57,17 +57,6 @@ module trustorbopt
 
     ! interfaces for callback functions
     abstract interface
-        subroutine update_orbs_type(kappa, func, grad, h_diag, hess_x_funptr)
-            import :: rp
-
-            real(rp), intent(in) :: kappa(:)
-
-            real(rp), intent(out) :: func, grad(:), h_diag(:)
-            procedure(hess_x_type), pointer, intent(out) :: hess_x_funptr
-        end subroutine update_orbs_type
-    end interface
-
-    abstract interface
         function hess_x_type(x) result(hess_x)
             import :: rp
 
@@ -75,6 +64,17 @@ module trustorbopt
 
             real(rp) :: hess_x(size(x))
         end function hess_x_type
+    end interface
+
+    abstract interface
+        subroutine update_orbs_type(kappa, func, grad, h_diag, hess_x_funptr)
+            import :: rp, hess_x_type
+
+            real(rp), intent(in) :: kappa(:)
+
+            real(rp), intent(out) :: func, grad(:), h_diag(:)
+            procedure(hess_x_type), pointer, intent(out) :: hess_x_funptr
+        end subroutine update_orbs_type
     end interface
 
     abstract interface
@@ -119,6 +119,7 @@ contains
         integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), external :: dnrm2, ddot
+        external :: dgemm, dgemv
 
         ! initialize settings
         call settings%init_solver_settings(stability, line_search, conv_tol, &
@@ -172,19 +173,19 @@ contains
             ! log results
             if (settings%verbose > 2) then
                 if (imacro == 1) then
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, '// &
-                           '1PE8.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 2X, '// &
+                           '1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
                            '8X, "-", 5X, "|", 6X, "-", 3X)') imacro - 1, func, grad_rms
                 else if (.not. stable) then
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, '// &
-                           '1PE8.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
-                           '8X, "-", 5X, "|", 2X, 1PE8.2)') imacro - 1, func, &
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 2X, '// &
+                           '1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
+                           '8X, "-", 5X, "|", X, 1PE9.2)') imacro - 1, func, &
                         grad_rms, dnrm2(n_param, kappa, 1)
                     stable = .true.
                 else
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 3X, '// &
-                           '1PE8.2, 3X, "|", 2X, 1PE9.2, 2X, "|", 6X, I3, 3X, "|", '// &
-                           '4X, 1PE8.2, 2X, "|", 2X, 1PE8.2)') imacro - 1, func, &
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 2X, '// &
+                           '1PE9.2, 3X, "|", 2X, 1PE9.2, 2X, "|", 6X, I3, 3X, "|", '// &
+                           '3X, 1PE9.2, 2X, "|", X, 1PE9.2)') imacro - 1, func, &
                         grad_rms, -mu, imicro, trust_radius, dnrm2(n_param, kappa, 1)
                 end if
             end if
@@ -442,6 +443,7 @@ contains
                                  red_space_hess(:, :), red_space_solution(:), &
                                  red_space_hess_vec(:)
         real(rp), external :: dnrm2
+        external :: dgemm, dgemv
 
         ! initialize settings
         call settings%init_stability_settings(conv_tol, n_random_trial_vectors, &
@@ -585,6 +587,7 @@ contains
         real(rp) :: red_hess(size(red_space_basis, 2), size(red_space_basis, 2)), &
                     ipiv(size(red_space_basis, 2))
         real(rp), allocatable :: work(:)
+        external :: dsysv, dgemv
 
         ! reduced space size
         nred = size(red_space_basis, 2)
@@ -652,8 +655,8 @@ contains
 
         ! check if trust region is within bracketing range
         if ((lower_trust_dist*upper_trust_dist) > 0.d0) then
-            call raise_error(error_flag, "Target trust region outside of "// &
-                             "bracketing range.")
+            error_flag = raise_error("Target trust region outside of bracketing "// &
+                "range.", present(error_flag))
             solution = 0.d0
             red_space_solution = 0.d0
             mu = 0.d0
@@ -691,6 +694,7 @@ contains
             real(rp), intent(in) :: alpha
 
             real(rp) :: eigvec(size(aug_hess, 1))
+            external :: dgemv
 
             ! finish construction of augmented Hessian
             aug_hess(1, 2) = alpha*grad_norm
@@ -896,6 +900,7 @@ contains
         real(rp), allocatable :: work(:)
         real(rp) :: eigvals(size(symm_matrix, 1)), &
                     eigvecs(size(symm_matrix, 1), size(symm_matrix, 2))
+        external :: dsyev
 
         ! size of matrix
         n = size(symm_matrix, 1)
@@ -938,6 +943,7 @@ contains
         real(rp) :: eigvals(size(matrix, 1)), temp(size(matrix, 1), size(matrix, 2))
         integer(ip) :: n, lwork, info
         real(rp), allocatable :: work(:)
+        external :: dsyev
 
         ! size of matrix
         n = size(matrix, 1)
@@ -1044,13 +1050,13 @@ contains
         real(rp), external :: ddot, dnrm2
 
         if (dnrm2(size(vector), vector, 1) <= 1.d-12) then
-            call raise_error(error_flag, "Vector passed to Gram-Schmidt procedure "// &
-                             "is numerically zero.")
+            error_flag = raise_error("Vector passed to Gram-Schmidt procedure is "// &
+                        "numerically zero.", present(error_flag))
             orth_vector = 0.d0
             return
         else if (size(space, 2) > size(space, 1) - 1) then
-            call raise_error(error_flag, "Number of vectors in Gram-Schmidt "// &
-                             "procedure larger than dimension of vector space.")
+            error_flag = raise_error("Number of vectors in Gram-Schmidt procedure "// &
+                        "larger than dimension of vector space.", present(error_flag))
             orth_vector = 0.d0
             return
         end if
@@ -1164,19 +1170,17 @@ contains
 
     end function set_default_logical
 
-    subroutine raise_error(error_flag, error_msg)
+    function raise_error(error_msg, return_error)
         !
         ! this function raises an error
         !
-        character(*) :: error_msg
-        character(:), intent(out), allocatable, optional :: error_flag
+        character(*), intent(in) :: error_msg
+        logical, intent(in) :: return_error
+        character(:), allocatable :: raise_error
 
-        if (present(error_flag)) then
-            error_flag = error_msg
-        else
-            error stop error_msg
-        end if
+        raise_error = error_msg
+        if (.not. return_error) error stop error_msg
 
-    end subroutine raise_error
+    end function raise_error
 
 end module trustorbopt

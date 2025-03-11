@@ -164,8 +164,8 @@ contains
         grad_c = 2.d0
         h_diag_c = 3.d0
 
-        ! call stability check first without associated optional arguments which should produce
-        ! default values
+        ! call stability check first without associated optional arguments which should 
+        ! produce default values
         call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
                                        stable, kappa, conv_tol_c_ptr, &
                                        n_random_trial_vectors_c_ptr, n_iter_c_ptr, &

@@ -9,14 +9,15 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
     set(CMAKE_Fortran_FLAGS_DEBUG "-g -Wall -Wextra -fcheck=all -fbacktrace")
     set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -march=native")
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
+    set(CMAKE_Fortran_FLAGS "-fpscomp logicals")
     set(CMAKE_Fortran_FLAGS_DEBUG "-g -warn all -traceback")
     set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -xHost")
 endif()
 
 # try finding 32-bit BLAS/LAPACK first
 set(BLA_SIZEOF_INTEGER 4 CACHE STRING "Size of BLAS/LAPACK integer type (4 for LP64, 8 for ILP64)")
-find_package(BLAS QUIET)
-find_package(LAPACK QUIET)
+find_package(BLAS)
+find_package(LAPACK)
 
 # check if 32-bit BLAS/LAPACK found
 if (NOT BLAS_FOUND OR NOT LAPACK_FOUND)
