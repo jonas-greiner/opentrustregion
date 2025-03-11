@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-project(trustorbopt Fortran)
+project(trustorbopt Fortran C)
 
 # default build type
-set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
+if(not CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 
 # set flags for build types
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
