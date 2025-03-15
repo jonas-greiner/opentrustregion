@@ -71,7 +71,6 @@ def solver_py_interface(
         # collected when the current function completes
         global grad
         global h_diag
-        global hx
         global hess_x_interface
 
         # convert orbital rotation matrix pointer to numpy array
@@ -87,6 +86,10 @@ def solver_py_interface(
 
         @hess_x_interface_type
         def hess_x_interface(x_ptr, hx_ptr):
+            # variables need to be defined as a global to ensure that they are not 
+            # garbage collected when the current function completes
+            global hx
+
             # convert trial vector pointer to numpy array
             x = np.ctypeslib.as_array(x_ptr[0], shape=(n_param,))
 

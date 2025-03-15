@@ -1044,7 +1044,7 @@ contains
         real(rp), intent(in) :: vector(:), space(:, :)
         character(:), intent(out), allocatable, optional :: error_flag
 
-        real(rp) :: orth_vector(size(vector))
+        real(rp) :: orth_vector(size(vector)), orth(size(space, 2))
 
         integer(ip) :: i
         real(rp), external :: ddot, dnrm2
@@ -1062,11 +1062,17 @@ contains
         end if
 
         orth_vector = vector
-        do i = 1, size(space, 2)
-            orth_vector = orth_vector - ddot(size(vector), vector, 1, space(:, i), 1)/ &
-                          ddot(size(vector), space(:, i), 1, space(:, i), 1)*space(:, i)
+        do while (.true.)
+            do i = 1, size(space, 2)
+                orth_vector = orth_vector - ddot(size(vector), orth_vector, 1, &
+                            space(:, i), 1)*space(:, i)
+            end do
+            orth_vector = orth_vector/dnrm2(size(vector), orth_vector, 1)
+
+            call dgemv("T", size(vector), size(space, 2), 1.d0, space, size(vector), &
+                       orth_vector, 1, 0.d0, orth, 1)
+            if (maxval(abs(orth)) < 1.d-14) exit
         end do
-        orth_vector = orth_vector/dnrm2(size(vector), orth_vector, 1)
 
     end function gram_schmidt
 
