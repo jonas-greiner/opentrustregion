@@ -172,11 +172,18 @@ def stability_check_py_interface(
 
     @hess_x_interface_type
     def hess_x_interface(x_ptr, hx_ptr):
+        # variables need to be defined as a global to ensure that they are not 
+        # garbage collected when the current function completes
+        global hx
+
         # convert trial vector pointer to numpy array
         x = np.ctypeslib.as_array(x_ptr[0], shape=(n_param,))
 
-        # perform linear transformation and convert numpy array to pointer
-        hx_ptr[0] = hess_x(x).ctypes.data_as(POINTER(c_double))
+        # perform linear transformation
+        hx = hess_x(x)
+
+        # convert numpy array to pointer
+        hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
     # define result and argument types
     libtrustorbopt.stability_check.restype = None

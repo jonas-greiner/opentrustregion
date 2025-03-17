@@ -146,12 +146,12 @@ contains
 
         ! print header
         if (settings%verbose > 2) then
-            write (stdout, *) repeat("-", 101)
-            write (stdout, *) " Iteration | Objective function | Gradient RMS |", &
-                " Level shift |   Micro    | Trust radius | Step size "
-            write (stdout, *) "           |                    |              |", &
-                "             | iterations |              |           "
-            write (stdout, *) repeat("-", 101)
+            write (stdout, *) repeat("-", 109)
+            write (stdout, *) " Iteration |     Objective function     |", &
+                " Gradient RMS | Level shift |   Micro    | Trust radius | Step size "
+            write (stdout, *) "           |                            |", &
+                "              |             | iterations |              |           "
+            write (stdout, *) repeat("-", 109)
         end if
 
         do imacro = 1, settings%n_macro
@@ -173,17 +173,17 @@ contains
             ! log results
             if (settings%verbose > 2) then
                 if (imacro == 1) then
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 2X, '// &
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, "|", 2X, '// &
                            '1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
                            '8X, "-", 5X, "|", 6X, "-", 3X)') imacro - 1, func, grad_rms
                 else if (.not. stable) then
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 2X, '// &
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, "|", 2X, '// &
                            '1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
                            '8X, "-", 5X, "|", X, 1PE9.2)') imacro - 1, func, &
                         grad_rms, dnrm2(n_param, kappa, 1)
                     stable = .true.
                 else
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE13.6, 3X, "|", 2X, '// &
+                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, "|", 2X, '// &
                            '1PE9.2, 3X, "|", 2X, 1PE9.2, 2X, "|", 6X, I3, 3X, "|", '// &
                            '3X, 1PE9.2, 2X, "|", X, 1PE9.2)') imacro - 1, func, &
                         grad_rms, -mu, imicro, trust_radius, dnrm2(n_param, kappa, 1)
@@ -221,10 +221,9 @@ contains
                             if (settings%verbose > 1) then
                                 write (stderr, *) "Reached saddle point. This is "// &
                                     "likely due to symmetry and can be avoided by "// &
-                                    "increasing the number of "
-                                write (stderr, *) "random trial vectors. The "// &
-                                    "algorithm will continue by moving along "// &
-                                    "eigenvector "
+                                    "increasing the number of random "
+                                write (stderr, *) "trial vectors. The algorithm "// &
+                                    "will continue by moving along eigenvector "
                                 write (stderr, *) "direction corresponding to "// &
                                     "negative eigenvalue."
                             end if
@@ -413,12 +412,16 @@ contains
 
         ! finish logging
         if (settings%verbose > 2) then
-            write (stdout, *) repeat("-", 101)
+            write (stdout, *) repeat("-", 109)
             write (stdout, '(A, I0)') " Total number of Hessian linear "// &
                 "transformations: ", tot_hess_x
             write (stdout, '(A, I0)') " Total number of orbital updates: ", &
                 tot_orb_update
         end if
+
+        ! flush output
+        flush(stdout)
+        flush(stderr)
 
     end subroutine solver
 
@@ -557,6 +560,10 @@ contains
                     "eigenvalue: ", eigval
             end if
         end if
+
+        ! flush output
+        flush(stdout)
+        flush(stderr)
 
     contains
 
