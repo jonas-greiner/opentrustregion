@@ -1,6 +1,6 @@
 module c_interface_mock
 
-    use trustorbopt, only: stderr
+    use opentrustregion, only: stderr
     use c_interface, only: update_orbs_c_type, hess_x_c_type, obj_func_c_type
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_funptr, &
                                               c_f_pointer, c_f_procpointer, c_associated

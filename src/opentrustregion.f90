@@ -1,4 +1,4 @@
-module trustorbopt
+module opentrustregion
 
     use, intrinsic :: iso_fortran_env, only: int32, int64, real64, &
                                              stdout => output_unit, stderr => error_unit
@@ -1206,4 +1206,4 @@ contains
 
     end function raise_error
 
-end module trustorbopt
+end module opentrustregion

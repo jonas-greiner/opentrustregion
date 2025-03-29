@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py
 
 ext = "dylib" if sys.platform == "darwin" else "so"
-libtrustorbopt_file = f"libtrustorbopt.{ext}"
+libopentrustregion_file = f"libopentrustregion.{ext}"
 libtestsuite_file = f"libtestsuite.{ext}"
 package_dir = pathlib.Path(__file__).parent.absolute()
 build_dir = package_dir / "build"
@@ -24,12 +24,12 @@ class CMakeBuild(build_py):
 
         # copy built binaries to package directory
         shutil.copy(
-            build_dir / libtrustorbopt_file,
-            package_dir / "pytrustorbopt" / libtrustorbopt_file,
+            build_dir / libopentrustregion_file,
+            package_dir / "pyopentrustregion" / libopentrustregion_file,
         )
         shutil.copy(
             build_dir / libtestsuite_file,
-            package_dir / "pytrustorbopt" / libtestsuite_file,
+            package_dir / "pyopentrustregion" / libtestsuite_file,
         )
 
         # run steps in parent class
@@ -39,6 +39,6 @@ class CMakeBuild(build_py):
 setup(
     packages=find_packages(),
     include_package_data=True,
-    package_data={"pytrustorbopt": [libtrustorbopt_file, libtestsuite_file]},
+    package_data={"pyopentrustregion": [libopentrustregion_file, libtestsuite_file]},
     cmdclass={"build_py": CMakeBuild},
 )

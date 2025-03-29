@@ -10,20 +10,20 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional
 
-# load the trustorbopt library
+# load the opentrustregion library
 ext = "dylib" if sys.platform == "darwin" else "so"
 try:
-    with resources.path("pytrustorbopt", f"libtrustorbopt.{ext}") as lib_path:
-        libtrustorbopt = CDLL(str(lib_path))
+    with resources.path("pyopentrustregion", f"libopentrustregion.{ext}") as lib_path:
+        libopentrustregion = CDLL(str(lib_path))
 # fallback location if installation was not through setup.py
 except OSError:
     try:
         fallback_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../build", f"libtrustorbopt.{ext}")
+            os.path.join(os.path.dirname(__file__), "../build", f"libopentrustregion.{ext}")
         )
-        libtrustorbopt = CDLL(fallback_path)
+        libopentrustregion = CDLL(fallback_path)
     except OSError:
-        raise FileNotFoundError("Cannot find trustorbopt library.")
+        raise FileNotFoundError("Cannot find opentrustregion library.")
 
 
 def solver_py_interface(
@@ -113,8 +113,8 @@ def solver_py_interface(
         return obj_func(kappa)
 
     # define result and argument types
-    libtrustorbopt.solver.restype = None
-    libtrustorbopt.solver.argtypes = [
+    libopentrustregion.solver.restype = None
+    libopentrustregion.solver.argtypes = [
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
         c_long,
@@ -132,7 +132,7 @@ def solver_py_interface(
     ]
 
     # call Fortran function
-    libtrustorbopt.solver(
+    libopentrustregion.solver(
         update_orbs_interface,
         obj_func_interface,
         n_param,
@@ -186,8 +186,8 @@ def stability_check_py_interface(
         hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
     # define result and argument types
-    libtrustorbopt.stability_check.restype = None
-    libtrustorbopt.stability_check.argtypes = [
+    libopentrustregion.stability_check.restype = None
+    libopentrustregion.stability_check.argtypes = [
         POINTER(c_double),
         POINTER(c_double),
         POINTER(hess_x_interface_type),
@@ -205,7 +205,7 @@ def stability_check_py_interface(
     kappa = np.empty(n_param, dtype=np.float64)
 
     # call Fortran function
-    libtrustorbopt.stability_check(
+    libopentrustregion.stability_check(
         grad.ctypes.data_as(POINTER(c_double)),
         h_diag.ctypes.data_as(POINTER(c_double)),
         hess_x_interface,

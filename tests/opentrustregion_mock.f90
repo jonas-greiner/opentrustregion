@@ -1,6 +1,7 @@
-module trustorbopt_mock
+module opentrustregion_mock
 
-    use trustorbopt, only: rp, ip, stderr, update_orbs_type, hess_x_type, obj_func_type
+    use opentrustregion, only: rp, ip, stderr, update_orbs_type, hess_x_type, &
+                               obj_func_type
 
     implicit none
 
@@ -18,14 +19,15 @@ contains
         !
         ! this subroutine is a mock routine for solver to test the C interface
         !
-        use trustorbopt, only: solver_stability_default, solver_line_search_default, &
-                               solver_conv_tol_default, &
-                               solver_n_random_trial_vectors_default, &
-                               solver_start_trust_radius_default, &
-                               solver_n_macro_default, solver_n_micro_default, &
-                               solver_global_red_factor_default, &
-                               solver_local_red_factor_default, &
-                               solver_verbose_default, solver_seed_default
+        use opentrustregion, only: solver_stability_default, &
+                                   solver_line_search_default, &
+                                   solver_conv_tol_default, &
+                                   solver_n_random_trial_vectors_default, &
+                                   solver_start_trust_radius_default, &
+                                   solver_n_macro_default, solver_n_micro_default, &
+                                   solver_global_red_factor_default, &
+                                   solver_local_red_factor_default, &
+                                   solver_verbose_default, solver_seed_default
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
@@ -137,9 +139,9 @@ contains
         !
         ! this subroutine performs a stability check
         !
-        use trustorbopt, only: stability_conv_tol_default, &
-                               stability_n_random_trial_vectors_default, &
-                               stability_n_iter_default, stability_verbose_default
+        use opentrustregion, only: stability_conv_tol_default, &
+                                   stability_n_random_trial_vectors_default, &
+                                   stability_n_iter_default, stability_verbose_default
 
         real(rp), intent(in) :: grad(:), h_diag(:)
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
@@ -208,4 +210,4 @@ contains
 
     end subroutine mock_stability_check
 
-end module trustorbopt_mock
+end module opentrustregion_mock

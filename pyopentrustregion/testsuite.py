@@ -13,16 +13,16 @@ try:
 except ImportError:
     NUMPY_AVAILABLE = False
 
-# check if pytrustorbopt is installed or import module in same directory
+# check if pyopentrustregion is installed or import module in same directory
 try:
-    from pytrustorbopt import solver_py_interface, stability_check_py_interface
+    from pyopentrustregion import solver_py_interface, stability_check_py_interface
 except ImportError:
     from python_interface import solver_py_interface, stability_check_py_interface
 
 # load the testsuite library
 ext = "dylib" if sys.platform == "darwin" else "so"
 try:
-    with resources.path("pytrustorbopt", f"libtestsuite.{ext}") as lib_path:
+    with resources.path("pyopentrustregion", f"libtestsuite.{ext}") as lib_path:
         libtestsuite = CDLL(str(lib_path))
 # fallback location if installation was not through setup.py
 except OSError:
@@ -37,7 +37,7 @@ except OSError:
 
 # define all tests
 fortran_tests = {
-    "trustorbopt_tests": [
+    "opentrustregion_tests": [
         "raise_error",
         "set_default",
         "init_solver_settings",
@@ -91,17 +91,17 @@ def add_tests(cls):
 
 
 @add_tests
-class TrustOrbOptTests(unittest.TestCase):
+class OpenTrustRegionTests(unittest.TestCase):
     """
-    this class contains unit tests for trustorbopt
+    this class contains unit tests for opentrustregion
     """
 
-    tests = fortran_tests["trustorbopt_tests"]
+    tests = fortran_tests["opentrustregion_tests"]
 
     @classmethod
     def setUpClass(cls):
         print(50 * "-")
-        print("Running unit tests for trustorbopt...")
+        print("Running unit tests for OpenTrustRegion...")
         print(50 * "-")
         return super().setUpClass()
 
@@ -137,7 +137,8 @@ class PyInterfaceTests(unittest.TestCase):
 
     # replace original library with mock library
     @patch(
-        "pytrustorbopt.python_interface.libtrustorbopt.solver", libtestsuite.mock_solver
+        "pyopentrustregion.python_interface.libopentrustregion.solver", 
+        libtestsuite.mock_solver,
     )
     def test_solver_py_interface(self):
         """
@@ -189,7 +190,7 @@ class PyInterfaceTests(unittest.TestCase):
 
     # replace original library with mock library
     @patch(
-        "pytrustorbopt.python_interface.libtrustorbopt.stability_check",
+        "pyopentrustregion.python_interface.libopentrustregion.stability_check",
         libtestsuite.mock_stability_check,
     )
     def test_stability_check_py_interface(self):
@@ -261,7 +262,7 @@ class PyInterfaceTests(unittest.TestCase):
 @add_tests
 class SystemTests(unittest.TestCase):
     """
-    this class contains system tests for trustorbopt
+    this class contains system tests for opentrustregion
     """
 
     tests = fortran_tests["system_tests"]
@@ -269,7 +270,7 @@ class SystemTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         print(50 * "-")
-        print("Running system tests for trustorbopt...")
+        print("Running system tests for OpenTrustRegion...")
         print(50 * "-")
         return super().setUpClass()
 

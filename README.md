@@ -1,4 +1,4 @@
-# Reusable Library for Second-Order Trust Region Orbital Optimization
+# OpenTrustRegion: A Reusable Library for Second-Order Trust Region Orbital Optimization
 
 This library provides a robust and flexible implementation for second-order trust region orbital optimization, with extensive customization options to suit various use cases.
 
@@ -14,7 +14,7 @@ cmake ..
 cmake --build .
 ```
 
-The installation can be tested by running the ```testsuite.py``` file in the ```pytrustorbopt``` directory.
+The installation can be tested by running the ```testsuite.py``` file in the ```pyopentrustregion``` directory.
 
 ### Python Usage
 To install the library for use with Python:
@@ -26,7 +26,7 @@ pip install .
 The installation can be tested by running
 
 ```sh
-python3 -m pytrustorbopt.testsuite
+python3 -m pyopentrustregion.testsuite
 ```
 
 ## Usage

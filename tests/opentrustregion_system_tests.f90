@@ -1,6 +1,6 @@
-module trustorbopt_system_tests
+module opentrustregion_system_tests
 
-    use trustorbopt, only: rp, ip, stderr
+    use opentrustregion, only: rp, ip, stderr
     use iso_c_binding, only: c_bool
 
     implicit none
@@ -22,8 +22,8 @@ contains
         !
         ! this function tests the Foster-Boys localization on water
         !
-        use trustorbopt, only: update_orbs_type, obj_func_type, solver, hess_x_type, &
-                               stability_check
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver, &
+                                   hess_x_type, stability_check
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
@@ -107,8 +107,8 @@ contains
         ! this function tests the Foster-Boys localization on water starting from a
         ! saddle point
         !
-        use trustorbopt, only: update_orbs_type, obj_func_type, solver, hess_x_type, &
-                               stability_check
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver, &
+                                   hess_x_type, stability_check
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
@@ -235,7 +235,7 @@ contains
         !
         ! this function updates the orbitals for Foster-Boys orbital localization
         !
-        use trustorbopt, only: hess_x_type
+        use opentrustregion, only: hess_x_type
 
         real(rp), intent(in) :: kappa(:)
         real(rp), intent(out) :: func, grad(:), h_diag(:)
@@ -417,4 +417,4 @@ contains
 
     end function exp_asymm_mat
 
-end module trustorbopt_system_tests
+end module opentrustregion_system_tests

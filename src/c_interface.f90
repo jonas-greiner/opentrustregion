@@ -1,7 +1,7 @@
 module c_interface
 
-    use trustorbopt, only: rp, ip, standard_solver => solver, &
-                           standard_stability_check => stability_check
+    use opentrustregion, only: rp, ip, standard_solver => solver, &
+                               standard_stability_check => stability_check
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_funptr, &
                                               c_f_pointer, c_f_procpointer, c_associated
 
@@ -59,7 +59,7 @@ module c_interface
                                n_macro, n_micro, global_red_factor, local_red_factor, &
                                verbose, seed)
 
-            use trustorbopt, only: rp, ip, update_orbs_type, obj_func_type
+            use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type
 
             procedure(update_orbs_type), intent(in), pointer :: update_orbs
             procedure(obj_func_type), intent(in), pointer :: obj_func
@@ -77,7 +77,7 @@ module c_interface
         subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, conv_tol, &
                                         n_random_trial_vectors, n_iter, verbose)
 
-            use trustorbopt, only: rp, ip, hess_x_type
+            use opentrustregion, only: rp, ip, hess_x_type
 
             real(rp), intent(in) :: grad(:), h_diag(:)
             procedure(hess_x_type), pointer, intent(in) :: hess_x
@@ -106,15 +106,16 @@ contains
         ! this subroutine wraps the solver subroutine to convert C variables to Fortran
         ! variables
         !
-        use trustorbopt, only: update_orbs_type, obj_func_type, &
-                               solver_stability_default, solver_line_search_default, &
-                               solver_conv_tol_default, &
-                               solver_n_random_trial_vectors_default, &
-                               solver_start_trust_radius_default, &
-                               solver_n_macro_default, solver_n_micro_default, &
-                               solver_global_red_factor_default, &
-                               solver_local_red_factor_default, &
-                               solver_verbose_default, solver_seed_default
+        use opentrustregion, only: update_orbs_type, obj_func_type, &
+                                   solver_stability_default, &
+                                   solver_line_search_default, &
+                                   solver_conv_tol_default, &
+                                   solver_n_random_trial_vectors_default, &
+                                   solver_start_trust_radius_default, &
+                                   solver_n_macro_default, solver_n_micro_default, &
+                                   solver_global_red_factor_default, &
+                                   solver_local_red_factor_default, &
+                                   solver_verbose_default, solver_seed_default
 
         type(c_funptr), intent(in) :: update_orbs_c_ptr, obj_func_c_ptr
         integer(c_long), value, intent(in) :: n_param_c
@@ -176,9 +177,9 @@ contains
         ! this subroutine wraps the stability check subroutine to convert C variables
         ! to Fortran variables
         !
-        use trustorbopt, only: hess_x_type, stability_conv_tol_default, &
-                               stability_n_random_trial_vectors_default, &
-                               stability_n_iter_default, stability_verbose_default
+        use opentrustregion, only: hess_x_type, stability_conv_tol_default, &
+                                   stability_n_random_trial_vectors_default, &
+                                   stability_n_iter_default, stability_verbose_default
 
         integer(c_long), value, intent(in) :: n_param_c
         real(c_double), intent(in), dimension(n_param_c) :: grad_c, h_diag_c
@@ -231,7 +232,7 @@ contains
         ! this subroutine wraps the orbital update subroutine to convert C variables to
         ! Fortran variables
         !
-        use trustorbopt, only: hess_x_type
+        use opentrustregion, only: hess_x_type
 
         real(rp), intent(in) :: kappa(:)
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(trustorbopt Fortran C)
+project(opentrustregion Fortran C)
 
 # default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -41,26 +41,26 @@ else()
 endif()
 
 # add source files
-add_library(trustorbopt SHARED src/trustorbopt.f90 src/c_interface.f90)
+add_library(opentrustregion SHARED src/opentrustregion.f90 src/c_interface.f90)
 
 # enable preprocessing
-set_source_files_properties(src/trustorbopt.f90 PROPERTIES Fortran_PREPROCESS ON)
+set_source_files_properties(src/opentrustregion.f90 PROPERTIES Fortran_PREPROCESS ON)
 
 # link against BLAS and LAPACK
-target_link_libraries(trustorbopt PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+target_link_libraries(opentrustregion PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
 
 # create test executable
 add_library(
     testsuite SHARED
-    tests/trustorbopt_unit_tests.f90
+    tests/opentrustregion_unit_tests.f90
     tests/c_interface_unit_tests.f90
-    tests/trustorbopt_mock.f90
+    tests/opentrustregion_mock.f90
     tests/c_interface_mock.f90
-    tests/trustorbopt_system_tests.f90
+    tests/opentrustregion_system_tests.f90
 )
 target_link_libraries(
     testsuite 
-    PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} trustorbopt
+    PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
 )
 
 # get the absolute path to the test data directory and add it as a definition so the
@@ -70,4 +70,4 @@ add_definitions(-DTEST_DATA_PATH=\"${TEST_DATA_PATH}\")
 target_compile_definitions(testsuite PRIVATE TEST_DATA_PATH="${TEST_DATA_PATH}")
 
 # enable preprocessing
-set_source_files_properties(tests/trustorbopt_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)
+set_source_files_properties(tests/opentrustregion_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)

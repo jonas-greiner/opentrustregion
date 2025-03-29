@@ -1,6 +1,6 @@
 module c_interface_unit_tests
 
-    use trustorbopt, only: rp, stderr
+    use opentrustregion, only: rp, stderr
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_loc, &
                                                           c_null_ptr, c_funptr, c_funloc
 
@@ -67,7 +67,7 @@ contains
         ! this function tests the C wrapper for the solver
         !
         use c_interface, only: solver, solver_c_wrapper
-        use trustorbopt_mock, only: mock_solver, test_passed
+        use opentrustregion_mock, only: mock_solver, test_passed
 
         type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
@@ -139,7 +139,7 @@ contains
         ! this function tests the C wrapper for the stability check
         !
         use c_interface, only: stability_check, stability_check_c_wrapper
-        use trustorbopt_mock, only: mock_stability_check, test_passed
+        use opentrustregion_mock, only: mock_stability_check, test_passed
 
         real(c_double), dimension(n_param) :: kappa
         type(c_funptr) :: hess_x_c_funptr
@@ -212,7 +212,7 @@ contains
         !
         ! this function tests the C wrapper for the orbital update
         !
-        use trustorbopt, only: hess_x_type
+        use opentrustregion, only: hess_x_type
         use c_interface, only: update_orbs_before_wrapping, update_orbs_c_wrapper
 
         real(rp), dimension(n_param) :: kappa, grad, h_diag, x, hess_x

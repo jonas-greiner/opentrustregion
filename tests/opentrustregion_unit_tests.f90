@@ -1,6 +1,6 @@
-module trustorbopt_unit_tests
+module opentrustregion_unit_tests
 
-    use trustorbopt, only: rp, ip, stderr
+    use opentrustregion, only: rp, ip, stderr
     use iso_c_binding, only: c_bool
 
     implicit none
@@ -104,8 +104,8 @@ contains
         !
         ! this function tests the solver subroutine
         !
-        use trustorbopt, only: update_orbs_type, obj_func_type, hess_x_type, &
-                               solver, solver_conv_tol_default
+        use opentrustregion, only: update_orbs_type, obj_func_type, hess_x_type, &
+                                   solver, solver_conv_tol_default
 
         integer(ip), parameter :: n_param = 6
         real(rp) :: vars(n_param), final_grad(n_param), hess(n_param, n_param)
@@ -232,7 +232,7 @@ contains
         !
         ! this function tests the stability check subroutine
         !
-        use trustorbopt, only: hess_x_type, stability_check
+        use opentrustregion, only: hess_x_type, stability_check
 
         real(rp) :: vars(6), grad(6), hess(6, 6), h_diag(6), direction(6)
         procedure(hess_x_type), pointer :: hess_x_ptr
@@ -311,7 +311,7 @@ contains
         !
         ! this function tests the Newton step subroutine
         !
-        use trustorbopt, only: newton_step
+        use opentrustregion, only: newton_step
 
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
                     aug_hess(4, 4), solution(6), red_space_solution(3)
@@ -366,7 +366,7 @@ contains
         !
         ! this function tests the bisection subroutine
         !
-        use trustorbopt, only: bisection
+        use opentrustregion, only: bisection
 
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
                     aug_hess(4, 4), solution(6), red_space_solution(3), trust_radius, mu
@@ -455,7 +455,7 @@ contains
         !
         ! this function tests the bisection subroutine
         !
-        use trustorbopt, only: obj_func_type, bracket
+        use opentrustregion, only: obj_func_type, bracket
 
         procedure(obj_func_type), pointer :: obj_func
         real(rp) :: vars(6), lower, upper, n
@@ -489,7 +489,7 @@ contains
         !
         ! this function tests the subroutine for extending a symmetric matrix
         !
-        use trustorbopt, only: extend_symm_matrix
+        use opentrustregion, only: extend_symm_matrix
 
         real(rp), allocatable :: matrix(:, :)
         real(rp) :: expected(3, 3), vector(3)
@@ -530,7 +530,7 @@ contains
         !
         ! this function tests the subroutine for adding a column to a matrix
         !
-        use trustorbopt, only: add_column
+        use opentrustregion, only: add_column
 
         real(rp), allocatable :: matrix(:, :)
         real(rp) :: expected(3, 3), new_col(3)
@@ -572,7 +572,7 @@ contains
         ! this function tests the subroutine for determining the minimum eigenvalue and
         ! corresponding eigenvector for a symmetric matrix
         !
-        use trustorbopt, only: symm_mat_min_eig
+        use opentrustregion, only: symm_mat_min_eig
 
         real(rp) :: matrix(3, 3)
         real(rp) :: eigval, eigvec(3)
@@ -606,7 +606,7 @@ contains
         ! this function tests the function for determining the minimum eigenvalue for
         ! a symmetric matrix
         !
-        use trustorbopt, only: min_eigval
+        use opentrustregion, only: min_eigval
 
         real(rp) :: matrix(3, 3)
 
@@ -632,7 +632,7 @@ contains
         ! this function tests the initialization subroutine for the random number
         ! generator
         !
-        use trustorbopt, only: init_rng
+        use opentrustregion, only: init_rng
 
         integer(ip) :: seed1, seed2, i
         real(rp) :: rand_seq1(5), rand_seq2(5), rand_seq3(5)
@@ -683,7 +683,7 @@ contains
         ! this function tests the function which generates trial vectors for the
         ! Davidson procedure
         !
-        use trustorbopt, only: generate_trial_vectors
+        use opentrustregion, only: generate_trial_vectors
 
         integer(ip) :: n_random
         real(rp), allocatable :: red_space_basis(:, :)
@@ -770,7 +770,7 @@ contains
         ! this function tests the Gram-Schmidt function which orthonormalizes a vector
         ! to a given basis
         !
-        use trustorbopt, only: gram_schmidt
+        use opentrustregion, only: gram_schmidt
 
         real(rp), dimension(4) :: vector, orth_vector
         real(rp), dimension(2) :: vector_small, orth_vector_small
@@ -833,16 +833,16 @@ contains
         !
         ! this function tests the subroutine which initializes the solver settings
         !
-        use trustorbopt, only: solver_settings_type, init_solver_settings, &
-                               solver_stability_default, solver_line_search_default, &
-                               solver_conv_tol_default, &
-                               solver_n_random_trial_vectors_default, &
-                               solver_start_trust_radius_default, &
-                               solver_n_macro_default, solver_n_micro_default, &
-                               solver_global_red_factor_default, &
-                               solver_local_red_factor_default, &
-                               solver_verbose_default, &
-                               solver_seed_default
+        use opentrustregion, only: solver_settings_type, init_solver_settings, &
+                                   solver_stability_default, &
+                                   solver_line_search_default, &
+                                   solver_conv_tol_default, &
+                                   solver_n_random_trial_vectors_default, &
+                                   solver_start_trust_radius_default, &
+                                   solver_n_macro_default, solver_n_micro_default, &
+                                   solver_global_red_factor_default, &
+                                   solver_local_red_factor_default, &
+                                   solver_verbose_default, solver_seed_default
 
         type(solver_settings_type) :: settings
 
@@ -897,11 +897,10 @@ contains
         ! this function tests the subroutine which initializes the stability check
         ! settings
         !
-        use trustorbopt, only: stability_settings_type, init_stability_settings, &
-                               stability_conv_tol_default, &
-                               stability_n_random_trial_vectors_default, &
-                               stability_n_iter_default, &
-                               stability_verbose_default
+        use opentrustregion, only: stability_settings_type, init_stability_settings, &
+                                   stability_conv_tol_default, &
+                                   stability_n_random_trial_vectors_default, &
+                                   stability_n_iter_default, stability_verbose_default
 
         type(stability_settings_type) :: settings
 
@@ -940,7 +939,7 @@ contains
         !
         ! this function tests the subroutine which sets default values
         !
-        use trustorbopt, only: set_default
+        use opentrustregion, only: set_default
 
         ! assume tests pass
         test_set_default = .true.
@@ -993,7 +992,7 @@ contains
         !
         ! this function tests the subroutine for raising errors
         !
-        use trustorbopt, only: raise_error
+        use opentrustregion, only: raise_error
 
         character(:), allocatable :: error_flag
 
@@ -1010,4 +1009,4 @@ contains
 
     end function test_raise_error
 
-end module trustorbopt_unit_tests
+end module opentrustregion_unit_tests
