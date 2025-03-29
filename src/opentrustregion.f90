@@ -430,8 +430,8 @@ contains
         end if
 
         ! flush output
-        flush(stdout)
-        flush(stderr)
+        flush (stdout)
+        flush (stderr)
 
     end subroutine solver
 
@@ -572,8 +572,8 @@ contains
         end if
 
         ! flush output
-        flush(stdout)
-        flush(stderr)
+        flush (stdout)
+        flush (stderr)
 
     contains
 
@@ -673,7 +673,7 @@ contains
         ! check if trust region is within bracketing range
         if ((lower_trust_dist*upper_trust_dist) > 0.d0) then
             error_flag = raise_error("Target trust region outside of bracketing "// &
-                "range.", present(error_flag))
+                                     "range.", present(error_flag))
             solution = 0.d0
             red_space_solution = 0.d0
             mu = 0.d0
@@ -1068,12 +1068,13 @@ contains
 
         if (dnrm2(size(vector), vector, 1) < 1.d-12) then
             error_flag = raise_error("Vector passed to Gram-Schmidt procedure is "// &
-                        "numerically zero.", present(error_flag))
+                                     "numerically zero.", present(error_flag))
             orth_vector = 0.d0
             return
         else if (size(space, 2) > size(space, 1) - 1) then
             error_flag = raise_error("Number of vectors in Gram-Schmidt procedure "// &
-                        "larger than dimension of vector space.", present(error_flag))
+                                     "larger than dimension of vector space.", &
+                                     present(error_flag))
             orth_vector = 0.d0
             return
         end if
@@ -1082,7 +1083,7 @@ contains
         do while (.true.)
             do i = 1, size(space, 2)
                 orth_vector = orth_vector - ddot(size(vector), orth_vector, 1, &
-                            space(:, i), 1)*space(:, i)
+                                                 space(:, i), 1)*space(:, i)
             end do
             orth_vector = orth_vector/dnrm2(size(vector), orth_vector, 1)
 
