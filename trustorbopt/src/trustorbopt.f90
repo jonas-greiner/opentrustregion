@@ -118,6 +118,7 @@ contains
         integer(ip) :: imacro, imicro, i, ntrial, initial_imicro
         integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr
+        character(:), allocatable :: error_flag
         real(rp), external :: dnrm2, ddot
         external :: dgemm, dgemv
 
@@ -192,7 +193,8 @@ contains
 
             ! check for convergence and stability
             if (grad_rms < settings%conv_tol) then
-                if (settings%stability) then
+                ! always perform stability check if starting at stationary point
+                if (settings%stability .or. imacro == 1) then
                     call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, &
                                          verbose=settings%verbose)
                     if (.not. stable) then
@@ -279,9 +281,13 @@ contains
                     end if
 
                     ! otherwise perform bisection to find the level shift
-                    if (.not. newton) call bisection(aug_hess, grad_norm, &
-                                                     red_space_basis, trust_radius, &
-                                                     solution, red_space_solution, mu)
+                    if (.not. newton) then
+                        call bisection(aug_hess, grad_norm, red_space_basis, &
+                                       trust_radius, solution, red_space_solution, mu, &
+                                       error_flag)
+                        if (error_flag == "Target trust region outside of "// &
+                            "bracketing range.") exit
+                    end if
 
                     ! calculate Hessian linear transformation of solution
                     call dgemv("N", n_param, size(h_basis, 2), 1.d0, h_basis, n_param, &
@@ -315,8 +321,8 @@ contains
                     if (residual_norm < max(red_factor*grad_norm, 1d-12)) then
                         micro_converged = .true.
                         exit
-                    else if (imicro - initial_imicro >= 5 .and. &
-                             residual_norm > 0.9*initial_residual_norm) then
+                    else if (imicro - initial_imicro >= 10 .and. &
+                            residual_norm > 0.8*initial_residual_norm) then
                         exit
                     end if
 
@@ -381,6 +387,10 @@ contains
                     trust_radius = 1.2d0*trust_radius
                     accept_step = .true.
                 end if
+
+                ! flush output
+                flush(stdout)
+                flush(stderr)
             end do
 
             ! increment total number of Hessian linear transformations
@@ -1056,7 +1066,7 @@ contains
         integer(ip) :: i
         real(rp), external :: ddot, dnrm2
 
-        if (dnrm2(size(vector), vector, 1) <= 1.d-12) then
+        if (dnrm2(size(vector), vector, 1) < 1.d-12) then
             error_flag = raise_error("Vector passed to Gram-Schmidt procedure is "// &
                         "numerically zero.", present(error_flag))
             orth_vector = 0.d0
