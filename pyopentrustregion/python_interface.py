@@ -1,3 +1,9 @@
+# Copyright (C) 2025- Jonas Greiner
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 from __future__ import annotations
 
 import os
@@ -19,7 +25,9 @@ try:
 except OSError:
     try:
         fallback_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../build", f"libopentrustregion.{ext}")
+            os.path.join(
+                os.path.dirname(__file__), "../build", f"libopentrustregion.{ext}"
+            )
         )
         libopentrustregion = CDLL(fallback_path)
     except OSError:
@@ -86,7 +94,7 @@ def solver_py_interface(
 
         @hess_x_interface_type
         def hess_x_interface(x_ptr, hx_ptr):
-            # variables need to be defined as a global to ensure that they are not 
+            # variables need to be defined as a global to ensure that they are not
             # garbage collected when the current function completes
             global hx
 
@@ -172,7 +180,7 @@ def stability_check_py_interface(
 
     @hess_x_interface_type
     def hess_x_interface(x_ptr, hx_ptr):
-        # variables need to be defined as a global to ensure that they are not 
+        # variables need to be defined as a global to ensure that they are not
         # garbage collected when the current function completes
         global hx
 

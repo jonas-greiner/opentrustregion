@@ -1,3 +1,9 @@
+# Copyright (C) 2025- Jonas Greiner
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 import os
 import sys
 import unittest
@@ -137,7 +143,7 @@ class PyInterfaceTests(unittest.TestCase):
 
     # replace original library with mock library
     @patch(
-        "pyopentrustregion.python_interface.libopentrustregion.solver", 
+        "pyopentrustregion.python_interface.libopentrustregion.solver",
         libtestsuite.mock_solver,
     )
     def test_solver_py_interface(self):
