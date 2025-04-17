@@ -10,7 +10,7 @@ import os
 import sys
 import numpy as np
 from importlib import resources
-from ctypes import CDLL, CFUNCTYPE, POINTER, byref, c_double, c_long, c_bool
+from ctypes import CDLL, CFUNCTYPE, POINTER, byref, c_double, c_long, c_bool, c_void_p
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -41,6 +41,7 @@ def solver_py_interface(
         Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]],
     ],
     n_param: int,
+    precond: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
     stability: Optional[bool] = None,
     line_search: Optional[bool] = None,
     conv_tol: Optional[float] = None,
@@ -54,7 +55,8 @@ def solver_py_interface(
     seed: Optional[int] = None,
 ):
     # callback function ctypes specifications, ctypes can only deal with simple return
-    # types so we interface to Fortran subroutines by creating data to the relevant data
+    # types so we interface to Fortran subroutines by creating pointers to the relevant
+    # data
     hess_x_interface_type = CFUNCTYPE(
         None, POINTER(POINTER(c_double)), POINTER(POINTER(c_double))
     )
@@ -67,6 +69,9 @@ def solver_py_interface(
         POINTER(hess_x_interface_type),
     )
     obj_func_interface_type = CFUNCTYPE(c_double, POINTER(POINTER(c_double)))
+    precond_interface_type = CFUNCTYPE(
+        None, POINTER(POINTER(c_double)), POINTER(c_double), POINTER(POINTER(c_double))
+    )
 
     @update_orbs_interface_type
     def update_orbs_interface(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_ptr):
@@ -120,12 +125,29 @@ def solver_py_interface(
 
         return obj_func(kappa)
 
+    @precond_interface_type
+    def precond_interface(residual_ptr, mu_ptr, precond_residual_ptr):
+        # variables need to be defined as a global to ensure that they are not
+        # garbage collected when the current function completes
+        global precond_residual
+
+        # convert pointers to numpy array and float
+        residual = np.ctypeslib.as_array(residual_ptr[0], shape=(n_param,))
+        mu = mu_ptr[0]
+
+        # perform linear transformation
+        precond_residual = precond(residual, mu)
+
+        # convert numpy array to pointer
+        precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
+
     # define result and argument types
     libopentrustregion.solver.restype = None
     libopentrustregion.solver.argtypes = [
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
         c_long,
+        c_void_p,
         POINTER(c_bool),
         POINTER(c_bool),
         POINTER(c_double),
@@ -144,6 +166,7 @@ def solver_py_interface(
         update_orbs_interface,
         obj_func_interface,
         n_param,
+        None if precond is None else precond_interface,
         None if stability is None else byref(c_bool(stability)),
         None if line_search is None else byref(c_bool(line_search)),
         None if conv_tol is None else byref(c_double(conv_tol)),
@@ -167,6 +190,7 @@ def stability_check_py_interface(
     h_diag: np.ndarray,
     hess_x: Callable[[np.ndarray], np.ndarray],
     n_param: int,
+    precond: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
     conv_tol: Optional[float] = None,
     n_random_trial_vectors: Optional[int] = None,
     n_iter: Optional[int] = None,
@@ -176,6 +200,9 @@ def stability_check_py_interface(
     # types so we interface to Fortran subroutines by creating data to the relevant data
     hess_x_interface_type = CFUNCTYPE(
         None, POINTER(POINTER(c_double)), POINTER(POINTER(c_double))
+    )
+    precond_interface_type = CFUNCTYPE(
+        None, POINTER(POINTER(c_double)), POINTER(c_double), POINTER(POINTER(c_double))
     )
 
     @hess_x_interface_type
@@ -193,6 +220,22 @@ def stability_check_py_interface(
         # convert numpy array to pointer
         hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
+    @precond_interface_type
+    def precond_interface(residual_ptr, mu_ptr, precond_residual_ptr):
+        # variables need to be defined as a global to ensure that they are not
+        # garbage collected when the current function completes
+        global precond_residual
+
+        # convert pointers to numpy array and float
+        residual = np.ctypeslib.as_array(residual_ptr[0], shape=(n_param,))
+        mu = mu_ptr[0]
+
+        # perform linear transformation
+        precond_residual = precond(residual, mu)
+
+        # convert numpy array to pointer
+        precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
+
     # define result and argument types
     libopentrustregion.stability_check.restype = None
     libopentrustregion.stability_check.argtypes = [
@@ -202,6 +245,7 @@ def stability_check_py_interface(
         c_long,
         POINTER(c_bool),
         POINTER(c_double),
+        c_void_p,
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_long),
@@ -220,6 +264,7 @@ def stability_check_py_interface(
         n_param,
         byref(stable),
         kappa.ctypes.data_as(POINTER(c_double)),
+        None if precond is None else precond_interface,
         None if conv_tol is None else byref(c_double(conv_tol)),
         (
             None

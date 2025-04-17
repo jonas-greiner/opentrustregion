@@ -8,7 +8,7 @@ module c_interface_unit_tests
 
     use opentrustregion, only: rp, stderr
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_loc, &
-                                                          c_null_ptr, c_funptr, c_funloc
+                                           c_null_ptr, c_funptr, c_funloc, c_null_funptr
 
     implicit none
 
@@ -17,7 +17,8 @@ module c_interface_unit_tests
     ! these pointer targets need to be defined out here to ensure that these arrays
     ! do not go out of scope when mock_update_orbs or mock_hess_x exit
     integer(c_long), parameter :: n_param = 3_c_long
-    real(c_double), dimension(n_param), target :: grad_c, h_diag_c, hess_x_c
+    real(c_double), dimension(n_param), target :: grad_c, h_diag_c, hess_x_c, &
+                                                  precond_residual_c
 
 contains
 
@@ -68,6 +69,18 @@ contains
 
     end function mock_obj_func
 
+    subroutine mock_precond(residual, mu, precond_residual_c_ptr) bind(C)
+        !
+        ! this function is a test function for the C preconditioner function
+        !
+        real(c_double), intent(in) :: residual(:), mu
+        type(c_ptr), intent(out) :: precond_residual_c_ptr
+
+        precond_residual_c = mu*residual
+        precond_residual_c_ptr = c_loc(precond_residual_c)
+
+    end subroutine mock_precond
+
     logical(c_bool) function test_solver_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the solver
@@ -75,7 +88,8 @@ contains
         use c_interface, only: solver, solver_c_wrapper
         use opentrustregion_mock, only: mock_solver, test_passed
 
-        type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr
+        type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr, &
+                          precond_c_funptr = c_null_funptr
         integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
                                    n_macro = 300_c_long, n_micro = 200_c_long, &
                                    verbose = 3_c_long, seed = 33_c_long
@@ -108,13 +122,17 @@ contains
         ! call solver first without associated optional arguments which should produce
         ! default values
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, &
-                              stability_c_ptr, line_search_c_ptr, conv_tol_c_ptr, &
-                              n_random_trial_vectors_c_ptr, &
+                              precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
+                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                               start_trust_radius_c_ptr, n_macro_c_ptr, &
                               n_micro_c_ptr, global_red_factor_c_ptr, &
                               local_red_factor_c_ptr, verbose_c_ptr, seed_c_ptr)
 
+        ! check if test has passed
+        test_solver_c_wrapper = test_passed
+
         ! associate optional arguments with values
+        precond_c_funptr = c_funloc(mock_precond)
         stability_c_ptr = c_loc(stability)
         line_search_c_ptr = c_loc(line_search)
         conv_tol_c_ptr = c_loc(conv_tol)
@@ -129,14 +147,14 @@ contains
 
         ! call solver with associated optional arguments
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, &
-                              stability_c_ptr, line_search_c_ptr, conv_tol_c_ptr, &
-                              n_random_trial_vectors_c_ptr, &
+                              precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
+                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                               start_trust_radius_c_ptr, n_macro_c_ptr, &
                               n_micro_c_ptr, global_red_factor_c_ptr, &
                               local_red_factor_c_ptr, verbose_c_ptr, seed_c_ptr)
 
         ! check if test has passed
-        test_solver_c_wrapper = test_passed
+        test_solver_c_wrapper = test_solver_c_wrapper .and. test_passed 
 
     end function test_solver_c_wrapper
 
@@ -148,7 +166,7 @@ contains
         use opentrustregion_mock, only: mock_stability_check, test_passed
 
         real(c_double), dimension(n_param) :: kappa
-        type(c_funptr) :: hess_x_c_funptr
+        type(c_funptr) :: hess_x_c_funptr, precond_c_funptr = c_null_funptr
         logical(c_bool) :: stable
         real(c_double), target :: conv_tol = 1e-3_c_double
         integer(c_long), target :: n_random_trial_vectors = 3_c_long, &
@@ -173,9 +191,12 @@ contains
         ! call stability check first without associated optional arguments which should 
         ! produce default values
         call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
-                                       stable, kappa, conv_tol_c_ptr, &
-                                       n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
-                                       verbose_c_ptr)
+                                       stable, kappa, precond_c_funptr, &
+                                       conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                       n_iter_c_ptr, verbose_c_ptr)
+
+        ! check if test has passed
+        test_stability_check_c_wrapper = test_passed
 
         ! check if output variables are as expected
         if (stable .or. any(abs(kappa - 1.d0) > tol)) then
@@ -185,6 +206,7 @@ contains
         end if
 
         ! associate optional arguments with values
+        precond_c_funptr = c_funloc(mock_precond)
         conv_tol_c_ptr = c_loc(conv_tol)
         n_random_trial_vectors_c_ptr = c_loc(n_random_trial_vectors)
         n_iter_c_ptr = c_loc(n_iter)
@@ -192,9 +214,9 @@ contains
 
         ! call stability check with associated optional arguments
         call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
-                                       stable, kappa, conv_tol_c_ptr, &
-                                       n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
-                                       verbose_c_ptr)
+                                       stable, kappa, precond_c_funptr, &
+                                       conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                       n_iter_c_ptr, verbose_c_ptr)
 
         ! check if output variables are as expected
         if (stable) then
@@ -210,7 +232,8 @@ contains
         end if
 
         ! check if test has passed
-       test_stability_check_c_wrapper = test_passed .and. test_stability_check_c_wrapper
+        test_stability_check_c_wrapper = test_passed .and. &
+                                         test_stability_check_c_wrapper
 
     end function test_stability_check_c_wrapper
 
@@ -298,7 +321,7 @@ contains
 
     logical(c_bool) function test_obj_func_c_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the Hessian linear transformation
+        ! this function tests the C wrapper for the objective function
         !
         use c_interface, only: obj_func_before_wrapping, obj_func_c_wrapper
 
@@ -321,6 +344,33 @@ contains
         end if
 
     end function test_obj_func_c_wrapper
+
+    logical(c_bool) function test_precond_c_wrapper() bind(C)
+        !
+        ! this function tests the C wrapper for the preconditioner function
+        !
+        use c_interface, only: precond_before_wrapping, precond_c_wrapper
+
+        real(rp), dimension(n_param) :: residual, precond_residual
+
+        ! assume tests pass
+        test_precond_c_wrapper = .true.
+
+        ! initialize kappa
+        residual = 1.d0
+
+        ! inject mock subroutine
+        precond_before_wrapping => mock_precond
+
+        ! check if function value is as expected
+        precond_residual = precond_c_wrapper(residual, 5.d0)
+        if (any(abs(precond_residual - 5.d0) > tol)) then
+            test_precond_c_wrapper = .false.
+            write (stderr, *) "test_precond_c_wrapper failed: Returned "// &
+                "preconditioner wrong."
+        end if
+
+    end function test_precond_c_wrapper
 
     logical(c_bool) function test_set_default_c_ptr() bind(C)
         !

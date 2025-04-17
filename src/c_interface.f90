@@ -17,6 +17,7 @@ module c_interface
     procedure(update_orbs_c_type), pointer :: update_orbs_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: hess_x_before_wrapping => null()
     procedure(obj_func_c_type), pointer :: obj_func_before_wrapping => null()
+    procedure(precond_c_type), pointer :: precond_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
@@ -51,6 +52,16 @@ module c_interface
         end function obj_func_c_type
     end interface
 
+    abstract interface
+        subroutine precond_c_type(residual, mu, precond_residual) bind(C)
+            use, intrinsic :: iso_c_binding, only: c_double, c_ptr
+
+            real(c_double), intent(in) :: residual(:), mu
+
+            type(c_ptr), intent(out) :: precond_residual
+        end subroutine precond_c_type
+    end interface
+
     ! interface for setting default values
     interface set_default_c_ptr
         module procedure set_default_c_ptr_integer, set_default_c_ptr_real, &
@@ -60,16 +71,18 @@ module c_interface
     ! interfaces for solver and stability subroutines, different routines can be
     ! injected, for example for testing
     interface
-        subroutine solver_type(update_orbs, obj_func, n_param, stability, line_search, &
-                               conv_tol, n_random_trial_vectors, start_trust_radius, &
-                               n_macro, n_micro, global_red_factor, local_red_factor, &
-                               verbose, seed)
+        subroutine solver_type(update_orbs, obj_func, n_param, precond, stability, &
+                               line_search, conv_tol, n_random_trial_vectors, &
+                               start_trust_radius, n_macro, n_micro, &
+                               global_red_factor, local_red_factor, verbose, seed)
 
-            use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type
+            use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type, &
+                                       precond_type
 
             procedure(update_orbs_type), intent(in), pointer :: update_orbs
             procedure(obj_func_type), intent(in), pointer :: obj_func
             integer(ip), intent(in) :: n_param
+            procedure(precond_type), intent(in), pointer, optional :: precond
             logical, intent(in), optional :: stability, line_search
             real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                               global_red_factor, local_red_factor
@@ -80,15 +93,17 @@ module c_interface
     end interface
 
     interface
-        subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, conv_tol, &
-                                        n_random_trial_vectors, n_iter, verbose)
+        subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, precond, &
+                                        conv_tol, n_random_trial_vectors, n_iter, &
+                                        verbose)
 
-            use opentrustregion, only: rp, ip, hess_x_type
+            use opentrustregion, only: rp, ip, hess_x_type, precond_type
 
             real(rp), intent(in) :: grad(:), h_diag(:)
             procedure(hess_x_type), pointer, intent(in) :: hess_x
             logical, intent(out) :: stable
             real(rp), intent(out) :: kappa(:)
+            procedure(precond_type), pointer, intent(in), optional :: precond
             real(rp), intent(in), optional :: conv_tol
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
 
@@ -102,8 +117,8 @@ module c_interface
 contains
 
     subroutine solver_c_wrapper(update_orbs_c_ptr, obj_func_c_ptr, n_param_c, &
-                                stability_c_ptr, line_search_c_ptr, conv_tol_c_ptr, &
-                                n_random_trial_vectors_c_ptr, &
+                                precond_c_ptr, stability_c_ptr, line_search_c_ptr, &
+                                conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                                 start_trust_radius_c_ptr, n_macro_c_ptr, &
                                 n_micro_c_ptr, global_red_factor_c_ptr, &
                                 local_red_factor_c_ptr, verbose_c_ptr, seed_c_ptr) &
@@ -112,7 +127,7 @@ contains
         ! this subroutine wraps the solver subroutine to convert C variables to Fortran
         ! variables
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, &
+        use opentrustregion, only: update_orbs_type, obj_func_type, precond_type, &
                                    solver_stability_default, &
                                    solver_line_search_default, &
                                    solver_conv_tol_default, &
@@ -125,6 +140,7 @@ contains
 
         type(c_funptr), intent(in) :: update_orbs_c_ptr, obj_func_c_ptr
         integer(c_long), value, intent(in) :: n_param_c
+        type(c_funptr), intent(in), value :: precond_c_ptr
         type(c_ptr), value, intent(in) :: stability_c_ptr, line_search_c_ptr, &
                                           conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
@@ -138,6 +154,7 @@ contains
         integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, verbose, seed
         procedure(update_orbs_type), pointer :: update_orbs
         procedure(obj_func_type), pointer :: obj_func
+        procedure(precond_type), pointer :: precond
 
         ! set optional arguments to default values
         stability = set_default_c_ptr(stability_c_ptr, solver_stability_default)
@@ -161,29 +178,43 @@ contains
         call c_f_procpointer(cptr=update_orbs_c_ptr, fptr=update_orbs_before_wrapping)
         call c_f_procpointer(cptr=obj_func_c_ptr, fptr=obj_func_before_wrapping)
 
-        ! convert dummy argument to Fortran kind
-        n_param = int(n_param_c, kind=ip)
-
         ! associate procedure pointer to wrapper function
         update_orbs => update_orbs_c_wrapper
         obj_func => obj_func_c_wrapper
 
-        ! update orbitals
-        call solver(update_orbs, obj_func, n_param, stability, line_search, conv_tol, &
-                    n_random_trial_vectors, start_trust_radius, n_macro, n_micro, &
-                    global_red_factor, local_red_factor, verbose, seed)
+        ! convert dummy argument to Fortran kind
+        n_param = int(n_param_c, kind=ip)
+
+        ! call solver with or without preconditioner
+        if (c_associated(precond_c_ptr)) then
+            call c_f_procpointer(cptr=precond_c_ptr, fptr=precond_before_wrapping)
+            precond => precond_c_wrapper
+            call solver(update_orbs, obj_func, n_param, precond, stability, &
+                        line_search, conv_tol, n_random_trial_vectors, &
+                        start_trust_radius, n_macro, n_micro, global_red_factor, &
+                        local_red_factor, verbose, seed)
+        else
+            call solver(update_orbs, obj_func, n_param, stability=stability, &
+                        line_search=line_search, conv_tol=conv_tol, &
+                        n_random_trial_vectors=n_random_trial_vectors, &
+                        start_trust_radius=start_trust_radius, n_macro=n_macro, &
+                        n_micro=n_micro, global_red_factor=global_red_factor, &
+                        local_red_factor=local_red_factor, verbose=verbose, seed=seed)
+        end if
 
     end subroutine solver_c_wrapper
 
     subroutine stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_ptr, n_param_c, &
-                                         stable_c, kappa_c, conv_tol_c_ptr, &
-                                         n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
-                                         verbose_c_ptr) bind(C, name="stability_check")
+                                         stable_c, kappa_c, precond_c_ptr, &
+                                         conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                         n_iter_c_ptr, verbose_c_ptr) &
+        bind(C, name="stability_check")
         !
         ! this subroutine wraps the stability check subroutine to convert C variables
         ! to Fortran variables
         !
-        use opentrustregion, only: hess_x_type, stability_conv_tol_default, &
+        use opentrustregion, only: hess_x_type, precond_type, &
+                                   stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
                                    stability_n_iter_default, stability_verbose_default
 
@@ -192,6 +223,7 @@ contains
         type(c_funptr), intent(in) :: hess_x_c_ptr
         logical(c_bool), intent(out) :: stable_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
+        type(c_funptr), intent(in), value :: precond_c_ptr
         type(c_ptr), value, intent(in) :: conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr
@@ -201,6 +233,7 @@ contains
         logical :: stable
         integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose
         procedure(hess_x_type), pointer :: hess_x
+        procedure(precond_type), pointer :: precond
 
         ! set optional arguments to default values
         conv_tol = set_default_c_ptr(conv_tol_c_ptr, stability_conv_tol_default)
@@ -223,9 +256,18 @@ contains
         grad = grad_c
         h_diag = h_diag_c
 
-        ! update orbitals
-        call stability_check(grad, h_diag, hess_x, stable, kappa, conv_tol, &
-                             n_random_trial_vectors, n_iter, verbose)
+        ! call stability check with or without preconditioner
+        if (c_associated(precond_c_ptr)) then
+            call c_f_procpointer(cptr=precond_c_ptr, fptr=precond_before_wrapping)
+            precond => precond_c_wrapper
+            call stability_check(grad, h_diag, hess_x, stable, kappa, precond, &
+                                 conv_tol, n_random_trial_vectors, n_iter, verbose)
+        else
+            call stability_check(grad, h_diag, hess_x, stable, kappa, &
+                                 conv_tol=conv_tol, &
+                                 n_random_trial_vectors=n_random_trial_vectors, &
+                                 n_iter=n_iter, verbose=verbose)
+        end if
 
         ! convert return arguments to C kind
         stable_c = stable
@@ -312,19 +354,47 @@ contains
 
         real(rp) :: obj_func
 
-        real(c_double) :: func_c
-        real(c_double) :: kappa_c(size(kappa))
+        real(c_double) :: kappa_c(size(kappa)), func_c
 
         ! convert dummy argument to C kind
         kappa_c = kappa
 
-        ! call update_orbs C function
+        ! call obj_func C function
         func_c = obj_func_before_wrapping(kappa_c)
 
         ! convert dummy argument to Fortran kind
         obj_func = func_c
 
     end function obj_func_c_wrapper
+
+    function precond_c_wrapper(residual, mu) result(precond_residual)
+        !
+        ! this function wraps the preconditioner function to convert C variables to 
+        ! Fortran variables
+        !
+        real(rp), intent(in) :: residual(:), mu
+
+        real(rp) :: precond_residual(size(residual))
+
+        real(c_double) :: residual_c(size(residual)), mu_c
+        type(c_ptr) :: precond_residual_c_ptr
+        real(c_double), pointer :: precond_residual_ptr(:)
+
+        ! convert dummy argument to C kind
+        residual_c = residual
+        mu_c = mu
+
+        ! call precond C function
+        call precond_before_wrapping(residual_c, mu_c, precond_residual_c_ptr)
+
+        ! associate C pointer to arrays with Fortran pointer
+        call c_f_pointer(cptr=precond_residual_c_ptr, fptr=precond_residual_ptr, &
+                         shape=[size(residual)])
+
+        ! convert preconditioned residual to Fortran kind
+        precond_residual = precond_residual_ptr
+
+    end function precond_c_wrapper
 
     function set_default_c_ptr_integer(optional_value, default_value) result(variable)
         !

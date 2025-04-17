@@ -93,17 +93,28 @@ module opentrustregion
         end function obj_func_type
     end interface
 
+    abstract interface
+        function precond_type(residual, mu) result(precond_residual)
+            import :: rp
+
+            real(rp), intent(in) :: residual(:), mu
+
+            real(rp) :: precond_residual(size(residual))
+        end function precond_type
+    end interface
+
 contains
 
-    subroutine solver(update_orbs, obj_func, n_param, stability, line_search, &
+    subroutine solver(update_orbs, obj_func, n_param, precond, stability, line_search, &
                       conv_tol, n_random_trial_vectors, start_trust_radius, n_macro, &
                       n_micro, global_red_factor, local_red_factor, verbose, seed)
         !
         ! this subroutine is the main solver for orbital optimization
         !
         procedure(update_orbs_type), pointer, intent(in) :: update_orbs
-        procedure(obj_func_type), intent(in), pointer :: obj_func
+        procedure(obj_func_type), pointer, intent(in) :: obj_func
         integer(ip), intent(in) :: n_param
+        procedure(precond_type), pointer, intent(in), optional :: precond
         logical, intent(in), optional :: stability, line_search
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
@@ -115,8 +126,7 @@ contains
                     red_factor, initial_residual_norm, new_func, ratio, n_kappa
         real(rp), dimension(n_param) :: kappa, grad, h_diag, solution, &
                                         last_solution_normalized, h_solution, &
-                                        residual, solution_normalized, precond, &
-                                        basis_vec
+                                        residual, solution_normalized, basis_vec
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
                                  red_space_solution(:), red_hess_vec(:)
         logical :: macro_converged = .false., stable = .true., accept_step, &
@@ -202,7 +212,7 @@ contains
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
                     call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, &
-                                         verbose=settings%verbose)
+                                         precond=precond, verbose=settings%verbose)
                     if (.not. stable) then
                         ! logarithmic line search
                         do i = 1, stability_n_points
@@ -336,11 +346,11 @@ contains
                     last_solution_normalized = solution_normalized
 
                     ! precondition residual
-                    precond = h_diag - mu
-                    where (abs(precond) < 1e-10)
-                        precond = 1e-10
-                    end where
-                    residual = residual/precond
+                    if (present(precond)) then
+                        residual = precond(residual, mu)
+                    else
+                        residual = diag_precond(residual, mu, h_diag)
+                    end if
 
                     ! orthonormalize to current orbital space to get new basis vector
                     basis_vec = gram_schmidt(residual, red_space_basis)
@@ -441,8 +451,8 @@ contains
 
     end subroutine solver
 
-    subroutine stability_check(grad, h_diag, hess_x_funptr, stable, kappa, conv_tol, &
-                               n_random_trial_vectors, n_iter, verbose)
+    subroutine stability_check(grad, h_diag, hess_x_funptr, stable, kappa, precond, &
+                               conv_tol, n_random_trial_vectors, n_iter, verbose)
         !
         ! this subroutine performs a stability check
         !
@@ -450,13 +460,14 @@ contains
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
         logical, intent(out) :: stable
         real(rp), intent(out) :: kappa(:)
+        procedure(precond_type), pointer, intent(in), optional :: precond
         real(rp), intent(in), optional :: conv_tol
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
 
         type(stability_settings_type) :: settings
         integer(ip) :: n_param, ntrial, i, iter
         real(rp), dimension(size(grad)) :: full_grad, full_h_diag, solution, &
-                                           h_solution, residual, precond, basis_vec
+                                           h_solution, residual, basis_vec
         real(rp) :: full_grad_norm, eigval
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), &
                                  red_space_hess(:, :), red_space_solution(:), &
@@ -526,11 +537,11 @@ contains
             if (dnrm2(n_param, residual, 1) < settings%conv_tol) exit
 
             ! precondition residual
-            precond = full_h_diag - eigval
-            where (abs(precond) < 1e-10)
-                precond = 1e-10
-            end where
-            residual = residual/precond
+            if (present(precond)) then
+                residual = precond(residual, eigval)
+            else
+                residual = diag_precond(residual, eigval, h_diag)
+            end if
 
             ! orthonormalize to current orbital space to get new basis vector
             basis_vec = gram_schmidt(residual, red_space_basis)
@@ -555,6 +566,10 @@ contains
             allocate (red_space_solution(size(red_space_basis, 2)))
 
         end do
+
+        ! check if stability check has converged
+        if (dnrm2(n_param, residual, 1) >= settings%conv_tol) write (stderr, *) &
+            " Stability check has not converged in the given number of iterations"
 
         ! increment total number of Hessian linear transformations
         tot_hess_x = tot_hess_x + size(red_space_basis, 2)
@@ -606,9 +621,8 @@ contains
         real(rp), intent(in) :: aug_hess(:, :), grad_norm, red_space_basis(:, :)
         real(rp), intent(out) :: solution(:), red_space_solution(:)
 
-        integer(ip) :: nred, lwork, info
-        real(rp) :: red_hess(size(red_space_basis, 2), size(red_space_basis, 2)), &
-                    ipiv(size(red_space_basis, 2))
+        integer(ip) :: nred, lwork, info, ipiv(size(red_space_basis, 2))
+        real(rp) :: red_hess(size(red_space_basis, 2), size(red_space_basis, 2))
         real(rp), allocatable :: work(:)
         external :: dsysv, dgemv
 
@@ -1212,5 +1226,22 @@ contains
         if (.not. return_error) error stop error_msg
 
     end function raise_error
+
+    function diag_precond(residual, mu, h_diag) result(precond_residual)
+        !
+        ! this function defines the default diagonal preconditioner
+        !
+        real(rp), intent(in) :: residual(:), mu, h_diag(:)
+        real(rp) :: precond_residual(size(residual))
+
+        real(rp) :: precond(size(residual))
+        
+        precond = h_diag - mu
+        where (abs(precond) < 1e-10)
+            precond = 1e-10
+        end where
+        precond_residual = residual/precond
+        
+    end function diag_precond
 
 end module opentrustregion

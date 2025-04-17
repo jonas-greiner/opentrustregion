@@ -1015,4 +1015,30 @@ contains
 
     end function test_raise_error
 
+    logical(c_bool) function test_diag_precond() bind(C)
+        !
+        ! this function tests the subroutine that constructs the default diagonal 
+        ! preconditioner
+        !
+        use opentrustregion, only: diag_precond
+
+        real(rp) :: residual(3), h_diag(3)
+
+        ! assume tests pass
+        test_diag_precond = .true.
+
+        ! initialize quantities
+        residual = [1.d0, 1.d0, 1.d0]
+        h_diag = [-1.d0, 1.d0, 2.d0]
+
+        ! call function and check if results match
+        if (any(abs(diag_precond(residual, -2.d0, h_diag) - [1.d0, 1.d0 / 3, 0.25d0]) &
+                > tol)) then
+            write (stderr, *) "test_diag_precond failed: Returned preconditioned "// &
+                "residual not correct."
+            test_diag_precond = .false.
+        end if
+
+    end function test_diag_precond
+
 end module opentrustregion_unit_tests

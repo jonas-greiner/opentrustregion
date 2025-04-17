@@ -44,6 +44,7 @@ except OSError:
 # define all tests
 fortran_tests = {
     "opentrustregion_tests": [
+        "diag_precond",
         "raise_error",
         "set_default",
         "init_solver_settings",
@@ -67,6 +68,7 @@ fortran_tests = {
         "update_orbs_c_wrapper",
         "hess_x_c_wrapper",
         "obj_func_c_wrapper",
+        "precond_c_wrapper",
         "set_default_c_ptr",
     ],
     "system_tests": ["h2o_atomic_fb", "h2o_saddle_fb"],
@@ -170,6 +172,12 @@ class PyInterfaceTests(unittest.TestCase):
 
             return func, grad, h_diag, hess_x
 
+        def mock_precond(residual, mu):
+            """
+            this function is a mock function for the preconditioner function
+            """
+            return mu * residual
+
         # call solver python interface without optional arguments
         solver_py_interface(mock_obj_func, mock_update_orbs, 3)
 
@@ -178,6 +186,7 @@ class PyInterfaceTests(unittest.TestCase):
             mock_obj_func,
             mock_update_orbs,
             3,
+            precond=mock_precond,
             stability=False,
             line_search=True,
             conv_tol=1e-3,
@@ -206,11 +215,17 @@ class PyInterfaceTests(unittest.TestCase):
         grad = np.full(3, 2.0, dtype=np.float64)
         h_diag = np.full(3, 3.0, dtype=np.float64)
 
-        def hess_x(x):
+        def mock_hess_x(x):
             return 4 * x
 
+        def mock_precond(residual, mu):
+            """
+            this function is a mock function for the preconditioner function
+            """
+            return mu * residual
+
         # call stability check python interface without optional arguments
-        stable, kappa = stability_check_py_interface(grad, h_diag, hess_x, 3)
+        stable, kappa = stability_check_py_interface(grad, h_diag, mock_hess_x, 3)
 
         if stable:
             print(
@@ -233,8 +248,9 @@ class PyInterfaceTests(unittest.TestCase):
         stable, kappa = stability_check_py_interface(
             grad,
             h_diag,
-            hess_x,
+            mock_hess_x,
             3,
+            precond=mock_precond,
             conv_tol=1e-3,
             n_random_trial_vectors=3,
             n_iter=50,

@@ -7,7 +7,7 @@
 module opentrustregion_mock
 
     use opentrustregion, only: rp, ip, stderr, update_orbs_type, hess_x_type, &
-                               obj_func_type
+                               obj_func_type, precond_type
 
     implicit none
 
@@ -18,10 +18,10 @@ module opentrustregion_mock
 
 contains
 
-    subroutine mock_solver(update_orbs_funptr, obj_func_funptr, n_param, stability, &
-                           line_search, conv_tol, n_random_trial_vectors, &
-                           start_trust_radius, n_macro, n_micro, global_red_factor, &
-                           local_red_factor, verbose, seed)
+    subroutine mock_solver(update_orbs_funptr, obj_func_funptr, n_param, &
+                           precond_funptr, stability, line_search, conv_tol, &
+                           n_random_trial_vectors, start_trust_radius, n_macro, &
+                           n_micro, global_red_factor, local_red_factor, verbose, seed)
         !
         ! this subroutine is a mock routine for solver to test the C interface
         !
@@ -38,13 +38,14 @@ contains
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         integer(ip), intent(in) :: n_param
+        procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         logical, intent(in), optional :: stability, line_search
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
                                              verbose, seed
 
-        real(rp), dimension(n_param) :: kappa, x, grad, h_diag, hess_x
+        real(rp), dimension(n_param) :: kappa, x, grad, h_diag, hess_x, residual
         real(rp) :: func
         procedure(hess_x_type), pointer :: hess_x_funptr
 
@@ -91,6 +92,28 @@ contains
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Passed number of "// &
                 "parameters wrong."
+        end if
+
+        ! check if optional preconditioner function is correctly passed
+        if (solver_default) then
+            if (present(precond_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "preconditioner function associated with value."
+            end if
+        else
+            if (.not. present(precond_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "preconditioner function not associated with value."
+            end if
+            residual = 1.d0
+            residual = precond_funptr(residual, 5.d0)
+            if (any(abs(residual - 5.d0) > tol)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Returned "// &
+                    "preconditioner of passed preconditioner function wrong."
+            end if
         end if
 
         ! check if optional arguments are associated with values
@@ -141,7 +164,8 @@ contains
     end subroutine mock_solver
 
     subroutine mock_stability_check(grad, h_diag, hess_x_funptr, stable, kappa, &
-                                    conv_tol, n_random_trial_vectors, n_iter, verbose)
+                                    precond_funptr, conv_tol, n_random_trial_vectors, &
+                                    n_iter, verbose)
         !
         ! this subroutine performs a stability check
         !
@@ -153,10 +177,11 @@ contains
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
         logical, intent(out) :: stable
         real(rp), intent(out) :: kappa(:)
+        procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         real(rp), intent(in), optional :: conv_tol
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
 
-        real(rp), dimension(size(grad)) :: x, hess_x
+        real(rp), dimension(size(grad)) :: x, hess_x, residual
 
         ! initialize logical
         test_passed = .true.
@@ -189,6 +214,28 @@ contains
         ! set output quantities
         stable = .false.
         kappa = 1.d0
+
+        ! check if optional preconditioner function is correctly passed
+        if (stability_check_default) then
+            if (present(precond_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                    "preconditioner function associated with value."
+            end if
+        else
+            if (.not. present(precond_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                    "preconditioner function not associated with value."
+            end if
+            residual = 1.d0
+            residual = precond_funptr(residual, 5.d0)
+            if (any(abs(residual - 5.d0) > tol)) then
+                test_passed = .false.
+                write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
+                    "preconditioner of passed preconditioner function wrong."
+            end if
+        end if
 
         ! check if default arguments are set correctly
         if (stability_check_default) then

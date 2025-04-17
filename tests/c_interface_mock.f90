@@ -7,7 +7,8 @@
 module c_interface_mock
 
     use opentrustregion, only: stderr
-    use c_interface, only: update_orbs_c_type, hess_x_c_type, obj_func_c_type
+    use c_interface, only: update_orbs_c_type, hess_x_c_type, obj_func_c_type, &
+                           precond_c_type
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_funptr, &
                                               c_f_pointer, c_f_procpointer, c_associated
 
@@ -38,8 +39,9 @@ contains
     end function test_stability_check_result
 
     subroutine mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
-                                     n_param_c, stability_c_ptr, line_search_c_ptr, &
-                                     conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                     n_param_c, precond_c_funptr, stability_c_ptr, &
+                                     line_search_c_ptr, conv_tol_c_ptr, &
+                                     n_random_trial_vectors_c_ptr, &
                                      start_trust_radius_c_ptr, n_macro_c_ptr, &
                                      n_micro_c_ptr, global_red_factor_c_ptr, &
                                      local_red_factor_c_ptr, verbose_c_ptr, &
@@ -48,6 +50,7 @@ contains
         ! this subroutine is a mock routine for the solver C wrapper subroutine
         !
         type(c_funptr), intent(in) :: update_orbs_c_funptr, obj_func_c_funptr
+        type(c_funptr), value, intent(in) :: precond_c_funptr
         integer(c_long), value, intent(in) :: n_param_c
         type(c_ptr), value, intent(in) :: stability_c_ptr, line_search_c_ptr, &
                                           conv_tol_c_ptr, &
@@ -61,11 +64,13 @@ contains
         procedure(update_orbs_c_type), pointer :: update_orbs_funptr
         procedure(hess_x_c_type), pointer :: hess_x_funptr
         procedure(obj_func_c_type), pointer :: obj_func_funptr
-        real(c_double), pointer :: grad_ptr(:), h_diag_ptr(:), hess_x_ptr(:)
+        real(c_double), pointer :: grad_ptr(:), h_diag_ptr(:), hess_x_ptr(:), &
+                                   precond_residual_ptr(:)
         real(c_double) :: func
-        real(c_double), dimension(n_param_c) :: kappa, x
-        type(c_ptr) :: grad_c_ptr, h_diag_c_ptr, hess_x_c_ptr
+        real(c_double), dimension(n_param_c) :: kappa, x, residual
+        type(c_ptr) :: grad_c_ptr, h_diag_c_ptr, hess_x_c_ptr, precond_residual_c_ptr
 
+        procedure(precond_c_type), pointer :: precond_funptr
         logical, pointer :: stability_ptr, line_search_ptr
         real(c_double), pointer :: conv_tol_ptr, start_trust_radius_ptr, &
                                    global_red_factor_ptr, local_red_factor_ptr
@@ -122,8 +127,8 @@ contains
 
         ! check if check if default arguments are correctly unassociated with values
         if (solver_default) then
-            if (c_associated(stability_c_ptr) .or. c_associated(line_search_c_ptr) &
-                .or. c_associated(conv_tol_c_ptr) .or. &
+            if (c_associated(precond_c_funptr) .or. c_associated(stability_c_ptr) .or. &
+                c_associated(line_search_c_ptr) .or. c_associated(conv_tol_c_ptr) .or. &
                 c_associated(n_random_trial_vectors_c_ptr) .or. &
                 c_associated(start_trust_radius_c_ptr) .or. &
                 c_associated(n_macro_c_ptr) .or. c_associated(n_micro_c_ptr) .or. &
@@ -136,7 +141,8 @@ contains
             end if
             ! check if check if optional arguments are associated with correct values
         else
-            if (.not. (c_associated(stability_c_ptr) .and. &
+            if (.not. (c_associated(precond_c_funptr) .and. &
+                       c_associated(stability_c_ptr) .and. &
                        c_associated(line_search_c_ptr) .and. &
                        c_associated(conv_tol_c_ptr) .and. &
                        c_associated(n_random_trial_vectors_c_ptr) .and. &
@@ -151,6 +157,24 @@ contains
                 write (stderr, *) "test_solver_py_interface failed: Passed "// &
                     "optional arguments not associated with values."
             end if
+
+            ! get Fortran pointer to passed precond function and call it
+            call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_funptr)
+            residual = 1.0_c_double
+            call precond_funptr(residual, 5.0_c_double, precond_residual_c_ptr)
+
+            ! convert to Fortran pointer and check if generated preconditioned residual 
+            ! is correct
+            call c_f_pointer(cptr=precond_residual_c_ptr, fptr=precond_residual_ptr, &
+                             shape=[n_param_c])
+            if (any(abs(precond_residual_ptr - 5.0_c_double) > tol)) then
+                write (stderr, *) "test_solver_py_interface failed: Returned "// &
+                    "preconditioned residual from preconditioner function wrong."
+                test_solver_interface = .false.
+            end if
+
+            ! get Fortran pointers to optional arguments and check against reference 
+            ! values
             call c_f_pointer(cptr=stability_c_ptr, fptr=stability_ptr)
             call c_f_pointer(cptr=line_search_c_ptr, fptr=line_search_ptr)
             call c_f_pointer(cptr=conv_tol_c_ptr, fptr=conv_tol_ptr)
@@ -184,7 +208,7 @@ contains
 
     subroutine mock_stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, &
                                               n_param_c, stable_c, kappa_c, &
-                                              conv_tol_c_ptr, &
+                                              precond_c_funptr, conv_tol_c_ptr, &
                                               n_random_trial_vectors_c_ptr, &
                                               n_iter_c_ptr, verbose_c_ptr) &
         bind(C, name="mock_stability_check")
@@ -195,6 +219,7 @@ contains
         integer(c_long), value, intent(in) :: n_param_c
         real(c_double), intent(in), dimension(n_param_c) :: grad_c, h_diag_c
         type(c_funptr), intent(in) :: hess_x_c_funptr
+        type(c_funptr), intent(in), value :: precond_c_funptr
         logical(c_bool), intent(out) :: stable_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
         type(c_ptr), value, intent(in) :: conv_tol_c_ptr, &
@@ -202,9 +227,10 @@ contains
                                           verbose_c_ptr
 
         procedure(hess_x_c_type), pointer :: hess_x_funptr
-        type(c_ptr) :: hess_x_c_ptr
-        real(c_double), pointer :: hess_x_ptr(:)
-        real(c_double) :: x(n_param_c)
+        procedure(precond_c_type), pointer :: precond_funptr
+        type(c_ptr) :: hess_x_c_ptr, precond_residual_c_ptr
+        real(c_double), pointer :: hess_x_ptr(:), precond_residual_ptr(:)
+        real(c_double), dimension(n_param_c) :: x, residual
         real(c_double), pointer :: conv_tol_ptr
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_iter_ptr, verbose_ptr
 
@@ -239,7 +265,7 @@ contains
 
         ! check if check if default arguments are correctly unassociated with values
         if (stability_check_default) then
-            if (c_associated(conv_tol_c_ptr) .or. &
+            if (c_associated(precond_c_funptr) .or. c_associated(conv_tol_c_ptr) .or. &
                 c_associated(n_random_trial_vectors_c_ptr) .or. &
                 c_associated(n_iter_c_ptr) .or. c_associated(verbose_c_ptr)) then
                 write (stderr, *) "test_stability_check_py_interface failed: "// &
@@ -248,7 +274,8 @@ contains
             end if
             ! check if check if optional arguments are associated with correct values
         else
-            if (.not. (c_associated(conv_tol_c_ptr) .and. &
+            if (.not. (c_associated(precond_c_funptr) .and. &
+                       c_associated(conv_tol_c_ptr) .and. &
                        c_associated(n_random_trial_vectors_c_ptr) .and. &
                        c_associated(n_iter_c_ptr) .and. &
                        c_associated(verbose_c_ptr))) then
@@ -256,6 +283,25 @@ contains
                 write (stderr, *) "test_stability_check_py_interface failed: "// &
                     "Passed optional arguments not associated with values."
             end if
+
+            ! get Fortran pointer to passed precond function and call it
+            call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_funptr)
+            residual = 1.0_c_double
+            call precond_funptr(residual, 5.0_c_double, precond_residual_c_ptr)
+
+            ! convert to Fortran pointer and check if generated preconditioned residual 
+            ! is correct
+            call c_f_pointer(cptr=precond_residual_c_ptr, fptr=precond_residual_ptr, &
+                             shape=[n_param_c])
+            if (any(abs(precond_residual_ptr - 5.0_c_double) > tol)) then
+                write (stderr, *) "test_stability_check_py_interface failed: "// &
+                    "Returned preconditioned residual from preconditioner function "// &
+                    "wrong."
+                test_stability_check_interface = .false.
+            end if
+
+            ! get Fortran pointers to optional arguments and check against reference 
+            ! values
             call c_f_pointer(cptr=conv_tol_c_ptr, fptr=conv_tol_ptr)
             call c_f_pointer(cptr=n_random_trial_vectors_c_ptr, &
                              fptr=n_random_trial_vectors_ptr)
