@@ -1,0 +1,6 @@
+# OpenTrustRegionConfig.cmake.in
+@PACKAGE_INIT@
+
+# Set the paths to the include and library directories
+set(OpenTrustRegion_INCLUDE_DIR "@OpenTrustRegion_INCLUDE_DIR@")
+set(OpenTrustRegion_LIBRARY "@OpenTrustRegion_LIBRARY@")

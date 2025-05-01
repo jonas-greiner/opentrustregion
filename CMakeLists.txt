@@ -71,3 +71,14 @@ target_compile_definitions(testsuite PRIVATE TEST_DATA_PATH="${TEST_DATA_PATH}")
 
 # enable preprocessing
 set_source_files_properties(tests/opentrustregion_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)
+
+# set paths to find module files and library in build directory
+set(OpenTrustRegion_INCLUDE_DIR ${CMAKE_BINARY_DIR})
+set(OpenTrustRegion_LIBRARY ${CMAKE_BINARY_DIR}/libopentrustregion${CMAKE_SHARED_LIBRARY_SUFFIX})
+
+# create the OpenTrustRegionConfig.cmake from the template
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTrustRegionConfig.cmake.in
+  ${CMAKE_BINARY_DIR}/cmake/OpenTrustRegionConfig.cmake
+  @ONLY
+)
