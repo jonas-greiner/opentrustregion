@@ -114,6 +114,7 @@ contains
                                    solver, solver_conv_tol_default
 
         integer(ip), parameter :: n_param = 6
+        logical :: error
         real(rp) :: vars(n_param), final_grad(n_param), hess(n_param, n_param)
         procedure(update_orbs_type), pointer :: update_orbs_ptr
         procedure(obj_func_type), pointer :: obj_func_ptr
@@ -127,8 +128,13 @@ contains
         update_orbs_ptr => update_orbs
         obj_func_ptr => obj_func
 
-        ! run solver and check whether gradient is zero and agrees with correct minimum
-        call solver(update_orbs_ptr, obj_func_ptr, n_param)
+        ! run solver, check if error has occured and check whether gradient is zero and 
+        ! agrees with correct minimum
+        call solver(update_orbs_ptr, obj_func_ptr, n_param, error)
+        if (error) then
+            write (stderr, *) "test_solver failed: Produced error."
+            test_solver = .false.
+        end if
         call hartmann6d_gradient(vars, final_grad)
         if (norm2(final_grad)/sqrt(real(n_param, kind=rp)) > &
             solver_conv_tol_default) then
@@ -146,8 +152,13 @@ contains
         update_orbs_ptr => update_orbs
         obj_func_ptr => obj_func
 
-        ! run solver and check whether gradient is zero and agrees with correct minimum
-        call solver(update_orbs_ptr, obj_func_ptr, n_param)
+        ! run solver, check if error has occured and check whether gradient is zero and 
+        ! agrees with correct minimum
+        call solver(update_orbs_ptr, obj_func_ptr, n_param, error)
+        if (error) then
+            write (stderr, *) "test_solver failed: Produced error."
+            test_solver = .false.
+        end if
         call hartmann6d_gradient(vars, final_grad)
         if (norm2(final_grad)/sqrt(real(n_param, kind=rp)) > &
             solver_conv_tol_default) then
@@ -166,8 +177,13 @@ contains
         update_orbs_ptr => update_orbs
         obj_func_ptr => obj_func
 
-        ! run solver and check whether gradient is zero and agrees with correct minimum
-        call solver(update_orbs_ptr, obj_func_ptr, n_param)
+        ! run solver, check if error has occured and check whether gradient is zero and 
+        ! agrees with correct minimum
+        call solver(update_orbs_ptr, obj_func_ptr, n_param, error)
+        if (error) then
+            write (stderr, *) "test_solver failed: Produced error."
+            test_solver = .false.
+        end if
         call hartmann6d_gradient(vars, final_grad)
         if (norm2(final_grad)/sqrt(real(n_param, kind=rp)) > &
             solver_conv_tol_default) then
@@ -242,7 +258,7 @@ contains
 
         real(rp) :: vars(6), grad(6), hess(6, 6), h_diag(6), direction(6)
         procedure(hess_x_type), pointer :: hess_x_ptr
-        logical :: stable
+        logical :: stable, error
         integer(ip) :: i
 
         ! assume tests pass
@@ -256,9 +272,13 @@ contains
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         hess_x_ptr => hess_x
 
-        ! run stability check and determine whether minimum is stable and the returned
-        ! direction vanishes
-        call stability_check(grad, h_diag, hess_x_ptr, stable, direction)
+        ! run stability, check if error has occured check and determine whether minimum 
+        ! is stable and the returned direction vanishes
+        call stability_check(grad, h_diag, hess_x_ptr, stable, direction, error)
+        if (error) then
+            write (stderr, *) "test_stability_check failed: Produced error."
+            test_stability_check = .false.
+        end if
         if (.not. stable) then
             write (stderr, *) "test_stability_check failed: Stability check "// &
                 "incorrectly classifies stability of minimum."
@@ -278,9 +298,13 @@ contains
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         hess_x_ptr => hess_x
 
-        ! run stability check and determine whether saddle point is unstable and the
-        ! returned direction is correct
-        call stability_check(grad, h_diag, hess_x_ptr, stable, direction)
+        ! run stability check, check if error has occured and determine whether saddle 
+        ! point is unstable and the returned direction is correct
+        call stability_check(grad, h_diag, hess_x_ptr, stable, direction, error)
+        if (error) then
+            write (stderr, *) "test_stability_check failed: Produced error."
+            test_stability_check = .false.
+        end if
         if (stable) then
             write (stderr, *) "test_stability_check failed: Stability check "// &
                 "incorrectly classifies stability of saddle point."
@@ -322,6 +346,7 @@ contains
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
                     aug_hess(4, 4), solution(6), red_space_solution(3)
         integer(ip) :: i, j
+        logical :: error
 
         ! assume tests pass
         test_newton_step = .true.
@@ -349,10 +374,14 @@ contains
             end do
         end do
 
-        ! perform Newton step and determine whether resulting solution is correct in
-        ! reduced and full space
+        ! perform Newton step, check if error has occured and determine whether 
+        ! resulting solution is correct in reduced and full space
         call newton_step(aug_hess, grad_norm, red_space_basis, solution, &
-                         red_space_solution)
+                         red_space_solution, stderr, error)
+        if (error) then
+            write (stderr, *) "test_newton_step failed: Produced error."
+            test_newton_step = .false.
+        end if
         if (any(abs(red_space_solution - &
                     [-2.555959788079d-2, 1.565498761914d-2, 4.727080080611d-3]) > &
                 tol)) then
@@ -377,7 +406,7 @@ contains
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
                     aug_hess(4, 4), solution(6), red_space_solution(3), trust_radius, mu
         integer(ip) :: i, j
-        character(:), allocatable :: error
+        logical :: bracketed, error
 
         ! assume tests pass
         test_bisection = .true.
@@ -407,11 +436,19 @@ contains
             end do
         end do
 
-        ! perform bisection and determine whether resulting solution is correct in
+        ! perform bisection, check whether error has occured, whether the correct trust 
+        ! region was bracketed, determine whether resulting solution is correct in 
         ! reduced and full space and respects target trust radius
         call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                       red_space_solution, mu, error_flag=error)
-
+                       red_space_solution, mu, bracketed, stderr, error)
+        if (error) then
+            write (stderr, *) "test_bisection failed: Produced error."
+            test_bisection = .false.
+        end if
+        if (.not. bracketed) then
+            write (stderr, *) "test_bisection failed: Unable to bracket trust region."
+            test_bisection = .false.
+        end if
         if (abs(norm2(solution) - trust_radius) > tol) then
             write (stderr, *) "test_bisection failed: Solution does not respect "// &
                 "trust radius."
@@ -448,10 +485,14 @@ contains
         ! perform bisection and determine whether routine correctly throws error since
         ! minimum is closer than target trust radius and no level shift is necessary
         call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                       red_space_solution, mu, error_flag=error)
-        if (error /= "Target trust region outside of bracketing range.") then
+                       red_space_solution, mu, bracketed, stderr, error)
+        if (error) then
+            write (stderr, *) "test_bisection failed: Produced error."
+            test_bisection = .false.
+        end if
+        if (bracketed) then
             write (stderr, *) "test_bisection failed: Bisection should fail if "// &
-                "minimum is closer than trust radius"
+                "minimum is closer than trust radius."
             test_bisection = .false.
         end if
 
@@ -465,6 +506,7 @@ contains
 
         procedure(obj_func_type), pointer :: obj_func
         real(rp) :: vars(6), lower, upper, n
+        logical :: error
 
         ! assume tests pass
         test_bracket = .true.
@@ -481,7 +523,11 @@ contains
 
         ! perform bracket and determine if new point decreases objective function in
         ! comparison to lower and upper bound
-        n = bracket(obj_func, vars, lower, upper)
+        n = bracket(obj_func, vars, lower, upper, stderr, error)
+        if (error) then
+            write (stderr, *) "test_bracket failed: Produced error."
+            test_bracket = .false.
+        end if
         if (obj_func(n*vars) >= obj_func(lower*vars) .and. obj_func(n*vars) >= &
             obj_func(upper*vars)) then
             write (stderr, *) "test_bracket failed: Line search does not produce "// &
@@ -582,6 +628,7 @@ contains
 
         real(rp) :: matrix(3, 3)
         real(rp) :: eigval, eigvec(3)
+        logical :: error
 
         ! assume tests pass
         test_symm_mat_min_eig = .true.
@@ -593,7 +640,11 @@ contains
 
         ! call routine and determine if lowest eigenvalue and corresponding eigenvector
         ! are found
-        call symm_mat_min_eig(matrix, eigval, eigvec)
+        call symm_mat_min_eig(matrix, eigval, eigvec, stderr, error)
+        if (error) then
+            write (stderr, *) "test_symm_mat_min_eig failed: Produced error."
+            test_symm_mat_min_eig = .false.
+        end if
         if (abs(eigval - 2.30797852837d0) > tol) then
             write (stderr, *) "test_symm_mat_min_eig failed: Incorrect minimum "// &
                 "eigenvalue for matrix."
@@ -614,7 +665,8 @@ contains
         !
         use opentrustregion, only: min_eigval
 
-        real(rp) :: matrix(3, 3)
+        real(rp) :: matrix(3, 3), matrix_min_eigval
+        logical :: error
 
         ! assume tests pass
         test_min_eigval = .true.
@@ -625,7 +677,12 @@ contains
                           1.d0, 2.d0, 5.d0], [3, 3])
 
         ! call function and determine if lowest eigenvalue is found
-        if (abs(min_eigval(matrix) - 2.30797852837d0) > tol) then
+        matrix_min_eigval = min_eigval(matrix, stderr, error)
+        if (error) then
+            write (stderr, *) "test_min_eigval failed: Produced error."
+            test_min_eigval = .false.
+        end if
+        if (abs(matrix_min_eigval - 2.30797852837d0) > tol) then
             write (stderr, *) "test_min_eigval failed: Incorrect minimum "// &
                 "eigenvalue for matrix."
             test_min_eigval = .false.
@@ -694,6 +751,7 @@ contains
         integer(ip) :: n_random
         real(rp), allocatable :: red_space_basis(:, :)
         real(rp) :: grad(4), h_diag(4), grad_norm
+        logical :: error
         integer(ip) :: i, j
 
         ! assume tests pass
@@ -709,7 +767,12 @@ contains
 
         ! generate trial vectors and determine whether function returns the correct
         ! number of orthonormal trial vectors
-        red_space_basis = generate_trial_vectors(n_random, grad, grad_norm, h_diag)
+        red_space_basis = generate_trial_vectors(n_random, grad, grad_norm, h_diag, &
+                                                 stderr, error)
+        if (error) then
+            write (stderr, *) "test_generate_trial_vectors failed: Produced error."
+            test_generate_trial_vectors = .false.
+        end if
         if (.not. allocated(red_space_basis)) then
             write (stderr, *) "test_generate_trial_vectors failed: Reduced space "// &
                 "basis not allocated."
@@ -742,7 +805,12 @@ contains
 
         ! generate trial vectors and determine whether function returns the correct
         ! number of orthonormal trial vectors
-        red_space_basis = generate_trial_vectors(n_random, grad, grad_norm, h_diag)
+        red_space_basis = generate_trial_vectors(n_random, grad, grad_norm, h_diag, &
+                                                 stderr, error)
+        if (error) then
+            write (stderr, *) "test_generate_trial_vectors failed: Produced error."
+            test_generate_trial_vectors = .false.
+        end if
         if (.not. allocated(red_space_basis)) then
             write (stderr, *) "test_generate_trial_vectors failed: Reduced space "// &
                 "basis not allocated."
@@ -781,7 +849,8 @@ contains
         real(rp), dimension(4) :: vector, orth_vector
         real(rp), dimension(2) :: vector_small, orth_vector_small
         real(rp) :: space(4, 2), space_small(2, 2)
-        character(:), allocatable :: error
+        logical :: error
+        character(100) :: line
 
         ! assume tests pass
         test_gram_schmidt = .true.
@@ -793,7 +862,11 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine whether added vector is
         ! orthonormalized
-        orth_vector = gram_schmidt(vector, space)
+        orth_vector = gram_schmidt(vector, space, stderr, error)
+        if (error) then
+            write (stderr, *) "test_gram_schmidt failed: Produced error."
+            test_gram_schmidt = .false.
+        end if
         if (abs(dot_product(orth_vector, space(:, 1))) > tol .or. &
             abs(dot_product(orth_vector, space(:, 2))) > tol) then
             write (stderr, *) "test_gram_schmidt failed: Added vector not orthogonal."
@@ -809,10 +882,14 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
-        orth_vector = gram_schmidt(vector, space, error_flag=error)
-        if (error /= "Vector passed to Gram-Schmidt procedure is numerically zero.") &
-            then
-            write (stderr, *) "test_gram_schmidt failed: No error thrown during "// &
+        open(unit=99, status="scratch")
+        orth_vector = gram_schmidt(vector, space, 99, error)
+        rewind(99)
+        read(unit=99, fmt='(A)') line
+        close(unit=99)
+        if ((.not. error) .or. (trim(line) /= " Vector passed to Gram-Schmidt "// &
+                                "procedure is numerically zero.")) then
+            write (stderr, *) "test_gram_schmidt failed: No error returned during "// &
                 "orthogonalization for zero vector."
             test_gram_schmidt = .false.
         end if
@@ -824,10 +901,14 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
-        orth_vector_small = gram_schmidt(vector_small, space_small, error_flag=error)
-        if (error /= "Number of vectors in Gram-Schmidt procedure larger than "// &
-            "dimension of vector space.") then
-            write (stderr, *) "test_gram_schmidt failed: No error thrown during "// &
+        open(unit=99, status="scratch")
+        orth_vector_small = gram_schmidt(vector_small, space_small, 99, error)
+        rewind(99)
+        read(unit=99, fmt='(A)') line
+        close(unit=99)
+        if (.not. error .or. (trim(line) /= " Number of vectors in Gram-Schmidt "// &
+                              "procedure larger than dimension of vector space.")) then
+            write (stderr, *) "test_gram_schmidt failed: No error returned during "// &
                 "orthogonalization when number of vectors is larger than dimension "// &
                 "of vector space."
             test_gram_schmidt = .false.
@@ -848,7 +929,7 @@ contains
                                    solver_n_macro_default, solver_n_micro_default, &
                                    solver_global_red_factor_default, &
                                    solver_local_red_factor_default, &
-                                   solver_verbose_default, solver_seed_default
+                                   solver_seed_default, solver_verbose_default, stdout
 
         type(solver_settings_type) :: settings
 
@@ -868,8 +949,9 @@ contains
             settings%n_micro /= solver_n_micro_default .or. &
             abs(settings%global_red_factor - solver_global_red_factor_default) > tol &
             .or. abs(settings%local_red_factor - solver_local_red_factor_default) > &
-            tol .or. settings%verbose /= solver_verbose_default .or. &
-            settings%seed /= solver_seed_default) then
+            tol .or. settings%seed /= solver_seed_default .or. &
+            settings%verbose /= solver_verbose_default .or. &
+            settings%out_unit /= stdout .or. settings%err_unit /= stderr) then
             write (stderr, *) "test_init_solver_settings failed: Default arguments "// &
                 "not set correctly."
             test_init_solver_settings = .false.
@@ -880,7 +962,7 @@ contains
                                   conv_tol=1.d-3, n_random_trial_vectors=5, &
                                   start_trust_radius=0.2d0, n_macro=300, n_micro=200, &
                                   global_red_factor=1.d-2, local_red_factor=1.d-3, &
-                                  verbose=3, seed=33)
+                                  seed=33, verbose=3, out_unit=4, err_unit=5)
 
         ! check if optional values are correctly set
         if (settings%stability .neqv. .false. .or. settings%line_search .neqv. .true. &
@@ -890,7 +972,8 @@ contains
             /= 300 .or. settings%n_micro /= 200 .or. &
             abs(settings%global_red_factor - 1.d-2) > tol .or. &
             abs(settings%local_red_factor - 1.d-3) > tol .or. &
-            settings%verbose /= 3 .or. settings%seed /= 33) then
+            settings%seed /= 33 .or. settings%verbose /= 3 .or. settings%out_unit /= 4 &
+            .or. settings%out_unit /= 5) then
             write (stderr, *) "test_init_solver_settings failed: Optional "// &
                 "arguments not set correctly."
             test_init_solver_settings = .false.
@@ -906,7 +989,8 @@ contains
         use opentrustregion, only: stability_settings_type, init_stability_settings, &
                                    stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
-                                   stability_n_iter_default, stability_verbose_default
+                                   stability_n_iter_default, &
+                                   stability_verbose_default, stdout
 
         type(stability_settings_type) :: settings
 
@@ -921,7 +1005,8 @@ contains
             settings%n_random_trial_vectors /= &
             stability_n_random_trial_vectors_default .or. settings%n_iter /= &
             stability_n_iter_default .or. settings%verbose /= &
-            stability_verbose_default) then
+            stability_verbose_default .or. settings%out_unit /= stdout .or. &
+            settings%err_unit /= stderr) then
             write (stderr, *) "test_init_stability_settings failed: Default "// &
                 "arguments not set correctly."
             test_init_stability_settings = .false.
@@ -929,11 +1014,13 @@ contains
 
         ! call routine with optional arguments
         call init_stability_settings(settings, conv_tol=1.d-3, &
-                                     n_random_trial_vectors=3, n_iter=50, verbose=3)
+                                     n_random_trial_vectors=3, n_iter=50, verbose=3, &
+                                     out_unit=4, err_unit=5)
 
         ! check if optional values are correctly set
         if (abs(settings%conv_tol - 1.d-3) > tol .or. settings%n_random_trial_vectors &
-            /= 3 .or. settings%n_iter /= 50 .or. settings%verbose /= 3) then
+            /= 3 .or. settings%n_iter /= 50 .or. settings%verbose /= 3 .or. &
+            settings%out_unit /= 4 .or. settings%err_unit /= 5) then
             write (stderr, *) "test_init_stability_settings failed: Optional "// &
                 "arguments not set correctly."
             test_init_stability_settings = .false.
@@ -993,27 +1080,6 @@ contains
         end if
 
     end function test_set_default
-
-    logical(c_bool) function test_raise_error() bind(C)
-        !
-        ! this function tests the subroutine for raising errors
-        !
-        use opentrustregion, only: raise_error
-
-        character(:), allocatable :: error_flag
-
-        ! assume tests pass
-        test_raise_error = .true.
-
-        ! check if error message is correctly returned when optional argument is passed
-        error_flag = raise_error("Error!", .true.)
-        if (error_flag /= "Error!") then
-            write (stderr, *) "test_raise_error failed: Returned character does "// &
-                "not equal passed error message"
-            test_raise_error = .false.
-        end if
-
-    end function test_raise_error
 
     logical(c_bool) function test_diag_precond() bind(C)
         !

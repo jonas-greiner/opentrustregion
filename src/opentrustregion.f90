@@ -32,7 +32,7 @@ module opentrustregion
     integer(ip), parameter :: solver_n_random_trial_vectors_default = 1, &
                               solver_n_macro_default = 150, &
                               solver_n_micro_default = 100, &
-                              solver_verbose_default = 0, solver_seed_default = 42, &
+                              solver_seed_default = 42, solver_verbose_default = 0, &
                               stability_n_random_trial_vectors_default = 20, &
                               stability_n_iter_default = 100, &
                               stability_verbose_default = 0
@@ -41,14 +41,15 @@ module opentrustregion
     type :: solver_settings_type
         logical :: stability, line_search
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
-        integer(ip) :: n_random_trial_vectors, n_macro, n_micro, verbose, seed
+        integer(ip) :: n_random_trial_vectors, n_macro, n_micro, seed, verbose, &
+                       out_unit, err_unit
     contains
         procedure :: init_solver_settings
     end type
 
     type :: stability_settings_type
         real(rp) :: conv_tol
-        integer(ip) :: n_random_trial_vectors, n_iter, verbose
+        integer(ip) :: n_random_trial_vectors, n_iter, verbose, out_unit, err_unit
     contains
         procedure :: init_stability_settings
     end type
@@ -105,9 +106,10 @@ module opentrustregion
 
 contains
 
-    subroutine solver(update_orbs, obj_func, n_param, precond, stability, line_search, &
-                      conv_tol, n_random_trial_vectors, start_trust_radius, n_macro, &
-                      n_micro, global_red_factor, local_red_factor, verbose, seed)
+    subroutine solver(update_orbs, obj_func, n_param, error, precond, stability, &
+                      line_search, conv_tol, n_random_trial_vectors, &
+                      start_trust_radius, n_macro, n_micro, global_red_factor, &
+                      local_red_factor, seed, verbose, out_unit, err_unit)
         !
         ! this subroutine is the main solver for orbital optimization
         !
@@ -115,34 +117,39 @@ contains
         procedure(obj_func_type), pointer, intent(in) :: obj_func
         integer(ip), intent(in) :: n_param
         procedure(precond_type), pointer, intent(in), optional :: precond
+        logical, intent(out) :: error
         logical, intent(in), optional :: stability, line_search
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
-                                             verbose, seed
+                                             seed, verbose, out_unit, err_unit
 
         type(solver_settings_type) :: settings
         real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, residual_norm, &
-                    red_factor, initial_residual_norm, new_func, ratio, n_kappa
+                    red_factor, initial_residual_norm, new_func, ratio, n_kappa, &
+                    aug_hess_min_eigval
         real(rp), dimension(n_param) :: kappa, grad, h_diag, solution, &
                                         last_solution_normalized, h_solution, &
                                         residual, solution_normalized, basis_vec
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
                                  red_space_solution(:), red_hess_vec(:)
         logical :: macro_converged = .false., stable = .true., accept_step, &
-                   micro_converged, newton
+                   micro_converged, newton, bracketed
         integer(ip) :: imacro, imicro, i, ntrial, initial_imicro
         integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr
-        character(:), allocatable :: error_flag
         real(rp), external :: dnrm2, ddot
         external :: dgemm, dgemv
+
+        ! initialize error flag
+        error = .false.
 
         ! initialize settings
         call settings%init_solver_settings(stability, line_search, conv_tol, &
                                            n_random_trial_vectors, start_trust_radius, &
                                            n_macro, n_micro, global_red_factor, &
-                                           local_red_factor, verbose, seed)
+                                           local_red_factor, seed, verbose, out_unit, &
+                                           err_unit)
 
         ! initialize random number generator
         call init_rng(settings%seed)
@@ -153,9 +160,10 @@ contains
         ! check that number of random trial vectors is below number of parameters
         if (settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
-            if (settings%verbose > 1) write (stderr, '(A, I0, A)') " Number of "// &
-                "random trial vectors should be smaller than half the number of "// &
-                "parameters. Setting to ", settings%n_random_trial_vectors, "."
+            if (settings%verbose > 1) write (settings%err_unit, '(A, I0, A)') &
+                " Number of random trial vectors should be smaller than half the "// &
+                "number of parameters. Setting to ", settings%n_random_trial_vectors, &
+                "."
         end if
 
         ! initialize starting trust radius
@@ -163,12 +171,12 @@ contains
 
         ! print header
         if (settings%verbose > 2) then
-            write (stdout, *) repeat("-", 109)
-            write (stdout, *) " Iteration |     Objective function     |", &
+            write (settings%out_unit, *) repeat("-", 109)
+            write (settings%out_unit, *) " Iteration |     Objective function     |", &
                 " Gradient RMS | Level shift |   Micro    | Trust radius | Step size "
-            write (stdout, *) "           |                            |", &
+            write (settings%out_unit, *) "           |                            |", &
                 "              |             | iterations |              |           "
-            write (stdout, *) repeat("-", 109)
+            write (settings%out_unit, *) repeat("-", 109)
         end if
 
         do imacro = 1, settings%n_macro
@@ -177,8 +185,10 @@ contains
 
             ! sanity check for array size
             if (imacro == 1 .and. size(grad) /= n_param) then
-                error stop "Size of gradient array returned by subroutine "// &
-                    "update_orbs does not equal number of parameters"
+                write (settings%err_unit, *) "Size of gradient array returned by "// &
+                    "subroutine update_orbs does not equal number of parameters"
+                error = .true.
+                return
             end if
 
             ! calculate gradient norm
@@ -190,20 +200,22 @@ contains
             ! log results
             if (settings%verbose > 2) then
                 if (imacro == 1) then
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, "|", 2X, '// &
-                           '1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
-                           '8X, "-", 5X, "|", 6X, "-", 3X)') imacro - 1, func, grad_rms
+                    write (settings%out_unit, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, '// &
+                           '"|", 2X, 1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", '// &
+                           '3X, "|", 8X, "-", 5X, "|", 6X, "-", 3X)') imacro - 1, &
+                        func, grad_rms
                 else if (.not. stable) then
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, "|", 2X, '// &
-                           '1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", 3X, "|", '// &
-                           '8X, "-", 5X, "|", X, 1PE9.2)') imacro - 1, func, &
+                    write (settings%out_unit, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, '// &
+                           '"|", 2X, 1PE9.2, 3X, "|", 6X, "-", 6X, "|", 8X, "-", '// &
+                           '3X, "|", 8X, "-", 5X, "|", X, 1PE9.2)') imacro - 1, func, &
                         grad_rms, dnrm2(n_param, kappa, 1)
                     stable = .true.
                 else
-                    write (stdout, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, "|", 2X, '// &
-                           '1PE9.2, 3X, "|", 2X, 1PE9.2, 2X, "|", 6X, I3, 3X, "|", '// &
-                           '3X, 1PE9.2, 2X, "|", X, 1PE9.2)') imacro - 1, func, &
-                        grad_rms, -mu, imicro, trust_radius, dnrm2(n_param, kappa, 1)
+                    write (settings%out_unit, '(6X, I3, 3X, "|", 4X, 1PE21.14, 3X, '// &
+                           '"|", 2X, 1PE9.2, 3X, "|", 2X, 1PE9.2, 2X, "|", 6X, I3, '// &
+                           '3X, "|", 3X, 1PE9.2, 2X, "|", X, 1PE9.2)') imacro - 1, &
+                        func, grad_rms, -mu, imicro, trust_radius, &
+                        dnrm2(n_param, kappa, 1)
                 end if
             end if
 
@@ -212,7 +224,10 @@ contains
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
                     call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, &
-                                         precond=precond, verbose=settings%verbose)
+                                         error, precond=precond, &
+                                         verbose=settings%verbose, out_unit=out_unit, &
+                                         err_unit=err_unit)
+                    if (error) return
                     if (.not. stable) then
                         ! logarithmic line search
                         do i = 1, stability_n_points
@@ -225,25 +240,28 @@ contains
                             end if
                         end do
                         if (new_func >= func) then
-                            error stop "Line search was unable to find lower "// &
-                                "objective function along unstable mode."
+                            write (settings%err_unit, *) "Line search was unable "// &
+                                "to find lower objective function along unstable mode."
+                            error = .true.
+                            return
                         else if (imacro == 1) then
                             if (settings%verbose > 1) then
-                                write (stderr, *) "Started at saddle point. The "// &
-                                    "algorithm will continue by moving along "// &
-                                    "eigenvector direction "
-                                write (stderr, *) "corresponding to negative "// &
-                                    "eigenvalue."
+                                write (settings%err_unit, *) "Started at saddle "// &
+                                    "point. The algorithm will continue by moving "// &
+                                    "along eigenvector direction "
+                                write (settings%err_unit, *) "corresponding to "// &
+                                    "negative eigenvalue."
                             end if
                         else
                             if (settings%verbose > 1) then
-                                write (stderr, *) "Reached saddle point. This is "// &
-                                    "likely due to symmetry and can be avoided by "// &
-                                    "increasing the number of random "
-                                write (stderr, *) "trial vectors. The algorithm "// &
-                                    "will continue by moving along eigenvector "
-                                write (stderr, *) "direction corresponding to "// &
-                                    "negative eigenvalue."
+                                write (settings%err_unit, *) "Reached saddle "// &
+                                    "point. This is likely due to symmetry and can "// &
+                                    "be avoided by increasing the number of random "
+                                write (settings%err_unit, *) "trial vectors. The "// &
+                                    "algorithm will continue by moving along "// &
+                                    "eigenvector "
+                                write (settings%err_unit, *) "direction "// &
+                                    "corresponding to negative eigenvalue."
                             end if
                         end if
                         cycle
@@ -259,7 +277,9 @@ contains
 
             ! generate trial vectors
             red_space_basis = generate_trial_vectors(settings%n_random_trial_vectors, &
-                                                     grad, grad_norm, h_diag)
+                                                     grad, grad_norm, h_diag, &
+                                                     err_unit, error)
+            if (error) return
 
             ! number of trial vectors
             ntrial = size(red_space_basis, 2)
@@ -289,9 +309,14 @@ contains
                     ! do a Newton step if the model is positive definite and the step
                     ! is within the trust region
                     newton = .false.
-                    if (min_eigval(aug_hess(2:, 2:)) > -1.d-5) then
+                    aug_hess_min_eigval = min_eigval(aug_hess(2:, 2:), &
+                                                     settings%err_unit, error)
+                    if (error) return
+                    if (aug_hess_min_eigval > -1.d-5) then
                         call newton_step(aug_hess, grad_norm, red_space_basis, &
-                                         solution, red_space_solution)
+                                         solution, red_space_solution, &
+                                         settings%err_unit, error)
+                        if (error) return
                         mu = 0.d0
                         if (dnrm2(n_param, solution, 1) < trust_radius) newton = .true.
                     end if
@@ -300,9 +325,9 @@ contains
                     if (.not. newton) then
                         call bisection(aug_hess, grad_norm, red_space_basis, &
                                        trust_radius, solution, red_space_solution, mu, &
-                                       error_flag)
-                        if (error_flag == "Target trust region outside of "// &
-                            "bracketing range.") exit
+                                       bracketed, settings%err_unit, error)
+                        if (error) return
+                        if (.not. bracketed) exit
                     end if
 
                     ! calculate Hessian linear transformation of solution
@@ -353,7 +378,9 @@ contains
                     end if
 
                     ! orthonormalize to current orbital space to get new basis vector
-                    basis_vec = gram_schmidt(residual, red_space_basis)
+                    basis_vec = gram_schmidt(residual, red_space_basis, &
+                                             settings%err_unit, error)
+                    if (error) return
 
                     ! add new trial vector to orbital space
                     call add_column(red_space_basis, basis_vec)
@@ -390,23 +417,27 @@ contains
                     any(abs(solution) > pi/4)) then
                     trust_radius = 0.7d0*trust_radius
                     accept_step = .false.
-                    if (trust_radius < 1.d-10) error stop "Trust radius too small."
-                    ! check if step is too long
+                    if (trust_radius < 1.d-10) then
+                        write (settings%err_unit, *) "Trust radius too small."
+                        error = .true.
+                        return
+                    end if
+                ! check if step is too long
                 else if (ratio < 0.25d0) then
                     trust_radius = 0.7d0*trust_radius
                     accept_step = .true.
-                    ! check if quadratic approximation is valid
+                ! check if quadratic approximation is valid
                 else if (ratio < 0.75d0) then
                     accept_step = .true.
-                    ! check if step is potentially too short
+                ! check if step is potentially too short
                 else
                     trust_radius = 1.2d0*trust_radius
                     accept_step = .true.
                 end if
 
                 ! flush output
-                flush(stdout)
-                flush(stderr)
+                flush(settings%out_unit)
+                flush(settings%err_unit)
             end do
 
             ! increment total number of Hessian linear transformations
@@ -420,7 +451,8 @@ contains
 
             ! perform line search
             if (settings%line_search) then
-                n_kappa = bracket(obj_func, solution, 0.d0, 1.d0)
+                n_kappa = bracket(obj_func, solution, 0.d0, 1.d0, err_unit, error)
+                if (error) return
             else
                 n_kappa = 1.d0
             end if
@@ -434,35 +466,41 @@ contains
         tot_orb_update = tot_orb_update + imacro
 
         ! stop if no convergence
-        if (.not. macro_converged) error stop "Orbital optimization has not converged!"
+        if (.not. macro_converged) then
+            write (settings%err_unit, *) "Orbital optimization has not converged!"
+            error = .true.
+            return
+        end if
 
         ! finish logging
         if (settings%verbose > 2) then
-            write (stdout, *) repeat("-", 109)
-            write (stdout, '(A, I0)') " Total number of Hessian linear "// &
+            write (settings%out_unit, *) repeat("-", 109)
+            write (settings%out_unit, '(A, I0)') " Total number of Hessian linear "// &
                 "transformations: ", tot_hess_x
-            write (stdout, '(A, I0)') " Total number of orbital updates: ", &
+            write (settings%out_unit, '(A, I0)') " Total number of orbital updates: ", &
                 tot_orb_update
         end if
 
         ! flush output
-        flush (stdout)
-        flush (stderr)
+        flush (settings%out_unit)
+        flush (settings%err_unit)
 
     end subroutine solver
 
-    subroutine stability_check(grad, h_diag, hess_x_funptr, stable, kappa, precond, &
-                               conv_tol, n_random_trial_vectors, n_iter, verbose)
+    subroutine stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error, &
+                               precond, conv_tol, n_random_trial_vectors, n_iter, &
+                               verbose, out_unit, err_unit)
         !
         ! this subroutine performs a stability check
         !
         real(rp), intent(in) :: grad(:), h_diag(:)
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
-        logical, intent(out) :: stable
+        logical, intent(out) :: stable, error
         real(rp), intent(out) :: kappa(:)
         procedure(precond_type), pointer, intent(in), optional :: precond
         real(rp), intent(in), optional :: conv_tol
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
+        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose, &
+                                             out_unit, err_unit
 
         type(stability_settings_type) :: settings
         integer(ip) :: n_param, ntrial, i, iter
@@ -475,9 +513,12 @@ contains
         real(rp), external :: dnrm2
         external :: dgemm, dgemv
 
+        ! initialize error flag
+        error = .false.
+
         ! initialize settings
         call settings%init_stability_settings(conv_tol, n_random_trial_vectors, &
-                                              n_iter, verbose)
+                                              n_iter, verbose, out_unit, err_unit)
 
         ! get number of parameters
         n_param = size(grad)
@@ -485,9 +526,10 @@ contains
         ! check that number of random trial vectors is below number of parameters
         if (settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
-            if (settings%verbose > 1) write (stderr, '(A, I0, A)') " Number of "// &
-                "random trial vectors should be smaller than half the number of "// &
-                "parameters. Setting to ", settings%n_random_trial_vectors, "."
+            if (settings%verbose > 1) write (settings%err_unit, '(A, I0, A)') &
+                " Number of random trial vectors should be smaller than half the "// &
+                "number of parameters. Setting to ", settings%n_random_trial_vectors, &
+                "."
         end if
 
         ! get quantities for full Hessian
@@ -497,7 +539,9 @@ contains
 
         ! generate trial vectors
         red_space_basis = generate_trial_vectors(settings%n_random_trial_vectors, &
-                                                 full_grad, full_grad_norm, full_h_diag)
+                                                 full_grad, full_grad_norm, &
+                                                 full_h_diag, err_unit, error)
+        if (error) return
 
         ! number of trial vectors
         ntrial = size(red_space_basis, 2)
@@ -519,7 +563,9 @@ contains
         ! loop over iterations
         do iter = 1, settings%n_iter
             ! solve reduced space problem
-            call symm_mat_min_eig(red_space_hess, eigval, red_space_solution)
+            call symm_mat_min_eig(red_space_hess, eigval, red_space_solution, &
+                                  settings%err_unit, error)
+            if (error) return
 
             ! get full space solution
             call dgemv("N", size(red_space_basis, 1), size(red_space_basis, 2), 1.d0, &
@@ -544,7 +590,9 @@ contains
             end if
 
             ! orthonormalize to current orbital space to get new basis vector
-            basis_vec = gram_schmidt(residual, red_space_basis)
+            basis_vec = gram_schmidt(residual, red_space_basis, settings%err_unit, &
+                                     error)
+            if (error) return
 
             ! add new trial vector to orbital space
             call add_column(red_space_basis, basis_vec)
@@ -568,8 +616,9 @@ contains
         end do
 
         ! check if stability check has converged
-        if (dnrm2(n_param, residual, 1) >= settings%conv_tol) write (stderr, *) &
-            " Stability check has not converged in the given number of iterations"
+        if (dnrm2(n_param, residual, 1) >= settings%conv_tol) &
+            write (settings%err_unit, *) " Stability check has not converged in "// &
+                "the given number of iterations"
 
         ! increment total number of Hessian linear transformations
         tot_hess_x = tot_hess_x + size(red_space_basis, 2)
@@ -587,14 +636,14 @@ contains
         else
             kappa = solution
             if (settings%verbose > 1) then
-                write (stderr, '(A, F0.2)') " Solution not stable. Lowest "// &
-                    "eigenvalue: ", eigval
+                write (settings%err_unit, '(A, F0.2)') " Solution not stable. "// &
+                    "Lowest eigenvalue: ", eigval
             end if
         end if
 
         ! flush output
-        flush (stdout)
-        flush (stderr)
+        flush (settings%out_unit)
+        flush (settings%err_unit)
 
     contains
 
@@ -613,18 +662,23 @@ contains
     end subroutine stability_check
 
     subroutine newton_step(aug_hess, grad_norm, red_space_basis, solution, &
-                           red_space_solution)
+                           red_space_solution, err_unit, error)
         !
         ! this subroutine performs a Newton step by solving the Newton equations in
         ! reduced space without a level shift
         !
         real(rp), intent(in) :: aug_hess(:, :), grad_norm, red_space_basis(:, :)
+        integer(ip), intent(in) :: err_unit
         real(rp), intent(out) :: solution(:), red_space_solution(:)
+        logical, intent(out) :: error
 
         integer(ip) :: nred, lwork, info, ipiv(size(red_space_basis, 2))
         real(rp) :: red_hess(size(red_space_basis, 2), size(red_space_basis, 2))
         real(rp), allocatable :: work(:)
         external :: dsysv, dgemv
+
+        ! initialize error flag
+        error = .false.
 
         ! reduced space size
         nred = size(red_space_basis, 2)
@@ -654,8 +708,10 @@ contains
 
         ! check for errors
         if (info /= 0) then
-            write (stderr, '(A, I0)') " Error in DSYSV, info = ", info
-            error stop "Linear solver failed"
+            write (err_unit, '(A, I0)') " Error in DSYSV, info = ", info
+            write (err_unit, *) "Linear solver failed"
+            error = .true.
+            return
         end if
 
         ! get solution in full space
@@ -666,19 +722,26 @@ contains
     end subroutine newton_step
 
     subroutine bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                         red_space_solution, mu, error_flag)
+                         red_space_solution, mu, bracketed, err_unit, error)
         !
         ! this subroutine performs bisection to find the parameter alpha that matches
         ! the desired trust radius
         !
         real(rp), intent(inout) :: aug_hess(:, :)
         real(rp), intent(in) :: grad_norm, red_space_basis(:, :), trust_radius
+        integer(ip), intent(in) :: err_unit
         real(rp), intent(out) :: solution(:), red_space_solution(:), mu
-        character(:), intent(out), allocatable, optional :: error_flag
+        logical, intent(out) :: bracketed, error
 
         real(rp) :: lower_alpha, middle_alpha, upper_alpha, lower_trust_dist, &
                     middle_trust_dist, upper_trust_dist
         real(rp), external :: dnrm2
+
+        ! initialize error flag
+        error = .false.
+
+        ! initialize bracketing flag
+        bracketed = .false.
 
         ! lower and upper bracket for alpha
         lower_alpha = 1.d-4
@@ -686,14 +749,14 @@ contains
 
         ! solve reduced space problem with scaled gradient
         call get_ah_lowest_eigenvec(lower_alpha)
+        if (error) return
         lower_trust_dist = dnrm2(size(solution), solution, 1) - trust_radius
         call get_ah_lowest_eigenvec(upper_alpha)
+        if (error) return
         upper_trust_dist = dnrm2(size(solution), solution, 1) - trust_radius
 
         ! check if trust region is within bracketing range
         if ((lower_trust_dist*upper_trust_dist) > 0.d0) then
-            error_flag = raise_error("Target trust region outside of bracketing "// &
-                                     "range.", present(error_flag))
             solution = 0.d0
             red_space_solution = 0.d0
             mu = 0.d0
@@ -703,6 +766,7 @@ contains
         ! get middle alpha
         middle_alpha = sqrt(upper_alpha*lower_alpha)
         call get_ah_lowest_eigenvec(middle_alpha)
+        if (error) return
         middle_trust_dist = dnrm2(size(solution), solution, 1) - trust_radius
 
         ! perform bisection to find root
@@ -719,8 +783,11 @@ contains
             ! get new middle alpha
             middle_alpha = sqrt(upper_alpha*lower_alpha)
             call get_ah_lowest_eigenvec(middle_alpha)
+            if (error) return
             middle_trust_dist = dnrm2(size(solution), solution, 1) - trust_radius
         end do
+
+        bracketed = .true.
 
     contains
 
@@ -739,7 +806,8 @@ contains
 
             ! perform eigendecomposition and get lowest eigenvalue and corresponding
             ! eigenvector
-            call symm_mat_min_eig(aug_hess, mu, eigvec)
+            call symm_mat_min_eig(aug_hess, mu, eigvec, err_unit, error)
+            if (error) return
 
             ! scale eigenvector such that first element is equal to one and divide by
             ! alpha to get solution in reduced space
@@ -754,17 +822,22 @@ contains
 
     end subroutine bisection
 
-    function bracket(obj_func, kappa, lower, upper) result(n_kappa)
+    function bracket(obj_func, kappa, lower, upper, err_unit, error) result(n_kappa)
         !
         ! this function brackets a minimum (algorithm from numerical recipes)
         !
         procedure(obj_func_type), intent(in), pointer :: obj_func
         real(rp), intent(in) :: kappa(:), lower, upper
+        integer(ip), intent(in) :: err_unit
+        logical, intent(out) :: error
 
         real(rp) :: n_kappa, f_upper, f_lower, n_a, n_b, n_c, n_u, f_a, f_b, f_c, f_u, &
                     n_u_lim, tmp1, tmp2, val, denom
         real(rp), parameter :: golden_ratio = (1.d0 + sqrt(5.d0))/2.d0, &
                                grow_limit = 110.d0
+
+        ! initialize error flag
+        error = .false.
 
         ! evaluate function at upper and lower bounds
         f_lower = obj_func(lower*kappa)
@@ -811,7 +884,7 @@ contains
                     f_a = f_b
                     f_b = f_u
                     exit
-                    ! check if minium between n_a and n_u
+                ! check if minium between n_a and n_u
                 else if (f_u > f_b) then
                     n_c = n_u
                     f_c = f_u
@@ -821,11 +894,11 @@ contains
                 ! parabolic fit did not help, default step
                 n_u = n_c + golden_ratio*(n_c - n_b)
                 f_u = obj_func(n_u*kappa)
-                ! limit parabolic fit to its maximum allowed value
+            ! limit parabolic fit to its maximum allowed value
             else if ((n_u - n_u_lim)*(n_u_lim - n_c) >= 0.d0) then
                 n_u = n_u_lim
                 f_u = obj_func(n_u*kappa)
-                ! parabolic fit is between n_c and its allowed limit
+            ! parabolic fit is between n_c and its allowed limit
             else if ((n_u - n_u_lim)*(n_c - n_u) > 0.d0) then
                 ! evaluate function at n_u
                 f_u = obj_func(n_u*kappa)
@@ -838,7 +911,7 @@ contains
                     f_c = f_u
                     f_u = obj_func(n_u*kappa)
                 end if
-                ! reject parabolic fit and use default step
+            ! reject parabolic fit and use default step
             else
                 n_u = n_c + golden_ratio*(n_c - n_b)
                 f_u = obj_func(n_u*kappa)
@@ -856,8 +929,11 @@ contains
         ! check if miniumum is bracketed
         if (.not. (((f_b < f_c .and. f_b <= f_a) .or. (f_b < f_a .and. f_b <= f_c)) &
                    .and. ((n_a < n_b .and. n_b < n_c) .or. &
-                          (n_c < n_b .and. n_b < n_a)))) &
-            error stop "Line search did not find minimum"
+                          (n_c < n_b .and. n_b < n_a)))) then
+            write (err_unit, *) "Line search did not find minimum"
+            error = .true.
+            return
+        end if
 
         ! set new multiplier
         n_kappa = n_b
@@ -925,19 +1001,25 @@ contains
 
     end subroutine add_column
 
-    subroutine symm_mat_min_eig(symm_matrix, lowest_eigval, lowest_eigvec)
+    subroutine symm_mat_min_eig(symm_matrix, lowest_eigval, lowest_eigvec, err_unit, &
+                                error)
         !
         ! this function returns the lowest eigenvalue and corresponding eigenvector of
         ! a symmetric matrix
         !
         real(rp), intent(in) :: symm_matrix(:, :)
+        integer(ip), intent(in) :: err_unit
         real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
+        logical, intent(out) :: error
 
         integer(ip) :: n, lwork, info
         real(rp), allocatable :: work(:)
         real(rp) :: eigvals(size(symm_matrix, 1)), &
                     eigvecs(size(symm_matrix, 1), size(symm_matrix, 2))
         external :: dsyev
+
+        ! initialize error flag
+        error = .false.
 
         ! size of matrix
         n = size(symm_matrix, 1)
@@ -961,8 +1043,10 @@ contains
 
         ! check for successful execution
         if (info /= 0) then
-            write (stderr, '(A, I0)') " Error in DSYEV, info = ", info
-            error stop "Eigendecomposition failed"
+            write (err_unit, '(A, I0)') " Error in DSYEV, info = ", info
+            write (err_unit, *) "Eigendecomposition failed"
+            error = .true.
+            return
         end if
 
         ! get lowest eigenvalue and corresponding eigenvector
@@ -971,16 +1055,21 @@ contains
 
     end subroutine symm_mat_min_eig
 
-    real(rp) function min_eigval(matrix)
+    real(rp) function min_eigval(matrix, err_unit, error)
         !
         ! this function calculates the lowest eigenvalue of a symmetric matrix
         !
         real(rp), intent(in) :: matrix(:, :)
+        integer(ip), intent(in) :: err_unit
+        logical, intent(out) :: error
 
         real(rp) :: eigvals(size(matrix, 1)), temp(size(matrix, 1), size(matrix, 2))
         integer(ip) :: n, lwork, info
         real(rp), allocatable :: work(:)
         external :: dsyev
+
+        ! initialize error flag
+        error = .false.
 
         ! size of matrix
         n = size(matrix, 1)
@@ -1004,8 +1093,10 @@ contains
 
         ! check for successful execution
         if (info /= 0) then
-            write (stderr, '(A, I0)') " Error in DSYEV, info = ", info
-            error stop "Eigendecomposition failed"
+            write (err_unit, '(A, I0)') " Error in DSYEV, info = ", info
+            write (err_unit, *) "Eigendecomposition failed"
+            error = .true.
+            return
         end if
 
         ! get lowest eigenvalue
@@ -1030,13 +1121,16 @@ contains
 
     end subroutine init_rng
 
-    function generate_trial_vectors(n_random_trial_vectors, grad, grad_norm, h_diag) &
+    function generate_trial_vectors(n_random_trial_vectors, grad, grad_norm, h_diag, &
+                                    err_unit, error) &
         result(red_space_basis)
         !
         ! this function generates trial vectors
         !
         integer(ip), intent(in) :: n_random_trial_vectors
         real(rp), intent(in) :: grad(:), grad_norm, h_diag(:)
+        integer(ip), intent(in) :: err_unit
+        logical :: error
 
         real(rp), allocatable :: red_space_basis(:, :)
 
@@ -1052,9 +1146,11 @@ contains
             red_space_basis(:, 1) = grad/grad_norm
             trial = 0.d0
             trial(min_idx) = 1.d0
-            red_space_basis(:, 2) = gram_schmidt(trial, &
-                                                 reshape(red_space_basis(:, 1), &
-                                                         [size(red_space_basis, 1), 1]))
+            red_space_basis(:, 2) = gram_schmidt(trial, reshape(red_space_basis(:, 1), &
+                                                                [size(red_space_basis, &
+                                                                      1), 1]), &
+                                                 err_unit, error)
+            if (error) return
         else
             n_vectors = 1
             allocate (red_space_basis(size(grad), n_vectors + n_random_trial_vectors))
@@ -1069,33 +1165,38 @@ contains
                 trial = 2*trial - 1
             end do
             red_space_basis(:, n_vectors + i) = &
-                gram_schmidt(trial, red_space_basis(:, :n_vectors + i - 1))
+                gram_schmidt(trial, red_space_basis(:, :n_vectors + i - 1), err_unit, &
+                             error)
+            if (error) return
         end do
 
     end function generate_trial_vectors
 
-    function gram_schmidt(vector, space, error_flag) result(orth_vector)
+    function gram_schmidt(vector, space, err_unit, error) result(orth_vector)
         !
         ! this function orthonormalizes a vector with respect to a vector space
         !
         real(rp), intent(in) :: vector(:), space(:, :)
-        character(:), intent(out), allocatable, optional :: error_flag
+        integer(ip), intent(in) :: err_unit
+        logical, intent(out) :: error
 
         real(rp) :: orth_vector(size(vector)), orth(size(space, 2))
 
         integer(ip) :: i
         real(rp), external :: ddot, dnrm2
 
+        ! initialize error flag
+        error = .false.
+
         if (dnrm2(size(vector), vector, 1) < 1.d-12) then
-            error_flag = raise_error("Vector passed to Gram-Schmidt procedure is "// &
-                                     "numerically zero.", present(error_flag))
-            orth_vector = 0.d0
+            write(err_unit, *) "Vector passed to Gram-Schmidt procedure is "// &
+                "numerically zero."
+            error = .true.
             return
         else if (size(space, 2) > size(space, 1) - 1) then
-            error_flag = raise_error("Number of vectors in Gram-Schmidt procedure "// &
-                                     "larger than dimension of vector space.", &
-                                     present(error_flag))
-            orth_vector = 0.d0
+            write(err_unit, *) "Number of vectors in Gram-Schmidt procedure "// &
+                "larger than dimension of vector space."
+            error = .true.
             return
         end if
 
@@ -1117,7 +1218,7 @@ contains
     subroutine init_solver_settings(self, stability, line_search, conv_tol, &
                                     n_random_trial_vectors, start_trust_radius, &
                                     n_macro, n_micro, global_red_factor, &
-                                    local_red_factor, verbose, seed)
+                                    local_red_factor, seed, verbose, out_unit, err_unit)
         !
         ! this subroutine sets the optional settings to their default values
         !
@@ -1126,7 +1227,7 @@ contains
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
-                                             verbose, seed
+                                             seed, verbose, out_unit, err_unit
 
         self%stability = set_default(stability, solver_stability_default)
         self%line_search = set_default(line_search, solver_line_search_default)
@@ -1141,25 +1242,30 @@ contains
                                              solver_global_red_factor_default)
         self%local_red_factor = set_default(local_red_factor, &
                                             solver_local_red_factor_default)
-        self%verbose = set_default(verbose, solver_verbose_default)
         self%seed = set_default(seed, solver_seed_default)
+        self%verbose = set_default(verbose, solver_verbose_default)
+        self%out_unit = set_default(out_unit, stdout)
+        self%err_unit = set_default(err_unit, stderr)
 
     end subroutine init_solver_settings
 
     subroutine init_stability_settings(self, conv_tol, n_random_trial_vectors, n_iter, &
-                                       verbose)
+                                       verbose, out_unit, err_unit)
         !
         ! this subroutine sets the optional settings to their default values
         !
         class(stability_settings_type), intent(inout) :: self
         real(rp), intent(in), optional :: conv_tol
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
+        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose, &
+                                             out_unit, err_unit
 
         self%conv_tol = set_default(conv_tol, stability_conv_tol_default)
         self%n_random_trial_vectors = set_default(n_random_trial_vectors, &
                                                stability_n_random_trial_vectors_default)
         self%n_iter = set_default(n_iter, stability_n_iter_default)
         self%verbose = set_default(verbose, stability_verbose_default)
+        self%out_unit = set_default(out_unit, stdout)
+        self%err_unit = set_default(err_unit, stderr)
 
     end subroutine init_stability_settings
 
@@ -1213,19 +1319,6 @@ contains
         end if
 
     end function set_default_logical
-
-    function raise_error(error_msg, return_error)
-        !
-        ! this function raises an error
-        !
-        character(*), intent(in) :: error_msg
-        logical, intent(in) :: return_error
-        character(:), allocatable :: raise_error
-
-        raise_error = error_msg
-        if (.not. return_error) error stop error_msg
-
-    end function raise_error
 
     function diag_precond(residual, mu, h_diag) result(precond_residual)
         !

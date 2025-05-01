@@ -18,10 +18,11 @@ module opentrustregion_mock
 
 contains
 
-    subroutine mock_solver(update_orbs_funptr, obj_func_funptr, n_param, &
+    subroutine mock_solver(update_orbs_funptr, obj_func_funptr, n_param, error, &
                            precond_funptr, stability, line_search, conv_tol, &
                            n_random_trial_vectors, start_trust_radius, n_macro, &
-                           n_micro, global_red_factor, local_red_factor, verbose, seed)
+                           n_micro, global_red_factor, local_red_factor, seed, &
+                           verbose, out_unit, err_unit)
         !
         ! this subroutine is a mock routine for solver to test the C interface
         !
@@ -33,17 +34,18 @@ contains
                                    solver_n_macro_default, solver_n_micro_default, &
                                    solver_global_red_factor_default, &
                                    solver_local_red_factor_default, &
-                                   solver_verbose_default, solver_seed_default
+                                   solver_seed_default, solver_verbose_default, stdout
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         integer(ip), intent(in) :: n_param
+        logical, intent(out) :: error
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         logical, intent(in), optional :: stability, line_search
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
-                                             verbose, seed
+                                             seed, verbose, out_unit, err_unit
 
         real(rp), dimension(n_param) :: kappa, x, grad, h_diag, hess_x, residual
         real(rp) :: func
@@ -94,6 +96,9 @@ contains
                 "parameters wrong."
         end if
 
+        ! set output quantities
+        error = .false.
+
         ! check if optional preconditioner function is correctly passed
         if (solver_default) then
             if (present(precond_funptr)) then
@@ -121,8 +126,9 @@ contains
                    present(conv_tol) .and. present(n_random_trial_vectors) .and. &
                    present(start_trust_radius) .and. present(n_macro) .and. &
                    present(n_micro) .and. present(global_red_factor) .and. &
-                   present(local_red_factor) .and. present(verbose) .and. &
-                   present(seed))) then
+                   present(local_red_factor) .and. present(seed) .and. &
+                   present(verbose) .and. present(out_unit) .and. present(err_unit))) &
+                   then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                 "arguments not associated with values."
@@ -139,7 +145,8 @@ contains
                 n_micro /= solver_n_micro_default .or. &
                 abs(global_red_factor - solver_global_red_factor_default) > tol .or. &
                 abs(local_red_factor - solver_local_red_factor_default) > tol .or. &
-                verbose /= solver_verbose_default .or. seed /= solver_seed_default) then
+                seed /= solver_seed_default .or. verbose /= solver_verbose_default &
+                .or. out_unit /= stdout .or. err_unit /= stderr) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                     "arguments associated with wrong values."
@@ -150,8 +157,8 @@ contains
                 n_random_trial_vectors /= 5 .or. abs(start_trust_radius - 0.2d0) > tol &
                 .or. n_macro /= 300 .or. n_micro /= 200 .or. &
                 abs(global_red_factor - 1.d-2) > tol .or. &
-                abs(local_red_factor - 1.d-3) > tol .or. verbose /= 3 .or. seed /= 33) &
-                then
+                abs(local_red_factor - 1.d-3) > tol .or. seed /= 33 .or. verbose /= 3 &
+                .or. out_unit /= 4 .or. err_unit /= 5) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                     "arguments associated with wrong values."
@@ -163,23 +170,25 @@ contains
 
     end subroutine mock_solver
 
-    subroutine mock_stability_check(grad, h_diag, hess_x_funptr, stable, kappa, &
+    subroutine mock_stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error, &
                                     precond_funptr, conv_tol, n_random_trial_vectors, &
-                                    n_iter, verbose)
+                                    n_iter, verbose, out_unit, err_unit)
         !
         ! this subroutine performs a stability check
         !
         use opentrustregion, only: stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
-                                   stability_n_iter_default, stability_verbose_default
+                                   stability_n_iter_default, &
+                                   stability_verbose_default, stdout
 
         real(rp), intent(in) :: grad(:), h_diag(:)
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
-        logical, intent(out) :: stable
+        logical, intent(out) :: stable, error
         real(rp), intent(out) :: kappa(:)
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         real(rp), intent(in), optional :: conv_tol
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
+        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose, &
+                                             out_unit, err_unit
 
         real(rp), dimension(size(grad)) :: x, hess_x, residual
 
@@ -214,6 +223,7 @@ contains
         ! set output quantities
         stable = .false.
         kappa = 1.d0
+        error = .false.
 
         ! check if optional preconditioner function is correctly passed
         if (stability_check_default) then
@@ -237,12 +247,22 @@ contains
             end if
         end if
 
+        ! check if optional arguments are associated with values
+        if (.not. (present(conv_tol) .and. present(n_random_trial_vectors) .and. &
+                   present(n_iter) .and. present(verbose)) .and. present(out_unit) &
+                   .and. present(err_unit)) then
+            test_passed = .false.
+            write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                "optional arguments not associated with values."
+        end if
+
         ! check if default arguments are set correctly
         if (stability_check_default) then
             if (abs(conv_tol - stability_conv_tol_default) > tol .or. &
                 n_random_trial_vectors /= stability_n_random_trial_vectors_default &
                 .or. n_iter /= stability_n_iter_default .or. &
-                verbose /= stability_verbose_default) then
+                verbose /= stability_verbose_default .or. out_unit /= stdout .or. &
+                err_unit /= stderr) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                     "optional arguments associated with wrong values."
@@ -250,7 +270,7 @@ contains
             ! check if optional arguments are correctly passed
         else
             if (abs(conv_tol - 1.d-3) > tol .or. n_random_trial_vectors /= 3 .or. &
-                n_iter /= 50 .or. verbose /= 3) &
+                n_iter /= 50 .or. verbose /= 3 .or. out_unit /= 4 .or. err_unit /= 5) &
                 then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &

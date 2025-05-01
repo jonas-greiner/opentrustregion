@@ -51,8 +51,10 @@ def solver_py_interface(
     n_micro: Optional[int] = None,
     global_red_factor: Optional[float] = None,
     local_red_factor: Optional[float] = None,
-    verbose: Optional[int] = None,
     seed: Optional[int] = None,
+    verbose: Optional[int] = None,
+    out_unit: Optional[int] = None,
+    err_unit: Optional[int] = None,
 ):
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating pointers to the relevant
@@ -147,6 +149,7 @@ def solver_py_interface(
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
         c_long,
+        POINTER(c_bool),
         c_void_p,
         POINTER(c_bool),
         POINTER(c_bool),
@@ -159,13 +162,19 @@ def solver_py_interface(
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_long),
+        POINTER(c_long),
+        POINTER(c_long),
     ]
+
+    # initialize return variables
+    error = c_bool(False)
 
     # call Fortran function
     libopentrustregion.solver(
         update_orbs_interface,
         obj_func_interface,
         n_param,
+        byref(error),
         None if precond is None else precond_interface,
         None if stability is None else byref(c_bool(stability)),
         None if line_search is None else byref(c_bool(line_search)),
@@ -180,9 +189,14 @@ def solver_py_interface(
         None if n_micro is None else byref(c_long(n_micro)),
         None if global_red_factor is None else byref(c_double(global_red_factor)),
         None if local_red_factor is None else byref(c_double(local_red_factor)),
-        None if verbose is None else byref(c_long(verbose)),
         None if seed is None else byref(c_long(seed)),
+        None if verbose is None else byref(c_long(verbose)),
+        None if out_unit is None else byref(c_long(out_unit)),
+        None if err_unit is None else byref(c_long(err_unit)),
     )
+
+    if error:
+        raise RuntimeError("OpenTrustRegion solver produced error.")
 
 
 def stability_check_py_interface(
@@ -195,6 +209,8 @@ def stability_check_py_interface(
     n_random_trial_vectors: Optional[int] = None,
     n_iter: Optional[int] = None,
     verbose: Optional[int] = None,
+    out_unit: Optional[int] = None,
+    err_unit: Optional[int] = None,
 ) -> Tuple[bool, np.ndarray]:
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating data to the relevant data
@@ -245,8 +261,11 @@ def stability_check_py_interface(
         c_long,
         POINTER(c_bool),
         POINTER(c_double),
+        POINTER(c_bool),
         c_void_p,
         POINTER(c_double),
+        POINTER(c_long),
+        POINTER(c_long),
         POINTER(c_long),
         POINTER(c_long),
         POINTER(c_long),
@@ -255,6 +274,7 @@ def stability_check_py_interface(
     # initialize return variables
     stable = c_bool(False)
     kappa = np.empty(n_param, dtype=np.float64)
+    error = c_bool(False)
 
     # call Fortran function
     libopentrustregion.stability_check(
@@ -264,6 +284,7 @@ def stability_check_py_interface(
         n_param,
         byref(stable),
         kappa.ctypes.data_as(POINTER(c_double)),
+        byref(error),
         None if precond is None else precond_interface,
         None if conv_tol is None else byref(c_double(conv_tol)),
         (
@@ -273,6 +294,11 @@ def stability_check_py_interface(
         ),
         None if n_iter is None else byref(c_long(n_iter)),
         None if verbose is None else byref(c_long(verbose)),
+        None if out_unit is None else byref(c_long(out_unit)),
+        None if err_unit is None else byref(c_long(err_unit)),
     )
+
+    if error:
+        raise RuntimeError("OpenTrustRegion stability check produced error.")
 
     return bool(stable), kappa

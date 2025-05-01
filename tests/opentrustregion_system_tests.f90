@@ -37,7 +37,7 @@ contains
         integer(ip) :: ios
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
         real(rp) :: func
-        logical :: stable
+        logical :: stable, error
 
         ! assume tests pass
         test_h2o_atomic_fb = .true.
@@ -79,7 +79,13 @@ contains
         obj_func_funptr => obj_func
 
         ! call solver
-        call solver(update_orbs_funptr, obj_func_funptr, n_param)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
+
+        ! check if error has occured
+        if (error) then
+            write (stderr, *) "test_h2o_atomic_fb failed: Solver produced error."
+            test_h2o_atomic_fb = .false.
+        end if
 
         ! get gradient, Hessian diagonal and Hessian linear transformation function
         ! pointer
@@ -87,7 +93,14 @@ contains
         call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
 
         ! perform stability check
-        call stability_check(grad, h_diag, hess_x_funptr, stable, kappa)
+        call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error)
+
+        ! check if error has occured
+        if (error) then
+            write (stderr, *) "test_h2o_atomic_fb failed: Stability check produced "// &
+            "error."
+            test_h2o_atomic_fb = .false.
+        end if
 
         ! test if solution is stable
         if (.not. stable) then
@@ -122,7 +135,7 @@ contains
         integer(ip) :: ios
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
         real(rp) :: func
-        logical :: stable
+        logical :: stable, error
 
         ! assume tests pass
         test_h2o_saddle_fb = .true.
@@ -164,7 +177,13 @@ contains
         obj_func_funptr => obj_func
 
         ! call solver
-        call solver(update_orbs_funptr, obj_func_funptr, n_param)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
+
+        ! check if error has occured
+        if (error) then
+            write (stderr, *) "test_h2o_saddle_fb failed: Solver produced error."
+            test_h2o_saddle_fb = .false.
+        end if
 
         ! get gradient, Hessian diagonal and Hessian linear transformation function
         ! pointer
@@ -172,7 +191,14 @@ contains
         call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
 
         ! perform stability check
-        call stability_check(grad, h_diag, hess_x_funptr, stable, kappa)
+        call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error)
+
+        ! check if error has occured
+        if (error) then
+            write (stderr, *) "test_h2o_saddle_fb failed: Stability check produced "// &
+            "error."
+            test_h2o_saddle_fb = .false.
+        end if
 
         ! test if solution is stable
         if (.not. stable) then

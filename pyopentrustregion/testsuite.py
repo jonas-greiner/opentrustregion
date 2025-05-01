@@ -45,7 +45,6 @@ except OSError:
 fortran_tests = {
     "opentrustregion_tests": [
         "diag_precond",
-        "raise_error",
         "set_default",
         "init_solver_settings",
         "init_stability_settings",
@@ -196,8 +195,10 @@ class PyInterfaceTests(unittest.TestCase):
             n_micro=200,
             global_red_factor=1e-2,
             local_red_factor=1e-3,
-            verbose=3,
             seed=33,
+            verbose=3,
+            out_unit=4,
+            err_unit=5,
         )
 
         self.assertTrue(libtestsuite.test_solver_result(), "solver_py_interface failed")
@@ -255,6 +256,8 @@ class PyInterfaceTests(unittest.TestCase):
             n_random_trial_vectors=3,
             n_iter=50,
             verbose=3,
+            out_unit=4,
+            err_unit=5,
         )
 
         # check if returned variables are correct

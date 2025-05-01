@@ -90,9 +90,11 @@ contains
 
         type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr, &
                           precond_c_funptr = c_null_funptr
+        logical(c_bool) :: error
         integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
                                    n_macro = 300_c_long, n_micro = 200_c_long, &
-                                   verbose = 3_c_long, seed = 33_c_long
+                                   seed = 33_c_long, verbose = 3_c_long, &
+                                   out_unit = 4_c_long, err_unit = 5_c_long
         logical(c_bool), target :: stability = .false., line_search = .true.
         real(c_double), target :: conv_tol = 1e-3_c_double, &
                                   start_trust_radius = 0.2_c_double, &
@@ -106,8 +108,8 @@ contains
                        n_micro_c_ptr = c_null_ptr, &
                        global_red_factor_c_ptr = c_null_ptr, &
                        local_red_factor_c_ptr = c_null_ptr, &
-                       verbose_c_ptr = c_null_ptr, &
-                       seed_c_ptr = c_null_ptr
+                       seed_c_ptr = c_null_ptr, verbose_c_ptr = c_null_ptr, &
+                       out_unit_c_ptr = c_null_ptr, err_unit_c_ptr = c_null_ptr
 
         ! assume tests pass
         test_solver_c_wrapper = .true.
@@ -121,15 +123,23 @@ contains
 
         ! call solver first without associated optional arguments which should produce
         ! default values
-        call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, &
+        call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
                               precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
                               conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                               start_trust_radius_c_ptr, n_macro_c_ptr, &
                               n_micro_c_ptr, global_red_factor_c_ptr, &
-                              local_red_factor_c_ptr, verbose_c_ptr, seed_c_ptr)
+                              local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
+                              out_unit_c_ptr, err_unit_c_ptr)
 
         ! check if test has passed
         test_solver_c_wrapper = test_passed
+
+        ! check if output variables are as expected
+        if (error) then
+            test_solver_c_wrapper = .false.
+            write (stderr, *) "test_solver_c_wrapper failed: Returned error "// &
+                "boolean wrong."
+        end if
 
         ! associate optional arguments with values
         precond_c_funptr = c_funloc(mock_precond)
@@ -142,19 +152,29 @@ contains
         n_micro_c_ptr = c_loc(n_micro)
         global_red_factor_c_ptr = c_loc(global_red_factor)
         local_red_factor_c_ptr = c_loc(local_red_factor)
-        verbose_c_ptr = c_loc(verbose)
         seed_c_ptr = c_loc(seed)
+        verbose_c_ptr = c_loc(verbose)
+        out_unit_c_ptr = c_loc(out_unit)
+        err_unit_c_ptr = c_loc(err_unit)
 
         ! call solver with associated optional arguments
-        call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, &
+        call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
                               precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
                               conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                               start_trust_radius_c_ptr, n_macro_c_ptr, &
                               n_micro_c_ptr, global_red_factor_c_ptr, &
-                              local_red_factor_c_ptr, verbose_c_ptr, seed_c_ptr)
+                              local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
+                              out_unit_c_ptr, err_unit_c_ptr)
+
+        ! check if output variables are as expected
+        if (error) then
+            test_solver_c_wrapper = .false.
+            write (stderr, *) "test_solver_c_wrapper failed: Returned error "// &
+                "boolean wrong."
+        end if
 
         ! check if test has passed
-        test_solver_c_wrapper = test_solver_c_wrapper .and. test_passed 
+        test_solver_c_wrapper = test_solver_c_wrapper .and. test_passed
 
     end function test_solver_c_wrapper
 
@@ -167,13 +187,15 @@ contains
 
         real(c_double), dimension(n_param) :: kappa
         type(c_funptr) :: hess_x_c_funptr, precond_c_funptr = c_null_funptr
-        logical(c_bool) :: stable
+        logical(c_bool) :: stable, error
         real(c_double), target :: conv_tol = 1e-3_c_double
         integer(c_long), target :: n_random_trial_vectors = 3_c_long, &
-                                   n_iter = 50_c_long, verbose = 3_c_long
+                                   n_iter = 50_c_long, verbose = 3_c_long, &
+                                   out_unit = 4_c_long, err_unit = 5_c_long
         type(c_ptr) :: conv_tol_c_ptr = c_null_ptr, &
                        n_random_trial_vectors_c_ptr = c_null_ptr, &
-                       n_iter_c_ptr = c_null_ptr, verbose_c_ptr = c_null_ptr
+                       n_iter_c_ptr = c_null_ptr, verbose_c_ptr = c_null_ptr, &
+                       out_unit_c_ptr = c_null_ptr, err_unit_c_ptr = c_null_ptr
 
         ! assume tests pass
         test_stability_check_c_wrapper = .true.
@@ -191,32 +213,13 @@ contains
         ! call stability check first without associated optional arguments which should 
         ! produce default values
         call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
-                                       stable, kappa, precond_c_funptr, &
+                                       stable, kappa, error, precond_c_funptr, &
                                        conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                                       n_iter_c_ptr, verbose_c_ptr)
+                                       n_iter_c_ptr, verbose_c_ptr, out_unit_c_ptr, &
+                                       err_unit_c_ptr)
 
         ! check if test has passed
         test_stability_check_c_wrapper = test_passed
-
-        ! check if output variables are as expected
-        if (stable .or. any(abs(kappa - 1.d0) > tol)) then
-            test_stability_check_c_wrapper = .false.
-            write (stderr, *) "test_stability_check_c_wrapper failed: Wrong output "// &
-                "variables."
-        end if
-
-        ! associate optional arguments with values
-        precond_c_funptr = c_funloc(mock_precond)
-        conv_tol_c_ptr = c_loc(conv_tol)
-        n_random_trial_vectors_c_ptr = c_loc(n_random_trial_vectors)
-        n_iter_c_ptr = c_loc(n_iter)
-        verbose_c_ptr = c_loc(verbose)
-
-        ! call stability check with associated optional arguments
-        call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
-                                       stable, kappa, precond_c_funptr, &
-                                       conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                                       n_iter_c_ptr, verbose_c_ptr)
 
         ! check if output variables are as expected
         if (stable) then
@@ -229,6 +232,47 @@ contains
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                 "direction wrong."
+        end if
+
+        if (error) then
+            test_stability_check_c_wrapper = .false.
+            write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
+                "error boolean wrong."
+        end if
+
+        ! associate optional arguments with values
+        precond_c_funptr = c_funloc(mock_precond)
+        conv_tol_c_ptr = c_loc(conv_tol)
+        n_random_trial_vectors_c_ptr = c_loc(n_random_trial_vectors)
+        n_iter_c_ptr = c_loc(n_iter)
+        verbose_c_ptr = c_loc(verbose)
+        out_unit_c_ptr = c_loc(out_unit)
+        err_unit_c_ptr = c_loc(err_unit)
+
+        ! call stability check with associated optional arguments
+        call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
+                                       stable, kappa, error, precond_c_funptr, &
+                                       conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                       n_iter_c_ptr, verbose_c_ptr, out_unit_c_ptr, &
+                                       err_unit_c_ptr)
+
+        ! check if output variables are as expected
+        if (stable) then
+            test_stability_check_c_wrapper = .false.
+            write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
+                "stability boolean wrong."
+        end if
+
+        if (any(abs(kappa - 1.d0) > tol)) then
+            test_stability_check_c_wrapper = .false.
+            write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
+                "direction wrong."
+        end if
+
+        if (error) then
+            test_stability_check_c_wrapper = .false.
+            write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
+                "error boolean wrong."
         end if
 
         ! check if test has passed

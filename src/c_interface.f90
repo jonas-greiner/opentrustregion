@@ -71,10 +71,11 @@ module c_interface
     ! interfaces for solver and stability subroutines, different routines can be
     ! injected, for example for testing
     interface
-        subroutine solver_type(update_orbs, obj_func, n_param, precond, stability, &
-                               line_search, conv_tol, n_random_trial_vectors, &
-                               start_trust_radius, n_macro, n_micro, &
-                               global_red_factor, local_red_factor, verbose, seed)
+        subroutine solver_type(update_orbs, obj_func, n_param, error, precond, &
+                               stability, line_search, conv_tol, &
+                               n_random_trial_vectors, start_trust_radius, n_macro, &
+                               n_micro, global_red_factor, local_red_factor, seed, &
+                               verbose, out_unit, err_unit)
 
             use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type, &
                                        precond_type
@@ -82,30 +83,34 @@ module c_interface
             procedure(update_orbs_type), intent(in), pointer :: update_orbs
             procedure(obj_func_type), intent(in), pointer :: obj_func
             integer(ip), intent(in) :: n_param
+            logical, intent(out) :: error
             procedure(precond_type), intent(in), pointer, optional :: precond
             logical, intent(in), optional :: stability, line_search
             real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                               global_red_factor, local_red_factor
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
-                                                 n_micro, verbose, seed
+                                                 n_micro, seed, verbose, out_unit, &
+                                                 err_unit
+                                                 
 
         end subroutine solver_type
     end interface
 
     interface
-        subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, precond, &
-                                        conv_tol, n_random_trial_vectors, n_iter, &
-                                        verbose)
+        subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, error, &
+                                        precond, conv_tol, n_random_trial_vectors, &
+                                        n_iter, verbose, out_unit, err_unit)
 
             use opentrustregion, only: rp, ip, hess_x_type, precond_type
 
             real(rp), intent(in) :: grad(:), h_diag(:)
             procedure(hess_x_type), pointer, intent(in) :: hess_x
-            logical, intent(out) :: stable
+            logical, intent(out) :: stable, error
             real(rp), intent(out) :: kappa(:)
             procedure(precond_type), pointer, intent(in), optional :: precond
             real(rp), intent(in), optional :: conv_tol
-            integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
+            integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, &
+                                                 out_unit, err_unit, verbose
 
         end subroutine stability_check_type
     end interface
@@ -116,13 +121,13 @@ module c_interface
 
 contains
 
-    subroutine solver_c_wrapper(update_orbs_c_ptr, obj_func_c_ptr, n_param_c, &
+    subroutine solver_c_wrapper(update_orbs_c_ptr, obj_func_c_ptr, n_param_c, error_c, &
                                 precond_c_ptr, stability_c_ptr, line_search_c_ptr, &
                                 conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                                 start_trust_radius_c_ptr, n_macro_c_ptr, &
                                 n_micro_c_ptr, global_red_factor_c_ptr, &
-                                local_red_factor_c_ptr, verbose_c_ptr, seed_c_ptr) &
-        bind(C, name="solver")
+                                local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
+                                out_unit_c_ptr, err_unit_c_ptr) bind(C, name="solver")
         !
         ! this subroutine wraps the solver subroutine to convert C variables to Fortran
         ! variables
@@ -136,22 +141,26 @@ contains
                                    solver_n_macro_default, solver_n_micro_default, &
                                    solver_global_red_factor_default, &
                                    solver_local_red_factor_default, &
-                                   solver_verbose_default, solver_seed_default
+                                   solver_seed_default, solver_verbose_default, &
+                                   stdout, stderr
+                                   
 
         type(c_funptr), intent(in) :: update_orbs_c_ptr, obj_func_c_ptr
         integer(c_long), value, intent(in) :: n_param_c
+        logical(c_bool), intent(out) :: error_c
         type(c_funptr), intent(in), value :: precond_c_ptr
         type(c_ptr), value, intent(in) :: stability_c_ptr, line_search_c_ptr, &
                                           conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
                                           start_trust_radius_c_ptr, n_macro_c_ptr, &
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
-                                          local_red_factor_c_ptr, verbose_c_ptr, &
-                                          seed_c_ptr
+                                          local_red_factor_c_ptr, seed_c_ptr, &
+                                          verbose_c_ptr, out_unit_c_ptr, err_unit_c_ptr
 
-        logical :: stability, line_search
+        logical :: error, stability, line_search
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
-        integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, verbose, seed
+        integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, seed, &
+                       verbose, out_unit, err_unit
         procedure(update_orbs_type), pointer :: update_orbs
         procedure(obj_func_type), pointer :: obj_func
         procedure(precond_type), pointer :: precond
@@ -170,8 +179,10 @@ contains
                                               solver_global_red_factor_default)
         local_red_factor = set_default_c_ptr(local_red_factor_c_ptr, &
                                              solver_local_red_factor_default)
-        verbose = set_default_c_ptr(verbose_c_ptr, solver_verbose_default)
         seed = set_default_c_ptr(seed_c_ptr, solver_seed_default)
+        verbose = set_default_c_ptr(verbose_c_ptr, solver_verbose_default)
+        out_unit = set_default_c_ptr(out_unit_c_ptr, stdout)
+        err_unit = set_default_c_ptr(err_unit_c_ptr, stderr)
 
         ! associate the input C pointer to update_orbs subroutine to a Fortran
         ! procedure pointer
@@ -189,26 +200,30 @@ contains
         if (c_associated(precond_c_ptr)) then
             call c_f_procpointer(cptr=precond_c_ptr, fptr=precond_before_wrapping)
             precond => precond_c_wrapper
-            call solver(update_orbs, obj_func, n_param, precond, stability, &
+            call solver(update_orbs, obj_func, n_param, error, precond, stability, &
                         line_search, conv_tol, n_random_trial_vectors, &
                         start_trust_radius, n_macro, n_micro, global_red_factor, &
-                        local_red_factor, verbose, seed)
+                        local_red_factor, seed, verbose, out_unit, err_unit)
         else
-            call solver(update_orbs, obj_func, n_param, stability=stability, &
+            call solver(update_orbs, obj_func, n_param, error, stability=stability, &
                         line_search=line_search, conv_tol=conv_tol, &
                         n_random_trial_vectors=n_random_trial_vectors, &
                         start_trust_radius=start_trust_radius, n_macro=n_macro, &
                         n_micro=n_micro, global_red_factor=global_red_factor, &
-                        local_red_factor=local_red_factor, verbose=verbose, seed=seed)
+                        local_red_factor=local_red_factor, seed=seed, verbose=verbose, &
+                        out_unit=out_unit, err_unit=err_unit)
         end if
+
+        ! convert return arguments to C kind
+        error_c = error
 
     end subroutine solver_c_wrapper
 
     subroutine stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_ptr, n_param_c, &
-                                         stable_c, kappa_c, precond_c_ptr, &
+                                         stable_c, kappa_c, error_c, precond_c_ptr, &
                                          conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                                         n_iter_c_ptr, verbose_c_ptr) &
-        bind(C, name="stability_check")
+                                         n_iter_c_ptr, verbose_c_ptr, out_unit_c_ptr, &
+                                         err_unit_c_ptr) bind(C, name="stability_check")
         !
         ! this subroutine wraps the stability check subroutine to convert C variables
         ! to Fortran variables
@@ -216,22 +231,24 @@ contains
         use opentrustregion, only: hess_x_type, precond_type, &
                                    stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
-                                   stability_n_iter_default, stability_verbose_default
+                                   stability_n_iter_default, &
+                                   stability_verbose_default, stdout, stderr
 
         integer(c_long), value, intent(in) :: n_param_c
         real(c_double), intent(in), dimension(n_param_c) :: grad_c, h_diag_c
         type(c_funptr), intent(in) :: hess_x_c_ptr
-        logical(c_bool), intent(out) :: stable_c
+        logical(c_bool), intent(out) :: stable_c, error_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
         type(c_funptr), intent(in), value :: precond_c_ptr
         type(c_ptr), value, intent(in) :: conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
-                                          verbose_c_ptr
+                                          verbose_c_ptr, out_unit_c_ptr, err_unit_c_ptr
 
         real(rp) :: conv_tol, grad(n_param_c), h_diag(n_param_c)
         real(rp) :: kappa(n_param_c)
-        logical :: stable
-        integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose
+        logical :: stable, error
+        integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose, out_unit, &
+                       err_unit
         procedure(hess_x_type), pointer :: hess_x
         procedure(precond_type), pointer :: precond
 
@@ -241,6 +258,8 @@ contains
                                                stability_n_random_trial_vectors_default)
         n_iter = set_default_c_ptr(n_iter_c_ptr, stability_n_iter_default)
         verbose = set_default_c_ptr(verbose_c_ptr, stability_verbose_default)
+        out_unit = set_default_c_ptr(out_unit_c_ptr, stdout)
+        err_unit = set_default_c_ptr(err_unit_c_ptr, stderr)
 
         ! associate the input C pointer to update_orbs subroutine to a Fortran
         ! procedure pointer
@@ -260,18 +279,21 @@ contains
         if (c_associated(precond_c_ptr)) then
             call c_f_procpointer(cptr=precond_c_ptr, fptr=precond_before_wrapping)
             precond => precond_c_wrapper
-            call stability_check(grad, h_diag, hess_x, stable, kappa, precond, &
-                                 conv_tol, n_random_trial_vectors, n_iter, verbose)
+            call stability_check(grad, h_diag, hess_x, stable, kappa, error, precond, &
+                                 conv_tol, n_random_trial_vectors, n_iter, verbose, &
+                                 out_unit, err_unit)
         else
-            call stability_check(grad, h_diag, hess_x, stable, kappa, &
+            call stability_check(grad, h_diag, hess_x, stable, kappa, error, &
                                  conv_tol=conv_tol, &
                                  n_random_trial_vectors=n_random_trial_vectors, &
-                                 n_iter=n_iter, verbose=verbose)
+                                 n_iter=n_iter, verbose=verbose, out_unit=out_unit, &
+                                 err_unit=err_unit)
         end if
 
         ! convert return arguments to C kind
         stable_c = stable
         kappa_c = kappa
+        error_c = error
 
     end subroutine stability_check_c_wrapper
 
