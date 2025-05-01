@@ -481,6 +481,10 @@ contains
                 tot_orb_update
         end if
 
+        ! reset global counter variables
+        tot_orb_update = 0
+        tot_hess_x = 0
+
         ! flush output
         flush (settings%out_unit)
         flush (settings%err_unit)
