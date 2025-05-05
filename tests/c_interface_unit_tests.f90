@@ -95,12 +95,14 @@ contains
                                    n_macro = 300_c_long, n_micro = 200_c_long, &
                                    seed = 33_c_long, verbose = 3_c_long, &
                                    out_unit = 4_c_long, err_unit = 5_c_long
-        logical(c_bool), target :: stability = .false., line_search = .true.
+        logical(c_bool), target :: stability = .false., line_search = .true., &
+                                   jacobi_davidson = .false.
         real(c_double), target :: conv_tol = 1e-3_c_double, &
                                   start_trust_radius = 0.2_c_double, &
                                   global_red_factor = 1e-2_c_double, &
                                   local_red_factor = 1e-3_c_double
         type(c_ptr) :: stability_c_ptr = c_null_ptr, line_search_c_ptr = c_null_ptr, &
+                       jacobi_davidson_c_ptr = c_null_ptr, &
                        conv_tol_c_ptr = c_null_ptr, &
                        n_random_trial_vectors_c_ptr = c_null_ptr, &
                        start_trust_radius_c_ptr = c_null_ptr, &
@@ -125,9 +127,9 @@ contains
         ! default values
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
                               precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
-                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                              start_trust_radius_c_ptr, n_macro_c_ptr, &
-                              n_micro_c_ptr, global_red_factor_c_ptr, &
+                              jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                              n_random_trial_vectors_c_ptr, start_trust_radius_c_ptr, &
+                              n_macro_c_ptr, n_micro_c_ptr, global_red_factor_c_ptr, &
                               local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
                               out_unit_c_ptr, err_unit_c_ptr)
 
@@ -145,6 +147,7 @@ contains
         precond_c_funptr = c_funloc(mock_precond)
         stability_c_ptr = c_loc(stability)
         line_search_c_ptr = c_loc(line_search)
+        jacobi_davidson_c_ptr = c_loc(jacobi_davidson)
         conv_tol_c_ptr = c_loc(conv_tol)
         n_random_trial_vectors_c_ptr = c_loc(n_random_trial_vectors)
         start_trust_radius_c_ptr = c_loc(start_trust_radius)
@@ -160,9 +163,9 @@ contains
         ! call solver with associated optional arguments
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
                               precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
-                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                              start_trust_radius_c_ptr, n_macro_c_ptr, &
-                              n_micro_c_ptr, global_red_factor_c_ptr, &
+                              jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                              n_random_trial_vectors_c_ptr, start_trust_radius_c_ptr, &
+                              n_macro_c_ptr, n_micro_c_ptr, global_red_factor_c_ptr, &
                               local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
                               out_unit_c_ptr, err_unit_c_ptr)
 
@@ -188,11 +191,13 @@ contains
         real(c_double), dimension(n_param) :: kappa
         type(c_funptr) :: hess_x_c_funptr, precond_c_funptr = c_null_funptr
         logical(c_bool) :: stable, error
+        logical(c_bool), target :: jacobi_davidson = .false.
         real(c_double), target :: conv_tol = 1e-3_c_double
         integer(c_long), target :: n_random_trial_vectors = 3_c_long, &
                                    n_iter = 50_c_long, verbose = 3_c_long, &
                                    out_unit = 4_c_long, err_unit = 5_c_long
-        type(c_ptr) :: conv_tol_c_ptr = c_null_ptr, &
+        type(c_ptr) :: jacobi_davidson_c_ptr = c_null_ptr, &
+                       conv_tol_c_ptr = c_null_ptr, &
                        n_random_trial_vectors_c_ptr = c_null_ptr, &
                        n_iter_c_ptr = c_null_ptr, verbose_c_ptr = c_null_ptr, &
                        out_unit_c_ptr = c_null_ptr, err_unit_c_ptr = c_null_ptr
@@ -214,9 +219,9 @@ contains
         ! produce default values
         call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
                                        stable, kappa, error, precond_c_funptr, &
-                                       conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                                       n_iter_c_ptr, verbose_c_ptr, out_unit_c_ptr, &
-                                       err_unit_c_ptr)
+                                       jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                       n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
+                                       verbose_c_ptr, out_unit_c_ptr, err_unit_c_ptr)
 
         ! check if test has passed
         test_stability_check_c_wrapper = test_passed
@@ -242,6 +247,7 @@ contains
 
         ! associate optional arguments with values
         precond_c_funptr = c_funloc(mock_precond)
+        jacobi_davidson_c_ptr = c_loc(jacobi_davidson)
         conv_tol_c_ptr = c_loc(conv_tol)
         n_random_trial_vectors_c_ptr = c_loc(n_random_trial_vectors)
         n_iter_c_ptr = c_loc(n_iter)
@@ -252,9 +258,9 @@ contains
         ! call stability check with associated optional arguments
         call stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param, &
                                        stable, kappa, error, precond_c_funptr, &
-                                       conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                                       n_iter_c_ptr, verbose_c_ptr, out_unit_c_ptr, &
-                                       err_unit_c_ptr)
+                                       jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                       n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
+                                       verbose_c_ptr, out_unit_c_ptr, err_unit_c_ptr)
 
         ! check if output variables are as expected
         if (stable) then

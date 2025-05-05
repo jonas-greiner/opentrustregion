@@ -44,6 +44,7 @@ def solver_py_interface(
     precond: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
     stability: Optional[bool] = None,
     line_search: Optional[bool] = None,
+    jacobi_davidson: Optional[bool] = None,
     conv_tol: Optional[float] = None,
     n_random_trial_vectors: Optional[int] = None,
     start_trust_radius: Optional[float] = None,
@@ -153,6 +154,7 @@ def solver_py_interface(
         c_void_p,
         POINTER(c_bool),
         POINTER(c_bool),
+        POINTER(c_bool),
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_double),
@@ -178,6 +180,7 @@ def solver_py_interface(
         None if precond is None else precond_interface,
         None if stability is None else byref(c_bool(stability)),
         None if line_search is None else byref(c_bool(line_search)),
+        None if jacobi_davidson is None else byref(c_bool(jacobi_davidson)),
         None if conv_tol is None else byref(c_double(conv_tol)),
         (
             None
@@ -205,6 +208,7 @@ def stability_check_py_interface(
     hess_x: Callable[[np.ndarray], np.ndarray],
     n_param: int,
     precond: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
+    jacobi_davidson: Optional[bool] = None,
     conv_tol: Optional[float] = None,
     n_random_trial_vectors: Optional[int] = None,
     n_iter: Optional[int] = None,
@@ -263,6 +267,7 @@ def stability_check_py_interface(
         POINTER(c_double),
         POINTER(c_bool),
         c_void_p,
+        POINTER(c_bool),
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_long),
@@ -286,6 +291,7 @@ def stability_check_py_interface(
         kappa.ctypes.data_as(POINTER(c_double)),
         byref(error),
         None if precond is None else precond_interface,
+        None if jacobi_davidson is None else byref(c_bool(jacobi_davidson)),
         None if conv_tol is None else byref(c_double(conv_tol)),
         (
             None

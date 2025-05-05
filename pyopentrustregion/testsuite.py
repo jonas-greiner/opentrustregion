@@ -44,6 +44,9 @@ except OSError:
 # define all tests
 fortran_tests = {
     "opentrustregion_tests": [
+        "minres",
+        "jacobi_davidson_correction",
+        "orthogonal_projection",
         "diag_precond",
         "set_default",
         "init_solver_settings",
@@ -188,6 +191,7 @@ class PyInterfaceTests(unittest.TestCase):
             precond=mock_precond,
             stability=False,
             line_search=True,
+            jacobi_davidson=False,
             conv_tol=1e-3,
             n_random_trial_vectors=5,
             start_trust_radius=0.2,
@@ -252,6 +256,7 @@ class PyInterfaceTests(unittest.TestCase):
             mock_hess_x,
             3,
             precond=mock_precond,
+            jacobi_davidson=False,
             conv_tol=1e-3,
             n_random_trial_vectors=3,
             n_iter=50,

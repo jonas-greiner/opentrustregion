@@ -41,7 +41,8 @@ contains
     subroutine mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
                                      n_param_c, error_c,  precond_c_funptr, &
                                      stability_c_ptr, line_search_c_ptr, &
-                                     conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                     jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                     n_random_trial_vectors_c_ptr, &
                                      start_trust_radius_c_ptr, n_macro_c_ptr, &
                                      n_micro_c_ptr, global_red_factor_c_ptr, &
                                      local_red_factor_c_ptr, seed_c_ptr, &
@@ -55,7 +56,7 @@ contains
         type(c_funptr), value, intent(in) :: precond_c_funptr
         integer(c_long), value, intent(in) :: n_param_c
         type(c_ptr), value, intent(in) :: stability_c_ptr, line_search_c_ptr, &
-                                          conv_tol_c_ptr, &
+                                          jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
                                           start_trust_radius_c_ptr, n_macro_c_ptr, &
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
@@ -73,7 +74,7 @@ contains
         type(c_ptr) :: grad_c_ptr, h_diag_c_ptr, hess_x_c_ptr, precond_residual_c_ptr
 
         procedure(precond_c_type), pointer :: precond_funptr
-        logical, pointer :: stability_ptr, line_search_ptr
+        logical, pointer :: stability_ptr, line_search_ptr, jacobi_davidson_ptr
         real(c_double), pointer :: conv_tol_ptr, start_trust_radius_ptr, &
                                    global_red_factor_ptr, local_red_factor_ptr
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_macro_ptr, &
@@ -131,8 +132,9 @@ contains
         ! check if check if default arguments are correctly unassociated with values
         if (solver_default) then
             if (c_associated(precond_c_funptr) .or. c_associated(stability_c_ptr) .or. &
-                c_associated(line_search_c_ptr) .or. c_associated(conv_tol_c_ptr) .or. &
-                c_associated(n_random_trial_vectors_c_ptr) .or. &
+                c_associated(line_search_c_ptr) .or. &
+                c_associated(jacobi_davidson_c_ptr) .or. c_associated(conv_tol_c_ptr) &
+                .or. c_associated(n_random_trial_vectors_c_ptr) .or. &
                 c_associated(start_trust_radius_c_ptr) .or. &
                 c_associated(n_macro_c_ptr) .or. c_associated(n_micro_c_ptr) .or. &
                 c_associated(global_red_factor_c_ptr) .or. &
@@ -148,6 +150,7 @@ contains
             if (.not. (c_associated(precond_c_funptr) .and. &
                        c_associated(stability_c_ptr) .and. &
                        c_associated(line_search_c_ptr) .and. &
+                       c_associated(jacobi_davidson_c_ptr) .and. &
                        c_associated(conv_tol_c_ptr) .and. &
                        c_associated(n_random_trial_vectors_c_ptr) .and. &
                        c_associated(start_trust_radius_c_ptr) .and. &
@@ -182,6 +185,7 @@ contains
             ! values
             call c_f_pointer(cptr=stability_c_ptr, fptr=stability_ptr)
             call c_f_pointer(cptr=line_search_c_ptr, fptr=line_search_ptr)
+            call c_f_pointer(cptr=jacobi_davidson_c_ptr, fptr=jacobi_davidson_ptr)
             call c_f_pointer(cptr=conv_tol_c_ptr, fptr=conv_tol_ptr)
             call c_f_pointer(cptr=n_random_trial_vectors_c_ptr, &
                              fptr=n_random_trial_vectors_ptr)
@@ -194,7 +198,7 @@ contains
             call c_f_pointer(cptr=verbose_c_ptr, fptr=verbose_ptr)
             call c_f_pointer(cptr=out_unit_c_ptr, fptr=out_unit_ptr)
             call c_f_pointer(cptr=err_unit_c_ptr, fptr=err_unit_ptr)
-            if (stability_ptr .or. .not. line_search_ptr .or. &
+            if (stability_ptr .or. .not. line_search_ptr .or. jacobi_davidson_ptr .or. &
                 abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. &
                 n_random_trial_vectors_ptr /= 5_c_long .or. &
                 abs(start_trust_radius_ptr - 0.2_c_double) > tol .or. &
@@ -219,7 +223,8 @@ contains
 
     subroutine mock_stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, &
                                               n_param_c, stable_c, kappa_c, error_c, &
-                                              precond_c_funptr, conv_tol_c_ptr, &
+                                              precond_c_funptr, jacobi_davidson_c_ptr, &
+                                              conv_tol_c_ptr, &
                                               n_random_trial_vectors_c_ptr, &
                                               n_iter_c_ptr, verbose_c_ptr, &
                                               out_unit_c_ptr, err_unit_c_ptr) &
@@ -234,7 +239,7 @@ contains
         type(c_funptr), intent(in), value :: precond_c_funptr
         logical(c_bool), intent(out) :: stable_c, error_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
-        type(c_ptr), value, intent(in) :: conv_tol_c_ptr, &
+        type(c_ptr), value, intent(in) :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr, out_unit_c_ptr, err_unit_c_ptr
 
@@ -243,6 +248,7 @@ contains
         type(c_ptr) :: hess_x_c_ptr, precond_residual_c_ptr
         real(c_double), pointer :: hess_x_ptr(:), precond_residual_ptr(:)
         real(c_double), dimension(n_param_c) :: x, residual
+        logical, pointer :: jacobi_davidson_ptr
         real(c_double), pointer :: conv_tol_ptr
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_iter_ptr, &
                                     verbose_ptr, out_unit_ptr, err_unit_ptr
@@ -278,8 +284,9 @@ contains
 
         ! check if check if default arguments are correctly unassociated with values
         if (stability_check_default) then
-            if (c_associated(precond_c_funptr) .or. c_associated(conv_tol_c_ptr) .or. &
-                c_associated(n_random_trial_vectors_c_ptr) .or. &
+            if (c_associated(precond_c_funptr) .or. &
+                c_associated(jacobi_davidson_c_ptr) .or. c_associated(conv_tol_c_ptr) &
+                .or. c_associated(n_random_trial_vectors_c_ptr) .or. &
                 c_associated(n_iter_c_ptr) .or. c_associated(verbose_c_ptr) .or. &
                 c_associated(out_unit_c_ptr) .or. c_associated(err_unit_c_ptr)) then
                 write (stderr, *) "test_stability_check_py_interface failed: "// &
@@ -289,6 +296,7 @@ contains
             ! check if check if optional arguments are associated with correct values
         else
             if (.not. (c_associated(precond_c_funptr) .and. &
+                       c_associated(jacobi_davidson_c_ptr) .and. &
                        c_associated(conv_tol_c_ptr) .and. &
                        c_associated(n_random_trial_vectors_c_ptr) .and. &
                        c_associated(n_iter_c_ptr) .and. &
@@ -319,13 +327,14 @@ contains
             ! get Fortran pointers to optional arguments and check against reference 
             ! values
             call c_f_pointer(cptr=conv_tol_c_ptr, fptr=conv_tol_ptr)
+            call c_f_pointer(cptr=jacobi_davidson_c_ptr, fptr=jacobi_davidson_ptr)
             call c_f_pointer(cptr=n_random_trial_vectors_c_ptr, &
                              fptr=n_random_trial_vectors_ptr)
             call c_f_pointer(cptr=n_iter_c_ptr, fptr=n_iter_ptr)
             call c_f_pointer(cptr=verbose_c_ptr, fptr=verbose_ptr)
             call c_f_pointer(cptr=out_unit_c_ptr, fptr=out_unit_ptr)
             call c_f_pointer(cptr=err_unit_c_ptr, fptr=err_unit_ptr)
-            if (abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. &
+            if (jacobi_davidson_ptr .or. abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. &
                 n_random_trial_vectors_ptr /= 3_c_long .or. n_iter_ptr /= 50_c_long &
                 .or. verbose_ptr /= 3_c_long .or. out_unit_ptr /= 4_c_long .or. &
                 err_unit_ptr /= 5_c_long) then

@@ -75,8 +75,6 @@ contains
             grad(j) = sum(2.d0*alpha*A(:, j)*(vars(j) - P(:, j))*exp_term)
         end do
 
-        grad = grad
-
     end subroutine hartmann6d_gradient
 
     subroutine hartmann6d_hessian(vars, hess)
@@ -102,8 +100,6 @@ contains
             end do
         end do
 
-        hess = hess
-
     end subroutine hartmann6d_hessian
 
     logical(c_bool) function test_solver() bind(C)
@@ -116,8 +112,8 @@ contains
         integer(ip), parameter :: n_param = 6
         logical :: error
         real(rp) :: vars(n_param), final_grad(n_param), hess(n_param, n_param)
-        procedure(update_orbs_type), pointer :: update_orbs_ptr
-        procedure(obj_func_type), pointer :: obj_func_ptr
+        procedure(update_orbs_type), pointer :: update_orbs_funptr
+        procedure(obj_func_type), pointer :: obj_func_funptr
         integer(ip) :: i
 
         ! assume tests pass
@@ -125,12 +121,12 @@ contains
 
         ! start in quadratic region near minimum
         vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
-        update_orbs_ptr => update_orbs
-        obj_func_ptr => obj_func
+        update_orbs_funptr => update_orbs
+        obj_func_funptr => obj_func
 
         ! run solver, check if error has occured and check whether gradient is zero and 
         ! agrees with correct minimum
-        call solver(update_orbs_ptr, obj_func_ptr, n_param, error)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
         if (error) then
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
@@ -142,19 +138,19 @@ contains
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(vars - minimum1) > 1e-8)) then
+        if (any(abs(vars - minimum1) > 1d-8)) then
             write (stderr, *) "test_solver failed: Solver did not find correct minimum."
             test_solver = .false.
         end if
 
         ! start near saddle point
         vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
-        update_orbs_ptr => update_orbs
-        obj_func_ptr => obj_func
+        update_orbs_funptr => update_orbs
+        obj_func_funptr => obj_func
 
         ! run solver, check if error has occured and check whether gradient is zero and 
         ! agrees with correct minimum
-        call solver(update_orbs_ptr, obj_func_ptr, n_param, error)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
         if (error) then
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
@@ -174,12 +170,12 @@ contains
 
         ! start at saddle point
         vars = saddle_point
-        update_orbs_ptr => update_orbs
-        obj_func_ptr => obj_func
+        update_orbs_funptr => update_orbs
+        obj_func_funptr => obj_func
 
         ! run solver, check if error has occured and check whether gradient is zero and 
         ! agrees with correct minimum
-        call solver(update_orbs_ptr, obj_func_ptr, n_param, error)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
         if (error) then
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
@@ -199,7 +195,7 @@ contains
 
     contains
 
-        subroutine update_orbs(delta_vars, func, grad, h_diag, hess_x_ptr)
+        subroutine update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr)
             !
             ! this function describes the orbital update equivalent for the Hartmann 6D
             ! function
@@ -207,7 +203,7 @@ contains
             real(rp), intent(in) :: delta_vars(:)
 
             real(rp), intent(out) :: func, grad(:), h_diag(:)
-            procedure(hess_x_type), pointer, intent(out) :: hess_x_ptr
+            procedure(hess_x_type), pointer, intent(out) :: hess_x_funptr
 
             ! update variables
             vars = vars + delta_vars
@@ -218,7 +214,7 @@ contains
             call hartmann6d_gradient(vars, grad)
             call hartmann6d_hessian(vars, hess)
             h_diag = [(hess(i, i), i=1, size(h_diag))]
-            hess_x_ptr => hess_x
+            hess_x_funptr => hess_x
 
         end subroutine update_orbs
 
@@ -257,7 +253,7 @@ contains
         use opentrustregion, only: hess_x_type, stability_check
 
         real(rp) :: vars(6), grad(6), hess(6, 6), h_diag(6), direction(6)
-        procedure(hess_x_type), pointer :: hess_x_ptr
+        procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable, error
         integer(ip) :: i
 
@@ -270,11 +266,11 @@ contains
         call hartmann6d_gradient(vars, grad)
         call hartmann6d_hessian(vars, hess)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_ptr => hess_x
+        hess_x_funptr => hess_x
 
         ! run stability, check if error has occured check and determine whether minimum 
         ! is stable and the returned direction vanishes
-        call stability_check(grad, h_diag, hess_x_ptr, stable, direction, error)
+        call stability_check(grad, h_diag, hess_x_funptr, stable, direction, error)
         if (error) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -296,11 +292,11 @@ contains
         call hartmann6d_gradient(vars, grad)
         call hartmann6d_hessian(vars, hess)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_ptr => hess_x
+        hess_x_funptr => hess_x
 
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
-        call stability_check(grad, h_diag, hess_x_ptr, stable, direction, error)
+        call stability_check(grad, h_diag, hess_x_funptr, stable, direction, error)
         if (error) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -841,14 +837,15 @@ contains
 
     logical(c_bool) function test_gram_schmidt() bind(C)
         !
-        ! this function tests the Gram-Schmidt function which orthonormalizes a vector
-        ! to a given basis
+        ! this function tests the Gram-Schmidt subroutine which orthonormalizes a 
+        ! vector to a given basis
         !
         use opentrustregion, only: gram_schmidt
 
-        real(rp), dimension(4) :: vector, orth_vector
-        real(rp), dimension(2) :: vector_small, orth_vector_small
-        real(rp) :: space(4, 2), space_small(2, 2)
+        real(rp), dimension(4) :: vector, lin_trans_vector
+        real(rp), dimension(2) :: vector_small
+        real(rp) :: space(4, 2), symm_matrix(4, 4), lin_trans_space(4, 2), &
+                    space_small(2, 2)
         logical :: error
         character(100) :: line
 
@@ -862,18 +859,55 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine whether added vector is
         ! orthonormalized
-        orth_vector = gram_schmidt(vector, space, stderr, error)
+        call gram_schmidt(vector, space, stderr, error)
         if (error) then
             write (stderr, *) "test_gram_schmidt failed: Produced error."
             test_gram_schmidt = .false.
         end if
-        if (abs(dot_product(orth_vector, space(:, 1))) > tol .or. &
-            abs(dot_product(orth_vector, space(:, 2))) > tol) then
+        if (abs(dot_product(vector, space(:, 1))) > tol .or. &
+            abs(dot_product(vector, space(:, 2))) > tol) then
             write (stderr, *) "test_gram_schmidt failed: Added vector not orthogonal."
             test_gram_schmidt = .false.
         end if
-        if (abs(norm2(orth_vector) - 1.d0) > tol) then
+        if (abs(norm2(vector) - 1.d0) > tol) then
             write (stderr, *) "test_gram_schmidt failed: Added vector not normalized."
+            test_gram_schmidt = .false.
+        end if
+
+        ! define vector to be orthogonalized and space
+        vector = [1.d0, 2.d0, 3.d0, 4.d0]
+        space(:, 1) = [0.d0, 1.d0, 0.d0, 0.d0]
+        space(:, 2) = [0.d0, 0.d0, 1.d0, 0.d0]
+
+        ! define symmetric linear transformation and corresponding vector and space
+        symm_matrix = reshape([ 1.d0, -5.d0,  8.d0,  0.d0, &
+                               -5.d0,  2.d0, -6.d0,  9.d0, &
+                                8.d0, -6.d0,  3.d0, -7.d0, &
+                                0.d0,  9.d0, -7.d0,  4.d0], &
+                              shape(symm_matrix), order=[2,1])
+        lin_trans_vector = matmul(symm_matrix, vector)
+        lin_trans_space = matmul(symm_matrix, space)
+
+        ! perform Gram-Schmidt orthogonalization and determine whether added vector is
+        ! orthonormalized and linear transformation is correct
+        call gram_schmidt(vector, space, stderr, error, lin_trans_vector, &
+                          lin_trans_space)
+        if (error) then
+            write (stderr, *) "test_gram_schmidt failed: Produced error."
+            test_gram_schmidt = .false.
+        end if
+        if (abs(dot_product(vector, space(:, 1))) > tol .or. &
+            abs(dot_product(vector, space(:, 2))) > tol) then
+            write (stderr, *) "test_gram_schmidt failed: Added vector not orthogonal."
+            test_gram_schmidt = .false.
+        end if
+        if (abs(norm2(vector) - 1.d0) > tol) then
+            write (stderr, *) "test_gram_schmidt failed: Added vector not normalized."
+            test_gram_schmidt = .false.
+        end if
+        if (abs(sum(abs(lin_trans_vector - matmul(symm_matrix, vector)))) > tol) then
+            write (stderr, *) "test_gram_schmidt failed: Added linear "// &
+                "transformation not correct."
             test_gram_schmidt = .false.
         end if
 
@@ -883,7 +917,7 @@ contains
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
         open(unit=99, status="scratch")
-        orth_vector = gram_schmidt(vector, space, 99, error)
+        call gram_schmidt(vector, space, 99, error)
         rewind(99)
         read(unit=99, fmt='(A)') line
         close(unit=99)
@@ -902,7 +936,7 @@ contains
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
         open(unit=99, status="scratch")
-        orth_vector_small = gram_schmidt(vector_small, space_small, 99, error)
+        call gram_schmidt(vector_small, space_small, 99, error)
         rewind(99)
         read(unit=99, fmt='(A)') line
         close(unit=99)
@@ -923,6 +957,7 @@ contains
         use opentrustregion, only: solver_settings_type, init_solver_settings, &
                                    solver_stability_default, &
                                    solver_line_search_default, &
+                                   solver_jacobi_davidson_default, &
                                    solver_conv_tol_default, &
                                    solver_n_random_trial_vectors_default, &
                                    solver_start_trust_radius_default, &
@@ -942,6 +977,7 @@ contains
         ! check if default values are correctly set
         if (settings%stability .neqv. solver_stability_default .or. &
             settings%line_search .neqv. solver_line_search_default .or. &
+            settings%jacobi_davidson .neqv. solver_jacobi_davidson_default .or. &
             abs(settings%conv_tol - solver_conv_tol_default) > tol .or. &
             settings%n_random_trial_vectors /= solver_n_random_trial_vectors_default &
             .or. abs(settings%start_trust_radius - solver_start_trust_radius_default) &
@@ -959,21 +995,23 @@ contains
 
         ! call routine with optional arguments
         call init_solver_settings(settings, stability=.false., line_search=.true., &
-                                  conv_tol=1.d-3, n_random_trial_vectors=5, &
-                                  start_trust_radius=0.2d0, n_macro=300, n_micro=200, &
-                                  global_red_factor=1.d-2, local_red_factor=1.d-3, &
-                                  seed=33, verbose=3, out_unit=4, err_unit=5)
+                                  jacobi_davidson=.false., conv_tol=1.d-3, &
+                                  n_random_trial_vectors=5, start_trust_radius=0.2d0, &
+                                  n_macro=300, n_micro=200, global_red_factor=1.d-2, &
+                                  local_red_factor=1.d-3, seed=33, verbose=3, &
+                                  out_unit=4, err_unit=5)
 
         ! check if optional values are correctly set
         if (settings%stability .neqv. .false. .or. settings%line_search .neqv. .true. &
-            .or. abs(settings%conv_tol - 1.d-3) > tol .or. &
+            .or. settings%jacobi_davidson .neqv. .false. .or. &
+            abs(settings%conv_tol - 1.d-3) > tol .or. &
             settings%n_random_trial_vectors /= 5 .or. &
             abs(settings%start_trust_radius - 0.2d0) > tol .or. settings%n_macro &
             /= 300 .or. settings%n_micro /= 200 .or. &
             abs(settings%global_red_factor - 1.d-2) > tol .or. &
             abs(settings%local_red_factor - 1.d-3) > tol .or. &
             settings%seed /= 33 .or. settings%verbose /= 3 .or. settings%out_unit /= 4 &
-            .or. settings%out_unit /= 5) then
+            .or. settings%err_unit /= 5) then
             write (stderr, *) "test_init_solver_settings failed: Optional "// &
                 "arguments not set correctly."
             test_init_solver_settings = .false.
@@ -987,6 +1025,7 @@ contains
         ! settings
         !
         use opentrustregion, only: stability_settings_type, init_stability_settings, &
+                                   stability_jacobi_davidson_default, &
                                    stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
                                    stability_n_iter_default, &
@@ -1001,7 +1040,8 @@ contains
         call init_stability_settings(settings)
 
         ! check if default values are correctly set
-        if (abs(settings%conv_tol - stability_conv_tol_default) > tol .or. &
+        if (settings%jacobi_davidson .neqv. stability_jacobi_davidson_default .or. &
+            abs(settings%conv_tol - stability_conv_tol_default) > tol .or. &
             settings%n_random_trial_vectors /= &
             stability_n_random_trial_vectors_default .or. settings%n_iter /= &
             stability_n_iter_default .or. settings%verbose /= &
@@ -1013,12 +1053,13 @@ contains
         end if
 
         ! call routine with optional arguments
-        call init_stability_settings(settings, conv_tol=1.d-3, &
-                                     n_random_trial_vectors=3, n_iter=50, verbose=3, &
-                                     out_unit=4, err_unit=5)
+        call init_stability_settings(settings, jacobi_davidson=.false., &
+                                     conv_tol=1.d-3, n_random_trial_vectors=3, &
+                                     n_iter=50, verbose=3, out_unit=4, err_unit=5)
 
         ! check if optional values are correctly set
-        if (abs(settings%conv_tol - 1.d-3) > tol .or. settings%n_random_trial_vectors &
+        if (settings%jacobi_davidson .neqv. .false. .or. &
+            abs(settings%conv_tol - 1.d-3) > tol .or. settings%n_random_trial_vectors &
             /= 3 .or. settings%n_iter /= 50 .or. settings%verbose /= 3 .or. &
             settings%out_unit /= 4 .or. settings%err_unit /= 5) then
             write (stderr, *) "test_init_stability_settings failed: Optional "// &
@@ -1106,5 +1147,165 @@ contains
         end if
 
     end function test_diag_precond
+
+    logical(c_bool) function test_orthogonal_projection() bind(C)
+        !
+        ! this function tests the orthogonal projection function which removes a 
+        ! certain direction from a vector
+        !
+        use opentrustregion, only: orthogonal_projection
+
+        real(rp), dimension(4) :: vector, direction
+
+        ! assume tests pass
+        test_orthogonal_projection = .true.
+
+        ! define vector and direction to be projected out, the latter needs to be 
+        ! normalized
+        vector = [1.d0, 2.d0, 3.d0, 4.d0]
+        direction = [0.d0, 1.d0, 2.d0, 0.d0] / sqrt(5.d0)
+
+        ! perform orthogonal projection and determine whether vector contains direction
+        vector = orthogonal_projection(vector, direction)
+        if (abs(dot_product(vector, direction)) > tol) then
+            write (stderr, *) "test_orthogonal_projection failed: Vector contains "// &
+                "component from direction to be projected out."
+            test_orthogonal_projection = .false.
+        end if
+
+    end function test_orthogonal_projection
+
+    logical(c_bool) function test_jacobi_davidson_correction() bind(C)
+        !
+        ! this function tests the Jacobi-Davidson correction subroutine
+        !
+        use opentrustregion, only: hess_x_type, jacobi_davidson_correction
+
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        real(rp), dimension(6) :: vars, vector, solution, corr_vector, hess_vector
+        real(rp) :: hess(6, 6)
+
+        ! assume tests pass
+        test_jacobi_davidson_correction = .true.
+
+        ! define point near saddle point, define trial vector, and solution to be 
+        ! projected out
+        vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        vector = [0.1d0, 0.2d0, 0.3d0, 0.4d0, 0.5d0, 0.6d0]
+        solution = [1.d0, -2.d0, 2.d0, -1.d0, 1.d0, -2.d0]
+
+        ! generate Hessian
+        call hartmann6d_hessian(vars, hess)
+
+        ! define Hessian linear transformation
+        hess_x_funptr => hess_x
+
+        ! calculate Jacobi-Davidson correction and compare values
+        call jacobi_davidson_correction(hess_x_funptr, vector, solution, 0.5d0, &
+                                        corr_vector, hess_vector)
+        if (sum(abs(corr_vector - [-96.940677944d0, 203.929698480d0, -216.199768920d0, &
+                                   100.656941418d0, -90.624469448d0, 212.045768918d0]) &
+                ) > 1d-8) then
+            write (stderr, *) "test_jacobi_davidson_correction failed: Returned "// &
+                "correction vector wrong."
+            test_jacobi_davidson_correction = .false.
+        end if
+        if (sum(abs(hess_vector - [14.407362159d0, -18.566381727d0, 6.546311286d0, &
+                                   -10.441098685d0, 20.923570656d0, -10.250311288d0]) &
+                ) > 1d-8) then
+            write (stderr, *) "test_jacobi_davidson_correction failed: Returned "// &
+                "Hessian linear transformation wrong."
+            test_jacobi_davidson_correction = .false.
+        end if
+
+        contains
+
+        function hess_x(x)
+            !
+            ! this function describes the Hessian linear transformation operation for
+            ! the Hartmann 6D function
+            !
+            real(rp), intent(in) :: x(:)
+
+            real(rp) :: hess_x(size(x))
+
+            hess_x = matmul(hess, x)
+
+        end function hess_x
+
+    end function test_jacobi_davidson_correction
+
+    logical(c_bool) function test_minres() bind(C)
+        !
+        ! this function tests the minimum residual method subroutine
+        !
+        use opentrustregion, only: hess_x_type, minres, stdout
+
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        real(rp), dimension(6) :: vars, rhs, solution, vector, hess_vector, corr_vector
+        real(rp) :: hess(6, 6), mu
+        logical :: error
+
+        ! assume tests pass
+        test_minres = .true.
+
+        ! define point near saddle point
+        vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+
+        ! define solution to be projected out
+        solution = [1.d0, 2.d0, 3.d0, 4.d0, 5.d0, 6.d0] / sqrt(91.d0)
+
+        ! generate Hessian
+        call hartmann6d_hessian(vars, hess)
+
+        ! define Hessian linear transformation
+        hess_x_funptr => hess_x
+
+        ! define Rayleigh quotient
+        mu = dot_product(solution, hess_x(solution))
+
+        ! define right hand side based on residual, this ensures rhs is orthogonal to 
+        ! solution if mu describes the Rayleigh quotient and solution is normalized
+        rhs = hess_x(solution) - mu * solution
+
+        ! run minimum residual method, check if Jacobi-Davidson correction equation is 
+        ! solved and whether Hessian linear transformation is correct, if rhs and 
+        ! solution are orthogonal (as in Jacobi-Davidson), the final vector will be 
+        ! orthogonal to the solution vector and consequently the Hessian linear 
+        ! transformation of the projected vector is equivalent to the Hessian linear 
+        ! transformation of the vector itself
+        call minres(-rhs, hess_x_funptr, solution, mu, 1d-12, vector, hess_vector, 0, &
+                    stdout, stderr, error)
+        corr_vector = vector - dot_product(vector, solution) * solution
+        corr_vector = hess_x(corr_vector) - mu * corr_vector
+        corr_vector = corr_vector - dot_product(corr_vector, solution) * solution
+        if (sum(abs(corr_vector + rhs)) > tol) then
+            write (stderr, *) "test_minres failed: Returned solution does not "// & 
+                "solve Jacobi-Davidson correction equation."
+            test_minres = .false.
+        end if
+        if (sum(abs(hess_vector + dot_product(vector, solution) * hess_x(solution) - &
+                    hess_x(vector))) > tol) then
+            write (stderr, *) "test_minres failed: Returned Hessian linear "// &
+                "transformation wrong."
+            test_minres = .false.
+        end if
+
+        contains
+
+        function hess_x(x)
+            !
+            ! this function describes the Hessian linear transformation operation for
+            ! the Hartmann 6D function
+            !
+            real(rp), intent(in) :: x(:)
+
+            real(rp) :: hess_x(size(x))
+
+            hess_x = matmul(hess, x)
+
+        end function hess_x
+
+    end function test_minres
 
 end module opentrustregion_unit_tests
