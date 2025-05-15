@@ -6,7 +6,7 @@
 
 module opentrustregion_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion, only: rp, ip, stderr, settings_type
     use iso_c_binding, only: c_bool
 
     implicit none
@@ -37,6 +37,9 @@ module opentrustregion_unit_tests
     real(rp), parameter :: saddle_point(6) = [0.35278250d0, 0.59374767d0, &
                                               0.47631257d0, 0.40058250d0, &
                                               0.31111531d0, 0.32397158d0]
+
+    ! global log message
+    character(:), allocatable :: log_message
 
 contains
 
@@ -101,6 +104,27 @@ contains
         end do
 
     end subroutine hartmann6d_hessian
+
+    subroutine logger(message)
+        !
+        ! this subroutine is a mock logging subroutine
+        !
+        character(*), intent(in) :: message
+
+        log_message = message
+
+    end subroutine logger
+
+    subroutine setup_settings(settings)
+        !
+        ! this subroutine sets up a settings object for tests
+        !
+        class(settings_type), intent(inout) :: settings
+
+        settings%verbose = 3
+        settings%logger => logger
+
+    end subroutine setup_settings
 
     logical(c_bool) function test_solver() bind(C)
         !
@@ -203,7 +227,7 @@ contains
             real(rp), intent(in) :: delta_vars(:)
 
             real(rp), intent(out) :: func, grad(:), h_diag(:)
-            procedure(hess_x_type), pointer, intent(out) :: hess_x_funptr
+            procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
 
             ! update variables
             vars = vars + delta_vars
@@ -339,6 +363,7 @@ contains
         !
         use opentrustregion, only: newton_step
 
+        type(settings_type) :: settings
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
                     aug_hess(4, 4), solution(6), red_space_solution(3)
         integer(ip) :: i, j
@@ -346,6 +371,9 @@ contains
 
         ! assume tests pass
         test_newton_step = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! defined a reduced space basis
         red_space_basis = &
@@ -373,7 +401,7 @@ contains
         ! perform Newton step, check if error has occured and determine whether 
         ! resulting solution is correct in reduced and full space
         call newton_step(aug_hess, grad_norm, red_space_basis, solution, &
-                         red_space_solution, stderr, error)
+                         red_space_solution, settings, error)
         if (error) then
             write (stderr, *) "test_newton_step failed: Produced error."
             test_newton_step = .false.
@@ -399,6 +427,7 @@ contains
         !
         use opentrustregion, only: bisection
 
+        type(settings_type) :: settings
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
                     aug_hess(4, 4), solution(6), red_space_solution(3), trust_radius, mu
         integer(ip) :: i, j
@@ -406,6 +435,9 @@ contains
 
         ! assume tests pass
         test_bisection = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! defined a reduced space basis
         red_space_basis = &
@@ -436,7 +468,7 @@ contains
         ! region was bracketed, determine whether resulting solution is correct in 
         ! reduced and full space and respects target trust radius
         call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                       red_space_solution, mu, bracketed, stderr, error)
+                       red_space_solution, mu, bracketed, settings, error)
         if (error) then
             write (stderr, *) "test_bisection failed: Produced error."
             test_bisection = .false.
@@ -481,7 +513,7 @@ contains
         ! perform bisection and determine whether routine correctly throws error since
         ! minimum is closer than target trust radius and no level shift is necessary
         call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                       red_space_solution, mu, bracketed, stderr, error)
+                       red_space_solution, mu, bracketed, settings, error)
         if (error) then
             write (stderr, *) "test_bisection failed: Produced error."
             test_bisection = .false.
@@ -500,12 +532,16 @@ contains
         !
         use opentrustregion, only: obj_func_type, bracket
 
+        type(settings_type) :: settings
         procedure(obj_func_type), pointer :: obj_func
         real(rp) :: vars(6), lower, upper, n
         logical :: error
 
         ! assume tests pass
         test_bracket = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! define procedure pointer
         obj_func => hartmann6d_func
@@ -519,7 +555,7 @@ contains
 
         ! perform bracket and determine if new point decreases objective function in
         ! comparison to lower and upper bound
-        n = bracket(obj_func, vars, lower, upper, stderr, error)
+        n = bracket(obj_func, vars, lower, upper, settings, error)
         if (error) then
             write (stderr, *) "test_bracket failed: Produced error."
             test_bracket = .false.
@@ -622,12 +658,16 @@ contains
         !
         use opentrustregion, only: symm_mat_min_eig
 
+        type(settings_type) :: settings
         real(rp) :: matrix(3, 3)
         real(rp) :: eigval, eigvec(3)
         logical :: error
 
         ! assume tests pass
         test_symm_mat_min_eig = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! initialize symmetric matrix
         matrix = reshape([3.d0, 1.d0, 1.d0, &
@@ -636,7 +676,7 @@ contains
 
         ! call routine and determine if lowest eigenvalue and corresponding eigenvector
         ! are found
-        call symm_mat_min_eig(matrix, eigval, eigvec, stderr, error)
+        call symm_mat_min_eig(matrix, eigval, eigvec, settings, error)
         if (error) then
             write (stderr, *) "test_symm_mat_min_eig failed: Produced error."
             test_symm_mat_min_eig = .false.
@@ -661,11 +701,15 @@ contains
         !
         use opentrustregion, only: min_eigval
 
+        type(settings_type) :: settings
         real(rp) :: matrix(3, 3), matrix_min_eigval
         logical :: error
 
         ! assume tests pass
         test_min_eigval = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! initialize symmetric matrix
         matrix = reshape([3.d0, 1.d0, 1.d0, &
@@ -673,7 +717,7 @@ contains
                           1.d0, 2.d0, 5.d0], [3, 3])
 
         ! call function and determine if lowest eigenvalue is found
-        matrix_min_eigval = min_eigval(matrix, stderr, error)
+        matrix_min_eigval = min_eigval(matrix, settings, error)
         if (error) then
             write (stderr, *) "test_min_eigval failed: Produced error."
             test_min_eigval = .false.
@@ -744,7 +788,7 @@ contains
         !
         use opentrustregion, only: generate_trial_vectors
 
-        integer(ip) :: n_random
+        type(settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
         real(rp) :: grad(4), h_diag(4), grad_norm
         logical :: error
@@ -753,18 +797,21 @@ contains
         ! assume tests pass
         test_generate_trial_vectors = .true.
 
+        ! setup settings object
+        call setup_settings(settings)
+        settings%n_random_trial_vectors = 2
+
         ! define gradient
         grad = [1.d0, 2.d0, 3.d0, 4.d0]
         grad_norm = norm2(grad)
 
         ! define all positive Hessian diagonal elements
-        n_random = 2
         h_diag = [1.d0, 2.d0, 3.d0, 4.d0]
 
         ! generate trial vectors and determine whether function returns the correct
         ! number of orthonormal trial vectors
-        red_space_basis = generate_trial_vectors(n_random, grad, grad_norm, h_diag, &
-                                                 stderr, error)
+        red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
+                                                 error)
         if (error) then
             write (stderr, *) "test_generate_trial_vectors failed: Produced error."
             test_generate_trial_vectors = .false.
@@ -775,7 +822,7 @@ contains
             test_generate_trial_vectors = .false.
             return
         end if
-        if (size(red_space_basis, 2) /= 1 + n_random) then
+        if (size(red_space_basis, 2) /= 1 + settings%n_random_trial_vectors) then
             write (stderr, *) "test_generate_trial_vectors failed: Incorrect "// &
                 "number of vectors for Hessian with only positive diagonal elements."
             test_generate_trial_vectors = .false.
@@ -796,13 +843,12 @@ contains
         deallocate (red_space_basis)
 
         ! define Hessian diagonal with negative elements
-        n_random = 2
         h_diag = [-1.d0, 2.d0, 3.d0, 4.d0]
 
         ! generate trial vectors and determine whether function returns the correct
         ! number of orthonormal trial vectors
-        red_space_basis = generate_trial_vectors(n_random, grad, grad_norm, h_diag, &
-                                                 stderr, error)
+        red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
+                                                 error)
         if (error) then
             write (stderr, *) "test_generate_trial_vectors failed: Produced error."
             test_generate_trial_vectors = .false.
@@ -813,7 +859,7 @@ contains
             test_generate_trial_vectors = .false.
             return
         end if
-        if (size(red_space_basis, 2) /= 2 + n_random) then
+        if (size(red_space_basis, 2) /= 2 + settings%n_random_trial_vectors) then
             write (stderr, *) "test_generate_trial_vectors failed: Incorrect "// &
                 "number of vectors for Hessian with diagonal elements."
             test_generate_trial_vectors = .false.
@@ -842,6 +888,7 @@ contains
         !
         use opentrustregion, only: gram_schmidt
 
+        type(settings_type) :: settings
         real(rp), dimension(4) :: vector, lin_trans_vector
         real(rp), dimension(2) :: vector_small
         real(rp) :: space(4, 2), symm_matrix(4, 4), lin_trans_space(4, 2), &
@@ -852,6 +899,9 @@ contains
         ! assume tests pass
         test_gram_schmidt = .true.
 
+        ! setup settings object
+        call setup_settings(settings)
+
         ! define vector to be orthogonalized and space
         vector = [1.d0, 2.d0, 3.d0, 4.d0]
         space(:, 1) = [0.d0, 1.d0, 0.d0, 0.d0]
@@ -859,7 +909,7 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine whether added vector is
         ! orthonormalized
-        call gram_schmidt(vector, space, stderr, error)
+        call gram_schmidt(vector, space, settings, error)
         if (error) then
             write (stderr, *) "test_gram_schmidt failed: Produced error."
             test_gram_schmidt = .false.
@@ -890,7 +940,7 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine whether added vector is
         ! orthonormalized and linear transformation is correct
-        call gram_schmidt(vector, space, stderr, error, lin_trans_vector, &
+        call gram_schmidt(vector, space, settings, error, lin_trans_vector, &
                           lin_trans_space)
         if (error) then
             write (stderr, *) "test_gram_schmidt failed: Produced error."
@@ -916,12 +966,8 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
-        open(unit=99, status="scratch")
-        call gram_schmidt(vector, space, 99, error)
-        rewind(99)
-        read(unit=99, fmt='(A)') line
-        close(unit=99)
-        if ((.not. error) .or. (trim(line) /= " Vector passed to Gram-Schmidt "// &
+        call gram_schmidt(vector, space, settings, error)
+        if ((.not. error) .or. (log_message /= " Vector passed to Gram-Schmidt "// &
                                 "procedure is numerically zero.")) then
             write (stderr, *) "test_gram_schmidt failed: No error returned during "// &
                 "orthogonalization for zero vector."
@@ -935,12 +981,8 @@ contains
 
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
-        open(unit=99, status="scratch")
-        call gram_schmidt(vector_small, space_small, 99, error)
-        rewind(99)
-        read(unit=99, fmt='(A)') line
-        close(unit=99)
-        if (.not. error .or. (trim(line) /= " Number of vectors in Gram-Schmidt "// &
+        call gram_schmidt(vector_small, space_small, settings, error)
+        if (.not. error .or. (log_message /= " Number of vectors in Gram-Schmidt "// &
                               "procedure larger than dimension of vector space.")) then
             write (stderr, *) "test_gram_schmidt failed: No error returned during "// &
                 "orthogonalization when number of vectors is larger than dimension "// &
@@ -954,8 +996,8 @@ contains
         !
         ! this function tests the subroutine which initializes the solver settings
         !
-        use opentrustregion, only: solver_settings_type, init_solver_settings, &
-                                   solver_stability_default, &
+        use opentrustregion, only: logger_type, solver_settings_type, &
+                                   init_solver_settings, solver_stability_default, &
                                    solver_line_search_default, &
                                    solver_jacobi_davidson_default, &
                                    solver_conv_tol_default, &
@@ -964,9 +1006,10 @@ contains
                                    solver_n_macro_default, solver_n_micro_default, &
                                    solver_global_red_factor_default, &
                                    solver_local_red_factor_default, &
-                                   solver_seed_default, solver_verbose_default, stdout
+                                   solver_seed_default, solver_verbose_default
 
         type(solver_settings_type) :: settings
+        procedure(logger_type), pointer :: logger_funptr
 
         ! assume tests pass
         test_init_solver_settings = .true.
@@ -987,11 +1030,14 @@ contains
             .or. abs(settings%local_red_factor - solver_local_red_factor_default) > &
             tol .or. settings%seed /= solver_seed_default .or. &
             settings%verbose /= solver_verbose_default .or. &
-            settings%out_unit /= stdout .or. settings%err_unit /= stderr) then
+            associated(settings%logger)) then
             write (stderr, *) "test_init_solver_settings failed: Default arguments "// &
                 "not set correctly."
             test_init_solver_settings = .false.
         end if
+
+        ! set pointer for logging routine
+        logger_funptr => logger
 
         ! call routine with optional arguments
         call init_solver_settings(settings, stability=.false., line_search=.true., &
@@ -999,7 +1045,7 @@ contains
                                   n_random_trial_vectors=5, start_trust_radius=0.2d0, &
                                   n_macro=300, n_micro=200, global_red_factor=1.d-2, &
                                   local_red_factor=1.d-3, seed=33, verbose=3, &
-                                  out_unit=4, err_unit=5)
+                                  logger=logger_funptr)
 
         ! check if optional values are correctly set
         if (settings%stability .neqv. .false. .or. settings%line_search .neqv. .true. &
@@ -1010,11 +1056,17 @@ contains
             /= 300 .or. settings%n_micro /= 200 .or. &
             abs(settings%global_red_factor - 1.d-2) > tol .or. &
             abs(settings%local_red_factor - 1.d-3) > tol .or. &
-            settings%seed /= 33 .or. settings%verbose /= 3 .or. settings%out_unit /= 4 &
-            .or. settings%err_unit /= 5) then
+            settings%seed /= 33 .or. settings%verbose /= 3 .or. &
+            .not. associated(settings%logger)) then
             write (stderr, *) "test_init_solver_settings failed: Optional "// &
                 "arguments not set correctly."
             test_init_solver_settings = .false.
+        end if
+        if (associated(settings%logger)) then
+            call settings%logger("test")
+            if (log_message /= "test") write (stderr, *) &
+                "test_init_solver_settings failed: Optional logging subroutine "// &
+                "not set correctly."
         end if
 
     end function test_init_solver_settings
@@ -1024,14 +1076,15 @@ contains
         ! this function tests the subroutine which initializes the stability check
         ! settings
         !
-        use opentrustregion, only: stability_settings_type, init_stability_settings, &
+        use opentrustregion, only: logger_type, stability_settings_type, &
+                                   init_stability_settings, &
                                    stability_jacobi_davidson_default, &
                                    stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
-                                   stability_n_iter_default, &
-                                   stability_verbose_default, stdout
+                                   stability_n_iter_default, stability_verbose_default
 
         type(stability_settings_type) :: settings
+        procedure(logger_type), pointer :: logger_funptr
 
         ! assume tests pass
         test_init_stability_settings = .true.
@@ -1045,26 +1098,34 @@ contains
             settings%n_random_trial_vectors /= &
             stability_n_random_trial_vectors_default .or. settings%n_iter /= &
             stability_n_iter_default .or. settings%verbose /= &
-            stability_verbose_default .or. settings%out_unit /= stdout .or. &
-            settings%err_unit /= stderr) then
+            stability_verbose_default .or. .not. associated(settings%logger)) then
             write (stderr, *) "test_init_stability_settings failed: Default "// &
                 "arguments not set correctly."
             test_init_stability_settings = .false.
         end if
 
+        ! set pointer for logger routine
+        logger_funptr => logger
+
         ! call routine with optional arguments
         call init_stability_settings(settings, jacobi_davidson=.false., &
                                      conv_tol=1.d-3, n_random_trial_vectors=3, &
-                                     n_iter=50, verbose=3, out_unit=4, err_unit=5)
+                                     n_iter=50, verbose=3, logger=logger_funptr)
 
         ! check if optional values are correctly set
         if (settings%jacobi_davidson .neqv. .false. .or. &
             abs(settings%conv_tol - 1.d-3) > tol .or. settings%n_random_trial_vectors &
             /= 3 .or. settings%n_iter /= 50 .or. settings%verbose /= 3 .or. &
-            settings%out_unit /= 4 .or. settings%err_unit /= 5) then
+            .not. associated(settings%logger)) then
             write (stderr, *) "test_init_stability_settings failed: Optional "// &
                 "arguments not set correctly."
             test_init_stability_settings = .false.
+        end if
+        if (associated(settings%logger)) then
+            call settings%logger("test")
+            if (log_message /= "test") write (stderr, *) &
+                "test_init_stability_settings failed: Optional logging subroutine "// &
+                "not set correctly."
         end if
 
     end function test_init_stability_settings
@@ -1239,8 +1300,9 @@ contains
         !
         ! this function tests the minimum residual method subroutine
         !
-        use opentrustregion, only: hess_x_type, minres, stdout
+        use opentrustregion, only: hess_x_type, minres
 
+        type(settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, rhs, solution, vector, hess_vector, corr_vector
         real(rp) :: hess(6, 6), mu
@@ -1248,6 +1310,9 @@ contains
 
         ! assume tests pass
         test_minres = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! define point near saddle point
         vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
@@ -1274,8 +1339,8 @@ contains
         ! orthogonal to the solution vector and consequently the Hessian linear 
         ! transformation of the projected vector is equivalent to the Hessian linear 
         ! transformation of the vector itself
-        call minres(-rhs, hess_x_funptr, solution, mu, 1d-12, vector, hess_vector, 0, &
-                    stdout, stderr, error)
+        call minres(-rhs, hess_x_funptr, solution, mu, 1d-12, vector, hess_vector, &
+                    settings, error)
         corr_vector = vector - dot_product(vector, solution) * solution
         corr_vector = hess_x(corr_vector) - mu * corr_vector
         corr_vector = corr_vector - dot_product(corr_vector, solution) * solution
@@ -1307,5 +1372,117 @@ contains
         end function hess_x
 
     end function test_minres
+
+    logical(c_bool) function test_print_results() bind(C)
+        !
+        ! this function tests the subroutine that prints the result table
+        !
+        use opentrustregion, only: solver_settings_type, print_results
+
+        type(solver_settings_type) :: settings
+
+        ! assume tests pass
+        test_print_results = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! print row of results table without optional arguments and check if row is 
+        ! correct
+        call print_results(settings, 1, 2.d0, 3.d0)
+        if (log_message /= "        1   |     2.00000000000000E+00   "// &
+            "|   3.00E+00   |      -      |        -   |        -     |      -   ") then
+            write (stderr, *) "test_print_results failed: Printed row without "// &
+                "optional arguments not correct."
+            test_print_results = .false.
+        end if
+
+        ! print row of results table with optional arguments
+        call print_results(settings, 1, 2.d0, 3.d0, 4.d0, 5, 6, 7.d0, 8.d0)
+        if (log_message /= "        1   |     2.00000000000000E+00   "// &
+            "|   3.00E+00   |   4.00E+00  |   0 |   5  |    7.00E+00  |  8.00E+00") then
+            write (stderr, *) "test_print_results failed: Printed row with "// &
+                "optional arguments not correct."
+            test_print_results = .false.
+        end if
+
+    end function test_print_results
+
+    logical(c_bool) function test_log() bind(C)
+        !
+        ! this function tests the logging subroutine
+        !
+        use opentrustregion, only: log
+
+        type(settings_type) :: settings
+
+        ! assume tests pass
+        test_log = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! check if logging is correctly performed according to verbosity level when 
+        ! logger is provided 
+        call log(settings, "This is a test message.", 1)
+        if (trim(log_message) /= " This is a test message.") then
+            write (stderr, *) "test_log failed: Log message is not printed "// &
+                "correctly even though it should be according to verbosity level."
+            test_log = .false.
+        end if
+        call log(settings, "This is another test message.", 4)
+        if (log_message == " This is another test message.") then
+            write (stderr, *) "test_log failed: Log message is printed even "// &
+                "though it should not be according to verbosity level."
+            test_log = .false.
+        end if
+
+    end function test_log
+
+    logical(c_bool) function test_split_string_by_space() bind(C)
+        !
+        ! this function tests the subroutine which splits strings after a space if 
+        ! they exceed a given maximum length
+        !
+        use opentrustregion, only: split_string_by_space
+
+        character(23), parameter :: message = "This is a test message."
+        character(:), allocatable :: substrings(:)
+
+        ! assume tests pass
+        test_split_string_by_space = .true.
+
+        ! check if strings are split correctly on spaces
+        call split_string_by_space(message, 8, substrings)
+        if (size(substrings) == 3) then
+            if (trim(substrings(1)) /= "This is" .or. trim(substrings(2)) /= "a test" &
+                .or. trim(substrings(3)) /= "message.") then
+                write (stderr, *) "test_split_string_by_space failed: Split "// &
+                    "strings incorrect."
+                test_split_string_by_space = .false.
+            end if
+        else
+            write (stderr, *) "test_split_string_by_space failed: Number of "// &
+                "substrings incorrect."
+            test_split_string_by_space = .false.
+        end if
+
+        ! check if strings are split correctly if splitting on spaces is not possible
+        call split_string_by_space(message, 5, substrings)
+        if (size(substrings) == 5) then
+            if (trim(substrings(1)) /= "This" .or. trim(substrings(2)) /= "is a" .or. &
+                trim(substrings(3)) /= "test" .or. trim(substrings(4)) /= "messa" .or. &
+                trim(substrings(5)) /= "ge.") then
+                write (stderr, *) "test_split_string_by_space failed: Split "// &
+                    "strings incorrect."
+                test_split_string_by_space = .false.
+            end if
+        else
+            write (stderr, *) "test_split_string_by_space failed: Number of "// &
+                "substrings incorrect."
+            test_split_string_by_space = .false.
+        end if
+
+    end function test_split_string_by_space
 
 end module opentrustregion_unit_tests

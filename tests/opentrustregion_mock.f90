@@ -7,7 +7,7 @@
 module opentrustregion_mock
 
     use opentrustregion, only: rp, ip, stderr, update_orbs_type, hess_x_type, &
-                               obj_func_type, precond_type
+                               obj_func_type, precond_type, logger_type
 
     implicit none
 
@@ -22,7 +22,7 @@ contains
                            precond_funptr, stability, line_search, jacobi_davidson, &
                            conv_tol, n_random_trial_vectors, start_trust_radius, &
                            n_macro, n_micro, global_red_factor, local_red_factor, &
-                           seed, verbose, out_unit, err_unit)
+                           seed, verbose, logger_funptr)
         !
         ! this subroutine is a mock routine for solver to test the C interface
         !
@@ -35,7 +35,7 @@ contains
                                    solver_n_macro_default, solver_n_micro_default, &
                                    solver_global_red_factor_default, &
                                    solver_local_red_factor_default, &
-                                   solver_seed_default, solver_verbose_default, stdout
+                                   solver_seed_default, solver_verbose_default
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
@@ -46,7 +46,8 @@ contains
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
-                                             seed, verbose, out_unit, err_unit
+                                             seed, verbose
+        procedure(logger_type), intent(in), pointer, optional :: logger_funptr
 
         real(rp), dimension(n_param) :: kappa, x, grad, h_diag, hess_x, residual
         real(rp) :: func
@@ -103,12 +104,18 @@ contains
         ! check if optional preconditioner function is correctly passed
         if (solver_default) then
             if (present(precond_funptr)) then
-                test_passed = .false.
-                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
-                    "preconditioner function associated with value."
+                if (associated(precond_funptr)) then
+                    test_passed = .false.
+                    write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                        "preconditioner function associated with value."
+                end if
             end if
         else
             if (.not. present(precond_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "preconditioner function not associated with value."
+            else if (.not. associated(precond_funptr)) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
                     "preconditioner function not associated with value."
@@ -128,8 +135,7 @@ contains
                    present(n_random_trial_vectors) .and. present(start_trust_radius) &
                    .and. present(n_macro) .and. present(n_micro) .and. &
                    present(global_red_factor) .and. present(local_red_factor) .and. &
-                   present(seed) .and. present(verbose) .and. present(out_unit) .and. &
-                   present(err_unit))) then
+                   present(seed) .and. present(verbose))) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                 "arguments not associated with values."
@@ -147,8 +153,7 @@ contains
                 n_micro /= solver_n_micro_default .or. &
                 abs(global_red_factor - solver_global_red_factor_default) > tol .or. &
                 abs(local_red_factor - solver_local_red_factor_default) > tol .or. &
-                seed /= solver_seed_default .or. verbose /= solver_verbose_default &
-                .or. out_unit /= stdout .or. err_unit /= stderr) then
+                seed /= solver_seed_default .or. verbose /= solver_verbose_default) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                     "arguments associated with wrong values."
@@ -159,12 +164,34 @@ contains
                 abs(conv_tol - 1.d-3) > tol .or. n_random_trial_vectors /= 5 .or. &
                 abs(start_trust_radius - 0.2d0) > tol .or. n_macro /= 300 .or. &
                 n_micro /= 200 .or. abs(global_red_factor - 1.d-2) > tol .or. &
-                abs(local_red_factor - 1.d-3) > tol .or. seed /= 33 .or. verbose /= 3 &
-                .or. out_unit /= 4 .or. err_unit /= 5) then
+                abs(local_red_factor - 1.d-3) > tol .or. seed /= 33 .or. verbose /= 3) &
+                then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                     "arguments associated with wrong values."
             end if
+        end if
+
+        ! check if optional logging function is correctly passed
+        if (solver_default) then
+            if (present(logger_funptr)) then
+                if (associated(logger_funptr)) then
+                    test_passed = .false.
+                    write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                        "logging function associated with value."
+                end if
+            end if
+        else
+            if (.not. present(logger_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "logging function not associated with value."
+            else if (.not. associated(logger_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "logging function not associated with value."
+            end if
+            call logger_funptr("test")
         end if
 
         ! move on to optional argument test for next test
@@ -174,8 +201,8 @@ contains
 
     subroutine mock_stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error, &
                                     precond_funptr, jacobi_davidson, conv_tol, &
-                                    n_random_trial_vectors, n_iter, verbose, out_unit, &
-                                    err_unit)
+                                    n_random_trial_vectors, n_iter, verbose, &
+                                    logger_funptr)
         !
         ! this subroutine performs a stability check
         !
@@ -183,17 +210,17 @@ contains
                                    stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
                                    stability_n_iter_default, &
-                                   stability_verbose_default, stdout
+                                   stability_verbose_default
 
         real(rp), intent(in) :: grad(:), h_diag(:)
-        procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
+        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable, error
         real(rp), intent(out) :: kappa(:)
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         logical, intent(in), optional :: jacobi_davidson
         real(rp), intent(in), optional :: conv_tol
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose, &
-                                             out_unit, err_unit
+        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
+        procedure(logger_type), intent(in), pointer, optional :: logger_funptr
 
         real(rp), dimension(size(grad)) :: x, hess_x, residual
 
@@ -233,12 +260,18 @@ contains
         ! check if optional preconditioner function is correctly passed
         if (stability_check_default) then
             if (present(precond_funptr)) then
-                test_passed = .false.
-                write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
-                    "preconditioner function associated with value."
+                if (associated(precond_funptr)) then
+                    test_passed = .false.
+                    write (stderr, *) "test_stability_check_c_wrapper failed: "// &
+                        "Passed preconditioner function associated with value."
+                end if
             end if
         else
             if (.not. present(precond_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                    "preconditioner function not associated with value."
+            else if (.not. associated(precond_funptr)) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                     "preconditioner function not associated with value."
@@ -255,8 +288,7 @@ contains
         ! check if optional arguments are associated with values
         if (.not. (present(jacobi_davidson) .and. present(conv_tol) .and. &
                    present(n_random_trial_vectors) .and. present(n_iter) .and. &
-                   present(verbose)) .and. present(out_unit) .and. present(err_unit)) &
-                   then
+                   present(verbose))) then
             test_passed = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                 "optional arguments not associated with values."
@@ -268,8 +300,7 @@ contains
                 abs(conv_tol - stability_conv_tol_default) > tol .or. &
                 n_random_trial_vectors /= stability_n_random_trial_vectors_default &
                 .or. n_iter /= stability_n_iter_default .or. &
-                verbose /= stability_verbose_default .or. out_unit /= stdout .or. &
-                err_unit /= stderr) then
+                verbose /= stability_verbose_default) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                     "optional arguments associated with wrong values."
@@ -277,12 +308,33 @@ contains
             ! check if optional arguments are correctly passed
         else
             if (jacobi_davidson .or. abs(conv_tol - 1.d-3) > tol .or. &
-                n_random_trial_vectors /= 3 .or. n_iter /= 50 .or. verbose /= 3 .or. &
-                out_unit /= 4 .or. err_unit /= 5) then
+                n_random_trial_vectors /= 3 .or. n_iter /= 50 .or. verbose /= 3) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                     "optional arguments associated with wrong values."
             end if
+        end if
+
+        ! check if optional logging function is correctly passed
+        if (stability_check_default) then
+            if (present(logger_funptr)) then
+                if (associated(logger_funptr)) then
+                    test_passed = .false.
+                    write (stderr, *) "test_stability_check_c_wrapper failed: "// &
+                        "Passed logging function associated with value."
+                end if
+            end if
+        else
+            if (.not. present(logger_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                    "logging function not associated with value."
+            else if (.not. associated(logger_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                    "logging function not associated with value."
+            end if
+            call logger_funptr("test")
         end if
 
         ! move on to optional argument test for next test

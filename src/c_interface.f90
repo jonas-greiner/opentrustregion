@@ -9,7 +9,8 @@ module c_interface
     use opentrustregion, only: rp, ip, standard_solver => solver, &
                                standard_stability_check => stability_check
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_funptr, &
-                                              c_f_pointer, c_f_procpointer, c_associated
+                                           c_f_pointer, c_f_procpointer, c_associated, &
+                                           c_char, c_null_char
 
     implicit none
 
@@ -18,48 +19,58 @@ module c_interface
     procedure(hess_x_c_type), pointer :: hess_x_before_wrapping => null()
     procedure(obj_func_c_type), pointer :: obj_func_before_wrapping => null()
     procedure(precond_c_type), pointer :: precond_before_wrapping => null()
+    procedure(logger_c_type), pointer :: logger_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
-        subroutine update_orbs_c_type(kappa, func, grad, h_diag, hess_x) bind(C)
+        subroutine update_orbs_c_type(kappa_c, func_c, grad_c_ptr, h_diag_c_ptr, &
+                                      hess_x_c_funptr) bind(C)
             use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_funptr
 
-            real(c_double), intent(in) :: kappa(:)
+            real(c_double), intent(in) :: kappa_c(*)
 
-            real(c_double), intent(out) :: func
-            type(c_ptr), intent(out) :: grad, h_diag
-            type(c_funptr), intent(out) :: hess_x
+            real(c_double), intent(out) :: func_c
+            type(c_ptr), intent(out) :: grad_c_ptr, h_diag_c_ptr
+            type(c_funptr), intent(out) :: hess_x_c_funptr
         end subroutine update_orbs_c_type
     end interface
 
     abstract interface
-        subroutine hess_x_c_type(x, hess_x) bind(C)
+        subroutine hess_x_c_type(x_c, hess_x_c_ptr) bind(C)
             use, intrinsic :: iso_c_binding, only: c_double, c_ptr
 
-            real(c_double), intent(in) :: x(:)
+            real(c_double), intent(in) :: x_c(*)
 
-            type(c_ptr), intent(out) :: hess_x
+            type(c_ptr), intent(out) :: hess_x_c_ptr
         end subroutine hess_x_c_type
     end interface
 
     abstract interface
-        function obj_func_c_type(kappa) result(func) bind(C)
+        function obj_func_c_type(kappa_c) result(func) bind(C)
             use, intrinsic :: iso_c_binding, only: c_double
 
-            real(c_double), intent(in) :: kappa(:)
+            real(c_double), intent(in) :: kappa_c(*)
 
             real(c_double) :: func
         end function obj_func_c_type
     end interface
 
     abstract interface
-        subroutine precond_c_type(residual, mu, precond_residual) bind(C)
+        subroutine precond_c_type(residual_c, mu_c, precond_residual_c_ptr) bind(C)
             use, intrinsic :: iso_c_binding, only: c_double, c_ptr
 
-            real(c_double), intent(in) :: residual(:), mu
+            real(c_double), intent(in) :: residual_c(*), mu_c
 
-            type(c_ptr), intent(out) :: precond_residual
+            type(c_ptr), intent(out) :: precond_residual_c_ptr
         end subroutine precond_c_type
+    end interface
+
+    abstract interface
+        subroutine logger_c_type(message) bind(C)
+            use, intrinsic :: iso_c_binding, only: c_char
+
+            character(kind=c_char), intent(in) :: message(*)
+        end subroutine logger_c_type
     end interface
 
     ! interface for setting default values
@@ -75,23 +86,21 @@ module c_interface
                                stability, line_search, jacobi_davidson, conv_tol, &
                                n_random_trial_vectors, start_trust_radius, n_macro, &
                                n_micro, global_red_factor, local_red_factor, seed, &
-                               verbose, out_unit, err_unit)
+                               verbose, logger)
 
-            use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type, &
-                                       precond_type
+            use opentrustregion, only: rp, ip
 
-            procedure(update_orbs_type), intent(in), pointer :: update_orbs
-            procedure(obj_func_type), intent(in), pointer :: obj_func
+            procedure(update_orbs_c_wrapper), intent(in), pointer :: update_orbs
+            procedure(obj_func_c_wrapper), intent(in), pointer :: obj_func
             integer(ip), intent(in) :: n_param
             logical, intent(out) :: error
-            procedure(precond_type), intent(in), pointer, optional :: precond
+            procedure(precond_c_wrapper), intent(in), pointer, optional :: precond
             logical, intent(in), optional :: stability, line_search, jacobi_davidson
             real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                               global_red_factor, local_red_factor
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
-                                                 n_micro, seed, verbose, out_unit, &
-                                                 err_unit
-                                                 
+                                                 n_micro, seed, verbose
+            procedure(logger_c_wrapper), intent(in), pointer, optional :: logger       
 
         end subroutine solver_type
     end interface
@@ -99,20 +108,20 @@ module c_interface
     interface
         subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, error, &
                                         precond, jacobi_davidson, conv_tol, &
-                                        n_random_trial_vectors, n_iter, verbose, &
-                                        out_unit, err_unit)
+                                        n_random_trial_vectors, n_iter, verbose, logger)
 
-            use opentrustregion, only: rp, ip, hess_x_type, precond_type
+            use opentrustregion, only: rp, ip
 
             real(rp), intent(in) :: grad(:), h_diag(:)
-            procedure(hess_x_type), pointer, intent(in) :: hess_x
+            procedure(hess_x_c_wrapper), intent(in), pointer :: hess_x
             logical, intent(out) :: stable, error
             real(rp), intent(out) :: kappa(:)
-            procedure(precond_type), pointer, intent(in), optional :: precond
+            procedure(precond_c_wrapper), intent(in), pointer, optional :: precond
             logical, intent(in), optional :: jacobi_davidson
             real(rp), intent(in), optional :: conv_tol
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, &
-                                                 out_unit, err_unit, verbose
+                                                 verbose
+            procedure(logger_c_wrapper), intent(in), pointer, optional :: logger   
 
         end subroutine stability_check_type
     end interface
@@ -123,20 +132,19 @@ module c_interface
 
 contains
 
-    subroutine solver_c_wrapper(update_orbs_c_ptr, obj_func_c_ptr, n_param_c, error_c, &
-                                precond_c_ptr, stability_c_ptr, line_search_c_ptr, &
-                                jacobi_davidson_c_ptr, conv_tol_c_ptr, &
-                                n_random_trial_vectors_c_ptr, &
+    subroutine solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
+                                error_c, precond_c_funptr, stability_c_ptr, &
+                                line_search_c_ptr, jacobi_davidson_c_ptr, &
+                                conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                                 start_trust_radius_c_ptr, n_macro_c_ptr, &
                                 n_micro_c_ptr, global_red_factor_c_ptr, &
                                 local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
-                                out_unit_c_ptr, err_unit_c_ptr) bind(C, name="solver")
+                                logger_c_funptr) bind(C, name="solver")
         !
         ! this subroutine wraps the solver subroutine to convert C variables to Fortran
         ! variables
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, precond_type, &
-                                   solver_stability_default, &
+        use opentrustregion, only: solver_stability_default, &
                                    solver_line_search_default, &
                                    solver_jacobi_davidson_default, &
                                    solver_conv_tol_default, &
@@ -145,29 +153,28 @@ contains
                                    solver_n_macro_default, solver_n_micro_default, &
                                    solver_global_red_factor_default, &
                                    solver_local_red_factor_default, &
-                                   solver_seed_default, solver_verbose_default, &
-                                   stdout, stderr
+                                   solver_seed_default, solver_verbose_default
                                    
 
-        type(c_funptr), intent(in) :: update_orbs_c_ptr, obj_func_c_ptr
-        integer(c_long), value, intent(in) :: n_param_c
+        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
+        integer(c_long), intent(in), value :: n_param_c
         logical(c_bool), intent(out) :: error_c
-        type(c_funptr), intent(in), value :: precond_c_ptr
-        type(c_ptr), value, intent(in) :: stability_c_ptr, line_search_c_ptr, &
+        type(c_funptr), intent(in), value :: precond_c_funptr, logger_c_funptr
+        type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
                                           jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
                                           start_trust_radius_c_ptr, n_macro_c_ptr, &
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
                                           local_red_factor_c_ptr, seed_c_ptr, &
-                                          verbose_c_ptr, out_unit_c_ptr, err_unit_c_ptr
+                                          verbose_c_ptr
 
         logical :: error, stability, line_search, jacobi_davidson
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
-        integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, seed, &
-                       verbose, out_unit, err_unit
-        procedure(update_orbs_type), pointer :: update_orbs
-        procedure(obj_func_type), pointer :: obj_func
-        procedure(precond_type), pointer :: precond
+        integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, seed, verbose
+        procedure(update_orbs_c_wrapper), pointer :: update_orbs
+        procedure(obj_func_c_wrapper), pointer :: obj_func
+        procedure(precond_c_wrapper), pointer :: precond
+        procedure(logger_c_wrapper), pointer :: logger
 
         ! set optional arguments to default values
         stability = set_default_c_ptr(stability_c_ptr, solver_stability_default)
@@ -187,13 +194,12 @@ contains
                                              solver_local_red_factor_default)
         seed = set_default_c_ptr(seed_c_ptr, solver_seed_default)
         verbose = set_default_c_ptr(verbose_c_ptr, solver_verbose_default)
-        out_unit = set_default_c_ptr(out_unit_c_ptr, stdout)
-        err_unit = set_default_c_ptr(err_unit_c_ptr, stderr)
 
         ! associate the input C pointer to update_orbs subroutine to a Fortran
         ! procedure pointer
-        call c_f_procpointer(cptr=update_orbs_c_ptr, fptr=update_orbs_before_wrapping)
-        call c_f_procpointer(cptr=obj_func_c_ptr, fptr=obj_func_before_wrapping)
+        call c_f_procpointer(cptr=update_orbs_c_funptr, &
+                             fptr=update_orbs_before_wrapping)
+        call c_f_procpointer(cptr=obj_func_c_funptr, fptr=obj_func_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         update_orbs => update_orbs_c_wrapper
@@ -203,64 +209,61 @@ contains
         n_param = int(n_param_c, kind=ip)
 
         ! call solver with or without preconditioner
-        if (c_associated(precond_c_ptr)) then
-            call c_f_procpointer(cptr=precond_c_ptr, fptr=precond_before_wrapping)
+        if (c_associated(precond_c_funptr)) then
+            call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_before_wrapping)
             precond => precond_c_wrapper
-            call solver(update_orbs, obj_func, n_param, error, precond, stability, &
-                        line_search, jacobi_davidson, conv_tol, &
-                        n_random_trial_vectors, start_trust_radius, n_macro, n_micro, &
-                        global_red_factor, local_red_factor, seed, verbose, out_unit, &
-                        err_unit)
         else
-            call solver(update_orbs, obj_func, n_param, error, stability=stability, &
-                        line_search=line_search, jacobi_davidson=jacobi_davidson, &
-                        conv_tol=conv_tol, &
-                        n_random_trial_vectors=n_random_trial_vectors, &
-                        start_trust_radius=start_trust_radius, n_macro=n_macro, &
-                        n_micro=n_micro, global_red_factor=global_red_factor, &
-                        local_red_factor=local_red_factor, seed=seed, verbose=verbose, &
-                        out_unit=out_unit, err_unit=err_unit)
+            precond => null()
         end if
+        if (c_associated(logger_c_funptr)) then
+            call c_f_procpointer(cptr=logger_c_funptr, fptr=logger_before_wrapping)
+            logger => logger_c_wrapper
+        else
+            logger => null()
+        end if
+        call solver(update_orbs, obj_func, n_param, error, precond, stability, &
+                    line_search, jacobi_davidson, conv_tol, &
+                    n_random_trial_vectors, start_trust_radius, n_macro, n_micro, &
+                    global_red_factor, local_red_factor, seed, verbose, logger)
 
         ! convert return arguments to C kind
         error_c = error
 
     end subroutine solver_c_wrapper
 
-    subroutine stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_ptr, n_param_c, &
-                                         stable_c, kappa_c, error_c, precond_c_ptr, &
+    subroutine stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param_c, &
+                                         stable_c, kappa_c, error_c, precond_c_funptr, &
                                          jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                          n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
-                                         verbose_c_ptr, out_unit_c_ptr, &
-                                         err_unit_c_ptr) bind(C, name="stability_check")
+                                         verbose_c_ptr, logger_c_funptr) &
+        bind(C, name="stability_check")
         !
         ! this subroutine wraps the stability check subroutine to convert C variables
         ! to Fortran variables
         !
-        use opentrustregion, only: hess_x_type, precond_type, &
-                                   stability_jacobi_davidson_default, &
+        use opentrustregion, only: stability_jacobi_davidson_default, &
                                    stability_conv_tol_default, &
                                    stability_n_random_trial_vectors_default, &
                                    stability_n_iter_default, &
-                                   stability_verbose_default, stdout, stderr
+                                   stability_verbose_default
 
-        integer(c_long), value, intent(in) :: n_param_c
+        integer(c_long), intent(in), value :: n_param_c
         real(c_double), intent(in), dimension(n_param_c) :: grad_c, h_diag_c
-        type(c_funptr), intent(in) :: hess_x_c_ptr
+        type(c_funptr), intent(in), value :: hess_x_c_funptr
         logical(c_bool), intent(out) :: stable_c, error_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
-        type(c_funptr), intent(in), value :: precond_c_ptr
-        type(c_ptr), value, intent(in) :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+        type(c_funptr), intent(in), value :: precond_c_funptr, logger_c_funptr
+        type(c_ptr), intent(in), value :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
-                                          verbose_c_ptr, out_unit_c_ptr, err_unit_c_ptr
+                                          verbose_c_ptr
 
         real(rp) :: conv_tol, grad(n_param_c), h_diag(n_param_c)
         real(rp) :: kappa(n_param_c)
         logical :: stable, error, jacobi_davidson
-        integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose, out_unit, &
-                       err_unit
-        procedure(hess_x_type), pointer :: hess_x
-        procedure(precond_type), pointer :: precond
+        integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose
+        procedure(hess_x_c_wrapper), pointer :: hess_x
+        procedure(precond_c_wrapper), pointer :: precond
+        procedure(logger_c_wrapper), pointer :: logger
 
         ! set optional arguments to default values
         jacobi_davidson = set_default_c_ptr(jacobi_davidson_c_ptr, &
@@ -270,12 +273,10 @@ contains
                                                stability_n_random_trial_vectors_default)
         n_iter = set_default_c_ptr(n_iter_c_ptr, stability_n_iter_default)
         verbose = set_default_c_ptr(verbose_c_ptr, stability_verbose_default)
-        out_unit = set_default_c_ptr(out_unit_c_ptr, stdout)
-        err_unit = set_default_c_ptr(err_unit_c_ptr, stderr)
 
         ! associate the input C pointer to update_orbs subroutine to a Fortran
         ! procedure pointer
-        call c_f_procpointer(cptr=hess_x_c_ptr, fptr=hess_x_before_wrapping)
+        call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_before_wrapping)
 
         ! convert dummy argument to Fortran kind
         n_param = int(n_param_c, kind=ip)
@@ -288,19 +289,21 @@ contains
         h_diag = h_diag_c
 
         ! call stability check with or without preconditioner
-        if (c_associated(precond_c_ptr)) then
-            call c_f_procpointer(cptr=precond_c_ptr, fptr=precond_before_wrapping)
+        if (c_associated(precond_c_funptr)) then
+            call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_before_wrapping)
             precond => precond_c_wrapper
-            call stability_check(grad, h_diag, hess_x, stable, kappa, error, precond, &
-                                 jacobi_davidson, conv_tol, n_random_trial_vectors, &
-                                 n_iter, verbose, out_unit, err_unit)
         else
-            call stability_check(grad, h_diag, hess_x, stable, kappa, error, &
-                                 jacobi_davidson=jacobi_davidson, conv_tol=conv_tol, &
-                                 n_random_trial_vectors=n_random_trial_vectors, &
-                                 n_iter=n_iter, verbose=verbose, out_unit=out_unit, &
-                                 err_unit=err_unit)
+            precond => null()
         end if
+        if (c_associated(logger_c_funptr)) then
+            call c_f_procpointer(cptr=logger_c_funptr, fptr=logger_before_wrapping)
+            logger => logger_c_wrapper
+        else
+            logger => null()
+        end if
+        call stability_check(grad, h_diag, hess_x, stable, kappa, error, precond, &
+                             jacobi_davidson, conv_tol, n_random_trial_vectors, &
+                             n_iter, verbose, logger)
 
         ! convert return arguments to C kind
         stable_c = stable
@@ -319,12 +322,12 @@ contains
         real(rp), intent(in) :: kappa(:)
 
         real(rp), intent(out) :: func, grad(:), h_diag(:)
-        procedure(hess_x_type), pointer, intent(out) :: hess_x
+        procedure(hess_x_type), intent(out), pointer :: hess_x
 
         real(c_double) :: func_c
         real(c_double) :: kappa_c(size(kappa))
         type(c_ptr) :: grad_c_ptr, h_diag_c_ptr
-        type(c_funptr) :: hess_x_c_ptr
+        type(c_funptr) :: hess_x_c_funptr
         real(c_double), pointer :: grad_ptr(:), h_diag_ptr(:)
 
         ! convert dummy argument to C kind
@@ -332,7 +335,7 @@ contains
 
         ! call update_orbs C function
         call update_orbs_before_wrapping(kappa_c, func_c, grad_c_ptr, h_diag_c_ptr, &
-                                         hess_x_c_ptr)
+                                         hess_x_c_funptr)
 
         ! associate C pointer to arrays with Fortran pointer
         call c_f_pointer(cptr=grad_c_ptr, fptr=grad_ptr, shape=[size(kappa)])
@@ -340,7 +343,7 @@ contains
 
         ! associate the input C pointer to hess_x function to a Fortran procedure
         ! pointer
-        call c_f_procpointer(cptr=hess_x_c_ptr, fptr=hess_x_before_wrapping)
+        call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         hess_x => hess_x_c_wrapper
@@ -430,6 +433,31 @@ contains
 
     end function precond_c_wrapper
 
+    subroutine logger_c_wrapper(message)
+        !
+        ! this function wraps the logging subroutine to convert C variables to Fortran 
+        ! variables
+        !
+        character(*), intent(in) :: message
+
+        character(kind=c_char), allocatable :: message_c(:)
+        integer(ip) :: message_len, i
+
+        ! copy to C character
+        message_len = len_trim(message)
+        allocate(message_c(0:message_len))
+        do i = 1, message_len
+            message_c(i - 1) = message(i:i)
+        end do
+        
+        ! append null terminator
+        message_c(message_len) = c_null_char 
+
+        ! call logging C function
+        call logger_before_wrapping(message_c)
+
+    end subroutine logger_c_wrapper
+
     function set_default_c_ptr_integer(optional_value, default_value) result(variable)
         !
         ! this function sets a default value for reals
@@ -479,7 +507,7 @@ contains
 
         logical :: variable
 
-        logical, pointer :: variable_ptr
+        logical(c_bool), pointer :: variable_ptr
 
         if (c_associated(optional_value)) then
             call c_f_pointer(cptr=optional_value, fptr=variable_ptr)

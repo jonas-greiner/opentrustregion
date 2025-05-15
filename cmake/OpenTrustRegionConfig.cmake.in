@@ -4,3 +4,16 @@
 # Set the paths to the include and library directories
 set(OpenTrustRegion_INCLUDE_DIR "@OpenTrustRegion_INCLUDE_DIR@")
 set(OpenTrustRegion_LIBRARY "@OpenTrustRegion_LIBRARY@")
+
+# Provide the target OpenTrustRegion::OpenTrustRegion
+include(CMakeFindDependencyMacro)
+
+# Create the target only if it doesn't already exist
+if(NOT TARGET OpenTrustRegion::OpenTrustRegion)
+    add_library(OpenTrustRegion::OpenTrustRegion SHARED IMPORTED)
+
+    set_target_properties(OpenTrustRegion::OpenTrustRegion PROPERTIES
+        IMPORTED_LOCATION "${OpenTrustRegion_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${OpenTrustRegion_INCLUDE_DIR}"
+    )
+endif()

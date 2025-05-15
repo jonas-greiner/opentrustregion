@@ -271,7 +271,7 @@ contains
 
         real(rp), intent(in) :: kappa(:)
         real(rp), intent(out) :: func, grad(:), h_diag(:)
-        procedure(hess_x_type), pointer, intent(out) :: hess_x_funptr
+        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
 
         integer(ip) :: xyz, i, j, idx
         real(rp), dimension(n_mo, n_mo) :: kappa_full, u, h_diag_tmp, tmp1

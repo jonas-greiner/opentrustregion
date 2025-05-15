@@ -10,7 +10,18 @@ import os
 import sys
 import numpy as np
 from importlib import resources
-from ctypes import CDLL, CFUNCTYPE, POINTER, byref, c_double, c_long, c_bool, c_void_p
+from ctypes import (
+    CDLL,
+    CFUNCTYPE,
+    POINTER,
+    byref,
+    string_at,
+    c_double,
+    c_long,
+    c_bool,
+    c_void_p,
+    c_char_p,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -54,30 +65,30 @@ def solver_py_interface(
     local_red_factor: Optional[float] = None,
     seed: Optional[int] = None,
     verbose: Optional[int] = None,
-    out_unit: Optional[int] = None,
-    err_unit: Optional[int] = None,
+    logger: Optional[Callable[[str], None]] = None,
 ):
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating pointers to the relevant
     # data
     hess_x_interface_type = CFUNCTYPE(
-        None, POINTER(POINTER(c_double)), POINTER(POINTER(c_double))
+        None, POINTER(c_double), POINTER(POINTER(c_double))
     )
     update_orbs_interface_type = CFUNCTYPE(
         None,
-        POINTER(POINTER(c_double)),
+        POINTER(c_double),
         POINTER(c_double),
         POINTER(POINTER(c_double)),
         POINTER(POINTER(c_double)),
         POINTER(hess_x_interface_type),
     )
-    obj_func_interface_type = CFUNCTYPE(c_double, POINTER(POINTER(c_double)))
+    obj_func_interface_type = CFUNCTYPE(c_double, POINTER(c_double))
     precond_interface_type = CFUNCTYPE(
-        None, POINTER(POINTER(c_double)), POINTER(c_double), POINTER(POINTER(c_double))
+        None, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
     )
+    logger_interface_type = CFUNCTYPE(None, c_char_p)
 
     @update_orbs_interface_type
-    def update_orbs_interface(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_ptr):
+    def update_orbs_interface(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_funptr):
         """
         this function updates the orbitals and writes pointers to the function value,
         gradient, Hessian diagonal and returns a procedure function to the Hessian
@@ -90,7 +101,7 @@ def solver_py_interface(
         global hess_x_interface
 
         # convert orbital rotation matrix pointer to numpy array
-        kappa = np.ctypeslib.as_array(kappa_ptr[0], shape=(n_param,))
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
 
         # update orbitals and retrieve objective function, gradient, Hessian diagonal
         # and Hessian linear transformation function
@@ -107,7 +118,7 @@ def solver_py_interface(
             global hx
 
             # convert trial vector pointer to numpy array
-            x = np.ctypeslib.as_array(x_ptr[0], shape=(n_param,))
+            x = np.ctypeslib.as_array(x_ptr, shape=(n_param,))
 
             # perform linear transformation
             hx = hess_x(x)
@@ -116,7 +127,7 @@ def solver_py_interface(
             hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
         # store the function pointer in hess_x_ptr
-        hess_x_ptr[0] = hess_x_interface
+        hess_x_funptr[0] = hess_x_interface
 
     @obj_func_interface_type
     def obj_func_interface(kappa_ptr):
@@ -124,7 +135,7 @@ def solver_py_interface(
         this function returns the function value
         """
         # convert orbital rotation matrix pointer to numpy array
-        kappa = np.ctypeslib.as_array(kappa_ptr[0], shape=(n_param,))
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
 
         return obj_func(kappa)
 
@@ -135,20 +146,25 @@ def solver_py_interface(
         global precond_residual
 
         # convert pointers to numpy array and float
-        residual = np.ctypeslib.as_array(residual_ptr[0], shape=(n_param,))
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(n_param,))
         mu = mu_ptr[0]
 
-        # perform linear transformation
+        # get preconditioner
         precond_residual = precond(residual, mu)
 
         # convert numpy array to pointer
         precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
 
+    @logger_interface_type
+    def logger_interface(message):
+        # call logger
+        logger(string_at(message).decode("utf-8"))
+
     # define result and argument types
     libopentrustregion.solver.restype = None
     libopentrustregion.solver.argtypes = [
-        POINTER(update_orbs_interface_type),
-        POINTER(obj_func_interface_type),
+        c_void_p,
+        c_void_p,
         c_long,
         POINTER(c_bool),
         c_void_p,
@@ -164,8 +180,7 @@ def solver_py_interface(
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_long),
-        POINTER(c_long),
-        POINTER(c_long),
+        c_void_p,
     ]
 
     # initialize return variables
@@ -194,8 +209,7 @@ def solver_py_interface(
         None if local_red_factor is None else byref(c_double(local_red_factor)),
         None if seed is None else byref(c_long(seed)),
         None if verbose is None else byref(c_long(verbose)),
-        None if out_unit is None else byref(c_long(out_unit)),
-        None if err_unit is None else byref(c_long(err_unit)),
+        None if logger is None else logger_interface,
     )
 
     if error:
@@ -213,17 +227,17 @@ def stability_check_py_interface(
     n_random_trial_vectors: Optional[int] = None,
     n_iter: Optional[int] = None,
     verbose: Optional[int] = None,
-    out_unit: Optional[int] = None,
-    err_unit: Optional[int] = None,
+    logger: Optional[Callable[[str], None]] = None,
 ) -> Tuple[bool, np.ndarray]:
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating data to the relevant data
     hess_x_interface_type = CFUNCTYPE(
-        None, POINTER(POINTER(c_double)), POINTER(POINTER(c_double))
+        None, POINTER(c_double), POINTER(POINTER(c_double))
     )
     precond_interface_type = CFUNCTYPE(
-        None, POINTER(POINTER(c_double)), POINTER(c_double), POINTER(POINTER(c_double))
+        None, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
     )
+    logger_interface_type = CFUNCTYPE(None, c_char_p)
 
     @hess_x_interface_type
     def hess_x_interface(x_ptr, hx_ptr):
@@ -232,7 +246,7 @@ def stability_check_py_interface(
         global hx
 
         # convert trial vector pointer to numpy array
-        x = np.ctypeslib.as_array(x_ptr[0], shape=(n_param,))
+        x = np.ctypeslib.as_array(x_ptr, shape=(n_param,))
 
         # perform linear transformation
         hx = hess_x(x)
@@ -247,7 +261,7 @@ def stability_check_py_interface(
         global precond_residual
 
         # convert pointers to numpy array and float
-        residual = np.ctypeslib.as_array(residual_ptr[0], shape=(n_param,))
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(n_param,))
         mu = mu_ptr[0]
 
         # perform linear transformation
@@ -256,12 +270,17 @@ def stability_check_py_interface(
         # convert numpy array to pointer
         precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
 
+    @logger_interface_type
+    def logger_interface(message):
+        # call logger
+        logger(string_at(message).decode("utf-8"))
+
     # define result and argument types
     libopentrustregion.stability_check.restype = None
     libopentrustregion.stability_check.argtypes = [
         POINTER(c_double),
         POINTER(c_double),
-        POINTER(hess_x_interface_type),
+        c_void_p,
         c_long,
         POINTER(c_bool),
         POINTER(c_double),
@@ -272,8 +291,7 @@ def stability_check_py_interface(
         POINTER(c_long),
         POINTER(c_long),
         POINTER(c_long),
-        POINTER(c_long),
-        POINTER(c_long),
+        c_void_p,
     ]
 
     # initialize return variables
@@ -300,8 +318,7 @@ def stability_check_py_interface(
         ),
         None if n_iter is None else byref(c_long(n_iter)),
         None if verbose is None else byref(c_long(verbose)),
-        None if out_unit is None else byref(c_long(out_unit)),
-        None if err_unit is None else byref(c_long(err_unit)),
+        None if logger is None else logger_interface,
     )
 
     if error:

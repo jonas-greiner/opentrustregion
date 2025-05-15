@@ -82,3 +82,27 @@ configure_file(
   ${CMAKE_BINARY_DIR}/cmake/OpenTrustRegionConfig.cmake
   @ONLY
 )
+
+# export the target to make OpenTrustRegion::OpenTrustRegion usable
+install(TARGETS opentrustregion
+        EXPORT OpenTrustRegionTargets
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        INCLUDES DESTINATION include)
+
+# export the target with namespace OpenTrustRegion::
+install(EXPORT OpenTrustRegionTargets
+        NAMESPACE OpenTrustRegion::
+        DESTINATION lib/cmake/OpenTrustRegion)
+
+# generate and install the config file
+include(CMakePackageConfigHelpers)
+
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTrustRegionConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/OpenTrustRegionConfig.cmake
+    INSTALL_DESTINATION lib/cmake/OpenTrustRegion
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/OpenTrustRegionConfig.cmake
+        DESTINATION lib/cmake/OpenTrustRegion)
