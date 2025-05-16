@@ -467,8 +467,11 @@ contains
                     any(abs(solution) > pi/4)) then
                     trust_radius = 0.7d0*trust_radius
                     accept_step = .false.
-                    if (trust_radius < 1.d-10) then
-                        call settings%log("Trust radius too small.", 1, .true.)
+                    if (trust_radius < 1.d-14) then
+                        call settings%log("Trust radius too small. Calculation "// &
+                                          "should be converged up to floating "// &
+                                          "point precision. Please restart with "// &
+                                          "larger convergence threshold.", 1, .true.)
                         error = .true.
                         return
                     end if
@@ -555,10 +558,9 @@ contains
 
         type(stability_settings_type) :: settings
         integer(ip) :: n_param, ntrial, i, iter
-        real(rp), dimension(size(grad)) :: full_grad, full_h_diag, solution, &
-                                           h_solution, residual, basis_vec, h_basis_vec
-        real(rp) :: full_grad_norm, eigval, minres_tol
-        procedure(hess_x_type), pointer :: full_hess_x_funptr
+        real(rp), dimension(size(grad)) :: solution, h_solution, residual, basis_vec, &
+                                           h_basis_vec
+        real(rp) :: grad_norm, eigval, minres_tol
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), &
                                  red_space_hess(:, :), red_space_solution(:), &
                                  red_space_hess_vec(:)
@@ -594,15 +596,12 @@ contains
             use_precond = .false.
         end if
 
-        ! get quantities for full Hessian
-        full_grad = 2.d0*grad
-        full_h_diag = 2.d0*h_diag
-        full_grad_norm = dnrm2(n_param, full_grad, 1)
-        full_hess_x_funptr => full_hess_x
+        ! get gradient norm
+        grad_norm = dnrm2(n_param, grad, 1)
 
         ! generate trial vectors
-        red_space_basis = generate_trial_vectors(full_grad, full_grad_norm, &
-                                                 full_h_diag, settings, error)
+        red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
+                                                 error)
         if (error) return
 
         ! number of trial vectors
@@ -611,7 +610,7 @@ contains
         ! calculate linear transformations of basis vectors
         allocate (h_basis(n_param, ntrial))
         do i = 1, ntrial
-            h_basis(:, i) = full_hess_x(red_space_basis(:, i))
+            h_basis(:, i) = hess_x_funptr(red_space_basis(:, i))
         end do
 
         ! construct augmented Hessian in reduced space
@@ -657,7 +656,7 @@ contains
                 if (error) return
 
                 ! add linear transformation of new basis vector
-                h_basis_vec = full_hess_x(basis_vec)
+                h_basis_vec = hess_x_funptr(basis_vec)
 
                 ! increment Hessian linear transformations
                 tot_hess_x = tot_hess_x + 1
@@ -665,8 +664,8 @@ contains
             else
                 ! solve Jacobi-Davidson correction equations
                 minres_tol = 3.d0 ** (-(iter - 31))
-                call minres(-residual, full_hess_x_funptr, solution, eigval, &
-                            minres_tol, basis_vec, h_basis_vec, settings, error)
+                call minres(-residual, hess_x_funptr, solution, eigval, minres_tol, &
+                            basis_vec, h_basis_vec, settings, error)
                 if (error) return
 
                 ! orthonormalize to current orbital space to get new basis 
@@ -725,20 +724,6 @@ contains
         ! flush output
         flush (stdout)
         flush (stderr)
-
-    contains
-
-        function full_hess_x(x)
-            !
-            ! this function calculates the full Hessian linear transformation
-            !
-            real(rp), intent(in) :: x(:)
-
-            real(rp) :: full_hess_x(size(x))
-
-            full_hess_x = 2.d0*hess_x_funptr(x)
-
-        end function full_hess_x
 
     end subroutine stability_check
 
