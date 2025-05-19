@@ -389,9 +389,13 @@ contains
                         exit
                     else if (((imicro - initial_imicro >= 5 .and. &
                                residual_norm > 0.9*initial_residual_norm) .or. &
-                               imicro > 30) .and. .not. jacobi_davidson_started) then
-                        jacobi_davidson_started = .true.
-                        imicro_jacobi_davidson = imicro
+                               imicro > 30)) then
+                        if (jacobi_davidson .and. .not. jacobi_davidson_started) then
+                            jacobi_davidson_started = .true.
+                            imicro_jacobi_davidson = imicro
+                        else
+                            exit
+                        end if
                     end if
 
                     ! save current solution
