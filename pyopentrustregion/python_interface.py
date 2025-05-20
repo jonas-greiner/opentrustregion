@@ -217,7 +217,6 @@ def solver_py_interface(
 
 
 def stability_check_py_interface(
-    grad: np.ndarray,
     h_diag: np.ndarray,
     hess_x: Callable[[np.ndarray], np.ndarray],
     n_param: int,
@@ -279,7 +278,6 @@ def stability_check_py_interface(
     libopentrustregion.stability_check.restype = None
     libopentrustregion.stability_check.argtypes = [
         POINTER(c_double),
-        POINTER(c_double),
         c_void_p,
         c_long,
         POINTER(c_bool),
@@ -301,7 +299,6 @@ def stability_check_py_interface(
 
     # call Fortran function
     libopentrustregion.stability_check(
-        grad.ctypes.data_as(POINTER(c_double)),
         h_diag.ctypes.data_as(POINTER(c_double)),
         hess_x_interface,
         n_param,

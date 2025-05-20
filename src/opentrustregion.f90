@@ -27,10 +27,10 @@ module opentrustregion
                           solver_jacobi_davidson_default = .true., &
                           stability_jacobi_davidson_default = .true.
     real(rp), parameter :: solver_conv_tol_default = 1d-5, &
-                           solver_start_trust_radius_default = 0.4, &
+                           solver_start_trust_radius_default = 0.4d0, &
                            solver_global_red_factor_default = 1d-3, &
                            solver_local_red_factor_default = 1d-4, &
-                           stability_conv_tol_default = 1d-4
+                           stability_conv_tol_default = 1d-8
     integer(ip), parameter :: solver_n_random_trial_vectors_default = 1, &
                               solver_n_macro_default = 150, &
                               solver_n_micro_default = 50, &
@@ -151,7 +151,8 @@ contains
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
                                  red_space_solution(:), red_hess_vec(:)
         logical :: macro_converged, stable, accept_step, micro_converged, newton, &
-                   bracketed, jacobi_davidson_started, use_precond
+                   bracketed, jacobi_davidson_started, use_precond, &
+                   trust_radius_decreased
         integer(ip) :: imacro, imicro, i, ntrial, initial_imicro, imicro_jacobi_davidson
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
@@ -225,7 +226,7 @@ contains
             grad_norm = dnrm2(n_param, grad, 1)
 
             ! calculate RMS gradient
-            grad_rms = grad_norm/sqrt(real(n_param, kind=rp))
+            grad_rms = grad_norm / sqrt(real(n_param, kind=rp))
 
             ! log results
             if (imacro == 1) then
@@ -252,9 +253,9 @@ contains
             if (grad_rms < settings%conv_tol) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
-                    call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, &
-                                         error, precond=precond, &
-                                         verbose=settings%verbose, logger=logger)
+                    call stability_check(h_diag, hess_x_funptr, stable, kappa, error, &
+                                         precond=precond, verbose=settings%verbose, &
+                                         logger=logger)
                     if (error) return
                     if (.not. stable) then
                         ! logarithmic line search
@@ -331,6 +332,7 @@ contains
             accept_step = .false.
             do while (.not. accept_step)
                 micro_converged = .false.
+                trust_radius_decreased = .false.
                 jacobi_davidson_started = .false.
                 do imicro = 1, settings%n_micro
                     ! do a Newton step if the model is positive definite and the step
@@ -387,13 +389,20 @@ contains
                     if (residual_norm < max(red_factor*grad_norm, 1d-12)) then
                         micro_converged = .true.
                         exit
+                    ! check residual has not decreased sufficiently or if maximum 
+                    ! of Davidson iterations has been reached
                     else if (((imicro - initial_imicro >= 5 .and. &
                                residual_norm > 0.9*initial_residual_norm) .or. &
                                imicro > 30)) then
-                        if (jacobi_davidson .and. .not. jacobi_davidson_started) then
+                        ! switch to Jacobi-Davidson if trust radius has already been 
+                        ! decreased this macroiteration
+                        if (settings%jacobi_davidson .and. trust_radius_decreased &
+                            .and. .not. jacobi_davidson_started) then
                             jacobi_davidson_started = .true.
                             imicro_jacobi_davidson = imicro
+                        ! decrease trust radius
                         else
+                            trust_radius_decreased = .true.
                             exit
                         end if
                     end if
@@ -433,6 +442,18 @@ contains
                                           lin_trans_vector=h_basis_vec, &
                                           lin_trans_space=h_basis)
                         if (error) return
+
+                        ! check if resulting linear transformation still respects 
+                        ! Hessian symmetry which can happen due to numerical noise 
+                        ! accumulation
+                        if (abs(ddot(n_param, &
+                                     red_space_basis(:, size(red_space_basis, 2)), 1, &
+                                     h_basis_vec, 1) - &
+                                ddot(n_param, basis_vec, 1, &
+                                     h_basis(:, size(red_space_basis, 2)), 1)) &
+                            > 1d-10) then
+                            h_basis_vec = hess_x_funptr(basis_vec)
+                        end if
                         
                     end if
 
@@ -544,13 +565,13 @@ contains
 
     end subroutine solver
 
-    subroutine stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error, &
-                               precond, jacobi_davidson, conv_tol, &
-                               n_random_trial_vectors, n_iter, verbose, logger)
+    subroutine stability_check(h_diag, hess_x_funptr, stable, kappa, error, precond, &
+                               jacobi_davidson, conv_tol, n_random_trial_vectors, &
+                               n_iter, verbose, logger)
         !
         ! this subroutine performs a stability check
         !
-        real(rp), intent(in) :: grad(:), h_diag(:)
+        real(rp), intent(in) :: h_diag(:)
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable, error
         real(rp), intent(out) :: kappa(:)
@@ -562,15 +583,15 @@ contains
 
         type(stability_settings_type) :: settings
         integer(ip) :: n_param, ntrial, i, iter
-        real(rp), dimension(size(grad)) :: solution, h_solution, residual, basis_vec, &
-                                           h_basis_vec
-        real(rp) :: grad_norm, eigval, minres_tol
+        real(rp), dimension(size(h_diag)) :: solution, h_solution, residual, &
+                                             basis_vec, h_basis_vec
+        real(rp) :: eigval, minres_tol, stability_rms
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), &
                                  red_space_hess(:, :), red_space_solution(:), &
                                  red_space_hess_vec(:)
         logical :: use_precond
         character(300) :: msg
-        real(rp), external :: dnrm2
+        real(rp), external :: dnrm2, ddot
         external :: dgemm, dgemv
 
         ! initialize error flag
@@ -582,7 +603,7 @@ contains
                                               logger)
 
         ! get number of parameters
-        n_param = size(grad)
+        n_param = size(h_diag)
 
         ! check that number of random trial vectors is below number of parameters
         if (settings%n_random_trial_vectors > n_param/2) then
@@ -600,12 +621,11 @@ contains
             use_precond = .false.
         end if
 
-        ! get gradient norm
-        grad_norm = dnrm2(n_param, grad, 1)
-
         ! generate trial vectors
-        red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
-                                                 error)
+        allocate (red_space_basis(size(h_diag), 1 + settings%n_random_trial_vectors))
+        red_space_basis(:, 1) = 0.d0
+        red_space_basis(minloc(h_diag), 1) = 1.d0
+        call generate_random_trial_vectors(red_space_basis, settings, error)
         if (error) return
 
         ! number of trial vectors
@@ -645,14 +665,15 @@ contains
             residual = h_solution - eigval*solution
 
             ! check convergence
-            if (dnrm2(n_param, residual, 1) < settings%conv_tol) exit
+            stability_rms = dnrm2(n_param, residual, 1) / sqrt(real(n_param, kind=rp))
+            if (stability_rms < settings%conv_tol) exit
 
-            if (iter <= 30) then
+            if (.not. settings%jacobi_davidson .or. iter <= 30) then
                 ! precondition residual
                 if (use_precond) then
-                    basis_vec = precond(residual, eigval)
+                    basis_vec = precond(residual, 0.d0)
                 else
-                    basis_vec = diag_precond(residual, eigval, h_diag)
+                    basis_vec = diag_precond(residual, 0.d0, h_diag)
                 end if
 
                 ! orthonormalize to current orbital space to get new basis vector
@@ -677,6 +698,15 @@ contains
                 call gram_schmidt(basis_vec, red_space_basis, settings, error, &
                                   lin_trans_vector=h_basis_vec, lin_trans_space=h_basis)
                 if (error) return
+
+                ! check if resulting linear transformation still respects Hessian 
+                ! symmetry which can happen due to numerical noise accumulation
+                if (abs(ddot(n_param, red_space_basis(:, size(red_space_basis, 2)), 1, &
+                             h_basis_vec, 1) - &
+                        ddot(n_param, basis_vec, 1, &
+                             h_basis(:, size(red_space_basis, 2)), 1)) > 1d-10) then
+                    h_basis_vec = hess_x_funptr(basis_vec)
+                end if
                 
             end if
 
@@ -702,9 +732,9 @@ contains
         end do
 
         ! check if stability check has converged
-        if (dnrm2(n_param, residual, 1) >= settings%conv_tol) &
+        if (stability_rms >= settings%conv_tol) &
             call settings%log("Stability check has not converged in the given "// &
-                "number of iterations", 1, .true.)
+                              "number of iterations.", 1, .true.)
 
         ! increment total number of Hessian linear transformations
         tot_hess_x = tot_hess_x + size(red_space_basis, 2)
@@ -1215,7 +1245,7 @@ contains
 
         real(rp), allocatable :: red_space_basis(:, :)
 
-        integer(ip) :: min_idx, n_vectors, i
+        integer(ip) :: min_idx, n_vectors
         real(rp) :: trial(size(grad))
         real(rp), external :: dnrm2
 
@@ -1240,20 +1270,37 @@ contains
             red_space_basis(:, 1) = grad/grad_norm
         end if
 
-        do i = 1, settings%n_random_trial_vectors
+        call generate_random_trial_vectors(red_space_basis, settings, error)
+
+    end function generate_trial_vectors
+
+    subroutine generate_random_trial_vectors(red_space_basis, settings, error)
+        !
+        ! this subroutine generates random trial vectors
+        !
+        real(rp), intent(inout) :: red_space_basis(:, :)
+        class(settings_type), intent(in) :: settings
+        logical, intent(out) :: error
+
+        integer(ip) :: i
+        real(rp) :: trial(size(red_space_basis, 1))
+        real(rp), external :: dnrm2
+
+        do i = size(red_space_basis, 2) - settings%n_random_trial_vectors + 1, &
+            size(red_space_basis, 2)
             call random_number(trial)
             trial = 2*trial - 1
-            do while (dnrm2(size(grad), trial, 1) < 1.d-3)
+            do while (dnrm2(size(trial), trial, 1) < 1.d-3)
                 call random_number(trial)
                 trial = 2*trial - 1
             end do
-            call gram_schmidt(trial, red_space_basis(:, :n_vectors + i - 1), settings, &
-                              error)      
+            call gram_schmidt(trial, red_space_basis(:, :i - 1), settings, &
+                              error)
             if (error) return
-            red_space_basis(:, n_vectors + i) = trial
+            red_space_basis(:, i) = trial
         end do
 
-    end function generate_trial_vectors
+    end subroutine generate_random_trial_vectors
 
     subroutine gram_schmidt(vector, space, settings, error, lin_trans_vector, &
                             lin_trans_space)
@@ -1306,8 +1353,7 @@ contains
                 do i = 1, size(space, 2)
                     dot = ddot(size(vector), vector, 1, space(:, i), 1)
                     vector = vector - dot * space(:, i)
-                    lin_trans_vector = lin_trans_vector - dot * &
-                        lin_trans_space(:, i)
+                    lin_trans_vector = lin_trans_vector - dot * lin_trans_space(:, i)
                 end do
                 norm = dnrm2(size(vector), vector, 1)
                 vector = vector / norm
@@ -1463,14 +1509,14 @@ contains
 
     end function orthogonal_projection
 
-    subroutine jacobi_davidson_correction(hess_x_funptr, vector, solution, mu, &
+    subroutine jacobi_davidson_correction(hess_x_funptr, vector, solution, eigval, &
                                           corr_vector, hess_vector)
         !
         ! this subroutine performs the Jacobi-Davidson correction but also returns the 
         ! Hessian linear transformation since this can be reused
         !
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
-        real(rp), intent(in) :: vector(:), solution(:), mu
+        real(rp), intent(in) :: vector(:), solution(:), eigval
         real(rp), intent(out) :: corr_vector(:), hess_vector(:)
 
         real(rp), allocatable :: proj_vector(:)
@@ -1482,18 +1528,19 @@ contains
         hess_vector = hess_x_funptr(proj_vector)
 
         ! finish construction of correction
-        corr_vector = orthogonal_projection(hess_vector - mu * proj_vector, solution)
+        corr_vector = orthogonal_projection(hess_vector - eigval * proj_vector, &
+                                            solution)
     
     end subroutine jacobi_davidson_correction
 
-    subroutine minres(rhs, hess_x_funptr, solution, mu, r_tol, vec, hvec, settings, &
-                      error, guess, max_iter)
+    subroutine minres(rhs, hess_x_funptr, solution, eigval, r_tol, vec, hvec, &
+                      settings, error, guess, max_iter)
         !
         ! this function uses the minimum residual method to iteratively solve the 
         ! linear system for the Jacobi-Davidson correction equation, modified from 
         ! SciPy implementation
         !
-        real(rp), intent(in) :: rhs(:), r_tol, solution(:), mu
+        real(rp), intent(in) :: rhs(:), r_tol, solution(:), eigval
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(out) :: vec(:), hvec(:)
         class(settings_type), intent(in) :: settings
@@ -1537,8 +1584,8 @@ contains
         ! initial guess
         if (present(guess)) then
             vec = guess
-            call jacobi_davidson_correction(hess_x_funptr, vec, solution, mu, matvec, &
-                                            hvec)
+            call jacobi_davidson_correction(hess_x_funptr, vec, solution, eigval, &
+                                            matvec, hvec)
             tot_hess_x = tot_hess_x + 1
         else
             vec = 0.d0
@@ -1591,7 +1638,7 @@ contains
             v = y / beta
 
             ! apply Jacobi-Davidson projector to trial vector
-            call jacobi_davidson_correction(hess_x_funptr, v, solution, mu, y, hv)
+            call jacobi_davidson_correction(hess_x_funptr, v, solution, eigval, y, hv)
             tot_hess_x = tot_hess_x + 1
 
             ! get new trial vector

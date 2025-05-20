@@ -199,7 +199,7 @@ contains
 
     end subroutine mock_solver
 
-    subroutine mock_stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error, &
+    subroutine mock_stability_check(h_diag, hess_x_funptr, stable, kappa, error, &
                                     precond_funptr, jacobi_davidson, conv_tol, &
                                     n_random_trial_vectors, n_iter, verbose, &
                                     logger_funptr)
@@ -212,7 +212,7 @@ contains
                                    stability_n_iter_default, &
                                    stability_verbose_default
 
-        real(rp), intent(in) :: grad(:), h_diag(:)
+        real(rp), intent(in) :: h_diag(:)
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable, error
         real(rp), intent(out) :: kappa(:)
@@ -222,17 +222,10 @@ contains
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
         procedure(logger_type), intent(in), pointer, optional :: logger_funptr
 
-        real(rp), dimension(size(grad)) :: x, hess_x, residual
+        real(rp), dimension(size(h_diag)) :: x, hess_x, residual
 
         ! initialize logical
         test_passed = .true.
-
-        ! check gradient
-        if (any(abs(grad - 2.d0) > tol)) then
-            test_passed = .false.
-            write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
-                "gradient passed wrong."
-        end if
 
         ! check Hessian diagonal
         if (any(abs(h_diag - 3.d0) > tol)) then

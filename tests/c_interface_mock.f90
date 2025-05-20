@@ -223,8 +223,8 @@ contains
 
     end subroutine mock_solver_c_wrapper
 
-    subroutine mock_stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, &
-                                              n_param_c, stable_c, kappa_c, error_c, &
+    subroutine mock_stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, &
+                                              stable_c, kappa_c, error_c, &
                                               precond_c_funptr, jacobi_davidson_c_ptr, &
                                               conv_tol_c_ptr, &
                                               n_random_trial_vectors_c_ptr, &
@@ -236,7 +236,7 @@ contains
         ! subroutine
         !
         integer(c_long), intent(in), value :: n_param_c
-        real(c_double), intent(in), dimension(n_param_c) :: grad_c, h_diag_c
+        real(c_double), intent(in), dimension(n_param_c) :: h_diag_c
         type(c_funptr), intent(in), value :: hess_x_c_funptr, precond_c_funptr, &
                                              logger_c_funptr
         logical(c_bool), intent(out) :: stable_c, error_c
@@ -255,13 +255,6 @@ contains
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_iter_ptr, verbose_ptr
         procedure(logger_c_type), pointer :: logger_funptr
         character(:), allocatable, target :: message
-
-        ! check if gradient is passed correctly
-        if (any(abs(grad_c - 2.0_c_double) > tol)) then
-            write (stderr, *) "test_stability_check_py_interface failed: Passed "// &
-                "gradient wrong."
-            test_stability_check_interface = .false.
-        end if
 
         ! check if Hessian diagonal is passed correctly
         if (any(abs(h_diag_c - 3.0_c_double) > tol)) then

@@ -276,7 +276,7 @@ contains
         !
         use opentrustregion, only: hess_x_type, stability_check
 
-        real(rp) :: vars(6), grad(6), hess(6, 6), h_diag(6), direction(6)
+        real(rp) :: vars(6), hess(6, 6), h_diag(6), direction(6)
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable, error
         integer(ip) :: i
@@ -284,17 +284,16 @@ contains
         ! assume tests pass
         test_stability_check = .true.
 
-        ! start at minimum and determine gradient, Hessian diagonal and define Hessian
-        ! linear transformation
+        ! start at minimum and determine Hessian diagonal and define Hessian linear
+        ! transformation
         vars = minimum1
-        call hartmann6d_gradient(vars, grad)
         call hartmann6d_hessian(vars, hess)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         hess_x_funptr => hess_x
 
         ! run stability, check if error has occured check and determine whether minimum 
         ! is stable and the returned direction vanishes
-        call stability_check(grad, h_diag, hess_x_funptr, stable, direction, error)
+        call stability_check(h_diag, hess_x_funptr, stable, direction, error)
         if (error) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -310,17 +309,16 @@ contains
             test_stability_check = .false.
         end if
 
-        ! start at saddle point and determine gradient, Hessian diagonal and define
-        ! Hessian linear transformation
+        ! start at saddle point and determine Hessian diagonal and define linear
+        ! linear transformation
         vars = saddle_point
-        call hartmann6d_gradient(vars, grad)
         call hartmann6d_hessian(vars, hess)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         hess_x_funptr => hess_x
 
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
-        call stability_check(grad, h_diag, hess_x_funptr, stable, direction, error)
+        call stability_check(h_diag, hess_x_funptr, stable, direction, error)
         if (error) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -880,6 +878,52 @@ contains
         deallocate (red_space_basis)
 
     end function test_generate_trial_vectors
+
+    logical(c_bool) function test_generate_random_trial_vectors() bind(C)
+        !
+        ! this function tests the function which generates random trial vectors for the
+        ! Davidson procedure
+        !
+        use opentrustregion, only: generate_random_trial_vectors
+
+        type(settings_type) :: settings
+        real(rp), allocatable :: red_space_basis(:, :)
+        logical :: error
+        integer(ip) :: i, j
+
+        ! assume tests pass
+        test_generate_random_trial_vectors = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+        settings%n_random_trial_vectors = 2
+
+        ! allocate reduced space basis
+        allocate (red_space_basis(4, 3))
+
+        ! generate trial vectors and determine whether function returns orthonormal 
+        ! trial vectors
+        call generate_random_trial_vectors(red_space_basis, settings, error)
+        if (error) then
+            write (stderr, *) "test_generate_trial_vectors failed: Produced error."
+            test_generate_random_trial_vectors = .false.
+        end if
+        do i = 1, size(red_space_basis, 2)
+            do j = i + 1, size(red_space_basis, 2)
+                if (abs(dot_product(red_space_basis(:, i), red_space_basis(:, j))) > &
+                    tol) then
+                    write (stderr, *) "test_generate_trial_vectors failed: "// &
+                        "Generated vectors are not orthonormal for Hessian with "// &
+                        "only positive diagonal elements."
+                    test_generate_random_trial_vectors = .false.
+                end if
+            end do
+        end do
+
+        ! deallocate reduced space basis
+        deallocate (red_space_basis)
+
+    end function test_generate_random_trial_vectors
 
     logical(c_bool) function test_gram_schmidt() bind(C)
         !

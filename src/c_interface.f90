@@ -106,13 +106,13 @@ module c_interface
     end interface
 
     interface
-        subroutine stability_check_type(grad, h_diag, hess_x, stable, kappa, error, &
-                                        precond, jacobi_davidson, conv_tol, &
+        subroutine stability_check_type(h_diag, hess_x, stable, kappa, error, precond, &
+                                        jacobi_davidson, conv_tol, &
                                         n_random_trial_vectors, n_iter, verbose, logger)
 
             use opentrustregion, only: rp, ip
 
-            real(rp), intent(in) :: grad(:), h_diag(:)
+            real(rp), intent(in) :: h_diag(:)
             procedure(hess_x_c_wrapper), intent(in), pointer :: hess_x
             logical, intent(out) :: stable, error
             real(rp), intent(out) :: kappa(:)
@@ -231,7 +231,7 @@ contains
 
     end subroutine solver_c_wrapper
 
-    subroutine stability_check_c_wrapper(grad_c, h_diag_c, hess_x_c_funptr, n_param_c, &
+    subroutine stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, &
                                          stable_c, kappa_c, error_c, precond_c_funptr, &
                                          jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                          n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
@@ -248,7 +248,7 @@ contains
                                    stability_verbose_default
 
         integer(c_long), intent(in), value :: n_param_c
-        real(c_double), intent(in), dimension(n_param_c) :: grad_c, h_diag_c
+        real(c_double), intent(in), dimension(n_param_c) :: h_diag_c
         type(c_funptr), intent(in), value :: hess_x_c_funptr
         logical(c_bool), intent(out) :: stable_c, error_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
@@ -257,7 +257,7 @@ contains
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr
 
-        real(rp) :: conv_tol, grad(n_param_c), h_diag(n_param_c)
+        real(rp) :: conv_tol, h_diag(n_param_c)
         real(rp) :: kappa(n_param_c)
         logical :: stable, error, jacobi_davidson
         integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose
@@ -285,7 +285,6 @@ contains
         hess_x => hess_x_c_wrapper
 
         ! convert dummy argument to Fortran kind
-        grad = grad_c
         h_diag = h_diag_c
 
         ! call stability check with or without preconditioner
@@ -301,7 +300,7 @@ contains
         else
             logger => null()
         end if
-        call stability_check(grad, h_diag, hess_x, stable, kappa, error, precond, &
+        call stability_check(h_diag, hess_x, stable, kappa, error, precond, &
                              jacobi_davidson, conv_tol, n_random_trial_vectors, &
                              n_iter, verbose, logger)
 

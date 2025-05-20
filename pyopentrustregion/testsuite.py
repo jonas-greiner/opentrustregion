@@ -56,6 +56,7 @@ fortran_tests = {
         "init_stability_settings",
         "init_rng",
         "gram_schmidt",
+        "generate_random_trial_vectors",
         "generate_trial_vectors",
         "add_column",
         "extend_symm_matrix",
@@ -239,7 +240,6 @@ class PyInterfaceTests(unittest.TestCase):
         """
         this function tests the stability check python interface
         """
-        grad = np.full(3, 2.0, dtype=np.float64)
         h_diag = np.full(3, 3.0, dtype=np.float64)
 
         def mock_hess_x(x):
@@ -261,7 +261,7 @@ class PyInterfaceTests(unittest.TestCase):
             return
 
         # call stability check python interface without optional arguments
-        stable, kappa = stability_check_py_interface(grad, h_diag, mock_hess_x, 3)
+        stable, kappa = stability_check_py_interface(h_diag, mock_hess_x, 3)
 
         if stable:
             print(
@@ -285,7 +285,6 @@ class PyInterfaceTests(unittest.TestCase):
 
         # call stability check python interface with optional arguments
         stable, kappa = stability_check_py_interface(
-            grad,
             h_diag,
             mock_hess_x,
             3,

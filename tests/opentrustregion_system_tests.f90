@@ -93,7 +93,7 @@ contains
         call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
 
         ! perform stability check
-        call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error)
+        call stability_check(h_diag, hess_x_funptr, stable, kappa, error)
 
         ! check if error has occured
         if (error) then
@@ -191,7 +191,7 @@ contains
         call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
 
         ! perform stability check
-        call stability_check(grad, h_diag, hess_x_funptr, stable, kappa, error)
+        call stability_check(h_diag, hess_x_funptr, stable, kappa, error)
 
         ! check if error has occured
         if (error) then
