@@ -391,19 +391,24 @@ contains
                         exit
                     ! check residual has not decreased sufficiently or if maximum 
                     ! of Davidson iterations has been reached
-                    else if (((imicro - initial_imicro >= 5 .and. &
-                               residual_norm > 0.9*initial_residual_norm) .or. &
+                    else if (((imicro - initial_imicro >= 10 .and. &
+                               residual_norm > 0.8*initial_residual_norm) .or. &
                                imicro > 30)) then
-                        ! switch to Jacobi-Davidson if trust radius has already been 
-                        ! decreased this macroiteration
-                        if (settings%jacobi_davidson .and. trust_radius_decreased &
-                            .and. .not. jacobi_davidson_started) then
-                            jacobi_davidson_started = .true.
-                            imicro_jacobi_davidson = imicro
-                        ! decrease trust radius
-                        else
-                            trust_radius_decreased = .true.
-                            exit
+                        ! check if Jacobi-Davidson has started, if yes just continue
+                        if (.not. jacobi_davidson_started) then
+                            ! switch to Jacobi-Davidson if current solution already 
+                            ! decreases objective function or if trust radius has 
+                            ! already been decreased this macroiteration
+                            if (settings%jacobi_davidson .and. &
+                                (obj_func(solution) < func .or. &
+                                 trust_radius_decreased)) then
+                                jacobi_davidson_started = .true.
+                                imicro_jacobi_davidson = imicro
+                            ! decrease trust radius
+                            else
+                                trust_radius_decreased = .true.
+                                exit
+                            end if
                         end if
                     end if
 
