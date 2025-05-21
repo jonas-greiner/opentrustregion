@@ -396,12 +396,21 @@ contains
                                imicro > 30)) then
                         ! check if Jacobi-Davidson has started, if yes just continue
                         if (.not. jacobi_davidson_started) then
-                            ! switch to Jacobi-Davidson if current solution already 
-                            ! decreases objective function or if trust radius has 
-                            ! already been decreased this macroiteration
+                            ! evaluate function at approximate point
+                            new_func = obj_func(solution)
+                            
+                            ! calculate ratio of evaluated function and predicted 
+                            ! function
+                            ratio = (obj_func(solution) - func) / &
+                                     ddot(n_param, solution, 1, grad + 0.5*h_solution, &
+                                          1)
+
+                            ! switch to Jacobi-Davidson if current solution would lead 
+                            ! to trust radius increase or if trust radius has 
+                            ! already been decreased this macroiteration or is already
+                            ! too small 
                             if (settings%jacobi_davidson .and. &
-                                (obj_func(solution) < func .or. &
-                                 trust_radius_decreased)) then
+                                (trust_radius_decreased .or. ratio > 0.75d0)) then
                                 jacobi_davidson_started = .true.
                                 imicro_jacobi_davidson = imicro
                             ! decrease trust radius
@@ -483,12 +492,14 @@ contains
                     allocate (red_space_solution(size(red_space_basis, 2)))
                 end do
 
-                ! evaluate function at predicted point
-                new_func = obj_func(solution)
+                if (.not. trust_radius_decreased) then
+                    ! evaluate function at predicted point
+                    new_func = obj_func(solution)
 
-                ! calculate ratio of evaluated function and predicted function
-                ratio = (new_func - func)/ddot(n_param, solution, 1, &
-                                               grad + 0.5*h_solution, 1)
+                    ! calculate ratio of evaluated function and predicted function
+                    ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                                     grad + 0.5*h_solution, 1)
+                end if
 
                 ! decrease trust radius if micro iterations are unable to converge, if
                 ! function value has not decreased or if individual orbitals change too
