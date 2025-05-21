@@ -151,8 +151,7 @@ contains
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
                                  red_space_solution(:), red_hess_vec(:)
         logical :: macro_converged, stable, accept_step, micro_converged, newton, &
-                   bracketed, jacobi_davidson_started, use_precond, &
-                   trust_radius_decreased
+                   bracketed, jacobi_davidson_started, use_precond, func_evaluated
         integer(ip) :: imacro, imicro, i, ntrial, initial_imicro, imicro_jacobi_davidson
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
@@ -332,7 +331,7 @@ contains
             accept_step = .false.
             do while (.not. accept_step)
                 micro_converged = .false.
-                trust_radius_decreased = .false.
+                func_evaluated = .false.
                 jacobi_davidson_started = .false.
                 do imicro = 1, settings%n_micro
                     ! do a Newton step if the model is positive definite and the step
@@ -405,17 +404,17 @@ contains
                                      ddot(n_param, solution, 1, grad + 0.5*h_solution, &
                                           1)
 
-                            ! switch to Jacobi-Davidson if current solution would lead 
-                            ! to trust radius increase or if trust radius has 
-                            ! already been decreased this macroiteration or is already
-                            ! too small 
+                            ! switch to Jacobi-Davidson only if current solution would 
+                            ! lead to trust radius increase when the solution is 
+                            ! already at the trust region boundary
                             if (settings%jacobi_davidson .and. &
-                                (trust_radius_decreased .or. ratio > 0.75d0)) then
+                                (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
+                                 > 0.99d0 * trust_radius)) then
                                 jacobi_davidson_started = .true.
                                 imicro_jacobi_davidson = imicro
                             ! decrease trust radius
                             else
-                                trust_radius_decreased = .true.
+                                func_evaluated = .true.
                                 exit
                             end if
                         end if
@@ -492,7 +491,7 @@ contains
                     allocate (red_space_solution(size(red_space_basis, 2)))
                 end do
 
-                if (.not. trust_radius_decreased) then
+                if (.not. func_evaluated) then
                     ! evaluate function at predicted point
                     new_func = obj_func(solution)
 
