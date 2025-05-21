@@ -456,7 +456,7 @@ contains
                                      h_basis_vec, 1) - &
                                 ddot(n_param, basis_vec, 1, &
                                      h_basis(:, size(red_space_basis, 2)), 1)) &
-                            > 1d-10) then
+                            > 1d-12) then
                             h_basis_vec = hess_x_funptr(basis_vec)
                         end if
                         
@@ -709,7 +709,7 @@ contains
                 if (abs(ddot(n_param, red_space_basis(:, size(red_space_basis, 2)), 1, &
                              h_basis_vec, 1) - &
                         ddot(n_param, basis_vec, 1, &
-                             h_basis(:, size(red_space_basis, 2)), 1)) > 1d-10) then
+                             h_basis(:, size(red_space_basis, 2)), 1)) > 1d-12) then
                     h_basis_vec = hess_x_funptr(basis_vec)
                 end if
                 
