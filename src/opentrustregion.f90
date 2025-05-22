@@ -508,11 +508,10 @@ contains
                     trust_radius = 0.7d0*trust_radius
                     accept_step = .false.
                     if (trust_radius < 1.d-14) then
-                        call settings%log("Trust radius too small. Calculation "// &
-                                          "should be converged up to floating "// &
-                                          "point precision. Please restart with "// &
-                                          "larger convergence threshold.", 1, .true.)
-                        error = .true.
+                        call settings%log("Trust radius too small. Convergence "// &
+                                          "criterion is not fulfilled but "// &
+                                          "calculation should be converged up to "// &
+                                          "floating point precision.", 1, .true.)
                         return
                     end if
                 ! check if step is too long
@@ -885,8 +884,9 @@ contains
         if (error) return
         middle_trust_dist = dnrm2(size(solution), solution, 1) - trust_radius
 
-        ! perform bisection to find root
-        do while (upper_alpha - lower_alpha > 1.d-10)
+        ! perform bisection to find root, converge to relative threshold to avoid 
+        ! precision issues
+        do while (upper_alpha - lower_alpha > 1.d-12 * upper_alpha)
             ! targeted trust radius is in upper bracket
             if (lower_trust_dist*middle_trust_dist > 0.d0) then
                 lower_alpha = middle_alpha
