@@ -114,6 +114,12 @@ module opentrustregion
     end interface
 
     abstract interface
+        function conv_check_type() result(converged)
+            logical :: converged
+        end function conv_check_type
+    end interface
+
+    abstract interface
         subroutine logger_type(message)
             character(*), intent(in) :: message
         end subroutine logger_type
@@ -121,10 +127,10 @@ module opentrustregion
 
 contains
 
-    subroutine solver(update_orbs, obj_func, n_param, error, precond, stability, &
-                      line_search, jacobi_davidson, conv_tol, n_random_trial_vectors, &
-                      start_trust_radius, n_macro, n_micro, global_red_factor, &
-                      local_red_factor, seed, verbose, logger)
+    subroutine solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
+                      stability, line_search, jacobi_davidson, conv_tol, &
+                      n_random_trial_vectors, start_trust_radius, n_macro, n_micro, &
+                      global_red_factor, local_red_factor, seed, verbose, logger)
         !
         ! this subroutine is the main solver for orbital optimization
         !
@@ -132,6 +138,7 @@ contains
         procedure(obj_func_type), intent(in), pointer :: obj_func
         integer(ip), intent(in) :: n_param
         procedure(precond_type), intent(in), pointer, optional :: precond
+        procedure(conv_check_type), intent(in), pointer, optional :: conv_check
         logical, intent(out) :: error
         logical, intent(in), optional :: stability, line_search, jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
@@ -249,7 +256,8 @@ contains
             end if
 
             ! check for convergence and stability
-            if (grad_rms < settings%conv_tol) then
+            if (grad_rms < settings%conv_tol .or. (present(conv_check) .and. &
+                conv_check())) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
                     call stability_check(h_diag, hess_x_funptr, stable, kappa, error, &

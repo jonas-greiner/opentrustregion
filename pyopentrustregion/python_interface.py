@@ -53,6 +53,7 @@ def solver_py_interface(
     ],
     n_param: int,
     precond: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
+    conv_check: Optional[Callable[[None], bool]] = None,
     stability: Optional[bool] = None,
     line_search: Optional[bool] = None,
     jacobi_davidson: Optional[bool] = None,
@@ -85,6 +86,7 @@ def solver_py_interface(
     precond_interface_type = CFUNCTYPE(
         None, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
     )
+    conv_check_interface_type = CFUNCTYPE(c_bool)
     logger_interface_type = CFUNCTYPE(None, c_char_p)
 
     @update_orbs_interface_type
@@ -141,6 +143,9 @@ def solver_py_interface(
 
     @precond_interface_type
     def precond_interface(residual_ptr, mu_ptr, precond_residual_ptr):
+        """
+        this function returns the preconditioner
+        """
         # variables need to be defined as a global to ensure that they are not
         # garbage collected when the current function completes
         global precond_residual
@@ -155,8 +160,18 @@ def solver_py_interface(
         # convert numpy array to pointer
         precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
 
+    @conv_check_interface_type
+    def conv_check_interface():
+        """
+        this function performs a convergence check
+        """
+        return conv_check()
+
     @logger_interface_type
     def logger_interface(message):
+        """
+        this function logs results
+        """
         # call logger
         logger(string_at(message).decode("utf-8"))
 
@@ -167,6 +182,7 @@ def solver_py_interface(
         c_void_p,
         c_long,
         POINTER(c_bool),
+        c_void_p,
         c_void_p,
         POINTER(c_bool),
         POINTER(c_bool),
@@ -193,6 +209,7 @@ def solver_py_interface(
         n_param,
         byref(error),
         None if precond is None else precond_interface,
+        None if conv_check is None else conv_check_interface,
         None if stability is None else byref(c_bool(stability)),
         None if line_search is None else byref(c_bool(line_search)),
         None if jacobi_davidson is None else byref(c_bool(jacobi_davidson)),

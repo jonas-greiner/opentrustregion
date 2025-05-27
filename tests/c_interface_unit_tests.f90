@@ -85,6 +85,16 @@ contains
 
     end subroutine mock_precond
 
+    function mock_conv_check() result(converged) bind(C)
+        !
+        ! this function is a test function for the convergence check function
+        !
+        logical(c_bool) :: converged
+
+        converged = .true.
+
+    end function mock_conv_check
+
     subroutine mock_logger(message_c) bind(C)
         !
         ! this function is a test function for the C logging function
@@ -106,6 +116,7 @@ contains
 
         type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr, &
                           precond_c_funptr = c_null_funptr, &
+                          conv_check_c_funptr = c_null_funptr, &
                           logger_c_funptr = c_null_funptr
         logical(c_bool) :: error
         integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
@@ -141,12 +152,12 @@ contains
         ! call solver first without associated optional arguments which should produce
         ! default values
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
-                              precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
-                              jacobi_davidson_c_ptr, conv_tol_c_ptr, &
-                              n_random_trial_vectors_c_ptr, start_trust_radius_c_ptr, &
-                              n_macro_c_ptr, n_micro_c_ptr, global_red_factor_c_ptr, &
-                              local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
-                              logger_c_funptr)
+                              precond_c_funptr, conv_check_c_funptr, stability_c_ptr, &
+                              line_search_c_ptr, jacobi_davidson_c_ptr, &
+                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                              start_trust_radius_c_ptr, n_macro_c_ptr, n_micro_c_ptr, &
+                              global_red_factor_c_ptr, local_red_factor_c_ptr, &
+                              seed_c_ptr, verbose_c_ptr, logger_c_funptr)
 
         ! check if test has passed
         test_solver_c_wrapper = test_passed
@@ -160,6 +171,7 @@ contains
 
         ! associate optional arguments with values
         precond_c_funptr = c_funloc(mock_precond)
+        conv_check_c_funptr = c_funloc(mock_conv_check)
         stability_c_ptr = c_loc(stability)
         line_search_c_ptr = c_loc(line_search)
         jacobi_davidson_c_ptr = c_loc(jacobi_davidson)
@@ -179,12 +191,12 @@ contains
 
         ! call solver with associated optional arguments
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
-                              precond_c_funptr, stability_c_ptr, line_search_c_ptr, &
-                              jacobi_davidson_c_ptr, conv_tol_c_ptr, &
-                              n_random_trial_vectors_c_ptr, start_trust_radius_c_ptr, &
-                              n_macro_c_ptr, n_micro_c_ptr, global_red_factor_c_ptr, &
-                              local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
-                              logger_c_funptr)
+                              precond_c_funptr, conv_check_c_funptr, stability_c_ptr, &
+                              line_search_c_ptr, jacobi_davidson_c_ptr, &
+                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                              start_trust_radius_c_ptr, n_macro_c_ptr, n_micro_c_ptr, &
+                              global_red_factor_c_ptr, local_red_factor_c_ptr, &
+                              seed_c_ptr, verbose_c_ptr, logger_c_funptr)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -452,6 +464,27 @@ contains
         end if
 
     end function test_precond_c_wrapper
+
+    logical(c_bool) function test_conv_check_c_wrapper() bind(C)
+        !
+        ! this function tests the C wrapper for the convergence check function
+        !
+        use c_interface, only: conv_check_before_wrapping, conv_check_c_wrapper
+
+        ! assume tests pass
+        test_conv_check_c_wrapper = .true.
+
+        ! inject mock subroutine
+        conv_check_before_wrapping => mock_conv_check
+
+        ! check if function value is as expected
+        if (.not. conv_check_c_wrapper()) then
+            test_conv_check_c_wrapper = .false.
+            write (stderr, *) "test_conv_check_c_wrapper failed: Returned "// &
+                "convergence logical wrong."
+        end if
+
+    end function test_conv_check_c_wrapper
 
     logical(c_bool) function test_logger_c_wrapper() bind(C)
         !

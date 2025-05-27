@@ -75,6 +75,7 @@ fortran_tests = {
         "hess_x_c_wrapper",
         "obj_func_c_wrapper",
         "precond_c_wrapper",
+        "conv_check_c_wrapper",
         "logger_c_wrapper",
         "set_default_c_ptr",
     ],
@@ -185,6 +186,12 @@ class PyInterfaceTests(unittest.TestCase):
             """
             return mu * residual
 
+        def mock_conv_check():
+            """
+            this function is a mock function for the convergence check function
+            """
+            return True
+
         def mock_logger(message):
             """
             this function is a mock function for the logging function
@@ -206,6 +213,7 @@ class PyInterfaceTests(unittest.TestCase):
             mock_update_orbs,
             3,
             precond=mock_precond,
+            conv_check=mock_conv_check,
             stability=False,
             line_search=True,
             jacobi_davidson=False,

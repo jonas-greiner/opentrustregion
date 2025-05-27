@@ -7,7 +7,7 @@
 module opentrustregion_mock
 
     use opentrustregion, only: rp, ip, stderr, update_orbs_type, hess_x_type, &
-                               obj_func_type, precond_type, logger_type
+                               obj_func_type, precond_type, conv_check_type, logger_type
 
     implicit none
 
@@ -19,10 +19,10 @@ module opentrustregion_mock
 contains
 
     subroutine mock_solver(update_orbs_funptr, obj_func_funptr, n_param, error, &
-                           precond_funptr, stability, line_search, jacobi_davidson, &
-                           conv_tol, n_random_trial_vectors, start_trust_radius, &
-                           n_macro, n_micro, global_red_factor, local_red_factor, &
-                           seed, verbose, logger_funptr)
+                           precond_funptr, conv_check_funptr, stability, line_search, &
+                           jacobi_davidson, conv_tol, n_random_trial_vectors, &
+                           start_trust_radius, n_macro, n_micro, global_red_factor, &
+                           local_red_factor, seed, verbose, logger_funptr)
         !
         ! this subroutine is a mock routine for solver to test the C interface
         !
@@ -42,6 +42,7 @@ contains
         integer(ip), intent(in) :: n_param
         logical, intent(out) :: error
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
+        procedure(conv_check_type), intent(in), pointer, optional :: conv_check_funptr
         logical, intent(in), optional :: stability, line_search, jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
@@ -126,6 +127,32 @@ contains
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Returned "// &
                     "preconditioner of passed preconditioner function wrong."
+            end if
+        end if
+
+        ! check if optional convergence check function is correctly passed
+        if (solver_default) then
+            if (present(conv_check_funptr)) then
+                if (associated(conv_check_funptr)) then
+                    test_passed = .false.
+                    write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                        "convergence check function associated with value."
+                end if
+            end if
+        else
+            if (.not. present(conv_check_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "convergence check function not associated with value."
+            else if (.not. associated(precond_funptr)) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "convergence check function not associated with value."
+            end if
+            if (.not. conv_check_funptr()) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Returned "// &
+                    "convergence logical of passed convergence check function wrong."
             end if
         end if
 

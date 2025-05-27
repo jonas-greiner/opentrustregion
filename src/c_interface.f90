@@ -19,6 +19,7 @@ module c_interface
     procedure(hess_x_c_type), pointer :: hess_x_before_wrapping => null()
     procedure(obj_func_c_type), pointer :: obj_func_before_wrapping => null()
     procedure(precond_c_type), pointer :: precond_before_wrapping => null()
+    procedure(conv_check_c_type), pointer :: conv_check_before_wrapping => null()
     procedure(logger_c_type), pointer :: logger_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
@@ -66,6 +67,14 @@ module c_interface
     end interface
 
     abstract interface
+        function conv_check_c_type() result(converged) bind(C)
+            use, intrinsic :: iso_c_binding, only: c_bool
+
+            logical(c_bool) :: converged
+        end function conv_check_c_type
+    end interface
+
+    abstract interface
         subroutine logger_c_type(message) bind(C)
             use, intrinsic :: iso_c_binding, only: c_char
 
@@ -83,10 +92,10 @@ module c_interface
     ! injected, for example for testing
     interface
         subroutine solver_type(update_orbs, obj_func, n_param, error, precond, &
-                               stability, line_search, jacobi_davidson, conv_tol, &
-                               n_random_trial_vectors, start_trust_radius, n_macro, &
-                               n_micro, global_red_factor, local_red_factor, seed, &
-                               verbose, logger)
+                               conv_check, stability, line_search, jacobi_davidson, &
+                               conv_tol, n_random_trial_vectors, start_trust_radius, &
+                               n_macro, n_micro, global_red_factor, local_red_factor, &
+                               seed, verbose, logger)
 
             use opentrustregion, only: rp, ip
 
@@ -95,6 +104,7 @@ module c_interface
             integer(ip), intent(in) :: n_param
             logical, intent(out) :: error
             procedure(precond_c_wrapper), intent(in), pointer, optional :: precond
+            procedure(conv_check_c_wrapper), intent(in), pointer, optional :: conv_check
             logical, intent(in), optional :: stability, line_search, jacobi_davidson
             real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                               global_red_factor, local_red_factor
@@ -133,9 +143,10 @@ module c_interface
 contains
 
     subroutine solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
-                                error_c, precond_c_funptr, stability_c_ptr, &
-                                line_search_c_ptr, jacobi_davidson_c_ptr, &
-                                conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                error_c, precond_c_funptr, conv_check_c_funptr, &
+                                stability_c_ptr, line_search_c_ptr, &
+                                jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                n_random_trial_vectors_c_ptr, &
                                 start_trust_radius_c_ptr, n_macro_c_ptr, &
                                 n_micro_c_ptr, global_red_factor_c_ptr, &
                                 local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
@@ -159,7 +170,8 @@ contains
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_long), intent(in), value :: n_param_c
         logical(c_bool), intent(out) :: error_c
-        type(c_funptr), intent(in), value :: precond_c_funptr, logger_c_funptr
+        type(c_funptr), intent(in), value :: precond_c_funptr, conv_check_c_funptr, &
+                                             logger_c_funptr
         type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
                                           jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
@@ -174,6 +186,7 @@ contains
         procedure(update_orbs_c_wrapper), pointer :: update_orbs
         procedure(obj_func_c_wrapper), pointer :: obj_func
         procedure(precond_c_wrapper), pointer :: precond
+        procedure(conv_check_c_wrapper), pointer :: conv_check
         procedure(logger_c_wrapper), pointer :: logger
 
         ! set optional arguments to default values
@@ -208,12 +221,19 @@ contains
         ! convert dummy argument to Fortran kind
         n_param = int(n_param_c, kind=ip)
 
-        ! call solver with or without preconditioner
+        ! call solver with or without optional procedures
         if (c_associated(precond_c_funptr)) then
             call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_before_wrapping)
             precond => precond_c_wrapper
         else
             precond => null()
+        end if
+        if (c_associated(conv_check_c_funptr)) then
+            call c_f_procpointer(cptr=conv_check_c_funptr, &
+                                 fptr=conv_check_before_wrapping)
+            conv_check => conv_check_c_wrapper
+        else
+            conv_check => null()
         end if
         if (c_associated(logger_c_funptr)) then
             call c_f_procpointer(cptr=logger_c_funptr, fptr=logger_before_wrapping)
@@ -221,8 +241,8 @@ contains
         else
             logger => null()
         end if
-        call solver(update_orbs, obj_func, n_param, error, precond, stability, &
-                    line_search, jacobi_davidson, conv_tol, &
+        call solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
+                    stability, line_search, jacobi_davidson, conv_tol, &
                     n_random_trial_vectors, start_trust_radius, n_macro, n_micro, &
                     global_red_factor, local_red_factor, seed, verbose, logger)
 
@@ -431,6 +451,23 @@ contains
         precond_residual = precond_residual_ptr
 
     end function precond_c_wrapper
+
+    function conv_check_c_wrapper() result(converged)
+        !
+        ! this function wraps the convergence check function to convert C variables to 
+        ! Fortran variables
+        !
+        logical :: converged
+
+        logical(c_bool) :: converged_c
+
+        ! call conv_check C function
+        converged_c = conv_check_before_wrapping()
+
+        ! convert return argument to Fortran kind
+        converged = converged_c
+
+    end function conv_check_c_wrapper
 
     subroutine logger_c_wrapper(message)
         !

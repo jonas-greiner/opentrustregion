@@ -8,7 +8,7 @@ module c_interface_mock
 
     use opentrustregion, only: stderr
     use c_interface, only: update_orbs_c_type, hess_x_c_type, obj_func_c_type, &
-                           precond_c_type, logger_c_type
+                           precond_c_type, conv_check_c_type, logger_c_type
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_funptr, &
                                            c_f_pointer, c_f_procpointer, c_associated, &
                                            c_null_char, c_loc
@@ -40,10 +40,10 @@ contains
     end function test_stability_check_result
 
     subroutine mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
-                                     n_param_c, error_c,  precond_c_funptr, &
-                                     stability_c_ptr, line_search_c_ptr, &
-                                     jacobi_davidson_c_ptr, conv_tol_c_ptr, &
-                                     n_random_trial_vectors_c_ptr, &
+                                     n_param_c, error_c, precond_c_funptr, &
+                                     conv_check_c_funptr, stability_c_ptr, &
+                                     line_search_c_ptr, jacobi_davidson_c_ptr, &
+                                     conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                                      start_trust_radius_c_ptr, n_macro_c_ptr, &
                                      n_micro_c_ptr, global_red_factor_c_ptr, &
                                      local_red_factor_c_ptr, seed_c_ptr, &
@@ -53,7 +53,8 @@ contains
         ! this subroutine is a mock routine for the solver C wrapper subroutine
         !
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
-                                             precond_c_funptr, logger_c_funptr
+                                             precond_c_funptr, conv_check_c_funptr, &
+                                             logger_c_funptr
         logical(c_bool), intent(out) :: error_c
         integer(c_long), intent(in), value :: n_param_c
         type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
@@ -74,6 +75,7 @@ contains
         real(c_double), dimension(n_param_c) :: kappa, x, residual
         type(c_ptr) :: grad_c_ptr, h_diag_c_ptr, hess_x_c_ptr, precond_residual_c_ptr
         procedure(precond_c_type), pointer :: precond_funptr
+        procedure(conv_check_c_type), pointer :: conv_check_funptr
         logical, pointer :: stability_ptr, line_search_ptr, jacobi_davidson_ptr
         real(c_double), pointer :: conv_tol_ptr, start_trust_radius_ptr, &
                                    global_red_factor_ptr, local_red_factor_ptr
@@ -132,7 +134,8 @@ contains
 
         ! check if check if default arguments are correctly unassociated with values
         if (solver_default) then
-            if (c_associated(precond_c_funptr) .or. c_associated(stability_c_ptr) .or. &
+            if (c_associated(precond_c_funptr) .or. c_associated(conv_check_c_funptr) &
+                .or. c_associated(stability_c_ptr) .or. &
                 c_associated(line_search_c_ptr) .or. &
                 c_associated(jacobi_davidson_c_ptr) .or. c_associated(conv_tol_c_ptr) &
                 .or. c_associated(n_random_trial_vectors_c_ptr) .or. &
@@ -149,6 +152,7 @@ contains
             ! check if check if optional arguments are associated with correct values
         else
             if (.not. (c_associated(precond_c_funptr) .and. &
+                       c_associated(conv_check_c_funptr) .and. &
                        c_associated(stability_c_ptr) .and. &
                        c_associated(line_search_c_ptr) .and. &
                        c_associated(jacobi_davidson_c_ptr) .and. &
@@ -178,6 +182,15 @@ contains
             if (any(abs(precond_residual_ptr - 5.0_c_double) > tol)) then
                 write (stderr, *) "test_solver_py_interface failed: Returned "// &
                     "preconditioned residual from preconditioner function wrong."
+                test_solver_interface = .false.
+            end if
+
+            ! get Fortran pointer to passed convergence check function, call it and 
+            ! check result
+            call c_f_procpointer(cptr=conv_check_c_funptr, fptr=conv_check_funptr)
+            if (.not. conv_check_funptr()) then
+                write (stderr, *) "test_solver_py_interface failed: Returned "// &
+                    "convergence logical of convergence check function wrong."
                 test_solver_interface = .false.
             end if
 
