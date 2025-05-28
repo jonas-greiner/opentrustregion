@@ -420,9 +420,8 @@ contains
                             
                             ! calculate ratio of evaluated function and predicted 
                             ! function
-                            ratio = (obj_func(solution) - func) / &
-                                     ddot(n_param, solution, 1, grad + 0.5*h_solution, &
-                                          1)
+                            ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                                             grad + 0.5*h_solution, 1)
 
                             ! switch to Jacobi-Davidson only if current solution would 
                             ! lead to trust radius increase when the solution is 
