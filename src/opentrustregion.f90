@@ -25,6 +25,7 @@ module opentrustregion
     logical, parameter :: solver_stability_default = .true., &
                           solver_line_search_default = .false., &
                           solver_jacobi_davidson_default = .true., &
+                          solver_prefer_jacobi_davidson_default = .false., &
                           stability_jacobi_davidson_default = .true.
     real(rp), parameter :: solver_conv_tol_default = 1d-5, &
                            solver_start_trust_radius_default = 0.4d0, &
@@ -50,7 +51,7 @@ module opentrustregion
     end type
 
     type, extends(settings_type) :: solver_settings_type
-        logical :: stability, line_search
+        logical :: stability, line_search, prefer_jacobi_davidson
         real(rp) :: start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_macro, n_micro, seed
     contains
@@ -128,9 +129,10 @@ module opentrustregion
 contains
 
     subroutine solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
-                      stability, line_search, jacobi_davidson, conv_tol, &
-                      n_random_trial_vectors, start_trust_radius, n_macro, n_micro, &
-                      global_red_factor, local_red_factor, seed, verbose, logger)
+                      stability, line_search, jacobi_davidson, prefer_jacobi_davidson, &
+                      conv_tol, n_random_trial_vectors, start_trust_radius, n_macro, &
+                      n_micro, global_red_factor, local_red_factor, seed, verbose, &
+                      logger)
         !
         ! this subroutine is the main solver for orbital optimization
         !
@@ -140,7 +142,8 @@ contains
         procedure(precond_type), intent(in), pointer, optional :: precond
         procedure(conv_check_type), intent(in), pointer, optional :: conv_check
         logical, intent(out) :: error
-        logical, intent(in), optional :: stability, line_search, jacobi_davidson
+        logical, intent(in), optional :: stability, line_search, jacobi_davidson, &
+                                         prefer_jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
@@ -158,7 +161,8 @@ contains
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
                                  red_space_solution(:), red_hess_vec(:)
         logical :: macro_converged, stable, accept_step, micro_converged, newton, &
-                   bracketed, jacobi_davidson_started, use_precond, func_evaluated
+                   bracketed, jacobi_davidson_started, use_precond, func_evaluated, &
+                   conv_check_passed
         integer(ip) :: imacro, imicro, i, ntrial, initial_imicro, imicro_jacobi_davidson
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
@@ -177,10 +181,10 @@ contains
 
         ! initialize settings
         call settings%init_solver_settings(stability, line_search, jacobi_davidson, &
-                                           conv_tol, n_random_trial_vectors, &
-                                           start_trust_radius, n_macro, n_micro, &
-                                           global_red_factor, local_red_factor, seed, &
-                                           verbose, logger)
+                                           prefer_jacobi_davidson, conv_tol, &
+                                           n_random_trial_vectors, start_trust_radius, &
+                                           n_macro, n_micro, global_red_factor, &
+                                           local_red_factor, seed, verbose, logger)
 
         ! initialize random number generator
         call init_rng(settings%seed)
@@ -256,8 +260,16 @@ contains
             end if
 
             ! check for convergence and stability
-            if (grad_rms < settings%conv_tol .or. (present(conv_check) .and. &
-                conv_check())) then
+            if (present(conv_check)) then
+                if (associated(conv_check)) then
+                    conv_check_passed = conv_check()
+                else
+                    conv_check_passed = .false.
+                end if
+            else
+                conv_check_passed = .false.
+            end if
+            if (grad_rms < settings%conv_tol .or. conv_check_passed) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
                     call stability_check(h_diag, hess_x_funptr, stable, kappa, error, &
@@ -416,8 +428,9 @@ contains
                             ! lead to trust radius increase when the solution is 
                             ! already at the trust region boundary
                             if (settings%jacobi_davidson .and. &
-                                (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
-                                 > 0.99d0 * trust_radius)) then
+                                (settings%prefer_jacobi_davidson .or. &
+                                 (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
+                                  > 0.99d0 * trust_radius))) then
                                 jacobi_davidson_started = .true.
                                 imicro_jacobi_davidson = imicro
                             ! decrease trust radius
@@ -1391,15 +1404,16 @@ contains
     end subroutine gram_schmidt
 
     subroutine init_solver_settings(self, stability, line_search, jacobi_davidson, &
-                                    conv_tol, n_random_trial_vectors, &
-                                    start_trust_radius, n_macro, n_micro, &
-                                    global_red_factor, local_red_factor, seed, &
-                                    verbose, logger)
+                                    prefer_jacobi_davidson, conv_tol, &
+                                    n_random_trial_vectors, start_trust_radius, &
+                                    n_macro, n_micro, global_red_factor, &
+                                    local_red_factor, seed, verbose, logger)
         !
         ! this subroutine sets the optional settings to their default values
         !
         class(solver_settings_type), intent(inout) :: self
-        logical, intent(in), optional :: stability, line_search, jacobi_davidson
+        logical, intent(in), optional :: stability, line_search, jacobi_davidson, &
+                                         prefer_jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
@@ -1410,6 +1424,8 @@ contains
         self%line_search = set_default(line_search, solver_line_search_default)
         self%jacobi_davidson = set_default(jacobi_davidson, &
                                            solver_jacobi_davidson_default)
+        self%prefer_jacobi_davidson = set_default(prefer_jacobi_davidson, &
+                                                  solver_prefer_jacobi_davidson_default)
         self%conv_tol = set_default(conv_tol, solver_conv_tol_default)
         self%n_random_trial_vectors = set_default(n_random_trial_vectors, &
                                                   solver_n_random_trial_vectors_default)
@@ -1797,7 +1813,7 @@ contains
         character(13) :: level_shift_str
         character(10) :: kappa_norm_str
 
-        write(iteration_str, '(5X, I3, 3X)') iteration
+        write(iteration_str, '(4X, I4, 3X)') iteration
         write(func_str, '(4X, 1PE21.14, 3X)') func
         write(grad_rms_str, '(2X, 1PE9.2, 3X)') grad_rms
 

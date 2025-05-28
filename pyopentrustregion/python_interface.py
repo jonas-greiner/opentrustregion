@@ -57,6 +57,7 @@ def solver_py_interface(
     stability: Optional[bool] = None,
     line_search: Optional[bool] = None,
     jacobi_davidson: Optional[bool] = None,
+    prefer_jacobi_davidson: Optional[bool] = None,
     conv_tol: Optional[float] = None,
     n_random_trial_vectors: Optional[int] = None,
     start_trust_radius: Optional[float] = None,
@@ -187,6 +188,7 @@ def solver_py_interface(
         POINTER(c_bool),
         POINTER(c_bool),
         POINTER(c_bool),
+        POINTER(c_bool),
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_double),
@@ -213,6 +215,11 @@ def solver_py_interface(
         None if stability is None else byref(c_bool(stability)),
         None if line_search is None else byref(c_bool(line_search)),
         None if jacobi_davidson is None else byref(c_bool(jacobi_davidson)),
+        (
+            None
+            if prefer_jacobi_davidson is None
+            else byref(c_bool(prefer_jacobi_davidson))
+        ),
         None if conv_tol is None else byref(c_double(conv_tol)),
         (
             None

@@ -93,7 +93,8 @@ module c_interface
     interface
         subroutine solver_type(update_orbs, obj_func, n_param, error, precond, &
                                conv_check, stability, line_search, jacobi_davidson, &
-                               conv_tol, n_random_trial_vectors, start_trust_radius, &
+                               prefer_jacobi_davidson, conv_tol, &
+                               n_random_trial_vectors, start_trust_radius, &
                                n_macro, n_micro, global_red_factor, local_red_factor, &
                                seed, verbose, logger)
 
@@ -105,7 +106,8 @@ module c_interface
             logical, intent(out) :: error
             procedure(precond_c_wrapper), intent(in), pointer, optional :: precond
             procedure(conv_check_c_wrapper), intent(in), pointer, optional :: conv_check
-            logical, intent(in), optional :: stability, line_search, jacobi_davidson
+            logical, intent(in), optional :: stability, line_search, jacobi_davidson, &
+                                             prefer_jacobi_davidson
             real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                               global_red_factor, local_red_factor
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
@@ -145,8 +147,8 @@ contains
     subroutine solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
                                 error_c, precond_c_funptr, conv_check_c_funptr, &
                                 stability_c_ptr, line_search_c_ptr, &
-                                jacobi_davidson_c_ptr, conv_tol_c_ptr, &
-                                n_random_trial_vectors_c_ptr, &
+                                jacobi_davidson_c_ptr, prefer_jacobi_davidson_c_ptr, &
+                                conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
                                 start_trust_radius_c_ptr, n_macro_c_ptr, &
                                 n_micro_c_ptr, global_red_factor_c_ptr, &
                                 local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
@@ -158,6 +160,7 @@ contains
         use opentrustregion, only: solver_stability_default, &
                                    solver_line_search_default, &
                                    solver_jacobi_davidson_default, &
+                                   solver_prefer_jacobi_davidson_default, &
                                    solver_conv_tol_default, &
                                    solver_n_random_trial_vectors_default, &
                                    solver_start_trust_radius_default, &
@@ -173,14 +176,17 @@ contains
         type(c_funptr), intent(in), value :: precond_c_funptr, conv_check_c_funptr, &
                                              logger_c_funptr
         type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
-                                          jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                          jacobi_davidson_c_ptr, &
+                                          prefer_jacobi_davidson_c_ptr, &
+                                          conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
                                           start_trust_radius_c_ptr, n_macro_c_ptr, &
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
                                           local_red_factor_c_ptr, seed_c_ptr, &
                                           verbose_c_ptr
 
-        logical :: error, stability, line_search, jacobi_davidson
+        logical :: error, stability, line_search, jacobi_davidson, &
+                   prefer_jacobi_davidson
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, seed, verbose
         procedure(update_orbs_c_wrapper), pointer :: update_orbs
@@ -194,6 +200,8 @@ contains
         line_search = set_default_c_ptr(line_search_c_ptr, solver_line_search_default)
         jacobi_davidson = set_default_c_ptr(jacobi_davidson_c_ptr, &
                                             solver_jacobi_davidson_default)
+        prefer_jacobi_davidson = set_default_c_ptr(prefer_jacobi_davidson_c_ptr, &
+                                                  solver_prefer_jacobi_davidson_default)
         conv_tol = set_default_c_ptr(conv_tol_c_ptr, solver_conv_tol_default)
         n_random_trial_vectors = set_default_c_ptr(n_random_trial_vectors_c_ptr, &
                                                   solver_n_random_trial_vectors_default)
@@ -242,9 +250,9 @@ contains
             logger => null()
         end if
         call solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
-                    stability, line_search, jacobi_davidson, conv_tol, &
-                    n_random_trial_vectors, start_trust_radius, n_macro, n_micro, &
-                    global_red_factor, local_red_factor, seed, verbose, logger)
+                    stability, line_search, jacobi_davidson, prefer_jacobi_davidson, &
+                    conv_tol, n_random_trial_vectors, start_trust_radius, n_macro, &
+                    n_micro, global_red_factor, local_red_factor, seed, verbose, logger)
 
         ! convert return arguments to C kind
         error_c = error

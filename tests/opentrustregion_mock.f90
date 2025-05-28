@@ -20,15 +20,17 @@ contains
 
     subroutine mock_solver(update_orbs_funptr, obj_func_funptr, n_param, error, &
                            precond_funptr, conv_check_funptr, stability, line_search, &
-                           jacobi_davidson, conv_tol, n_random_trial_vectors, &
-                           start_trust_radius, n_macro, n_micro, global_red_factor, &
-                           local_red_factor, seed, verbose, logger_funptr)
+                           jacobi_davidson, prefer_jacobi_davidson, conv_tol, &
+                           n_random_trial_vectors, start_trust_radius, n_macro, &
+                           n_micro, global_red_factor, local_red_factor, seed, &
+                           verbose, logger_funptr)
         !
         ! this subroutine is a mock routine for solver to test the C interface
         !
         use opentrustregion, only: solver_stability_default, &
                                    solver_line_search_default, &
                                    solver_jacobi_davidson_default, &
+                                   solver_prefer_jacobi_davidson_default, &
                                    solver_conv_tol_default, &
                                    solver_n_random_trial_vectors_default, &
                                    solver_start_trust_radius_default, &
@@ -43,7 +45,8 @@ contains
         logical, intent(out) :: error
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         procedure(conv_check_type), intent(in), pointer, optional :: conv_check_funptr
-        logical, intent(in), optional :: stability, line_search, jacobi_davidson
+        logical, intent(in), optional :: stability, line_search, jacobi_davidson, &
+                                         prefer_jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
@@ -158,11 +161,12 @@ contains
 
         ! check if optional arguments are associated with values
         if (.not. (present(stability) .and. present(line_search) .and. &
-                   present(jacobi_davidson) .and. present(conv_tol) .and. &
-                   present(n_random_trial_vectors) .and. present(start_trust_radius) &
-                   .and. present(n_macro) .and. present(n_micro) .and. &
-                   present(global_red_factor) .and. present(local_red_factor) .and. &
-                   present(seed) .and. present(verbose))) then
+                   present(jacobi_davidson) .and. present(prefer_jacobi_davidson) &
+                   .and. present(conv_tol) .and. present(n_random_trial_vectors) .and. &
+                   present(start_trust_radius) .and. present(n_macro) .and. &
+                   present(n_micro) .and. present(global_red_factor) .and. &
+                   present(local_red_factor) .and. present(seed) .and. &
+                   present(verbose))) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                 "arguments not associated with values."
@@ -173,7 +177,8 @@ contains
             if (stability .neqv. solver_stability_default .or. &
                 line_search .neqv. solver_line_search_default .or. &
                 jacobi_davidson .neqv. solver_jacobi_davidson_default .or. &
-                abs(conv_tol - solver_conv_tol_default) > tol .or. &
+                prefer_jacobi_davidson .neqv. solver_prefer_jacobi_davidson_default &
+                .or. abs(conv_tol - solver_conv_tol_default) > tol .or. &
                 n_random_trial_vectors /= solver_n_random_trial_vectors_default .or. &
                 abs(start_trust_radius - solver_start_trust_radius_default) > tol .or. &
                 n_macro /= solver_n_macro_default .or. &
@@ -188,9 +193,10 @@ contains
             ! check if optional arguments are correctly passed
         else
             if (stability .or. .not. line_search .or. jacobi_davidson .or. &
-                abs(conv_tol - 1.d-3) > tol .or. n_random_trial_vectors /= 5 .or. &
-                abs(start_trust_radius - 0.2d0) > tol .or. n_macro /= 300 .or. &
-                n_micro /= 200 .or. abs(global_red_factor - 1.d-2) > tol .or. &
+                .not. prefer_jacobi_davidson .or. abs(conv_tol - 1.d-3) > tol .or. &
+                n_random_trial_vectors /= 5 .or. abs(start_trust_radius - 0.2d0) > tol &
+                .or. n_macro /= 300 .or. n_micro /= 200 .or. &
+                abs(global_red_factor - 1.d-2) > tol .or. &
                 abs(local_red_factor - 1.d-3) > tol .or. seed /= 33 .or. verbose /= 3) &
                 then
                 test_passed = .false.

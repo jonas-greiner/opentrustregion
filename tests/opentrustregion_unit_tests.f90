@@ -1044,6 +1044,7 @@ contains
                                    init_solver_settings, solver_stability_default, &
                                    solver_line_search_default, &
                                    solver_jacobi_davidson_default, &
+                                   solver_prefer_jacobi_davidson_default, &
                                    solver_conv_tol_default, &
                                    solver_n_random_trial_vectors_default, &
                                    solver_start_trust_radius_default, &
@@ -1065,6 +1066,8 @@ contains
         if (settings%stability .neqv. solver_stability_default .or. &
             settings%line_search .neqv. solver_line_search_default .or. &
             settings%jacobi_davidson .neqv. solver_jacobi_davidson_default .or. &
+            settings%prefer_jacobi_davidson .neqv. &
+            solver_prefer_jacobi_davidson_default .or. &
             abs(settings%conv_tol - solver_conv_tol_default) > tol .or. &
             settings%n_random_trial_vectors /= solver_n_random_trial_vectors_default &
             .or. abs(settings%start_trust_radius - solver_start_trust_radius_default) &
@@ -1085,7 +1088,8 @@ contains
 
         ! call routine with optional arguments
         call init_solver_settings(settings, stability=.false., line_search=.true., &
-                                  jacobi_davidson=.false., conv_tol=1.d-3, &
+                                  jacobi_davidson=.false., &
+                                  prefer_jacobi_davidson=.true., conv_tol=1.d-3, &
                                   n_random_trial_vectors=5, start_trust_radius=0.2d0, &
                                   n_macro=300, n_micro=200, global_red_factor=1.d-2, &
                                   local_red_factor=1.d-3, seed=33, verbose=3, &
@@ -1094,6 +1098,7 @@ contains
         ! check if optional values are correctly set
         if (settings%stability .neqv. .false. .or. settings%line_search .neqv. .true. &
             .or. settings%jacobi_davidson .neqv. .false. .or. &
+            settings%prefer_jacobi_davidson .neqv. .true. .or. &
             abs(settings%conv_tol - 1.d-3) > tol .or. &
             settings%n_random_trial_vectors /= 5 .or. &
             abs(settings%start_trust_radius - 0.2d0) > tol .or. settings%n_macro &

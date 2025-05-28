@@ -217,6 +217,7 @@ class PyInterfaceTests(unittest.TestCase):
             stability=False,
             line_search=True,
             jacobi_davidson=False,
+            prefer_jacobi_davidson=True,
             conv_tol=1e-3,
             n_random_trial_vectors=5,
             start_trust_radius=0.2,
