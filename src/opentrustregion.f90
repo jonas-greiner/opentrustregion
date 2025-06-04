@@ -339,7 +339,8 @@ contains
                 call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                                   obj_func, hess_x_funptr, &
                                                   use_precond, precond, settings, &
-                                                  trust_radius, solution, mu, imicro)
+                                                  trust_radius, solution, mu, imicro, &
+                                                  jacobi_davidson_started)
             end if
 
             ! perform line search
@@ -1992,7 +1993,7 @@ contains
     subroutine truncated_conjugate_gradient(func, grad, h_diag, n_param, obj_func, &
                                             hess_x_funptr, use_precond, precond, &
                                             settings, trust_radius, solution, mu, &
-                                            imicro)
+                                            imicro, jacobi_davidson_started)
         !
         ! this subroutine performs truncated conjugate gradient to solve the trust 
         ! region subproblem
@@ -2007,6 +2008,7 @@ contains
         real(rp), intent(inout) :: trust_radius
         real(rp), intent(out) :: solution(:), mu
         integer(ip), intent(out) :: imicro
+        logical, intent(out) :: jacobi_davidson_started
 
         logical :: accept_step, micro_converged
         real(rp) :: model_func, initial_residual_norm, curvature, step_size, &
@@ -2154,6 +2156,9 @@ contains
 
         ! no level shift is used
         mu = 0.d0
+
+        ! no Jacobi-Davidson is used
+        jacobi_davidson_started = .false.
 
         ! deallocate arrays
         deallocate (h_solution)
