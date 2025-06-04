@@ -572,7 +572,7 @@ contains
         deallocate (red_space_basis)
 
         ! determine if saddle point
-        stable = eigval > -1.d-3
+        stable = eigval > -1.d-4
         if (stable) then
             kappa = 0.d0
         else
