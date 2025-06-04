@@ -42,7 +42,8 @@ contains
     subroutine mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
                                      n_param_c, error_c, precond_c_funptr, &
                                      conv_check_c_funptr, stability_c_ptr, &
-                                     line_search_c_ptr, jacobi_davidson_c_ptr, &
+                                     line_search_c_ptr, davidson_c_ptr, &
+                                     jacobi_davidson_c_ptr, &
                                      prefer_jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                      n_random_trial_vectors_c_ptr, &
                                      start_trust_radius_c_ptr, n_macro_c_ptr, &
@@ -59,7 +60,7 @@ contains
         logical(c_bool), intent(out) :: error_c
         integer(c_long), intent(in), value :: n_param_c
         type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
-                                          jacobi_davidson_c_ptr, &
+                                          davidson_c_ptr, jacobi_davidson_c_ptr, &
                                           prefer_jacobi_davidson_c_ptr, &
                                           conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
@@ -79,8 +80,8 @@ contains
         type(c_ptr) :: grad_c_ptr, h_diag_c_ptr, hess_x_c_ptr, precond_residual_c_ptr
         procedure(precond_c_type), pointer :: precond_funptr
         procedure(conv_check_c_type), pointer :: conv_check_funptr
-        logical, pointer :: stability_ptr, line_search_ptr, jacobi_davidson_ptr, &
-                            prefer_jacobi_davidson_ptr
+        logical, pointer :: stability_ptr, line_search_ptr, davidson_ptr, &
+                            jacobi_davidson_ptr, prefer_jacobi_davidson_ptr
         real(c_double), pointer :: conv_tol_ptr, start_trust_radius_ptr, &
                                    global_red_factor_ptr, local_red_factor_ptr
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_macro_ptr, &
@@ -140,7 +141,7 @@ contains
         if (solver_default) then
             if (c_associated(precond_c_funptr) .or. c_associated(conv_check_c_funptr) &
                 .or. c_associated(stability_c_ptr) .or. &
-                c_associated(line_search_c_ptr) .or. &
+                c_associated(line_search_c_ptr) .or. c_associated(davidson_c_ptr) .or. &
                 c_associated(jacobi_davidson_c_ptr) .or. &
                 c_associated(prefer_jacobi_davidson_c_ptr) .or. &
                 c_associated(conv_tol_c_ptr) .or. &
@@ -161,6 +162,7 @@ contains
                        c_associated(conv_check_c_funptr) .and. &
                        c_associated(stability_c_ptr) .and. &
                        c_associated(line_search_c_ptr) .and. &
+                       c_associated(davidson_c_ptr) .and. &
                        c_associated(jacobi_davidson_c_ptr) .and. &
                        c_associated(prefer_jacobi_davidson_c_ptr) .and. &
                        c_associated(conv_tol_c_ptr) .and. &
@@ -205,6 +207,7 @@ contains
             ! values
             call c_f_pointer(cptr=stability_c_ptr, fptr=stability_ptr)
             call c_f_pointer(cptr=line_search_c_ptr, fptr=line_search_ptr)
+            call c_f_pointer(cptr=davidson_c_ptr, fptr=davidson_ptr)
             call c_f_pointer(cptr=jacobi_davidson_c_ptr, fptr=jacobi_davidson_ptr)
             call c_f_pointer(cptr=prefer_jacobi_davidson_c_ptr, &
                              fptr=prefer_jacobi_davidson_ptr)
@@ -218,8 +221,8 @@ contains
             call c_f_pointer(cptr=local_red_factor_c_ptr, fptr=local_red_factor_ptr)
             call c_f_pointer(cptr=seed_c_ptr, fptr=seed_ptr)
             call c_f_pointer(cptr=verbose_c_ptr, fptr=verbose_ptr)
-            if (stability_ptr .or. .not. line_search_ptr .or. jacobi_davidson_ptr .or. &
-                .not. prefer_jacobi_davidson_ptr .or. &
+            if (stability_ptr .or. .not. line_search_ptr .or. davidson_ptr .or. &
+                jacobi_davidson_ptr .or. .not. prefer_jacobi_davidson_ptr .or. &
                 abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. &
                 n_random_trial_vectors_ptr /= 5_c_long .or. &
                 abs(start_trust_radius_ptr - 0.2_c_double) > tol .or. &

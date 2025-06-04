@@ -24,6 +24,7 @@ module opentrustregion
     ! define default optional arguments
     logical, parameter :: solver_stability_default = .true., &
                           solver_line_search_default = .false., &
+                          solver_davidson_default = .true., &
                           solver_jacobi_davidson_default = .true., &
                           solver_prefer_jacobi_davidson_default = .false., &
                           stability_jacobi_davidson_default = .true.
@@ -51,7 +52,7 @@ module opentrustregion
     end type
 
     type, extends(settings_type) :: solver_settings_type
-        logical :: stability, line_search, prefer_jacobi_davidson
+        logical :: stability, line_search, davidson, prefer_jacobi_davidson
         real(rp) :: start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_macro, n_micro, seed
     contains
@@ -129,10 +130,10 @@ module opentrustregion
 contains
 
     subroutine solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
-                      stability, line_search, jacobi_davidson, prefer_jacobi_davidson, &
-                      conv_tol, n_random_trial_vectors, start_trust_radius, n_macro, &
-                      n_micro, global_red_factor, local_red_factor, seed, verbose, &
-                      logger)
+                      stability, line_search, davidson, jacobi_davidson, &
+                      prefer_jacobi_davidson, conv_tol, n_random_trial_vectors, &
+                      start_trust_radius, n_macro, n_micro, global_red_factor, &
+                      local_red_factor, seed, verbose, logger)
         !
         ! this subroutine is the main solver for orbital optimization
         !
@@ -142,8 +143,8 @@ contains
         procedure(precond_type), intent(in), pointer, optional :: precond
         procedure(conv_check_type), intent(in), pointer, optional :: conv_check
         logical, intent(out) :: error
-        logical, intent(in), optional :: stability, line_search, jacobi_davidson, &
-                                         prefer_jacobi_davidson
+        logical, intent(in), optional :: stability, line_search, davidson, &
+                                         jacobi_davidson, prefer_jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
@@ -151,24 +152,16 @@ contains
         procedure(logger_type), intent(in), pointer, optional :: logger
 
         type(solver_settings_type) :: settings
-        real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, residual_norm, &
-                    red_factor, initial_residual_norm, new_func, ratio, n_kappa, &
-                    aug_hess_min_eigval, minres_tol
-        real(rp), dimension(n_param) :: kappa, grad, h_diag, solution, &
-                                        last_solution_normalized, h_solution, &
-                                        residual, solution_normalized, basis_vec, &
-                                        h_basis_vec
-        real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
-                                 red_space_solution(:), red_hess_vec(:)
-        logical :: macro_converged, stable, accept_step, micro_converged, newton, &
-                   bracketed, jacobi_davidson_started, use_precond, func_evaluated, &
+        real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, new_func, n_kappa, &
+                    kappa_norm
+        real(rp), dimension(n_param) :: kappa, grad, h_diag, solution
+        logical :: macro_converged, stable, jacobi_davidson_started, use_precond, &
                    conv_check_passed
-        integer(ip) :: imacro, imicro, i, ntrial, initial_imicro, imicro_jacobi_davidson
+        integer(ip) :: imacro, imicro, imicro_jacobi_davidson, i
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr
-        real(rp), external :: dnrm2, ddot
-        external :: dgemm, dgemv
+        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = .false.
@@ -180,11 +173,12 @@ contains
         stable = .true.
 
         ! initialize settings
-        call settings%init_solver_settings(stability, line_search, jacobi_davidson, &
-                                           prefer_jacobi_davidson, conv_tol, &
-                                           n_random_trial_vectors, start_trust_radius, &
-                                           n_macro, n_micro, global_red_factor, &
-                                           local_red_factor, seed, verbose, logger)
+        call settings%init_solver_settings(stability, line_search, davidson, &
+                                           jacobi_davidson, prefer_jacobi_davidson, &
+                                           conv_tol, n_random_trial_vectors, &
+                                           start_trust_radius, n_macro, n_micro, &
+                                           global_red_factor, local_red_factor, seed, &
+                                           verbose, logger)
 
         ! initialize random number generator
         call init_rng(settings%seed)
@@ -241,22 +235,34 @@ contains
             ! log results
             if (imacro == 1) then
                 call settings%print_results(imacro - 1, func, grad_rms)
-            else if (.not. stable) then
-                call settings%print_results(imacro - 1, func, grad_rms, &
-                                            kappa_norm=dnrm2(n_param, kappa, 1))
-                stable = .true.
-            else if (jacobi_davidson_started) then
-                call settings%print_results(imacro - 1, func, grad_rms, &
-                                            level_shift=-mu, n_micro = imicro, &
-                                            imicro_jacobi_davidson=&
-                                            imicro_jacobi_davidson, &
-                                            trust_radius=trust_radius, &
-                                            kappa_norm=dnrm2(n_param, kappa, 1))
             else
-                call settings%print_results(imacro - 1, func, grad_rms, &
-                                            level_shift=-mu, n_micro=imicro, &
-                                            trust_radius=trust_radius, &
-                                            kappa_norm=dnrm2(n_param, kappa, 1))
+                if (settings%davidson) then
+                    kappa_norm = dnrm2(n_param, kappa, 1)
+                else
+                    if (use_precond) then
+                        kappa_norm = sqrt(dot_product(kappa, precond(kappa, 0.d0)))
+                    else
+                        kappa_norm = sqrt(dot_product(kappa, abs_diag_precond(kappa, &
+                                                                              h_diag)))
+                    end if
+                end if
+                if (.not. stable) then
+                    call settings%print_results(imacro - 1, func, grad_rms, &
+                                                kappa_norm=kappa_norm)
+                    stable = .true.
+                else if (jacobi_davidson_started) then
+                    call settings%print_results(imacro - 1, func, grad_rms, &
+                                                level_shift=-mu, n_micro = imicro, &
+                                                imicro_jacobi_davidson=&
+                                                imicro_jacobi_davidson, &
+                                                trust_radius=trust_radius, &
+                                                kappa_norm=kappa_norm)
+                else
+                    call settings%print_results(imacro - 1, func, grad_rms, &
+                                                level_shift=-mu, n_micro=imicro, &
+                                                trust_radius=trust_radius, &
+                                                kappa_norm=kappa_norm)
+                end if
             end if
 
             ! check for convergence and stability
@@ -319,244 +325,22 @@ contains
                 end if
             end if
 
-            ! generate trial vectors
-            red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, &
-                                                     settings, error)
-            if (error) return
-
-            ! number of trial vectors
-            ntrial = size(red_space_basis, 2)
-
-            ! increment number of Hessian linear transformations
-            tot_hess_x = tot_hess_x + ntrial
-
-            ! calculate linear transformations of basis vectors
-            allocate (h_basis(n_param, ntrial))
-            do i = 1, ntrial
-                h_basis(:, i) = hess_x_funptr(red_space_basis(:, i))
-            end do
-
-            ! construct augmented Hessian in reduced space
-            allocate (aug_hess(ntrial + 1, ntrial + 1))
-            aug_hess = 0.d0
-            call dgemm("T", "N", ntrial, ntrial, n_param, 1.d0, red_space_basis, &
-                       n_param, h_basis, n_param, 0.d0, aug_hess(2:, 2:), ntrial)
-
-            ! allocate space for reduced space solution
-            allocate (red_space_solution(size(red_space_basis, 2)))
-
-            ! decrease trust radius until micro iterations converge and step is
-            ! accepted
-            last_solution_normalized = 0.d0
-            accept_step = .false.
-            do while (.not. accept_step)
-                micro_converged = .false.
-                func_evaluated = .false.
-                jacobi_davidson_started = .false.
-                do imicro = 1, settings%n_micro
-                    ! do a Newton step if the model is positive definite and the step
-                    ! is within the trust region
-                    newton = .false.
-                    aug_hess_min_eigval = min_eigval(aug_hess(2:, 2:), settings, error)
-                    if (error) return
-                    if (aug_hess_min_eigval > -1.d-5) then
-                        call newton_step(aug_hess, grad_norm, red_space_basis, &
-                                         solution, red_space_solution, settings, error)
-                        if (error) return
-                        mu = 0.d0
-                        if (dnrm2(n_param, solution, 1) < trust_radius) newton = .true.
-                    end if
-
-                    ! otherwise perform bisection to find the level shift
-                    if (.not. newton) then
-                        call bisection(aug_hess, grad_norm, red_space_basis, &
-                                       trust_radius, solution, red_space_solution, mu, &
-                                       bracketed, settings, error)
-                        if (error) return
-                        if (.not. bracketed) exit
-                    end if
-
-                    ! calculate Hessian linear transformation of solution
-                    call dgemv("N", n_param, size(h_basis, 2), 1.d0, h_basis, n_param, &
-                               red_space_solution, 1, 0.d0, h_solution, 1)
-
-                    ! calculate residual
-                    residual = grad + h_solution - mu*solution
-
-                    ! calculate residual norm
-                    residual_norm = dnrm2(n_param, residual, 1)
-
-                    ! determine reduction factor depending on whether local region is
-                    ! reached
-                    if (abs(mu) < 1.d-12) then
-                        red_factor = settings%local_red_factor
-                    else
-                        red_factor = settings%global_red_factor
-                    end if
-
-                    ! get normalized solution vector
-                    solution_normalized = solution/dnrm2(n_param, solution, 1)
-
-                    ! reset initial residual norm if solution changes
-                    if (ddot(n_param, last_solution_normalized, 1, &
-                             solution_normalized, 1)**2 < 0.5d0) then
-                        initial_imicro = imicro
-                        initial_residual_norm = residual_norm
-                    end if
-
-                    ! check if micro iterations have converged
-                    if (residual_norm < max(red_factor*grad_norm, 1d-12)) then
-                        micro_converged = .true.
-                        exit
-                    ! check residual has not decreased sufficiently or if maximum 
-                    ! of Davidson iterations has been reached
-                    else if (((imicro - initial_imicro >= 10 .and. &
-                               residual_norm > 0.8*initial_residual_norm) .or. &
-                               imicro > 30)) then
-                        ! check if Jacobi-Davidson has started, if yes just continue
-                        if (.not. jacobi_davidson_started) then
-                            ! evaluate function at approximate point
-                            new_func = obj_func(solution)
-                            
-                            ! calculate ratio of evaluated function and predicted 
-                            ! function
-                            ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                                             grad + 0.5*h_solution, 1)
-
-                            ! switch to Jacobi-Davidson only if current solution would 
-                            ! lead to trust radius increase when the solution is 
-                            ! already at the trust region boundary
-                            if (settings%jacobi_davidson .and. &
-                                (settings%prefer_jacobi_davidson .or. &
-                                 (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
-                                  > 0.99d0 * trust_radius))) then
-                                jacobi_davidson_started = .true.
-                                imicro_jacobi_davidson = imicro
-                            ! decrease trust radius
-                            else
-                                func_evaluated = .true.
-                                exit
-                            end if
-                        end if
-                    end if
-
-                    ! save current solution
-                    last_solution_normalized = solution_normalized
-
-                    if (.not. jacobi_davidson_started) then
-                        ! precondition residual
-                        if (use_precond) then
-                            basis_vec = precond(residual, mu)
-                        else
-                            basis_vec = diag_precond(residual, mu, h_diag)
-                        end if
-
-                        ! orthonormalize to current orbital space to get new basis 
-                        ! vector
-                        call gram_schmidt(basis_vec, red_space_basis, settings, error)
-                        if (error) return
-
-                        ! add linear transformation of new basis vector
-                        h_basis_vec = hess_x_funptr(basis_vec)
-
-                        ! increment Hessian linear transformations
-                        tot_hess_x = tot_hess_x + 1
-
-                    else
-                        ! solve Jacobi-Davidson correction equations
-                        minres_tol = 3.d0 ** (-(imicro - imicro_jacobi_davidson))
-                        call minres(-residual, hess_x_funptr, solution_normalized, mu, &
-                                    minres_tol, basis_vec, h_basis_vec, settings, error)
-                        if (error) return
-
-                        ! orthonormalize to current orbital space to get new basis 
-                        ! vector
-                        call gram_schmidt(basis_vec, red_space_basis, settings, error, &
-                                          lin_trans_vector=h_basis_vec, &
-                                          lin_trans_space=h_basis)
-                        if (error) return
-
-                        ! check if resulting linear transformation still respects 
-                        ! Hessian symmetry which can happen due to numerical noise 
-                        ! accumulation
-                        if (abs(ddot(n_param, &
-                                     red_space_basis(:, size(red_space_basis, 2)), 1, &
-                                     h_basis_vec, 1) - &
-                                ddot(n_param, basis_vec, 1, &
-                                     h_basis(:, size(red_space_basis, 2)), 1)) &
-                            > 1d-12) then
-                            h_basis_vec = hess_x_funptr(basis_vec)
-                        end if
-                        
-                    end if
-
-                    ! add new trial vector to orbital space
-                    call add_column(red_space_basis, basis_vec)
-
-                    ! add linear transformation of new basis vector
-                    call add_column(h_basis, h_basis_vec)
-
-                    ! construct new augmented Hessian
-                    allocate (red_hess_vec(size(red_space_basis, 2) + 1))
-                    red_hess_vec(1) = 0.d0
-                    call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, &
-                               red_space_basis, n_param, &
-                               h_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
-                               red_hess_vec(2:), 1)
-                    call extend_symm_matrix(aug_hess, red_hess_vec)
-                    deallocate (red_hess_vec)
-
-                    ! reallocate reduced space solution
-                    deallocate (red_space_solution)
-                    allocate (red_space_solution(size(red_space_basis, 2)))
-                end do
-
-                if (.not. func_evaluated) then
-                    ! evaluate function at predicted point
-                    new_func = obj_func(solution)
-
-                    ! calculate ratio of evaluated function and predicted function
-                    ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                                     grad + 0.5*h_solution, 1)
-                end if
-
-                ! decrease trust radius if micro iterations are unable to converge, if
-                ! function value has not decreased or if individual orbitals change too
-                ! much
-                if (.not. micro_converged .or. ratio < 0.d0 .or. &
-                    any(abs(solution) > pi/4)) then
-                    trust_radius = 0.7d0*trust_radius
-                    accept_step = .false.
-                    if (trust_radius < 1.d-14) then
-                        call settings%log("Trust radius too small. Convergence "// &
-                                          "criterion is not fulfilled but "// &
-                                          "calculation should be converged up to "// &
-                                          "floating point precision.", 1, .true.)
-                        return
-                    end if
-                ! check if step is too long
-                else if (ratio < 0.25d0) then
-                    trust_radius = 0.7d0*trust_radius
-                    accept_step = .true.
-                ! check if quadratic approximation is valid
-                else if (ratio < 0.75d0) then
-                    accept_step = .true.
-                ! check if step is potentially too short
-                else
-                    trust_radius = 1.2d0*trust_radius
-                    accept_step = .true.
-                end if
-
-                ! flush output
-                flush(stdout)
-                flush(stderr)
-            end do
-
-            ! deallocate quantities from microiterations
-            deallocate (red_space_solution)
-            deallocate (aug_hess)
-            deallocate (h_basis)
-            deallocate (red_space_basis)
+            if (settings%davidson) then
+                ! solve trust region subproblem with (Jacobi-)Davidson
+                call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+                                            obj_func, hess_x_funptr, settings, &
+                                            use_precond, precond, trust_radius, &
+                                            solution, mu, imicro, &
+                                            imicro_jacobi_davidson, &
+                                            jacobi_davidson_started, error)
+                if (error) return
+            else
+                ! solve trust region subproblem with truncated conjugate gradient
+                call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
+                                                  obj_func, hess_x_funptr, &
+                                                  use_precond, precond, settings, &
+                                                  trust_radius, solution, mu, imicro)
+            end if
 
             ! perform line search
             if (settings%line_search) then
@@ -707,7 +491,7 @@ contains
                 if (use_precond) then
                     basis_vec = precond(residual, 0.d0)
                 else
-                    basis_vec = diag_precond(residual, 0.d0, h_diag)
+                    basis_vec = level_shifted_diag_precond(residual, 0.d0, h_diag)
                 end if
 
                 ! orthonormalize to current orbital space to get new basis vector
@@ -1402,8 +1186,8 @@ contains
 
     end subroutine gram_schmidt
 
-    subroutine init_solver_settings(self, stability, line_search, jacobi_davidson, &
-                                    prefer_jacobi_davidson, conv_tol, &
+    subroutine init_solver_settings(self, stability, line_search, davidson, &
+                                    jacobi_davidson, prefer_jacobi_davidson, conv_tol, &
                                     n_random_trial_vectors, start_trust_radius, &
                                     n_macro, n_micro, global_red_factor, &
                                     local_red_factor, seed, verbose, logger)
@@ -1411,8 +1195,8 @@ contains
         ! this subroutine sets the optional settings to their default values
         !
         class(solver_settings_type), intent(inout) :: self
-        logical, intent(in), optional :: stability, line_search, jacobi_davidson, &
-                                         prefer_jacobi_davidson
+        logical, intent(in), optional :: stability, line_search, davidson, &
+                                         jacobi_davidson, prefer_jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
@@ -1421,6 +1205,7 @@ contains
 
         self%stability = set_default(stability, solver_stability_default)
         self%line_search = set_default(line_search, solver_line_search_default)
+        self%davidson = set_default(davidson, solver_davidson_default)
         self%jacobi_davidson = set_default(jacobi_davidson, &
                                            solver_jacobi_davidson_default)
         self%prefer_jacobi_davidson = set_default(prefer_jacobi_davidson, &
@@ -1516,22 +1301,42 @@ contains
 
     end function set_default_logical
 
-    function diag_precond(residual, mu, h_diag) result(precond_residual)
+    function level_shifted_diag_precond(vector, mu, h_diag) result(precond_vector)
         !
-        ! this function defines the default diagonal preconditioner
+        ! this function defines the default level-shifted diagonal preconditioner
         !
-        real(rp), intent(in) :: residual(:), mu, h_diag(:)
-        real(rp) :: precond_residual(size(residual))
+        real(rp), intent(in) :: vector(:), mu, h_diag(:)
+        real(rp) :: precond_vector(size(vector))
 
-        real(rp) :: precond(size(residual))
+        real(rp) :: precond(size(vector))
         
+        ! construct level-shifted preconditioner
         precond = h_diag - mu
         where (abs(precond) < 1d-10)
             precond = 1d-10
         end where
-        precond_residual = residual/precond
+
+        ! precondition vector
+        precond_vector = vector / precond
         
-    end function diag_precond
+    end function level_shifted_diag_precond
+
+    function abs_diag_precond(vector, h_diag) result(precond_vector)
+        !
+        ! this function defines the default absolute diagonal preconditioner
+        !
+        real(rp), intent(in) :: vector(:), h_diag(:)
+        real(rp) :: precond_vector(size(vector))
+
+        real(rp) :: precond(size(vector))
+
+        ! construct positive-definite preconditioner
+        precond = max(abs(h_diag), 1.d-10)
+        
+        ! precondition vector
+        precond_vector = vector / precond
+        
+    end function abs_diag_precond
 
     function orthogonal_projection(vector, direction) result(complement)
         !
@@ -1937,5 +1742,461 @@ contains
             start_pos = space_pos + 1
         end do
     end subroutine split_string_by_space
+
+    subroutine level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+                                      obj_func, hess_x_funptr, settings, use_precond, &
+                                      precond, trust_radius, solution, mu, imicro, &
+                                      imicro_jacobi_davidson, jacobi_davidson_started, &
+                                      error)
+        !
+        ! this subroutine performs level-shifted (Jacobi-)Davidson to solve the trust 
+        ! region subproblem
+        !
+        real(rp), intent(in) :: func, grad(:), grad_norm, h_diag(:)
+        integer(ip), intent(in) :: n_param
+        procedure(obj_func_type), pointer, intent(in) :: obj_func
+        procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
+        class(solver_settings_type), intent(in) :: settings
+        logical, intent(in) :: use_precond
+        procedure(precond_type), intent(in), pointer, optional :: precond
+        real(rp), intent(inout) :: trust_radius
+        real(rp), intent(out) :: solution(:), mu
+        integer(ip), intent(out) :: imicro, imicro_jacobi_davidson
+        logical, intent(out) :: jacobi_davidson_started, error
+
+        real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
+                                 red_space_solution(:), red_hess_vec(:)
+        integer(ip) :: ntrial, i, initial_imicro
+        real(rp), dimension(n_param) :: last_solution_normalized, h_solution, &
+                                        residual, solution_normalized, basis_vec, &
+                                        h_basis_vec
+        logical :: accept_step, micro_converged, func_evaluated, &
+                   newton, bracketed
+        real(rp) :: aug_hess_min_eigval, residual_norm, red_factor, &
+                    initial_residual_norm, new_func, ratio, minres_tol
+        real(rp), external :: dnrm2, ddot
+
+        ! generate trial vectors
+        red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
+                                                 error)
+        if (error) return
+
+        ! number of trial vectors
+        ntrial = size(red_space_basis, 2)
+
+        ! increment number of Hessian linear transformations
+        tot_hess_x = tot_hess_x + ntrial
+
+        ! calculate linear transformations of basis vectors
+        allocate (h_basis(n_param, ntrial))
+        do i = 1, ntrial
+            h_basis(:, i) = hess_x_funptr(red_space_basis(:, i))
+        end do
+
+        ! construct augmented Hessian in reduced space
+        allocate (aug_hess(ntrial + 1, ntrial + 1))
+        aug_hess = 0.d0
+        call dgemm("T", "N", ntrial, ntrial, n_param, 1.d0, red_space_basis, &
+                   n_param, h_basis, n_param, 0.d0, aug_hess(2:, 2:), ntrial)
+
+        ! allocate space for reduced space solution
+        allocate (red_space_solution(size(red_space_basis, 2)))
+
+        ! decrease trust radius until micro iterations converge and step is accepted
+        last_solution_normalized = 0.d0
+        accept_step = .false.
+        do while (.not. accept_step)
+            micro_converged = .false.
+            func_evaluated = .false.
+
+            jacobi_davidson_started = .false.
+            do imicro = 1, settings%n_micro
+                ! do a Newton step if the model is positive definite and the step is 
+                ! within the trust region
+                newton = .false.
+                aug_hess_min_eigval = min_eigval(aug_hess(2:, 2:), settings, error)
+                if (error) return
+                if (aug_hess_min_eigval > -1.d-5) then
+                    call newton_step(aug_hess, grad_norm, red_space_basis, &
+                                     solution, red_space_solution, settings, error)
+                    if (error) return
+                    mu = 0.d0
+                    if (dnrm2(n_param, solution, 1) < trust_radius) newton = .true.
+                end if
+
+                ! otherwise perform bisection to find the level shift
+                if (.not. newton) then
+                    call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, &
+                                   solution, red_space_solution, mu, bracketed, &
+                                   settings, error)
+                    if (error) return
+                    if (.not. bracketed) exit
+                end if
+
+                ! calculate Hessian linear transformation of solution
+                call dgemv("N", n_param, size(h_basis, 2), 1.d0, h_basis, n_param, &
+                           red_space_solution, 1, 0.d0, h_solution, 1)
+
+                ! calculate residual
+                residual = grad + h_solution - mu*solution
+
+                ! calculate residual norm
+                residual_norm = dnrm2(n_param, residual, 1)
+
+                ! determine reduction factor depending on whether local region is
+                ! reached
+                if (abs(mu) < 1.d-12) then
+                    red_factor = settings%local_red_factor
+                else
+                    red_factor = settings%global_red_factor
+                end if
+
+                ! get normalized solution vector
+                solution_normalized = solution / dnrm2(n_param, solution, 1)
+
+                ! reset initial residual norm if solution changes
+                if (ddot(n_param, last_solution_normalized, 1, solution_normalized, &
+                         1)**2 < 0.5d0) then
+                    initial_imicro = imicro
+                    initial_residual_norm = residual_norm
+                end if
+
+                ! check if micro iterations have converged
+                if (residual_norm < max(red_factor*grad_norm, 1d-12)) then
+                    micro_converged = .true.
+                    exit
+                ! check residual has not decreased sufficiently or if maximum of 
+                ! Davidson iterations has been reached
+                else if (((imicro - initial_imicro >= 10 .and. &
+                           residual_norm > 0.8*initial_residual_norm) .or. &
+                           imicro > 30)) then
+                    ! check if Jacobi-Davidson has started, if yes just continue
+                    if (.not. jacobi_davidson_started) then
+                        ! evaluate function at approximate point
+                        new_func = obj_func(solution)
+
+                        ! calculate ratio of evaluated function and predicted function
+                        ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                                         grad + 0.5*h_solution, 1)
+
+                        ! switch to Jacobi-Davidson only if current solution would lead 
+                        ! to trust radius increase when the solution is already at the 
+                        ! trust region boundary
+                        if (settings%jacobi_davidson .and. &
+                            (settings%prefer_jacobi_davidson .or. &
+                             (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
+                              > 0.99d0 * trust_radius))) then
+                            jacobi_davidson_started = .true.
+                            imicro_jacobi_davidson = imicro
+                        ! decrease trust radius
+                        else
+                            func_evaluated = .true.
+                            exit
+                        end if
+                    end if
+                end if
+
+                ! save current solution
+                last_solution_normalized = solution_normalized
+
+                if (.not. jacobi_davidson_started) then
+                    ! precondition residual
+                    if (use_precond) then
+                        basis_vec = precond(residual, mu)
+                    else
+                        basis_vec = level_shifted_diag_precond(residual, mu, h_diag)
+                    end if
+
+                    ! orthonormalize to current orbital space to get new basis vector
+                    call gram_schmidt(basis_vec, red_space_basis, settings, error)
+                    if (error) return
+
+                    ! add linear transformation of new basis vector
+                    h_basis_vec = hess_x_funptr(basis_vec)
+
+                    ! increment Hessian linear transformations
+                    tot_hess_x = tot_hess_x + 1
+
+                else
+                    ! solve Jacobi-Davidson correction equations
+                    minres_tol = 3.d0 ** (-(imicro - imicro_jacobi_davidson))
+                    call minres(-residual, hess_x_funptr, solution_normalized, mu, &
+                                minres_tol, basis_vec, h_basis_vec, settings, error)
+                    if (error) return
+
+                    ! orthonormalize to current orbital space to get new basis vector
+                    call gram_schmidt(basis_vec, red_space_basis, settings, error, &
+                                      lin_trans_vector=h_basis_vec, &
+                                      lin_trans_space=h_basis)
+                    if (error) return
+
+                    ! check if resulting linear transformation still respects Hessian 
+                    ! symmetry which can happen due to numerical noise accumulation
+                    if (abs(ddot(n_param, &
+                                 red_space_basis(:, size(red_space_basis, 2)), 1, &
+                                 h_basis_vec, 1) - &
+                            ddot(n_param, basis_vec, 1, &
+                                 h_basis(:, size(red_space_basis, 2)), 1)) > 1d-12) then
+                        h_basis_vec = hess_x_funptr(basis_vec)
+                    end if
+
+                end if
+
+                ! add new trial vector to orbital space
+                call add_column(red_space_basis, basis_vec)
+
+                ! add linear transformation of new basis vector
+                call add_column(h_basis, h_basis_vec)
+
+                ! construct new augmented Hessian
+                allocate (red_hess_vec(size(red_space_basis, 2) + 1))
+                red_hess_vec(1) = 0.d0
+                call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, &
+                           red_space_basis, n_param, &
+                           h_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
+                           red_hess_vec(2:), 1)
+                call extend_symm_matrix(aug_hess, red_hess_vec)
+                deallocate (red_hess_vec)
+
+                ! reallocate reduced space solution
+                deallocate (red_space_solution)
+                allocate (red_space_solution(size(red_space_basis, 2)))
+            end do
+
+            if (.not. func_evaluated) then
+                ! evaluate function at predicted point
+                new_func = obj_func(solution)
+
+                ! calculate ratio of evaluated function and predicted function
+                ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                                 grad + 0.5d0*h_solution, 1)
+            end if
+
+            ! decide whether to accept step and modify trust radius
+            accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
+                                                   settings, trust_radius)
+
+            ! flush output
+            flush(stdout)
+            flush(stderr)
+        end do
+
+        ! deallocate quantities from microiterations
+        deallocate (red_space_solution)
+        deallocate (aug_hess)
+        deallocate (h_basis)
+        deallocate (red_space_basis)
+
+    end subroutine level_shifted_davidson
+
+    subroutine truncated_conjugate_gradient(func, grad, h_diag, n_param, obj_func, &
+                                            hess_x_funptr, use_precond, precond, &
+                                            settings, trust_radius, solution, mu, &
+                                            imicro)
+        !
+        ! this subroutine performs truncated conjugate gradient to solve the trust 
+        ! region subproblem
+        !
+        real(rp), intent(in) :: func, grad(:), h_diag(:)
+        integer(ip), intent(in) :: n_param
+        procedure(obj_func_type), pointer, intent(in) :: obj_func
+        procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
+        class(solver_settings_type), intent(in) :: settings
+        logical, intent(in) :: use_precond
+        procedure(precond_type), intent(in), pointer, optional :: precond
+        real(rp), intent(inout) :: trust_radius
+        real(rp), intent(out) :: solution(:), mu
+        integer(ip), intent(out) :: imicro
+
+        logical :: accept_step, micro_converged
+        real(rp) :: model_func, initial_residual_norm, curvature, step_size, &
+                    solution_dot, solution_direction_dot, direction_dot, step_length, &
+                    model_func_new, new_func, ratio
+        real(rp), allocatable :: h_solution(:), residual(:), precond_residual(:), &
+                                 direction(:), hess_direction(:), precond_solution(:), &
+                                 precond_direction(:), solution_new(:), &
+                                 h_solution_new(:), residual_new(:), &
+                                 precond_residual_new(:)
+        real(rp), external :: ddot
+
+        ! allocate arrays
+        allocate (h_solution(n_param))
+
+        accept_step = .false.
+        do while (.not. accept_step)
+            micro_converged = .false.
+
+            ! initialize solution
+            solution = 0.d0
+            h_solution = 0.d0
+            model_func = 0.d0
+            
+            ! initialize residual, preconditioned residual and direction, residual 
+            ! should include h_solution if not starting at zero
+            residual = grad
+            initial_residual_norm = norm2(residual)
+            if (use_precond) then
+                precond_residual = precond(residual, 0.d0)
+            else
+                precond_residual = abs_diag_precond(residual, h_diag)
+            end if
+            direction = -precond_residual
+
+            ! start microiteration loop
+            do imicro = 1, settings%n_micro
+                ! get Hessian linear transformation of direction
+                hess_direction = hess_x_funptr(direction)
+
+                ! increment Hessian linear transformations
+                tot_hess_x = tot_hess_x + 1
+
+                ! calculate curvature
+                curvature = ddot(n_param, direction, 1, hess_direction, 1)
+
+                ! get step size along new direction
+                step_size = ddot(n_param, residual, 1, precond_residual, 1) / curvature
+
+                ! precondition current solution and direction
+                if (use_precond) then
+                    precond_solution = precond(solution, 0.d0)
+                    precond_direction = precond(direction, 0.d0)
+                else
+                    precond_solution = abs_diag_precond(solution, h_diag)
+                    precond_direction = abs_diag_precond(direction, h_diag)
+                end if
+
+                ! calculate dot products
+                solution_dot = ddot(n_param, solution, 1, precond_solution, 1)
+                solution_direction_dot = ddot(n_param, solution, 1, precond_direction, &
+                                              1)
+                direction_dot = ddot(n_param, direction, 1, precond_direction, 1)
+
+                ! calculate total step length
+                step_length = solution_dot + 2 * step_size * solution_direction_dot + &
+                              step_size ** 2 * direction_dot
+
+                if (curvature < 0.d0 .or. step_length >= trust_radius ** 2) then
+                    ! solve quadratic equation
+                    step_size = (-solution_direction_dot + &
+                                 sqrt(solution_direction_dot ** 2 + direction_dot * &
+                                      (trust_radius ** 2 - solution_dot))) / &
+                                direction_dot
+
+                    ! get step to boundary and exit
+                    solution = solution + step_size * direction
+                    h_solution = h_solution + step_size * hess_direction
+                    micro_converged = .true.
+                    exit
+                end if
+
+                ! get new step
+                solution_new = solution + step_size * direction
+                h_solution_new = h_solution + step_size * hess_direction
+
+                ! get new model function value
+                model_func_new = ddot(size(solution_new), solution_new, 1, &
+                                      grad + 0.5d0 * h_solution_new, 1)
+
+                ! check if model was improved
+                if (model_func_new >= model_func) then
+                    micro_converged = .true.
+                    exit
+                end if
+
+                ! accept step
+                solution = solution_new
+                h_solution = h_solution_new
+                
+                ! get residual for model
+                residual_new = residual + step_size * hess_direction
+                if (use_precond) then
+                    precond_residual_new = precond(residual_new, 0.d0)
+                else
+                    precond_residual_new = abs_diag_precond(residual_new, h_diag)
+                end if
+
+                ! check for linear or superlinear (in this case quadratic) convergence
+                if (norm2(residual_new) <= initial_residual_norm * &
+                    min(1.d-3, initial_residual_norm)) then
+                    micro_converged = .true.
+                    exit
+                end if
+
+                ! get new search direction
+                direction = -precond_residual_new + &
+                            ddot(size(residual_new), residual_new, 1, &
+                                 precond_residual_new, 1) / &
+                            ddot(size(residual), residual, 1, precond_residual, 1) * &
+                            direction
+                
+                ! save new model
+                model_func = model_func_new
+                residual = residual_new
+                precond_residual = precond_residual_new
+            end do
+
+            ! evaluate function at predicted point
+            new_func = obj_func(solution)
+
+            ! calculate ratio of evaluated function and predicted function
+            ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                             grad + 0.5d0*h_solution, 1)
+
+            ! decide whether to accept step and modify trust radius
+            accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
+                                                   settings, trust_radius)
+
+            ! flush output
+            flush(stdout)
+            flush(stderr)
+
+        end do
+
+        ! no level shift is used
+        mu = 0.d0
+
+        ! deallocate arrays
+        deallocate (h_solution)
+
+    end subroutine truncated_conjugate_gradient
+
+    logical function accept_trust_region_step(solution, ratio, micro_converged, &
+                                              settings, trust_radius)
+        !
+        ! this function checks whether the trust region step is accepted and modified 
+        ! the trust region accordingly
+        !
+        real(rp), intent(in) :: solution(:), ratio
+        logical, intent(in) :: micro_converged
+        class(solver_settings_type), intent(in) :: settings
+        real(rp), intent(inout) :: trust_radius
+
+        ! decrease trust radius if micro iterations are unable to converge, if function 
+        ! value has not decreased or if individual orbitals change too much
+        if (.not. micro_converged .or. ratio < 0.d0 .or. &
+            any(abs(solution) > pi/4)) then
+            trust_radius = 0.7d0*trust_radius
+            accept_trust_region_step = .false.
+            if (trust_radius < 1.d-14) then
+                call settings%log("Trust radius too small. Convergence criterion "// &
+                                  "is not fulfilled but calculation should be "// &
+                                  "converged up to floating point precision.", 1, &
+                                  .true.)
+                return
+            end if
+        ! check if step is too long
+        else if (ratio < 0.25d0) then
+            trust_radius = 0.7d0*trust_radius
+            accept_trust_region_step = .true.
+        ! check if quadratic approximation is valid
+        else if (ratio < 0.75d0) then
+            accept_trust_region_step = .true.
+        ! check if step is potentially too short
+        else
+            trust_radius = 1.2d0*trust_radius
+            accept_trust_region_step = .true.
+        end if
+
+    end function accept_trust_region_step
 
 end module opentrustregion

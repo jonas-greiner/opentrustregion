@@ -56,6 +56,7 @@ def solver_py_interface(
     conv_check: Optional[Callable[[None], bool]] = None,
     stability: Optional[bool] = None,
     line_search: Optional[bool] = None,
+    davidson: Optional[bool] = None,
     jacobi_davidson: Optional[bool] = None,
     prefer_jacobi_davidson: Optional[bool] = None,
     conv_tol: Optional[float] = None,
@@ -189,6 +190,7 @@ def solver_py_interface(
         POINTER(c_bool),
         POINTER(c_bool),
         POINTER(c_bool),
+        POINTER(c_bool),
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_double),
@@ -214,6 +216,7 @@ def solver_py_interface(
         None if conv_check is None else conv_check_interface,
         None if stability is None else byref(c_bool(stability)),
         None if line_search is None else byref(c_bool(line_search)),
+        None if davidson is None else byref(c_bool(davidson)),
         None if jacobi_davidson is None else byref(c_bool(jacobi_davidson)),
         (
             None

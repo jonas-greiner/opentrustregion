@@ -1043,6 +1043,7 @@ contains
         use opentrustregion, only: logger_type, solver_settings_type, &
                                    init_solver_settings, solver_stability_default, &
                                    solver_line_search_default, &
+                                   solver_davidson_default, &
                                    solver_jacobi_davidson_default, &
                                    solver_prefer_jacobi_davidson_default, &
                                    solver_conv_tol_default, &
@@ -1063,11 +1064,12 @@ contains
         call init_solver_settings(settings)
 
         ! check if default values are correctly set
-        if (settings%stability .neqv. solver_stability_default .or. &
-            settings%line_search .neqv. solver_line_search_default .or. &
-            settings%jacobi_davidson .neqv. solver_jacobi_davidson_default .or. &
-            settings%prefer_jacobi_davidson .neqv. &
-            solver_prefer_jacobi_davidson_default .or. &
+        if ((settings%stability .neqv. solver_stability_default) .or. &
+            (settings%line_search .neqv. solver_line_search_default) .or. &
+            (settings%davidson .neqv. solver_davidson_default) .or. &
+            (settings%jacobi_davidson .neqv. solver_jacobi_davidson_default) .or. &
+            (settings%prefer_jacobi_davidson .neqv. &
+             solver_prefer_jacobi_davidson_default) .or. &
             abs(settings%conv_tol - solver_conv_tol_default) > tol .or. &
             settings%n_random_trial_vectors /= solver_n_random_trial_vectors_default &
             .or. abs(settings%start_trust_radius - solver_start_trust_radius_default) &
@@ -1088,7 +1090,7 @@ contains
 
         ! call routine with optional arguments
         call init_solver_settings(settings, stability=.false., line_search=.true., &
-                                  jacobi_davidson=.false., &
+                                  davidson=.false., jacobi_davidson=.false., &
                                   prefer_jacobi_davidson=.true., conv_tol=1.d-3, &
                                   n_random_trial_vectors=5, start_trust_radius=0.2d0, &
                                   n_macro=300, n_micro=200, global_red_factor=1.d-2, &
@@ -1096,9 +1098,11 @@ contains
                                   logger=logger_funptr)
 
         ! check if optional values are correctly set
-        if (settings%stability .neqv. .false. .or. settings%line_search .neqv. .true. &
-            .or. settings%jacobi_davidson .neqv. .false. .or. &
-            settings%prefer_jacobi_davidson .neqv. .true. .or. &
+        if ((settings%stability .neqv. .false.) .or. &
+            (settings%line_search .neqv. .true.) .or. &
+            (settings%davidson .neqv. .false.) .or. &
+            (settings%jacobi_davidson .neqv. .false.) .or. &
+            (settings%prefer_jacobi_davidson .neqv. .true.) .or. &
             abs(settings%conv_tol - 1.d-3) > tol .or. &
             settings%n_random_trial_vectors /= 5 .or. &
             abs(settings%start_trust_radius - 0.2d0) > tol .or. settings%n_macro &
@@ -1142,12 +1146,12 @@ contains
         call init_stability_settings(settings)
 
         ! check if default values are correctly set
-        if (settings%jacobi_davidson .neqv. stability_jacobi_davidson_default .or. &
+        if ((settings%jacobi_davidson .neqv. stability_jacobi_davidson_default) .or. &
             abs(settings%conv_tol - stability_conv_tol_default) > tol .or. &
             settings%n_random_trial_vectors /= &
             stability_n_random_trial_vectors_default .or. settings%n_iter /= &
             stability_n_iter_default .or. settings%verbose /= &
-            stability_verbose_default .or. .not. associated(settings%logger)) then
+            stability_verbose_default .or. associated(settings%logger)) then
             write (stderr, *) "test_init_stability_settings failed: Default "// &
                 "arguments not set correctly."
             test_init_stability_settings = .false.
@@ -1162,7 +1166,7 @@ contains
                                      n_iter=50, verbose=3, logger=logger_funptr)
 
         ! check if optional values are correctly set
-        if (settings%jacobi_davidson .neqv. .false. .or. &
+        if ((settings%jacobi_davidson .neqv. .false.) .or. &
             abs(settings%conv_tol - 1.d-3) > tol .or. settings%n_random_trial_vectors &
             /= 3 .or. settings%n_iter /= 50 .or. settings%verbose /= 3 .or. &
             .not. associated(settings%logger)) then
@@ -1232,31 +1236,31 @@ contains
 
     end function test_set_default
 
-    logical(c_bool) function test_diag_precond() bind(C)
+    logical(c_bool) function test_level_shifted_diag_precond() bind(C)
         !
         ! this function tests the subroutine that constructs the default diagonal 
         ! preconditioner
         !
-        use opentrustregion, only: diag_precond
+        use opentrustregion, only: level_shifted_diag_precond
 
         real(rp) :: residual(3), h_diag(3)
 
         ! assume tests pass
-        test_diag_precond = .true.
+        test_level_shifted_diag_precond = .true.
 
         ! initialize quantities
         residual = [1.d0, 1.d0, 1.d0]
         h_diag = [-1.d0, 1.d0, 2.d0]
 
         ! call function and check if results match
-        if (any(abs(diag_precond(residual, -2.d0, h_diag) - [1.d0, 1.d0 / 3, 0.25d0]) &
-                > tol)) then
-            write (stderr, *) "test_diag_precond failed: Returned preconditioned "// &
-                "residual not correct."
-            test_diag_precond = .false.
+        if (any(abs(level_shifted_diag_precond(residual, -2.d0, h_diag) - &
+                    [1.d0, 1.d0 / 3, 0.25d0]) > tol)) then
+            write (stderr, *) "test_level_shifted_diag_precond failed: Returned "// &
+                "preconditioned residual not correct."
+            test_level_shifted_diag_precond = .false.
         end if
 
-    end function test_diag_precond
+    end function test_level_shifted_diag_precond
 
     logical(c_bool) function test_orthogonal_projection() bind(C)
         !
