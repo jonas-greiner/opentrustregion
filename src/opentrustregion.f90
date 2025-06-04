@@ -155,8 +155,8 @@ contains
         real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, new_func, n_kappa, &
                     kappa_norm
         real(rp), dimension(n_param) :: kappa, grad, h_diag, solution
-        logical :: macro_converged, stable, jacobi_davidson_started, use_precond, &
-                   conv_check_passed
+        logical :: max_precision_reached, macro_converged, stable, &
+                   jacobi_davidson_started, use_precond, conv_check_passed
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson, i
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
@@ -165,6 +165,9 @@ contains
 
         ! initialize error flag
         error = .false.
+
+        ! initialize maximum precision convergence
+        max_precision_reached = .false.
 
         ! initialize macroiteration convergence
         macro_converged = .false.
@@ -275,7 +278,8 @@ contains
             else
                 conv_check_passed = .false.
             end if
-            if (grad_rms < settings%conv_tol .or. conv_check_passed) then
+            if (grad_rms < settings%conv_tol .or. max_precision_reached .or. &
+                conv_check_passed) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
                     call stability_check(h_diag, hess_x_funptr, stable, kappa, error, &
@@ -332,7 +336,9 @@ contains
                                             use_precond, precond, trust_radius, &
                                             solution, mu, imicro, &
                                             imicro_jacobi_davidson, &
-                                            jacobi_davidson_started, error)
+                                            jacobi_davidson_started, &
+                                            max_precision_reached, &
+                                            error)
                 if (error) return
             else
                 ! solve trust region subproblem with truncated conjugate gradient
@@ -340,7 +346,8 @@ contains
                                                   obj_func, hess_x_funptr, &
                                                   use_precond, precond, settings, &
                                                   trust_radius, solution, mu, imicro, &
-                                                  jacobi_davidson_started)
+                                                  jacobi_davidson_started, &
+                                                  max_precision_reached)
             end if
 
             ! perform line search
@@ -1748,7 +1755,7 @@ contains
                                       obj_func, hess_x_funptr, settings, use_precond, &
                                       precond, trust_radius, solution, mu, imicro, &
                                       imicro_jacobi_davidson, jacobi_davidson_started, &
-                                      error)
+                                      max_precision_reached, error)
         !
         ! this subroutine performs level-shifted (Jacobi-)Davidson to solve the trust 
         ! region subproblem
@@ -1763,7 +1770,7 @@ contains
         real(rp), intent(inout) :: trust_radius
         real(rp), intent(out) :: solution(:), mu
         integer(ip), intent(out) :: imicro, imicro_jacobi_davidson
-        logical, intent(out) :: jacobi_davidson_started, error
+        logical, intent(out) :: jacobi_davidson_started, max_precision_reached, error
 
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
                                  red_space_solution(:), red_hess_vec(:)
@@ -1975,7 +1982,9 @@ contains
 
             ! decide whether to accept step and modify trust radius
             accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
-                                                   settings, trust_radius)
+                                                   settings, trust_radius, &
+                                                   max_precision_reached)
+            if (max_precision_reached) exit
 
             ! flush output
             flush(stdout)
@@ -1993,7 +2002,8 @@ contains
     subroutine truncated_conjugate_gradient(func, grad, h_diag, n_param, obj_func, &
                                             hess_x_funptr, use_precond, precond, &
                                             settings, trust_radius, solution, mu, &
-                                            imicro, jacobi_davidson_started)
+                                            imicro, jacobi_davidson_started, &
+                                            max_precision_reached)
         !
         ! this subroutine performs truncated conjugate gradient to solve the trust 
         ! region subproblem
@@ -2008,7 +2018,7 @@ contains
         real(rp), intent(inout) :: trust_radius
         real(rp), intent(out) :: solution(:), mu
         integer(ip), intent(out) :: imicro
-        logical, intent(out) :: jacobi_davidson_started
+        logical, intent(out) :: jacobi_davidson_started, max_precision_reached
 
         logical :: accept_step, micro_converged
         real(rp) :: model_func, initial_residual_norm, curvature, step_size, &
@@ -2146,7 +2156,9 @@ contains
 
             ! decide whether to accept step and modify trust radius
             accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
-                                                   settings, trust_radius)
+                                                   settings, trust_radius, &
+                                                   max_precision_reached)
+            if (max_precision_reached) exit
 
             ! flush output
             flush(stdout)
@@ -2166,7 +2178,8 @@ contains
     end subroutine truncated_conjugate_gradient
 
     logical function accept_trust_region_step(solution, ratio, micro_converged, &
-                                              settings, trust_radius)
+                                              settings, trust_radius, &
+                                              max_precision_reached)
         !
         ! this function checks whether the trust region step is accepted and modified 
         ! the trust region accordingly
@@ -2175,6 +2188,7 @@ contains
         logical, intent(in) :: micro_converged
         class(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: trust_radius
+        logical, intent(out) :: max_precision_reached
 
         ! decrease trust radius if micro iterations are unable to converge, if function 
         ! value has not decreased or if individual orbitals change too much
@@ -2187,6 +2201,7 @@ contains
                                   "is not fulfilled but calculation should be "// &
                                   "converged up to floating point precision.", 1, &
                                   .true.)
+                max_precision_reached = .true.
                 return
             end if
         ! check if step is too long
