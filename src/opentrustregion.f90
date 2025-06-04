@@ -577,7 +577,7 @@ contains
             kappa = 0.d0
         else
             kappa = solution
-            write (msg, '(A, F0.2)') "Solution not stable. Lowest eigenvalue: ", eigval
+            write (msg, '(A, F0.4)') "Solution not stable. Lowest eigenvalue: ", eigval
             call settings%log(msg, 1, .true.)
         end if
 
