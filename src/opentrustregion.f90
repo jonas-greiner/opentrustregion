@@ -361,6 +361,10 @@ contains
             ! set orbital rotation
             kappa = n_kappa*solution
 
+            ! flush output
+            flush(stdout)
+            flush(stderr)
+
         end do
 
         ! increment total number of orbital updates
@@ -1985,10 +1989,6 @@ contains
                                                    settings, trust_radius, &
                                                    max_precision_reached)
             if (max_precision_reached) exit
-
-            ! flush output
-            flush(stdout)
-            flush(stderr)
         end do
 
         ! deallocate quantities from microiterations
@@ -2028,143 +2028,223 @@ contains
                                  direction(:), hess_direction(:), precond_solution(:), &
                                  precond_direction(:), solution_new(:), &
                                  h_solution_new(:), residual_new(:), &
-                                 precond_residual_new(:)
-        real(rp), external :: ddot
+                                 precond_residual_new(:), random_vector(:), &
+                                 solutions(:, :), h_solutions(:, :)
+        integer(ip) :: i
+        real(rp), external :: ddot, dnrm2
 
         ! allocate arrays
         allocate (h_solution(n_param))
+        allocate (random_vector(n_param))
+        allocate (solutions(n_param, 1))
+        allocate (h_solutions(n_param, 1))
 
-        accept_step = .false.
-        do while (.not. accept_step)
-            micro_converged = .false.
-
-            ! initialize solution
-            solution = 0.d0
-            h_solution = 0.d0
-            model_func = 0.d0
-            
-            ! initialize residual, preconditioned residual and direction, residual 
-            ! should include h_solution if not starting at zero
-            residual = grad
-            initial_residual_norm = norm2(residual)
-            if (use_precond) then
-                precond_residual = precond(residual, 0.d0)
-            else
-                precond_residual = abs_diag_precond(residual, h_diag)
-            end if
-            direction = -precond_residual
-
-            ! start microiteration loop
-            do imicro = 1, settings%n_micro
-                ! get Hessian linear transformation of direction
-                hess_direction = hess_x_funptr(direction)
-
-                ! increment Hessian linear transformations
-                tot_hess_x = tot_hess_x + 1
-
-                ! calculate curvature
-                curvature = ddot(n_param, direction, 1, hess_direction, 1)
-
-                ! get step size along new direction
-                step_size = ddot(n_param, residual, 1, precond_residual, 1) / curvature
-
-                ! precondition current solution and direction
-                if (use_precond) then
-                    precond_solution = precond(solution, 0.d0)
-                    precond_direction = precond(direction, 0.d0)
-                else
-                    precond_solution = abs_diag_precond(solution, h_diag)
-                    precond_direction = abs_diag_precond(direction, h_diag)
-                end if
-
-                ! calculate dot products
-                solution_dot = ddot(n_param, solution, 1, precond_solution, 1)
-                solution_direction_dot = ddot(n_param, solution, 1, precond_direction, &
-                                              1)
-                direction_dot = ddot(n_param, direction, 1, precond_direction, 1)
-
-                ! calculate total step length
-                step_length = solution_dot + 2 * step_size * solution_direction_dot + &
-                              step_size ** 2 * direction_dot
-
-                if (curvature < 0.d0 .or. step_length >= trust_radius ** 2) then
-                    ! solve quadratic equation
-                    step_size = (-solution_direction_dot + &
-                                 sqrt(solution_direction_dot ** 2 + direction_dot * &
-                                      (trust_radius ** 2 - solution_dot))) / &
-                                direction_dot
-
-                    ! get step to boundary and exit
-                    solution = solution + step_size * direction
-                    h_solution = h_solution + step_size * hess_direction
-                    micro_converged = .true.
-                    exit
-                end if
-
-                ! get new step
-                solution_new = solution + step_size * direction
-                h_solution_new = h_solution + step_size * hess_direction
-
-                ! get new model function value
-                model_func_new = ddot(size(solution_new), solution_new, 1, &
-                                      grad + 0.5d0 * h_solution_new, 1)
-
-                ! check if model was improved
-                if (model_func_new >= model_func) then
-                    micro_converged = .true.
-                    exit
-                end if
-
-                ! accept step
-                solution = solution_new
-                h_solution = h_solution_new
-                
-                ! get residual for model
-                residual_new = residual + step_size * hess_direction
-                if (use_precond) then
-                    precond_residual_new = precond(residual_new, 0.d0)
-                else
-                    precond_residual_new = abs_diag_precond(residual_new, h_diag)
-                end if
-
-                ! check for linear or superlinear (in this case quadratic) convergence
-                if (norm2(residual_new) <= initial_residual_norm * &
-                    min(1.d-3, initial_residual_norm)) then
-                    micro_converged = .true.
-                    exit
-                end if
-
-                ! get new search direction
-                direction = -precond_residual_new + &
-                            ddot(size(residual_new), residual_new, 1, &
-                                 precond_residual_new, 1) / &
-                            ddot(size(residual), residual, 1, precond_residual, 1) * &
-                            direction
-                
-                ! save new model
-                model_func = model_func_new
-                residual = residual_new
-                precond_residual = precond_residual_new
-            end do
-
-            ! evaluate function at predicted point
-            new_func = obj_func(solution)
-
-            ! calculate ratio of evaluated function and predicted function
-            ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                             grad + 0.5d0*h_solution, 1)
-
-            ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
-                                                   settings, trust_radius, &
-                                                   max_precision_reached)
-            if (max_precision_reached) exit
-
-            ! flush output
-            flush(stdout)
-            flush(stderr)
-
+        ! initialize solution
+        solution = 0.d0
+        h_solution = 0.d0
+        solutions(:, 1) = solution
+        h_solutions(:, 1) = h_solution
+        model_func = 0.d0
+        
+        ! initialize residual and add random noise, residual should include h_solution 
+        ! if not starting at zero
+        residual = grad
+        random_vector = 0.d0
+        do while (dnrm2(size(random_vector), random_vector, 1) == 0.d0)
+            call random_number(random_vector)
+            random_vector = 2 * random_vector - 1
         end do
+        residual = residual + 1.d-4 * norm2(residual) * random_vector / &
+                   norm2(random_vector)
+        initial_residual_norm = norm2(residual)
+
+        ! initialize preconditioned residual and direction,
+        if (use_precond) then
+            precond_residual = precond(residual, 0.d0)
+        else
+            precond_residual = abs_diag_precond(residual, h_diag)
+        end if
+        direction = -precond_residual
+
+        ! start microiteration loop
+        micro_converged = .false.
+        do imicro = 1, settings%n_micro - 1
+            ! get Hessian linear transformation of direction
+            hess_direction = hess_x_funptr(direction)
+
+            ! increment Hessian linear transformations
+            tot_hess_x = tot_hess_x + 1
+
+            ! calculate curvature
+            curvature = ddot(n_param, direction, 1, hess_direction, 1)
+
+            ! get step size along new direction
+            step_size = ddot(n_param, residual, 1, precond_residual, 1) / curvature
+
+            ! precondition current solution and direction
+            if (use_precond) then
+                precond_solution = precond(solution, 0.d0)
+                precond_direction = precond(direction, 0.d0)
+            else
+                precond_solution = abs_diag_precond(solution, h_diag)
+                precond_direction = abs_diag_precond(direction, h_diag)
+            end if
+
+            ! calculate dot products
+            solution_dot = ddot(n_param, solution, 1, precond_solution, 1)
+            solution_direction_dot = ddot(n_param, solution, 1, precond_direction, 1)
+            direction_dot = ddot(n_param, direction, 1, precond_direction, 1)
+
+            ! calculate total step length
+            step_length = solution_dot + 2 * step_size * solution_direction_dot + &
+                          step_size ** 2 * direction_dot
+
+            if (curvature < 0.d0 .or. step_length >= trust_radius ** 2) then
+                ! solve quadratic equation
+                step_size = (-solution_direction_dot + &
+                                sqrt(solution_direction_dot ** 2 + direction_dot * &
+                                    (trust_radius ** 2 - solution_dot))) / &
+                            direction_dot
+
+                ! get step to boundary and exit
+                solution = solution + step_size * direction
+                h_solution = h_solution + step_size * hess_direction
+                call add_column(solutions, solution)
+                call add_column(h_solutions, h_solution)
+                micro_converged = .true.
+                exit
+            end if
+
+            ! get new step
+            solution_new = solution + step_size * direction
+            h_solution_new = h_solution + step_size * hess_direction
+
+            ! get new model function value
+            model_func_new = ddot(size(solution_new), solution_new, 1, &
+                                  grad + 0.5d0 * h_solution_new, 1)
+
+            ! check if model was improved
+            if (model_func_new >= model_func) then
+                micro_converged = .true.
+                exit
+            end if
+
+            ! accept step
+            solution = solution_new
+            h_solution = h_solution_new
+            call add_column(solutions, solution)
+            call add_column(h_solutions, h_solution)
+            
+            ! get residual for model
+            residual_new = residual + step_size * hess_direction
+            if (use_precond) then
+                precond_residual_new = precond(residual_new, 0.d0)
+            else
+                precond_residual_new = abs_diag_precond(residual_new, h_diag)
+            end if
+
+            ! check for linear or superlinear (in this case quadratic) convergence
+            if (norm2(residual_new) <= initial_residual_norm * &
+                min(1.d-3, initial_residual_norm)) then
+                micro_converged = .true.
+                exit
+            end if
+
+            ! get new search direction
+            direction = -precond_residual_new + &
+                        ddot(size(residual_new), residual_new, 1, &
+                                precond_residual_new, 1) / &
+                        ddot(size(residual), residual, 1, precond_residual, 1) * &
+                        direction
+            
+            ! save new model
+            model_func = model_func_new
+            residual = residual_new
+            precond_residual = precond_residual_new
+        end do
+
+        ! evaluate function at predicted point
+        new_func = obj_func(solution)
+
+        ! calculate ratio of evaluated function and predicted function
+        ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                         grad + 0.5d0*h_solution, 1)
+
+        if (abs(new_func - func) / max(abs(new_func), abs(func)) > 1.d-14) then
+            ! reduce trust region until step is accepted
+            do while (.true.)
+                ! decide whether to accept step and modify trust radius
+                accept_step = accept_trust_region_step(solution, ratio, &
+                                                       micro_converged, settings, &
+                                                       trust_radius, &
+                                                       max_precision_reached)
+                if (accept_step .or. max_precision_reached) exit
+
+                ! check if step exceeds new trust region boundary
+                if (dot_product(solution, abs_diag_precond(solution, h_diag)) > &
+                    trust_radius ** 2) then
+                    ! find step that exceeds trust region boundary
+                    do i = 1, size(solutions, 2)
+                        if (dot_product(solutions(:, i), &
+                            abs_diag_precond(solutions(:, i), h_diag)) > &
+                            trust_radius ** 2) then
+                            ! get previous step
+                            solution = solutions(:, i - 1)
+                            h_solution = h_solutions(:, i - 1)
+
+                            ! get direction
+                            direction = solutions(:, i) - solutions(:, i - 1)
+                            hess_direction = h_solutions(:, i) - h_solutions(:, i - 1)
+
+                            ! precondition current solution and direction
+                            if (use_precond) then
+                                precond_solution = precond(solution, 0.d0)
+                                precond_direction = precond(direction, 0.d0)
+                            else
+                                precond_solution = abs_diag_precond(solution, h_diag)
+                                precond_direction = abs_diag_precond(direction, h_diag)
+                            end if
+
+                            ! calculate dot products
+                            solution_dot = ddot(n_param, solution, 1, &
+                                                precond_solution, 1)
+                            solution_direction_dot = ddot(n_param, solution, 1, &
+                                                          precond_direction, 1)
+                            direction_dot = ddot(n_param, direction, 1, &
+                                                 precond_direction, 1)
+
+                            ! solve quadratic equation
+                            step_size = (-solution_direction_dot + &
+                                         sqrt(solution_direction_dot ** 2 + &
+                                              direction_dot * &
+                                              (trust_radius ** 2 - solution_dot))) / &
+                                        direction_dot
+
+                            ! get step to boundary
+                            solution = solution + step_size * direction
+                            h_solution = h_solution + step_size * hess_direction
+
+                            ! evaluate function at predicted point
+                            new_func = obj_func(solution)
+
+                            ! calculate ratio of evaluated function and predicted 
+                            ! function
+                            ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                                             grad + 0.5d0*h_solution, 1)
+
+                            ! exit to retry whether step is accepted
+                            micro_converged = .true.
+                            exit
+                        end if
+                    end do
+                end if
+            end do
+        else
+            call settings%log("Function value barely changed. Convergence "// &
+                              "criterion is not fulfilled but calculation should "// &
+                              "be converged up to floating point precision.", 1, .true.)
+            max_precision_reached = .true.
+        end if
 
         ! no level shift is used
         mu = 0.d0
@@ -2174,6 +2254,9 @@ contains
 
         ! deallocate arrays
         deallocate (h_solution)
+        deallocate (random_vector)
+        deallocate (solutions)
+        deallocate (h_solutions)
 
     end subroutine truncated_conjugate_gradient
 
