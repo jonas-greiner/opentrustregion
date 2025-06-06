@@ -351,7 +351,7 @@ contains
             end if
 
             ! perform line search
-            if (settings%line_search) then
+            if (settings%line_search .and. .not. max_precision_reached) then
                 n_kappa = bracket(obj_func, solution, 0.d0, 1.d0, settings, error)
                 if (error) return
             else
@@ -1677,15 +1677,15 @@ contains
         integer(ip), intent(in) :: level
         logical, intent(in), optional :: error
 
-        integer(ip), parameter :: max_length = 110
+        integer(ip), parameter :: max_length = 109
         integer(ip) :: i, out_unit
         character(:), dimension(:), allocatable :: substrings
 
         if (self%verbose >= level) then
-            call split_string_by_space(" " // message, max_length, substrings)
+            call split_string_by_space(message, max_length, substrings)
             if (associated(self%logger)) then
                 do i = 1, size(substrings)
-                    call self%logger(substrings(i))
+                    call self%logger(" " // substrings(i))
                 end do
             else
                 if (.not. present(error)) then
@@ -1696,7 +1696,7 @@ contains
                     out_unit = stderr
                 end if
                 do i = 1, size(substrings)
-                    write(out_unit, '(A)') substrings(i)
+                    write(out_unit, '(A)') " " // substrings(i)
                 end do
             end if
         end if
