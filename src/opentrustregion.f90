@@ -217,54 +217,56 @@ contains
         call settings%log(repeat("-", 109), 3)
 
         do imacro = 1, settings%n_macro
-            ! calculate cost function, gradient and Hessian diagonal
-            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
+            if (.not. max_precision_reached) then
+                ! calculate cost function, gradient and Hessian diagonal
+                call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
 
-            ! sanity check for array size
-            if (imacro == 1 .and. size(grad) /= n_param) then
-                call settings%log("Size of gradient array returned by subroutine "// &
-                                  "update_orbs does not equal number of parameters", &
-                                  1, .true.)
-                error = .true.
-                return
-            end if
-
-            ! calculate gradient norm
-            grad_norm = dnrm2(n_param, grad, 1)
-
-            ! calculate RMS gradient
-            grad_rms = grad_norm / sqrt(real(n_param, kind=rp))
-
-            ! log results
-            if (imacro == 1) then
-                call settings%print_results(imacro - 1, func, grad_rms)
-            else
-                if (settings%davidson) then
-                    kappa_norm = dnrm2(n_param, kappa, 1)
-                else
-                    if (use_precond) then
-                        kappa_norm = sqrt(dot_product(kappa, precond(kappa, 0.d0)))
-                    else
-                        kappa_norm = sqrt(dot_product(kappa, abs_diag_precond(kappa, &
-                                                                              h_diag)))
-                    end if
+                ! sanity check for array size
+                if (imacro == 1 .and. size(grad) /= n_param) then
+                    call settings%log("Size of gradient array returned by "// &
+                                      "subroutine update_orbs does not equal "// &
+                                      "number of parameters", 1, .true.)
+                    error = .true.
+                    return
                 end if
-                if (.not. stable) then
-                    call settings%print_results(imacro - 1, func, grad_rms, &
-                                                kappa_norm=kappa_norm)
-                    stable = .true.
-                else if (jacobi_davidson_started) then
-                    call settings%print_results(imacro - 1, func, grad_rms, &
-                                                level_shift=-mu, n_micro = imicro, &
-                                                imicro_jacobi_davidson=&
-                                                imicro_jacobi_davidson, &
-                                                trust_radius=trust_radius, &
-                                                kappa_norm=kappa_norm)
+
+                ! calculate gradient norm
+                grad_norm = dnrm2(n_param, grad, 1)
+
+                ! calculate RMS gradient
+                grad_rms = grad_norm / sqrt(real(n_param, kind=rp))
+
+                ! log results
+                if (imacro == 1) then
+                    call settings%print_results(imacro - 1, func, grad_rms)
                 else
-                    call settings%print_results(imacro - 1, func, grad_rms, &
-                                                level_shift=-mu, n_micro=imicro, &
-                                                trust_radius=trust_radius, &
-                                                kappa_norm=kappa_norm)
+                    if (settings%davidson) then
+                        kappa_norm = dnrm2(n_param, kappa, 1)
+                    else
+                        if (use_precond) then
+                            kappa_norm = sqrt(dot_product(kappa, precond(kappa, 0.d0)))
+                        else
+                            kappa_norm = sqrt( &
+                                dot_product(kappa, abs_diag_precond(kappa, h_diag)))
+                        end if
+                    end if
+                    if (.not. stable) then
+                        call settings%print_results(imacro - 1, func, grad_rms, &
+                                                    kappa_norm=kappa_norm)
+                        stable = .true.
+                    else if (jacobi_davidson_started) then
+                        call settings%print_results(imacro - 1, func, grad_rms, &
+                                                    level_shift=-mu, n_micro=imicro, &
+                                                    imicro_jacobi_davidson=&
+                                                    imicro_jacobi_davidson, &
+                                                    trust_radius=trust_radius, &
+                                                    kappa_norm=kappa_norm)
+                    else
+                        call settings%print_results(imacro - 1, func, grad_rms, &
+                                                    level_shift=-mu, n_micro=imicro, &
+                                                    trust_radius=trust_radius, &
+                                                    kappa_norm=kappa_norm)
+                    end if
                 end if
             end if
 
@@ -318,6 +320,7 @@ contains
                                               "eigenvector direction corresponding "// &
                                               "to negative eigenvalue.", 1, .true.)
                         end if
+                        max_precision_reached = .false.
                         cycle
                     else
                         macro_converged = .true.
@@ -351,7 +354,9 @@ contains
             end if
 
             ! perform line search
-            if (settings%line_search .and. .not. max_precision_reached) then
+            if (max_precision_reached) then
+                n_kappa = 0.d0
+            else if (settings%line_search) then
                 n_kappa = bracket(obj_func, solution, 0.d0, 1.d0, settings, error)
                 if (error) return
             else
