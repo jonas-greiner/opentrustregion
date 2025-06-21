@@ -22,10 +22,10 @@ module opentrustregion
     real(rp), parameter :: pi = 4.d0*atan(1.d0)
 
     ! define default optional arguments
-    logical, parameter :: solver_stability_default = .true., &
+    logical, parameter :: solver_stability_default = .false., &
                           solver_line_search_default = .false., &
                           solver_davidson_default = .true., &
-                          solver_jacobi_davidson_default = .true., &
+                          solver_jacobi_davidson_default = .false., &
                           solver_prefer_jacobi_davidson_default = .false., &
                           stability_jacobi_davidson_default = .true.
     real(rp), parameter :: solver_conv_tol_default = 1d-5, &

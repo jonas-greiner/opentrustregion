@@ -77,3 +77,15 @@ A separate `stability_check` function is available to verify whether the current
 
 ---
 Both the solver and stability check functions can be directly accessed from Fortran, C, or Python using the same arguments but within the appropriate language.
+
+### Program Interfaces
+
+The PySCF interface is available as an extension hosted at https://github.com/eriksen-lab/pyscf_opentrustregion. To install it, simply add its path to the **`PYSCF_EXT_PATH`** environment variable:
+```sh
+export PYSCF_EXT_PATH=path/to/pyscf_opentrustregion
+```
+Usage examples can be found in the **`examples`** directory of the PySCF interface repository.
+
+The interface supports Hartree–Fock and DFT calculations via the **`mf_to_otr`** function, which wraps PySCF **`HF`** and **`KS`** objects into their OpenTrustRegion counterparts. Similarly, localization methods are available through the **`BoysOTR`**, **`PipekMezeyOTR`**, and **`EdmistonRuedenbergOTR`** classes, and state-specific CASSCF calculations are supported via the **`casscf_to_otr`** function applied to a PySCF **`CASSCF`** object. All returned objects are fully compatible with the original PySCF classes and can be used interchangeably.
+
+Optional settings can be adjusted by modifying object attributes directly. Orbital optimization and internal stability analysis are performed using the **`kernel`** and **`stability_check`** member functions, respectively.
