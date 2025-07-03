@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(opentrustregion Fortran C)
+include(GNUInstallDirs)
 
 # default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -59,7 +60,7 @@ add_library(
     tests/opentrustregion_system_tests.f90
 )
 target_link_libraries(
-    testsuite 
+    testsuite
     PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
 )
 
@@ -89,6 +90,7 @@ install(TARGETS opentrustregion
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib
         INCLUDES DESTINATION include)
+install(FILES include/opentrustregion.h DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/)
 
 # export the target with namespace OpenTrustRegion::
 install(EXPORT OpenTrustRegionTargets
