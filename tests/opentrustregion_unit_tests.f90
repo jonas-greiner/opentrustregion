@@ -38,6 +38,10 @@ module opentrustregion_unit_tests
                                               0.47631257d0, 0.40058250d0, &
                                               0.31111531d0, 0.32397158d0]
 
+    ! define global current variable and 6D Hartmann Hessian so that these can be 
+    ! accessed by procedure pointers
+    real(rp) :: curr_vars(6), hess(6, 6)
+
     ! global log message
     character(:), allocatable :: log_message
 
@@ -80,12 +84,11 @@ contains
 
     end subroutine hartmann6d_gradient
 
-    subroutine hartmann6d_hessian(vars, hess)
+    subroutine hartmann6d_hessian(vars)
         !
         ! this subroutine defines the Hartmann 6D function's Hessian
         !
         real(rp), intent(in) :: vars(:)
-        real(rp), intent(out) :: hess(size(vars), size(vars))
         real(rp) :: exp_term(4)
         integer(ip) :: i, j
 
@@ -104,6 +107,58 @@ contains
         end do
 
     end subroutine hartmann6d_hessian
+
+    function hess_x(x)
+        !
+        ! this function describes the Hessian linear transformation operation for the
+        ! Hartmann 6D function
+        !
+        real(rp), intent(in) :: x(:)
+
+        real(rp) :: hess_x(size(x))
+
+        hess_x = matmul(hess, x)
+
+    end function hess_x
+
+    function obj_func(delta_vars) result(func)
+        !
+        ! this function describes the objective function evaluation for the Hartmann
+        ! 6D function
+        !
+        real(rp), intent(in) :: delta_vars(:)
+
+        real(rp) :: func
+
+        func = hartmann6d_func(curr_vars + delta_vars)
+
+    end function obj_func
+
+    subroutine update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr)
+        !
+        ! this function describes the orbital update equivalent for the Hartmann 6D
+        ! function
+        !
+        use opentrustregion, only: hess_x_type
+
+        real(rp), intent(in) :: delta_vars(:)
+
+        real(rp), intent(out) :: func, grad(:), h_diag(:)
+        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
+        integer(ip) :: i
+
+        ! update variables
+        curr_vars = curr_vars + delta_vars
+
+        ! evaluate function, calculate gradient and Hessian diagonal and define
+        ! Hessian linear transformation
+        func = hartmann6d_func(curr_vars)
+        call hartmann6d_gradient(curr_vars, grad)
+        call hartmann6d_hessian(curr_vars)
+        h_diag = [(hess(i, i), i=1, size(h_diag))]
+        hess_x_funptr => hess_x
+
+    end subroutine update_orbs
 
     subroutine logger(message)
         !
@@ -130,21 +185,20 @@ contains
         !
         ! this function tests the solver subroutine
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, hess_x_type, &
-                                   solver, solver_conv_tol_default
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver, &
+                                   solver_conv_tol_default
 
         integer(ip), parameter :: n_param = 6
         logical :: error
-        real(rp) :: vars(n_param), final_grad(n_param), hess(n_param, n_param)
+        real(rp) :: final_grad(n_param)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
-        integer(ip) :: i
 
         ! assume tests pass
         test_solver = .true.
 
         ! start in quadratic region near minimum
-        vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
         update_orbs_funptr => update_orbs
         obj_func_funptr => obj_func
 
@@ -155,20 +209,20 @@ contains
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
         end if
-        call hartmann6d_gradient(vars, final_grad)
+        call hartmann6d_gradient(curr_vars, final_grad)
         if (norm2(final_grad)/sqrt(real(n_param, kind=rp)) > &
             solver_conv_tol_default) then
             write (stderr, *) "test_solver failed: Solver did not find stationary "// &
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(vars - minimum1) > 1d-8)) then
+        if (any(abs(curr_vars - minimum1) > 1d-8)) then
             write (stderr, *) "test_solver failed: Solver did not find correct minimum."
             test_solver = .false.
         end if
 
         ! start near saddle point
-        vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        curr_vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
         update_orbs_funptr => update_orbs
         obj_func_funptr => obj_func
 
@@ -179,21 +233,21 @@ contains
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
         end if
-        call hartmann6d_gradient(vars, final_grad)
+        call hartmann6d_gradient(curr_vars, final_grad)
         if (norm2(final_grad)/sqrt(real(n_param, kind=rp)) > &
             solver_conv_tol_default) then
             write (stderr, *) "test_solver failed: Solver did not find stationary "// &
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(vars - minimum1) > 1d-6) .and. &
-            any(abs(vars - minimum2) > 1d-6)) then
+        if (any(abs(curr_vars - minimum1) > 1d-6) .and. &
+            any(abs(curr_vars - minimum2) > 1d-6)) then
             write (stderr, *) "test_solver failed: Solver did not find correct minimum."
             test_solver = .false.
         end if
 
         ! start at saddle point
-        vars = saddle_point
+        curr_vars = saddle_point
         update_orbs_funptr => update_orbs
         obj_func_funptr => obj_func
 
@@ -204,69 +258,18 @@ contains
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
         end if
-        call hartmann6d_gradient(vars, final_grad)
+        call hartmann6d_gradient(curr_vars, final_grad)
         if (norm2(final_grad)/sqrt(real(n_param, kind=rp)) > &
             solver_conv_tol_default) then
             write (stderr, *) "test_solver failed: Solver did not find stationary "// &
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(vars - minimum1) > 1d-6) .and. &
-            any(abs(vars - minimum2) > 1d-6)) then
+        if (any(abs(curr_vars - minimum1) > 1d-6) .and. &
+            any(abs(curr_vars - minimum2) > 1d-6)) then
             write (stderr, *) "test_solver failed: Solver did not find minimum."
             test_solver = .false.
         end if
-
-    contains
-
-        subroutine update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr)
-            !
-            ! this function describes the orbital update equivalent for the Hartmann 6D
-            ! function
-            !
-            real(rp), intent(in) :: delta_vars(:)
-
-            real(rp), intent(out) :: func, grad(:), h_diag(:)
-            procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
-
-            ! update variables
-            vars = vars + delta_vars
-
-            ! evaluate function, calculate gradient and Hessian diagonal and define
-            ! Hessian linear transformation
-            func = hartmann6d_func(vars)
-            call hartmann6d_gradient(vars, grad)
-            call hartmann6d_hessian(vars, hess)
-            h_diag = [(hess(i, i), i=1, size(h_diag))]
-            hess_x_funptr => hess_x
-
-        end subroutine update_orbs
-
-        function hess_x(x)
-            !
-            ! this function describes the Hessian linear transformation operation for
-            ! the Hartmann 6D function
-            !
-            real(rp), intent(in) :: x(:)
-
-            real(rp) :: hess_x(size(x))
-
-            hess_x = matmul(hess, x)
-
-        end function hess_x
-
-        function obj_func(delta_vars) result(func)
-            !
-            ! this function describes the objective function evaluation for the
-            ! Hartmann 6D function
-            !
-            real(rp), intent(in) :: delta_vars(:)
-
-            real(rp) :: func
-
-            func = hartmann6d_func(vars + delta_vars)
-
-        end function obj_func
 
     end function test_solver
 
@@ -276,7 +279,7 @@ contains
         !
         use opentrustregion, only: hess_x_type, stability_check
 
-        real(rp) :: vars(6), hess(6, 6), h_diag(6), direction(6)
+        real(rp) :: vars(6), h_diag(6), direction(6)
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable, error
         integer(ip) :: i
@@ -287,7 +290,7 @@ contains
         ! start at minimum and determine Hessian diagonal and define Hessian linear
         ! transformation
         vars = minimum1
-        call hartmann6d_hessian(vars, hess)
+        call hartmann6d_hessian(vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         hess_x_funptr => hess_x
 
@@ -312,7 +315,7 @@ contains
         ! start at saddle point and determine Hessian diagonal and define linear
         ! linear transformation
         vars = saddle_point
-        call hartmann6d_hessian(vars, hess)
+        call hartmann6d_hessian(vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         hess_x_funptr => hess_x
 
@@ -338,21 +341,6 @@ contains
             test_stability_check = .false.
         end if
 
-    contains
-
-        function hess_x(x)
-            !
-            ! this function describes the Hessian linear transformation operation for
-            ! the Hartmann 6D function
-            !
-            real(rp), intent(in) :: x(:)
-
-            real(rp) :: hess_x(size(x))
-
-            hess_x = matmul(hess, x)
-
-        end function hess_x
-
     end function test_stability_check
 
     logical(c_bool) function test_newton_step() bind(C)
@@ -362,7 +350,7 @@ contains
         use opentrustregion, only: newton_step
 
         type(settings_type) :: settings
-        real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
+        real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
                     aug_hess(4, 4), solution(6), red_space_solution(3)
         integer(ip) :: i, j
         logical :: error
@@ -386,7 +374,7 @@ contains
         ! calculate gradient and Hessian to define augmented Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
-        call hartmann6d_hessian(vars, hess)
+        call hartmann6d_hessian(vars)
         aug_hess = 0.d0
         do i = 1, 3
             do j = 1, 3
@@ -426,7 +414,7 @@ contains
         use opentrustregion, only: bisection
 
         type(settings_type) :: settings
-        real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, hess(6, 6), &
+        real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
                     aug_hess(4, 4), solution(6), red_space_solution(3), trust_radius, mu
         integer(ip) :: i, j
         logical :: bracketed, error
@@ -453,7 +441,7 @@ contains
         ! calculate gradient and Hessian to define augmented Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
-        call hartmann6d_hessian(vars, hess)
+        call hartmann6d_hessian(vars)
         aug_hess = 0.d0
         do i = 1, 3
             do j = 1, 3
@@ -498,7 +486,7 @@ contains
         ! calculate gradient and Hessian to define augmented Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
-        call hartmann6d_hessian(vars, hess)
+        call hartmann6d_hessian(vars)
         aug_hess = 0.d0
         do i = 1, 3
             do j = 1, 3
@@ -898,8 +886,10 @@ contains
         call setup_settings(settings)
         settings%n_random_trial_vectors = 2
 
-        ! allocate reduced space basis
+        ! allocate reduced space basis and set first normalized basis vector
         allocate (red_space_basis(4, 3))
+        red_space_basis(:, 1) = [1.d0, 2.d0, 3.d0, 4.d0]
+        red_space_basis(:, 1) = red_space_basis(:, 1) / norm2(red_space_basis(:, 1))
 
         ! generate trial vectors and determine whether function returns orthonormal 
         ! trial vectors
@@ -1297,7 +1287,6 @@ contains
 
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, vector, solution, corr_vector, hess_vector
-        real(rp) :: hess(6, 6)
 
         ! assume tests pass
         test_jacobi_davidson_correction = .true.
@@ -1309,7 +1298,7 @@ contains
         solution = [1.d0, -2.d0, 2.d0, -1.d0, 1.d0, -2.d0]
 
         ! generate Hessian
-        call hartmann6d_hessian(vars, hess)
+        call hartmann6d_hessian(vars)
 
         ! define Hessian linear transformation
         hess_x_funptr => hess_x
@@ -1332,21 +1321,6 @@ contains
             test_jacobi_davidson_correction = .false.
         end if
 
-        contains
-
-        function hess_x(x)
-            !
-            ! this function describes the Hessian linear transformation operation for
-            ! the Hartmann 6D function
-            !
-            real(rp), intent(in) :: x(:)
-
-            real(rp) :: hess_x(size(x))
-
-            hess_x = matmul(hess, x)
-
-        end function hess_x
-
     end function test_jacobi_davidson_correction
 
     logical(c_bool) function test_minres() bind(C)
@@ -1358,7 +1332,7 @@ contains
         type(settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, rhs, solution, vector, hess_vector, corr_vector
-        real(rp) :: hess(6, 6), mu
+        real(rp) :: mu
         logical :: error
 
         ! assume tests pass
@@ -1374,7 +1348,7 @@ contains
         solution = [1.d0, 2.d0, 3.d0, 4.d0, 5.d0, 6.d0] / sqrt(91.d0)
 
         ! generate Hessian
-        call hartmann6d_hessian(vars, hess)
+        call hartmann6d_hessian(vars)
 
         ! define Hessian linear transformation
         hess_x_funptr => hess_x
@@ -1392,7 +1366,7 @@ contains
         ! orthogonal to the solution vector and consequently the Hessian linear 
         ! transformation of the projected vector is equivalent to the Hessian linear 
         ! transformation of the vector itself
-        call minres(-rhs, hess_x_funptr, solution, mu, 1d-12, vector, hess_vector, &
+        call minres(-rhs, hess_x_funptr, solution, mu, 1d-14, vector, hess_vector, &
                     settings, error)
         corr_vector = vector - dot_product(vector, solution) * solution
         corr_vector = hess_x(corr_vector) - mu * corr_vector
@@ -1408,21 +1382,6 @@ contains
                 "transformation wrong."
             test_minres = .false.
         end if
-
-        contains
-
-        function hess_x(x)
-            !
-            ! this function describes the Hessian linear transformation operation for
-            ! the Hartmann 6D function
-            !
-            real(rp), intent(in) :: x(:)
-
-            real(rp) :: hess_x(size(x))
-
-            hess_x = matmul(hess, x)
-
-        end function hess_x
 
     end function test_minres
 
