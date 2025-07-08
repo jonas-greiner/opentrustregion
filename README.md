@@ -1,3 +1,7 @@
+![License](https://img.shields.io/github/license/eriksen-lab/opentrustregion)
+![CI](https://github.com/eriksen-lab/opentrustregion/actions/workflows/main.yml/badge.svg)
+[![codecov](https://codecov.io/github/eriksen-lab/opentrustregion/graph/badge.svg?token=NJIM6FDADD)](https://codecov.io/github/eriksen-lab/opentrustregion)
+
 # OpenTrustRegion: A Reusable Library for Second-Order Trust Region Orbital Optimization
 
 This library provides a robust and flexible implementation for second-order trust region orbital optimization, with extensive customization options to suit various use cases.
