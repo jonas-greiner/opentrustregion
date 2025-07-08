@@ -16,25 +16,35 @@ jobs:
           - os: linux
             compiler: gnu
             runs-on: ubuntu-latest
+            build-type: test
             python-version: "3.10"
             cmargs: ""
           - os: linux
             compiler: intel
             runs-on: ubuntu-latest
+            build-type: test
             python-version: "3.10"
             cmargs: ""
           - os: macos-silicon
             compiler: clang
             runs-on: macos-latest
+            build-type: test
             python-version: "3.10"
             cmargs: ""
           - os: macos-intel
             compiler: clang
             runs-on: macos-13
+            build-type: test
+            python-version: "3.10"
+            cmargs: ""
+          - os: linux
+            compiler: gnu
+            runs-on: ubuntu-latest
+            build-type: coverage
             python-version: "3.10"
             cmargs: ""
 
-    name: "Repo • 🐍 ${{ matrix.python-version }} • OS ${{ matrix.os }} • Compiler ${{ matrix.compiler }}"
+    name: "Repo • 🐍 ${{ matrix.python-version }} • OS ${{ matrix.os }} • Compiler ${{ matrix.compiler }} • Build Type ${{ matrix.build-type }}"
     runs-on: ${{ matrix.runs-on }}
     defaults:
       run:
@@ -96,7 +106,36 @@ jobs:
         python -m pip install --upgrade pip
 
     - name: Build & Install OpenTrustRegion
+      if: ${{ matrix.build-type == 'test' }}
       run: pip install ${{github.workspace}}
 
     - name: Testing OpenTrustRegion
+      if: ${{ matrix.build-type == 'test' }}
       run: python -m pyopentrustregion.testsuite
+
+    - name: Install Coverage Tools
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: pip install gcovr coverage
+
+    - name: Build & Install OpenTrustRegion with Coverage Flags
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: |
+        CMAKE_FLAGS="-DCMAKE_Fortran_FLAGS='--coverage -g'" pip install ${{github.workspace}}
+
+    - name: Testing OpenTrustRegion with Coverage
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: coverage run --omit="pyopentrustregion/testsuite.py" -m pyopentrustregion.testsuite
+
+    - name: Generate coverage report
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: |
+        coverage xml -o python_coverage.xml
+        gcovr -r . --exclude 'tests/*' --xml -o fortran_coverage.xml
+
+    - name: Upload to Codecov
+      if: ${{ matrix.build-type == 'coverage' }}
+      uses: codecov/codecov-action@v4
+      with:
+        file: |
+          fortran_coverage.xml
+          python_coverage.xml
