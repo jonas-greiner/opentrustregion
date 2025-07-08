@@ -98,21 +98,22 @@ module c_interface
                                n_macro, n_micro, global_red_factor, local_red_factor, &
                                seed, verbose, logger)
 
-            use opentrustregion, only: rp, ip
+            use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type, &
+                                       precond_type, conv_check_type, logger_type
 
-            procedure(update_orbs_c_wrapper), intent(in), pointer :: update_orbs
-            procedure(obj_func_c_wrapper), intent(in), pointer :: obj_func
+            procedure(update_orbs_type), intent(in), pointer :: update_orbs
+            procedure(obj_func_type), intent(in), pointer :: obj_func
             integer(ip), intent(in) :: n_param
             logical, intent(out) :: error
-            procedure(precond_c_wrapper), intent(in), pointer, optional :: precond
-            procedure(conv_check_c_wrapper), intent(in), pointer, optional :: conv_check
+            procedure(precond_type), intent(in), pointer, optional :: precond
+            procedure(conv_check_type), intent(in), pointer, optional :: conv_check
             logical, intent(in), optional :: stability, line_search, davidson, &
                                              jacobi_davidson, prefer_jacobi_davidson
             real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                               global_red_factor, local_red_factor
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
                                                  n_micro, seed, verbose
-            procedure(logger_c_wrapper), intent(in), pointer, optional :: logger       
+            procedure(logger_type), intent(in), pointer, optional :: logger       
 
         end subroutine solver_type
     end interface
@@ -122,18 +123,19 @@ module c_interface
                                         jacobi_davidson, conv_tol, &
                                         n_random_trial_vectors, n_iter, verbose, logger)
 
-            use opentrustregion, only: rp, ip
+            use opentrustregion, only: rp, ip, hess_x_type, precond_type, &
+                                       conv_check_type, logger_type
 
             real(rp), intent(in) :: h_diag(:)
-            procedure(hess_x_c_wrapper), intent(in), pointer :: hess_x
+            procedure(hess_x_type), intent(in), pointer :: hess_x
             logical, intent(out) :: stable, error
             real(rp), intent(out) :: kappa(:)
-            procedure(precond_c_wrapper), intent(in), pointer, optional :: precond
+            procedure(precond_type), intent(in), pointer, optional :: precond
             logical, intent(in), optional :: jacobi_davidson
             real(rp), intent(in), optional :: conv_tol
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, &
                                                  verbose
-            procedure(logger_c_wrapper), intent(in), pointer, optional :: logger   
+            procedure(logger_type), intent(in), pointer, optional :: logger   
 
         end subroutine stability_check_type
     end interface

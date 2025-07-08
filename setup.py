@@ -18,8 +18,14 @@ class CMakeBuild(build_py):
         # ensure build directory exists
         os.makedirs(build_dir, exist_ok=True)
 
+        # add extra flags
+        extra_flags = os.getenv("CMAKE_FLAGS", "")
+        cmake_cmd = ["cmake", ".."]
+        if extra_flags:
+            cmake_cmd.append(extra_flags)
+
         # run CMake configure & build
-        subprocess.check_call(["cmake", ".."], cwd=build_dir)
+        subprocess.check_call(cmake_cmd, cwd=build_dir)
         subprocess.check_call(["cmake", "--build", "."], cwd=build_dir)
 
         # copy built binaries to package directory

@@ -1,0 +1,141 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-test-repo:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            compiler: gnu
+            runs-on: ubuntu-latest
+            build-type: test
+            python-version: "3.10"
+            cmargs: ""
+          - os: linux
+            compiler: intel
+            runs-on: ubuntu-latest
+            build-type: test
+            python-version: "3.10"
+            cmargs: ""
+          - os: macos-silicon
+            compiler: clang
+            runs-on: macos-latest
+            build-type: test
+            python-version: "3.10"
+            cmargs: ""
+          - os: macos-intel
+            compiler: clang
+            runs-on: macos-13
+            build-type: test
+            python-version: "3.10"
+            cmargs: ""
+          - os: linux
+            compiler: gnu
+            runs-on: ubuntu-latest
+            build-type: coverage
+            python-version: "3.10"
+            cmargs: ""
+
+    name: "Repo • 🐍 ${{ matrix.python-version }} • OS ${{ matrix.os }} • Compiler ${{ matrix.compiler }} • Build Type ${{ matrix.build-type }}"
+    runs-on: ${{ matrix.runs-on }}
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+    - name: Checkout OpenTrustRegion
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.x
+
+    - name: Install GNU compilers
+      if: ${{ matrix.compiler == 'gnu' && matrix.os == 'linux' }}
+      run: |
+        sudo apt update
+        sudo apt install -y gcc gfortran
+
+    - name: Add Intel oneAPI repository
+      if: ${{ matrix.compiler == 'intel' }}
+      run: |
+        wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+        echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+        sudo apt update
+
+    - name: Install Intel oneAPI Fortran Compiler
+      if: ${{ matrix.compiler == 'intel' }}
+      run: sudo apt install -y intel-oneapi-compiler-fortran
+
+    - name: Install Intel oneAPI MKL
+      if: ${{ matrix.compiler == 'intel' }}
+      run: sudo apt install -y intel-oneapi-mkl
+
+    - name: Setup Intel oneAPI Environment
+      if: ${{ matrix.compiler == 'intel' }}
+      run: |
+        source /opt/intel/oneapi/setvars.sh
+        printenv >> $GITHUB_ENV
+
+    - name: Install OpenBLAS on MacOS
+      if: ${{ contains(matrix.os, 'macos') }}
+      run: |
+        brew install openblas
+        echo "PKG_CONFIG_PATH=/usr/local/opt/openblas/lib/pkgconfig" >> $GITHUB_ENV
+        echo "LDFLAGS=-L/opt/homebrew/opt/openblas/lib" >> $GITHUB_ENV
+        echo "CPPFLAGS=-I/opt/homebrew/opt/openblas/include" >> $GITHUB_ENV
+
+    - name: Install OpenBLAS on Linux
+      if: ${{ matrix.compiler == 'gnu' && matrix.os == 'linux' }}
+      run: |
+        sudo apt install -y libopenblas-dev
+
+    - name: Create and Activate Python Virtual Environment
+      run: |
+        python -m venv venv
+        source venv/bin/activate
+        python -m pip install --upgrade pip
+
+    - name: Build & Install OpenTrustRegion
+      if: ${{ matrix.build-type == 'test' }}
+      run: pip install ${{github.workspace}}
+
+    - name: Testing OpenTrustRegion
+      if: ${{ matrix.build-type == 'test' }}
+      run: python -m pyopentrustregion.testsuite
+
+    - name: Install Coverage Tools
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: pip install gcovr coverage
+
+    - name: Build & Install OpenTrustRegion with Coverage Flags
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: |
+        CMAKE_FLAGS="-DCMAKE_Fortran_FLAGS='--coverage -g'" pip install ${{github.workspace}}
+
+    - name: Testing OpenTrustRegion with Coverage
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: coverage run --omit="pyopentrustregion/testsuite.py" -m pyopentrustregion.testsuite
+
+    - name: Generate coverage report
+      if: ${{ matrix.build-type == 'coverage' }}
+      run: |
+        coverage xml -o python_coverage.xml
+        gcovr -r . --exclude 'tests/*' --xml -o fortran_coverage.xml
+
+    - name: Upload to Codecov
+      if: ${{ matrix.build-type == 'coverage' }}
+      uses: codecov/codecov-action@v4
+      with:
+        file: |
+          fortran_coverage.xml
+          python_coverage.xml
