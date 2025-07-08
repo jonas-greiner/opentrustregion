@@ -52,25 +52,25 @@ jobs:
     - name: Install GNU compilers
       if: ${{ matrix.compiler == 'gnu' && matrix.os == 'linux' }}
       run: |
-        apt update
-        apt install -y gcc gfortran
+        sudo apt update
+        sudo apt install -y gcc gfortran
 
     - name: Add Intel oneAPI repository
       if: ${{ matrix.compiler == 'intel' }}
       run: |
         wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
         echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
-        apt update
+        sudo apt update
 
     - name: Install Intel oneAPI Fortran Compiler
       if: ${{ matrix.compiler == 'intel' }}
-      run: apt install -y intel-oneapi-compiler-fortran
+      run: sudo apt install -y intel-oneapi-compiler-fortran
 
     - name: Install Intel oneAPI MKL
       if: ${{ matrix.compiler == 'intel' }}
-      run: apt install -y intel-oneapi-mkl
+      run: sudo apt install -y intel-oneapi-mkl
 
-    - name: Setup Intel oneAPI environment
+    - name: Setup Intel oneAPI Environment
       if: ${{ matrix.compiler == 'intel' }}
       run: |
         source /opt/intel/oneapi/setvars.sh
@@ -87,10 +87,16 @@ jobs:
     - name: Install OpenBLAS on Linux
       if: ${{ matrix.compiler == 'gnu' && matrix.os == 'linux' }}
       run: |
-        apt install -y libopenblas-dev
+        sudo apt install -y libopenblas-dev
+
+    - name: Create and Activate Python Virtual Environment
+      run: |
+        python -m venv venv
+        source venv/bin/activate
+        python -m pip install --upgrade pip
 
     - name: Build & Install OpenTrustRegion
-      run: pip3 install ${{github.workspace}}
+      run: pip install ${{github.workspace}}
 
     - name: Testing OpenTrustRegion
-      run: python3 -m pyopentrustregion.testsuite
+      run: python -m pyopentrustregion.testsuite
