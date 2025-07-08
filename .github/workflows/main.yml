@@ -126,11 +126,11 @@ jobs:
       if: ${{ matrix.build-type == 'coverage' }}
       run: coverage run --omit="pyopentrustregion/testsuite.py" -m pyopentrustregion.testsuite
 
-    - name: Generate coverage report
+    - name: Generate Coverage Report
       if: ${{ matrix.build-type == 'coverage' }}
       run: |
         coverage xml -o python_coverage.xml
-        gcovr -r . --exclude 'tests/*' --xml -o fortran_coverage.xml
+        gcovr -r . --exclude 'tests/.*' --xml -o fortran_coverage.xml
 
     - name: Upload to Codecov
       if: ${{ matrix.build-type == 'coverage' }}
