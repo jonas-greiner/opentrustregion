@@ -1882,27 +1882,26 @@ contains
                 if (residual_norm < max(red_factor*grad_norm, 1d-12)) then
                     micro_converged = .true.
                     exit
-                ! check residual has not decreased sufficiently or if maximum of 
-                ! Davidson iterations has been reached
-                else if (((imicro - initial_imicro >= 10 .and. &
-                           residual_norm > 0.8*initial_residual_norm) .or. &
-                           imicro > 30)) then
-                    ! check if Jacobi-Davidson has started, if yes just continue
-                    if (.not. jacobi_davidson_started) then
+                ! check if Jacobi-Davidson is used and has not been started
+                else if (settings%jacobi_davidson .and. .not. jacobi_davidson_started) then
+                    ! check residual has not decreased sufficiently or if maximum of 
+                    ! Davidson iterations has been reached
+                    if ((imicro - initial_imicro >= 10 .and. &
+                         residual_norm > 0.8*initial_residual_norm) .or. &
+                        imicro > 0.8 * settings%n_micro) then
                         ! evaluate function at approximate point
                         new_func = obj_func(solution)
 
                         ! calculate ratio of evaluated function and predicted function
                         ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                                         grad + 0.5*h_solution, 1)
+                                                        grad + 0.5*h_solution, 1)
 
                         ! switch to Jacobi-Davidson only if current solution would lead 
                         ! to trust radius increase when the solution is already at the 
                         ! trust region boundary
-                        if (settings%jacobi_davidson .and. &
-                            (settings%prefer_jacobi_davidson .or. &
-                             (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
-                              > 0.99d0 * trust_radius))) then
+                        if (settings%prefer_jacobi_davidson .or. &
+                            (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
+                             > 0.99d0 * trust_radius)) then
                             jacobi_davidson_started = .true.
                             imicro_jacobi_davidson = imicro
                         ! decrease trust radius
@@ -1911,6 +1910,9 @@ contains
                             exit
                         end if
                     end if
+                else if (imicro - initial_imicro >= 10 .and. &
+                         residual_norm > 0.8*initial_residual_norm) then
+                    exit
                 end if
 
                 ! save current solution
