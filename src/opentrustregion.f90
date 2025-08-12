@@ -22,17 +22,19 @@ module opentrustregion
     real(rp), parameter :: pi = 4.d0*atan(1.d0)
 
     ! define default optional arguments
-    logical, parameter :: solver_stability_default = .false., &
-                          solver_line_search_default = .false., &
-                          solver_davidson_default = .true., &
-                          solver_jacobi_davidson_default = .false., &
-                          solver_prefer_jacobi_davidson_default = .false., &
-                          stability_jacobi_davidson_default = .true.
     real(rp), parameter :: solver_conv_tol_default = 1d-5, &
                            solver_start_trust_radius_default = 0.4d0, &
                            solver_global_red_factor_default = 1d-3, &
                            solver_local_red_factor_default = 1d-4, &
                            stability_conv_tol_default = 1d-8
+    logical, parameter :: solver_stability_default = .false., &
+                          solver_hess_symm_default = .true., &
+                          solver_line_search_default = .false., &
+                          solver_davidson_default = .true., &
+                          solver_jacobi_davidson_default = .false., &
+                          solver_prefer_jacobi_davidson_default = .false., &
+                          stability_hess_symm_default = .true., &
+                          stability_jacobi_davidson_default = .true.
     integer(ip), parameter :: solver_n_random_trial_vectors_default = 1, &
                               solver_n_macro_default = 150, &
                               solver_n_micro_default = 50, &
@@ -43,8 +45,8 @@ module opentrustregion
 
     ! derived type for solver settings
     type :: settings_type
-        logical :: jacobi_davidson
         real(rp) :: conv_tol
+        logical :: hess_symm, jacobi_davidson
         integer(ip) :: n_random_trial_vectors, verbose
         procedure(logger_type), pointer, nopass :: logger => null()
     contains
@@ -130,8 +132,8 @@ module opentrustregion
 contains
 
     subroutine solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
-                      stability, line_search, davidson, jacobi_davidson, &
-                      prefer_jacobi_davidson, conv_tol, n_random_trial_vectors, &
+                      conv_tol, stability, hess_symm, line_search, davidson, &
+                      jacobi_davidson, prefer_jacobi_davidson, n_random_trial_vectors, &
                       start_trust_radius, n_macro, n_micro, global_red_factor, &
                       local_red_factor, seed, verbose, logger)
         !
@@ -143,10 +145,10 @@ contains
         procedure(precond_type), intent(in), pointer, optional :: precond
         procedure(conv_check_type), intent(in), pointer, optional :: conv_check
         logical, intent(out) :: error
-        logical, intent(in), optional :: stability, line_search, davidson, &
-                                         jacobi_davidson, prefer_jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
+        logical, intent(in), optional :: stability, hess_symm, line_search, davidson, &
+                                         jacobi_davidson, prefer_jacobi_davidson
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
                                              seed, verbose
         procedure(logger_type), intent(in), pointer, optional :: logger
@@ -176,12 +178,12 @@ contains
         stable = .true.
 
         ! initialize settings
-        call settings%init_solver_settings(stability, line_search, davidson, &
-                                           jacobi_davidson, prefer_jacobi_davidson, &
-                                           conv_tol, n_random_trial_vectors, &
-                                           start_trust_radius, n_macro, n_micro, &
-                                           global_red_factor, local_red_factor, seed, &
-                                           verbose, logger)
+        call settings%init_solver_settings(conv_tol, stability, hess_symm, &
+                                           line_search, davidson, jacobi_davidson, &
+                                           prefer_jacobi_davidson, &
+                                           n_random_trial_vectors, start_trust_radius, &
+                                           n_macro, n_micro, global_red_factor, &
+                                           local_red_factor, seed, verbose, logger)
 
         ! initialize random number generator
         call init_rng(settings%seed)
@@ -401,8 +403,8 @@ contains
     end subroutine solver
 
     subroutine stability_check(h_diag, hess_x_funptr, stable, kappa, error, precond, &
-                               jacobi_davidson, conv_tol, n_random_trial_vectors, &
-                               n_iter, verbose, logger)
+                               conv_tol, hess_symm, jacobi_davidson, &
+                               n_random_trial_vectors, n_iter, verbose, logger)
         !
         ! this subroutine performs a stability check
         !
@@ -411,8 +413,8 @@ contains
         logical, intent(out) :: stable, error
         real(rp), intent(out) :: kappa(:)
         procedure(precond_type), intent(in), pointer, optional :: precond
-        logical, intent(in), optional :: jacobi_davidson
         real(rp), intent(in), optional :: conv_tol
+        logical, intent(in), optional :: hess_symm, jacobi_davidson
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
         procedure(logger_type), intent(in), pointer, optional :: logger
 
@@ -423,7 +425,7 @@ contains
         real(rp) :: eigval, minres_tol, stability_rms
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), &
                                  red_space_hess(:, :), red_space_solution(:), &
-                                 red_space_hess_vec(:)
+                                 row_vec(:), col_vec(:)
         logical :: use_precond
         character(300) :: msg
         real(rp), external :: dnrm2, ddot
@@ -433,7 +435,7 @@ contains
         error = .false.
 
         ! initialize settings
-        call settings%init_stability_settings(jacobi_davidson, conv_tol, &
+        call settings%init_stability_settings(conv_tol, hess_symm, jacobi_davidson, &
                                               n_random_trial_vectors, n_iter, verbose, &
                                               logger)
 
@@ -483,8 +485,8 @@ contains
         ! loop over iterations
         do iter = 1, settings%n_iter
             ! solve reduced space problem
-            call symm_mat_min_eig(red_space_hess, eigval, red_space_solution, &
-                                  settings, error)
+            call mat_min_eig(red_space_hess, settings%hess_symm, eigval, &
+                             red_space_solution, settings, error)
             if (error) return
 
             ! get full space solution
@@ -552,13 +554,21 @@ contains
             call add_column(h_basis, h_basis_vec)
 
             ! construct new reduced space Hessian
-            allocate (red_space_hess_vec(size(red_space_basis, 2)))
-            call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, &
-                       red_space_basis, n_param, &
-                       h_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
-                       red_space_hess_vec, 1)
-            call extend_symm_matrix(red_space_hess, red_space_hess_vec)
-            deallocate (red_space_hess_vec)
+            allocate (row_vec(size(red_space_basis, 2)))
+            allocate (col_vec(size(red_space_basis, 2)))
+            call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, red_space_basis, &
+                       n_param, h_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
+                       row_vec, 1)
+            if (settings%hess_symm) then
+                col_vec = row_vec
+            else
+                call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, h_basis, &
+                           n_param, red_space_basis(:, size(red_space_basis, 2)), 1, &
+                           0.d0, col_vec, 1)
+            end if
+            call extend_matrix(red_space_hess, row_vec, col_vec)
+            deallocate (row_vec)
+            deallocate (col_vec)
 
             ! reallocate reduced space solution
             deallocate (red_space_solution)
@@ -611,7 +621,7 @@ contains
         real(rp) :: red_hess(size(red_space_basis, 2), size(red_space_basis, 2))
         real(rp), allocatable :: work(:)
         character(300) :: msg
-        external :: dsysv, dgemv
+        external :: dsysv, dgesv, dgemv
 
         ! initialize error flag
         error = .false.
@@ -626,28 +636,47 @@ contains
         red_space_solution = 0.d0
         red_space_solution(1) = -grad_norm
 
-        ! query optimal workspace size
-        lwork = -1
-        allocate (work(1))
-        call dsysv("U", nred, 1, red_hess, nred, ipiv, red_space_solution, nred, work, &
-                   lwork, info)
-        lwork = int(work(1))
-        deallocate (work)
-        allocate (work(lwork))
-
         ! solve linear system
-        call dsysv("U", nred, 1, red_hess, nred, ipiv, red_space_solution, nred, work, &
-                   lwork, info)
+        if (settings%hess_symm) then
+            ! query optimal workspace size
+            lwork = -1
+            allocate (work(1))
+            call dsysv("U", nred, 1, red_hess, nred, ipiv, red_space_solution, nred, &
+                       work, lwork, info)
+            lwork = int(work(1))
+            deallocate (work)
+            allocate (work(lwork))
 
-        ! deallocate work array
-        deallocate (work)
+            ! solve linear system
+            call dsysv("U", nred, 1, red_hess, nred, ipiv, red_space_solution, nred, &
+                       work, lwork, info)
 
-        ! check for errors
-        if (info /= 0) then
-            write (msg, '(A, I0)') "Linear solver failed: Error in DSYSV, info = ", info
-            call settings%log(msg, 1, .true.)
-            error = .true.
-            return
+            ! deallocate work array
+            deallocate (work)
+
+            ! check for errors
+            if (info /= 0) then
+                write (msg, '(A, I0)') "Linear solver failed: Error in DSYSV, "// &
+                                       "info = ", info
+                call settings%log(msg, 1, .true.)
+                error = .true.
+                return
+            end if
+
+        else
+            ! general linear system solver since the Hessian can be non-symmetric for 
+            ! Hessian approximations
+            call dgesv(nred, 1, red_hess, nred, ipiv, red_space_solution, nred, INFO) 	
+
+            ! check for errors
+            if (info /= 0) then
+                write (msg, '(A, I0)') "Linear solver failed: Error in DGESV, "// &
+                                       "info = ", info
+                call settings%log(msg, 1, .true.)
+                error = .true.
+                return
+            end if
+
         end if
 
         ! get solution in full space
@@ -743,7 +772,7 @@ contains
 
             ! perform eigendecomposition and get lowest eigenvalue and corresponding
             ! eigenvector
-            call symm_mat_min_eig(aug_hess, mu, eigvec, settings, error)
+            call mat_min_eig(aug_hess, settings%hess_symm, mu, eigvec, settings, error)
             if (error) return
 
             ! check if eigenvector has level-shift component
@@ -885,12 +914,12 @@ contains
 
     end function bracket
 
-    subroutine extend_symm_matrix(matrix, vector)
+    subroutine extend_matrix(matrix, row, column)
         !
-        ! this subroutine extends a symmetric matrix
+        ! this subroutine extends a matrix with a row and a column
         !
         real(rp), allocatable, intent(inout) :: matrix(:, :)
-        real(rp), intent(in) :: vector(:)
+        real(rp), intent(in) :: row(:), column(:)
 
         real(rp), allocatable :: temp(:, :)
 
@@ -908,13 +937,13 @@ contains
         matrix(:size(temp, 1), :size(temp, 2)) = temp
 
         ! add new row and column
-        matrix(:, size(temp, 2) + 1) = vector
-        matrix(size(temp, 1) + 1, :) = vector
+        matrix(:, size(temp, 2) + 1) = row
+        matrix(size(temp, 1) + 1, :) = column
 
         ! deallocate temporary array
         deallocate (temp)
 
-    end subroutine extend_symm_matrix
+    end subroutine extend_matrix
 
     subroutine add_column(matrix, new_col)
         !
@@ -946,11 +975,32 @@ contains
 
     end subroutine add_column
 
+    subroutine mat_min_eig(matrix, symm_matrix, lowest_eigval, lowest_eigvec, &
+                           settings, error)
+        !
+        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
+        ! of a matrix
+        !
+        real(rp), intent(in) :: matrix(:, :)
+        logical, intent(in) :: symm_matrix
+        class(settings_type), intent(in) :: settings
+        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
+        logical, intent(out) :: error
+
+        if (symm_matrix) then
+            call symm_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, error)
+        else
+            call general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
+                                     error)
+        end if 
+
+    end subroutine mat_min_eig
+
     subroutine symm_mat_min_eig(symm_matrix, lowest_eigval, lowest_eigvec, settings, &
                                 error)
         !
-        ! this function returns the lowest eigenvalue and corresponding eigenvector of
-        ! a symmetric matrix
+        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
+        ! of a symmetric matrix
         !
         real(rp), intent(in) :: symm_matrix(:, :)
         class(settings_type), intent(in) :: settings
@@ -1002,7 +1052,85 @@ contains
 
     end subroutine symm_mat_min_eig
 
-    real(rp) function min_eigval(matrix, settings, error)
+    subroutine general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
+                                   error)
+        !
+        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
+        ! of a square matrix
+        !
+        real(rp), intent(in) :: matrix(:, :)
+        class(settings_type), intent(in) :: settings
+        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
+        logical, intent(out) :: error
+
+        integer(ip) :: n, lwork, info, min_idx
+        real(rp), allocatable :: work(:)
+        real(rp) :: temp(size(matrix, 1), size(matrix, 2)), eigvals(size(matrix, 1)), &
+                    imag_eigvals(size(matrix, 1)), &
+                    left_eigvecs(size(matrix, 1), size(matrix, 2)), &
+                    right_eigvecs(size(matrix, 1), size(matrix, 2))
+        character(300) :: msg
+        external :: dgeev
+
+        ! initialize error flag
+        error = .false.
+
+        ! size of matrix
+        n = size(matrix, 1)
+
+        ! copy matrix to avoid modification of original matrix
+        temp = matrix
+
+        ! query optimal workspace size
+        lwork = -1
+        allocate (work(1))
+        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
+        lwork = int(work(1))
+        deallocate (work)
+        allocate (work(lwork))
+
+        ! perform eigendecomposition
+        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
+
+        ! deallocate work array
+        deallocate (work)
+
+        ! check for successful execution
+        if (info /= 0) then
+            write (msg, '(A, I0)') "Eigendecomposition failed: Error in DGEEV, "// &
+                "info = ", info
+            call settings%log(msg, 1, .true.)
+            error = .true.
+            return
+        end if
+
+        ! get lowest eigenvalue and corresponding eigenvector
+        min_idx = minloc(eigvals, dim=1)
+        lowest_eigval = eigvals(min_idx)
+        lowest_eigvec = right_eigvecs(:, min_idx)
+
+    end subroutine general_mat_min_eig
+
+    real(rp) function mat_min_eigval(matrix, symm_matrix, settings, error)
+        !
+        ! this function calculates the lowest eigenvalue of a matrix
+        !
+        real(rp), intent(in) :: matrix(:, :)
+        logical, intent(in) :: symm_matrix
+        class(settings_type), intent(in) :: settings
+        logical, intent(out) :: error
+
+        if (symm_matrix) then
+            mat_min_eigval = symm_mat_min_eigval(matrix, settings, error)
+        else
+            mat_min_eigval = general_mat_min_eigval(matrix, settings, error)
+        end if
+
+    end function mat_min_eigval
+
+    real(rp) function symm_mat_min_eigval(matrix, settings, error)
         !
         ! this function calculates the lowest eigenvalue of a symmetric matrix
         !
@@ -1049,9 +1177,65 @@ contains
         end if
 
         ! get lowest eigenvalue
-        min_eigval = eigvals(1)
+        symm_mat_min_eigval = eigvals(1)
 
-    end function min_eigval
+    end function symm_mat_min_eigval
+
+    real(rp) function general_mat_min_eigval(matrix, settings, error)
+        !
+        ! this function calculates the lowest eigenvalue of a square matrix
+        !
+        real(rp), intent(in) :: matrix(:, :)
+        class(settings_type), intent(in) :: settings
+        logical, intent(out) :: error
+
+        real(rp) :: temp(size(matrix, 1), size(matrix, 2)), eigvals(size(matrix, 1)), &
+                    imag_eigvals(size(matrix, 1)), &
+                    left_eigvecs(size(matrix, 1), size(matrix, 2)), &
+                    right_eigvecs(size(matrix, 1), size(matrix, 2))
+        integer(ip) :: n, lwork, info
+        real(rp), allocatable :: work(:)
+        character(300) :: msg
+        external :: dgeev
+
+        ! initialize error flag
+        error = .false.
+
+        ! size of matrix
+        n = size(matrix, 1)
+
+        ! copy matrix to avoid modification of original matrix
+        temp = matrix
+
+        ! query optimal workspace size
+        lwork = -1
+        allocate (work(1))
+        call dgeev("N", "N", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
+        lwork = int(work(1))
+        deallocate (work)
+        allocate (work(lwork))
+
+        ! compute eigenvalues
+        call dgeev("N", "N", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
+
+        ! deallocate work array
+        deallocate (work)
+
+        ! check for successful execution
+        if (info /= 0) then
+            write (msg, '(A, I0)') "Eigendecomposition failed: Error in DGEEV, "// &
+                "info = ", info
+            call settings%log(msg, 1, .true.)
+            error = .true.
+            return
+        end if
+
+        ! get lowest eigenvalue
+        general_mat_min_eigval = minval(eigvals)
+
+    end function general_mat_min_eigval
 
     subroutine init_rng(seed)
         !
@@ -1203,8 +1387,8 @@ contains
 
     end subroutine gram_schmidt
 
-    subroutine init_solver_settings(self, stability, line_search, davidson, &
-                                    jacobi_davidson, prefer_jacobi_davidson, conv_tol, &
+    subroutine init_solver_settings(self, conv_tol, stability, hess_symm, line_search, &
+                                    davidson, jacobi_davidson, prefer_jacobi_davidson, &
                                     n_random_trial_vectors, start_trust_radius, &
                                     n_macro, n_micro, global_red_factor, &
                                     local_red_factor, seed, verbose, logger)
@@ -1212,22 +1396,23 @@ contains
         ! this subroutine sets the optional settings to their default values
         !
         class(solver_settings_type), intent(inout) :: self
-        logical, intent(in), optional :: stability, line_search, davidson, &
-                                         jacobi_davidson, prefer_jacobi_davidson
         real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                           global_red_factor, local_red_factor
+        logical, intent(in), optional :: stability, hess_symm, line_search, davidson, &
+                                         jacobi_davidson, prefer_jacobi_davidson
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
                                              seed, verbose
         procedure(logger_type), intent(in), pointer, optional :: logger
 
+        self%conv_tol = set_default(conv_tol, solver_conv_tol_default)
         self%stability = set_default(stability, solver_stability_default)
+        self%hess_symm = set_default(hess_symm, solver_hess_symm_default)
         self%line_search = set_default(line_search, solver_line_search_default)
         self%davidson = set_default(davidson, solver_davidson_default)
         self%jacobi_davidson = set_default(jacobi_davidson, &
                                            solver_jacobi_davidson_default)
         self%prefer_jacobi_davidson = set_default(prefer_jacobi_davidson, &
                                                   solver_prefer_jacobi_davidson_default)
-        self%conv_tol = set_default(conv_tol, solver_conv_tol_default)
         self%n_random_trial_vectors = set_default(n_random_trial_vectors, &
                                                   solver_n_random_trial_vectors_default)
         self%start_trust_radius = set_default(start_trust_radius, &
@@ -1244,21 +1429,22 @@ contains
 
     end subroutine init_solver_settings
 
-    subroutine init_stability_settings(self, jacobi_davidson, conv_tol, &
+    subroutine init_stability_settings(self, conv_tol, hess_symm, jacobi_davidson, &
                                        n_random_trial_vectors, n_iter, verbose, &
                                        logger)
         !
         ! this subroutine sets the optional settings to their default values
         !
         class(stability_settings_type), intent(inout) :: self
-        logical, intent(in), optional :: jacobi_davidson
         real(rp), intent(in), optional :: conv_tol
+        logical, intent(in), optional :: hess_symm, jacobi_davidson
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
         procedure(logger_type), intent(in), pointer, optional :: logger
 
+        self%conv_tol = set_default(conv_tol, stability_conv_tol_default)
+        self%hess_symm = set_default(hess_symm, stability_hess_symm_default)
         self%jacobi_davidson = set_default(jacobi_davidson, &
                                            stability_jacobi_davidson_default)
-        self%conv_tol = set_default(conv_tol, stability_conv_tol_default)
         self%n_random_trial_vectors = set_default(n_random_trial_vectors, &
                                                stability_n_random_trial_vectors_default)
         self%n_iter = set_default(n_iter, stability_n_iter_default)
@@ -1782,7 +1968,7 @@ contains
         logical, intent(out) :: jacobi_davidson_started, max_precision_reached, error
 
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
-                                 red_space_solution(:), red_hess_vec(:)
+                                 red_space_solution(:), row_vec(:), col_vec(:)
         integer(ip) :: ntrial, i, initial_imicro
         real(rp), dimension(n_param) :: last_solution_normalized, h_solution, &
                                         residual, solution_normalized, basis_vec, &
@@ -1831,7 +2017,9 @@ contains
                 ! do a Newton step if the model is positive definite and the step is 
                 ! within the trust region
                 newton = .false.
-                aug_hess_min_eigval = min_eigval(aug_hess(2:, 2:), settings, error)
+                aug_hess_min_eigval = mat_min_eigval(aug_hess(2:, 2:), &
+                                                     settings%hess_symm, settings, &
+                                                     error)
                 if (error) return
                 if (aug_hess_min_eigval > -1.d-5) then
                     call newton_step(aug_hess, grad_norm, red_space_basis, &
@@ -1968,14 +2156,22 @@ contains
                 call add_column(h_basis, h_basis_vec)
 
                 ! construct new augmented Hessian
-                allocate (red_hess_vec(size(red_space_basis, 2) + 1))
-                red_hess_vec(1) = 0.d0
+                allocate (row_vec(size(red_space_basis, 2) + 1))
+                row_vec(1) = 0.d0
                 call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, &
                            red_space_basis, n_param, &
                            h_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
-                           red_hess_vec(2:), 1)
-                call extend_symm_matrix(aug_hess, red_hess_vec)
-                deallocate (red_hess_vec)
+                           row_vec(2:), 1)
+                col_vec = row_vec
+                if (.not. settings%hess_symm) then
+                    call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, &
+                               h_basis, n_param, &
+                               red_space_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
+                               col_vec(2:), 1)
+                end if
+                call extend_matrix(aug_hess, row_vec, col_vec)
+                deallocate (row_vec)
+                deallocate (col_vec)
 
                 ! reallocate reduced space solution
                 deallocate (red_space_solution)

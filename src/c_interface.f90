@@ -92,11 +92,12 @@ module c_interface
     ! injected, for example for testing
     interface
         subroutine solver_type(update_orbs, obj_func, n_param, error, precond, &
-                               conv_check, stability, line_search, davidson, &
-                               jacobi_davidson, prefer_jacobi_davidson, conv_tol, &
-                               n_random_trial_vectors, start_trust_radius, &
-                               n_macro, n_micro, global_red_factor, local_red_factor, &
-                               seed, verbose, logger)
+                               conv_check, conv_tol, stability, hess_symm, &
+                               line_search, davidson, jacobi_davidson, &
+                               prefer_jacobi_davidson, n_random_trial_vectors, &
+                               start_trust_radius, n_macro, n_micro, &
+                               global_red_factor, local_red_factor, seed, verbose, &
+                               logger)
 
             use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type, &
                                        precond_type, conv_check_type, logger_type
@@ -107,10 +108,11 @@ module c_interface
             logical, intent(out) :: error
             procedure(precond_type), intent(in), pointer, optional :: precond
             procedure(conv_check_type), intent(in), pointer, optional :: conv_check
-            logical, intent(in), optional :: stability, line_search, davidson, &
-                                             jacobi_davidson, prefer_jacobi_davidson
             real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
                                               global_red_factor, local_red_factor
+            logical, intent(in), optional :: stability, hess_symm, line_search, &
+                                             davidson, jacobi_davidson, &
+                                             prefer_jacobi_davidson
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
                                                  n_micro, seed, verbose
             procedure(logger_type), intent(in), pointer, optional :: logger       
@@ -120,7 +122,7 @@ module c_interface
 
     interface
         subroutine stability_check_type(h_diag, hess_x, stable, kappa, error, precond, &
-                                        jacobi_davidson, conv_tol, &
+                                        conv_tol, hess_symm, jacobi_davidson, &
                                         n_random_trial_vectors, n_iter, verbose, logger)
 
             use opentrustregion, only: rp, ip, hess_x_type, precond_type, &
@@ -131,8 +133,8 @@ module c_interface
             logical, intent(out) :: stable, error
             real(rp), intent(out) :: kappa(:)
             procedure(precond_type), intent(in), pointer, optional :: precond
-            logical, intent(in), optional :: jacobi_davidson
             real(rp), intent(in), optional :: conv_tol
+            logical, intent(in), optional :: hess_symm, jacobi_davidson
             integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, &
                                                  verbose
             procedure(logger_type), intent(in), pointer, optional :: logger   
@@ -148,9 +150,10 @@ contains
 
     subroutine solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
                                 error_c, precond_c_funptr, conv_check_c_funptr, &
-                                stability_c_ptr, line_search_c_ptr, davidson_c_ptr, &
+                                conv_tol_c_ptr, stability_c_ptr, hess_symm_c_ptr, &
+                                line_search_c_ptr, davidson_c_ptr, &
                                 jacobi_davidson_c_ptr, prefer_jacobi_davidson_c_ptr, &
-                                conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
+                                n_random_trial_vectors_c_ptr, &
                                 start_trust_radius_c_ptr, n_macro_c_ptr, &
                                 n_micro_c_ptr, global_red_factor_c_ptr, &
                                 local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
@@ -159,12 +162,12 @@ contains
         ! this subroutine wraps the solver subroutine to convert C variables to Fortran
         ! variables
         !
-        use opentrustregion, only: solver_stability_default, &
+        use opentrustregion, only: solver_conv_tol_default, solver_stability_default, &
+                                   solver_hess_symm_default, &
                                    solver_line_search_default, &
                                    solver_davidson_default, &
                                    solver_jacobi_davidson_default, &
                                    solver_prefer_jacobi_davidson_default, &
-                                   solver_conv_tol_default, &
                                    solver_n_random_trial_vectors_default, &
                                    solver_start_trust_radius_default, &
                                    solver_n_macro_default, solver_n_micro_default, &
@@ -178,19 +181,19 @@ contains
         logical(c_bool), intent(out) :: error_c
         type(c_funptr), intent(in), value :: precond_c_funptr, conv_check_c_funptr, &
                                              logger_c_funptr
-        type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
+        type(c_ptr), intent(in), value :: conv_tol_c_ptr, stability_c_ptr, &
+                                          hess_symm_c_ptr, line_search_c_ptr, &
                                           davidson_c_ptr, jacobi_davidson_c_ptr, &
                                           prefer_jacobi_davidson_c_ptr, &
-                                          conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
                                           start_trust_radius_c_ptr, n_macro_c_ptr, &
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
                                           local_red_factor_c_ptr, seed_c_ptr, &
                                           verbose_c_ptr
 
-        logical :: error, stability, line_search, davidson, jacobi_davidson, &
-                   prefer_jacobi_davidson
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
+        logical :: error, stability, hess_symm, line_search, davidson, &
+                   jacobi_davidson, prefer_jacobi_davidson
         integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, seed, verbose
         procedure(update_orbs_c_wrapper), pointer :: update_orbs
         procedure(obj_func_c_wrapper), pointer :: obj_func
@@ -199,14 +202,15 @@ contains
         procedure(logger_c_wrapper), pointer :: logger
 
         ! set optional arguments to default values
+        conv_tol = set_default_c_ptr(conv_tol_c_ptr, solver_conv_tol_default)
         stability = set_default_c_ptr(stability_c_ptr, solver_stability_default)
+        hess_symm = set_default_c_ptr(hess_symm_c_ptr, solver_hess_symm_default)
         line_search = set_default_c_ptr(line_search_c_ptr, solver_line_search_default)
         davidson = set_default_c_ptr(davidson_c_ptr, solver_davidson_default)
         jacobi_davidson = set_default_c_ptr(jacobi_davidson_c_ptr, &
                                             solver_jacobi_davidson_default)
         prefer_jacobi_davidson = set_default_c_ptr(prefer_jacobi_davidson_c_ptr, &
                                                   solver_prefer_jacobi_davidson_default)
-        conv_tol = set_default_c_ptr(conv_tol_c_ptr, solver_conv_tol_default)
         n_random_trial_vectors = set_default_c_ptr(n_random_trial_vectors_c_ptr, &
                                                   solver_n_random_trial_vectors_default)
         start_trust_radius = set_default_c_ptr(start_trust_radius_c_ptr, &
@@ -254,8 +258,8 @@ contains
             logger => null()
         end if
         call solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
-                    stability, line_search, davidson, jacobi_davidson, &
-                    prefer_jacobi_davidson, conv_tol, n_random_trial_vectors, &
+                    conv_tol, stability, hess_symm, line_search, davidson, &
+                    jacobi_davidson, prefer_jacobi_davidson, n_random_trial_vectors, &
                     start_trust_radius, n_macro, n_micro, global_red_factor, &
                     local_red_factor, seed, verbose, logger)
 
@@ -266,7 +270,8 @@ contains
 
     subroutine stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, &
                                          stable_c, kappa_c, error_c, precond_c_funptr, &
-                                         jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                         conv_tol_c_ptr, hess_symm_c_ptr, &
+                                         jacobi_davidson_c_ptr, &
                                          n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                          verbose_c_ptr, logger_c_funptr) &
         bind(C, name="stability_check")
@@ -274,8 +279,9 @@ contains
         ! this subroutine wraps the stability check subroutine to convert C variables
         ! to Fortran variables
         !
-        use opentrustregion, only: stability_jacobi_davidson_default, &
-                                   stability_conv_tol_default, &
+        use opentrustregion, only: stability_conv_tol_default, &
+                                   stability_hess_symm_default, &
+                                   stability_jacobi_davidson_default, &
                                    stability_n_random_trial_vectors_default, &
                                    stability_n_iter_default, &
                                    stability_verbose_default
@@ -286,22 +292,24 @@ contains
         logical(c_bool), intent(out) :: stable_c, error_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
         type(c_funptr), intent(in), value :: precond_c_funptr, logger_c_funptr
-        type(c_ptr), intent(in), value :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+        type(c_ptr), intent(in), value :: conv_tol_c_ptr, hess_symm_c_ptr, &
+                                          jacobi_davidson_c_ptr,  &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr
 
         real(rp) :: conv_tol, h_diag(n_param_c)
         real(rp) :: kappa(n_param_c)
-        logical :: stable, error, jacobi_davidson
+        logical :: stable, error, hess_symm, jacobi_davidson
         integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose
         procedure(hess_x_c_wrapper), pointer :: hess_x
         procedure(precond_c_wrapper), pointer :: precond
         procedure(logger_c_wrapper), pointer :: logger
 
         ! set optional arguments to default values
+        conv_tol = set_default_c_ptr(conv_tol_c_ptr, stability_conv_tol_default)
         jacobi_davidson = set_default_c_ptr(jacobi_davidson_c_ptr, &
                                             stability_jacobi_davidson_default)
-        conv_tol = set_default_c_ptr(conv_tol_c_ptr, stability_conv_tol_default)
+        hess_symm = set_default_c_ptr(hess_symm_c_ptr, stability_hess_symm_default)
         n_random_trial_vectors = set_default_c_ptr(n_random_trial_vectors_c_ptr, &
                                                stability_n_random_trial_vectors_default)
         n_iter = set_default_c_ptr(n_iter_c_ptr, stability_n_iter_default)
@@ -334,8 +342,8 @@ contains
             logger => null()
         end if
         call stability_check(h_diag, hess_x, stable, kappa, error, precond, &
-                             jacobi_davidson, conv_tol, n_random_trial_vectors, &
-                             n_iter, verbose, logger)
+                             conv_tol, hess_symm, jacobi_davidson, &
+                             n_random_trial_vectors, n_iter, verbose, logger)
 
         ! convert return arguments to C kind
         stable_c = stable

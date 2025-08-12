@@ -555,46 +555,47 @@ contains
 
     end function test_bracket
 
-    logical(c_bool) function test_extend_symm_matrix() bind(C)
+    logical(c_bool) function test_extend_matrix() bind(C)
         !
-        ! this function tests the subroutine for extending a symmetric matrix
+        ! this function tests the subroutine for extending a matrix
         !
-        use opentrustregion, only: extend_symm_matrix
+        use opentrustregion, only: extend_matrix
 
         real(rp), allocatable :: matrix(:, :)
-        real(rp) :: expected(3, 3), vector(3)
+        real(rp) :: expected(3, 3), vector1(3), vector2(3)
 
         ! assume tests pass
-        test_extend_symm_matrix = .true.
+        test_extend_matrix = .true.
 
         ! allocate and initialize symmetric matrix and vector to be added
         allocate (matrix(2, 2))
         matrix = reshape([1.d0, 2.d0, &
                           2.d0, 3.d0], [2, 2])
-        vector = [4.d0, 5.d0, 6.d0]
+        vector1 = [4.d0, 5.d0, 6.d0]
+        vector2 = [7.d0, 8.d0, 6.d0]
 
         ! initialize expected matrix
-        expected = reshape([1.d0, 2.d0, 4.d0, &
-                            2.d0, 3.d0, 5.d0, &
+        expected = reshape([1.d0, 2.d0, 7.d0, &
+                            2.d0, 3.d0, 8.d0, &
                             4.d0, 5.d0, 6.d0], [3, 3])
 
         ! call routine and determine if dimensions and values of resulting matrix match
-        call extend_symm_matrix(matrix, vector)
+        call extend_matrix(matrix, vector1, vector2)
         if (size(matrix, 1) /= 3 .or. size(matrix, 2) /= 3) then
-            write (stderr, *) "test_extend_symm_matrix failed: Incorrect matrix "// &
+            write (stderr, *) "test_extend_matrix failed: Incorrect matrix "// &
                 "dimensions after extending."
-            test_extend_symm_matrix = .false.
+            test_extend_matrix = .false.
         end if
         if (norm2(matrix - expected) > tol) then
-            write (stderr, *) "test_extend_symm_matrix failed: Incorrect matrix "// &
-                "values after extending."
-            test_extend_symm_matrix = .false.
+            write (stderr, *) "test_extend_matrix failed: Incorrect matrix values "// &
+                "after extending."
+            test_extend_matrix = .false.
         end if
 
         ! deallocate matrix
         deallocate (matrix)
 
-    end function test_extend_symm_matrix
+    end function test_extend_matrix
 
     logical(c_bool) function test_add_column() bind(C)
         !
@@ -680,19 +681,19 @@ contains
 
     end function test_symm_mat_min_eig
 
-    logical(c_bool) function test_min_eigval() bind(C)
+    logical(c_bool) function test_symm_mat_min_eigval() bind(C)
         !
         ! this function tests the function for determining the minimum eigenvalue for
         ! a symmetric matrix
         !
-        use opentrustregion, only: min_eigval
+        use opentrustregion, only: symm_mat_min_eigval
 
         type(settings_type) :: settings
         real(rp) :: matrix(3, 3), matrix_min_eigval
         logical :: error
 
         ! assume tests pass
-        test_min_eigval = .true.
+        test_symm_mat_min_eigval = .true.
 
         ! setup settings object
         call setup_settings(settings)
@@ -703,18 +704,18 @@ contains
                           1.d0, 2.d0, 5.d0], [3, 3])
 
         ! call function and determine if lowest eigenvalue is found
-        matrix_min_eigval = min_eigval(matrix, settings, error)
+        matrix_min_eigval = symm_mat_min_eigval(matrix, settings, error)
         if (error) then
-            write (stderr, *) "test_min_eigval failed: Produced error."
-            test_min_eigval = .false.
+            write (stderr, *) "test_symm_mat_min_eigval failed: Produced error."
+            test_symm_mat_min_eigval = .false.
         end if
         if (abs(matrix_min_eigval - 2.30797852837d0) > tol) then
-            write (stderr, *) "test_min_eigval failed: Incorrect minimum "// &
+            write (stderr, *) "test_symm_mat_min_eigval failed: Incorrect minimum "// &
                 "eigenvalue for matrix."
-            test_min_eigval = .false.
+            test_symm_mat_min_eigval = .false.
         end if
 
-    end function test_min_eigval
+    end function test_symm_mat_min_eigval
 
     logical(c_bool) function test_init_rng() bind(C)
         !
@@ -1031,12 +1032,12 @@ contains
         ! this function tests the subroutine which initializes the solver settings
         !
         use opentrustregion, only: logger_type, solver_settings_type, &
-                                   init_solver_settings, solver_stability_default, &
+                                   init_solver_settings, solver_conv_tol_default, &
+                                   solver_hess_symm_default, solver_stability_default, &
                                    solver_line_search_default, &
                                    solver_davidson_default, &
                                    solver_jacobi_davidson_default, &
                                    solver_prefer_jacobi_davidson_default, &
-                                   solver_conv_tol_default, &
                                    solver_n_random_trial_vectors_default, &
                                    solver_start_trust_radius_default, &
                                    solver_n_macro_default, solver_n_micro_default, &
@@ -1054,13 +1055,14 @@ contains
         call init_solver_settings(settings)
 
         ! check if default values are correctly set
-        if ((settings%stability .neqv. solver_stability_default) .or. &
+        if (abs(settings%conv_tol - solver_conv_tol_default) > tol .or. &
+            (settings%hess_symm .neqv. solver_hess_symm_default) .or. &
+            (settings%stability .neqv. solver_stability_default) .or. &
             (settings%line_search .neqv. solver_line_search_default) .or. &
             (settings%davidson .neqv. solver_davidson_default) .or. &
             (settings%jacobi_davidson .neqv. solver_jacobi_davidson_default) .or. &
             (settings%prefer_jacobi_davidson .neqv. &
              solver_prefer_jacobi_davidson_default) .or. &
-            abs(settings%conv_tol - solver_conv_tol_default) > tol .or. &
             settings%n_random_trial_vectors /= solver_n_random_trial_vectors_default &
             .or. abs(settings%start_trust_radius - solver_start_trust_radius_default) &
             > tol .or. settings%n_macro /= solver_n_macro_default .or. &
@@ -1079,21 +1081,23 @@ contains
         logger_funptr => logger
 
         ! call routine with optional arguments
-        call init_solver_settings(settings, stability=.false., line_search=.true., &
-                                  davidson=.false., jacobi_davidson=.false., &
-                                  prefer_jacobi_davidson=.true., conv_tol=1.d-3, &
+        call init_solver_settings(settings, conv_tol=1.d-3, stability=.false., &
+                                  hess_symm=.false., line_search=.true., &
+                                  davidson=.false., jacobi_davidson=.true., &
+                                  prefer_jacobi_davidson=.true., &
                                   n_random_trial_vectors=5, start_trust_radius=0.2d0, &
                                   n_macro=300, n_micro=200, global_red_factor=1.d-2, &
                                   local_red_factor=1.d-3, seed=33, verbose=3, &
                                   logger=logger_funptr)
 
         ! check if optional values are correctly set
-        if ((settings%stability .neqv. .false.) .or. &
+        if (abs(settings%conv_tol - 1.d-3) > tol .or. &
+            (settings%stability .neqv. .false.) .or. &
+            (settings%hess_symm .neqv. .false.) .or. &
             (settings%line_search .neqv. .true.) .or. &
             (settings%davidson .neqv. .false.) .or. &
-            (settings%jacobi_davidson .neqv. .false.) .or. &
+            (settings%jacobi_davidson .neqv. .true.) .or. &
             (settings%prefer_jacobi_davidson .neqv. .true.) .or. &
-            abs(settings%conv_tol - 1.d-3) > tol .or. &
             settings%n_random_trial_vectors /= 5 .or. &
             abs(settings%start_trust_radius - 0.2d0) > tol .or. settings%n_macro &
             /= 300 .or. settings%n_micro /= 200 .or. &
@@ -1121,8 +1125,9 @@ contains
         !
         use opentrustregion, only: logger_type, stability_settings_type, &
                                    init_stability_settings, &
-                                   stability_jacobi_davidson_default, &
                                    stability_conv_tol_default, &
+                                   stability_hess_symm_default, &
+                                   stability_jacobi_davidson_default, &
                                    stability_n_random_trial_vectors_default, &
                                    stability_n_iter_default, stability_verbose_default
 
@@ -1136,8 +1141,9 @@ contains
         call init_stability_settings(settings)
 
         ! check if default values are correctly set
-        if ((settings%jacobi_davidson .neqv. stability_jacobi_davidson_default) .or. &
-            abs(settings%conv_tol - stability_conv_tol_default) > tol .or. &
+        if (abs(settings%conv_tol - stability_conv_tol_default) > tol .or. &
+            (settings%hess_symm .neqv. stability_hess_symm_default) .or. &
+            (settings%jacobi_davidson .neqv. stability_jacobi_davidson_default) .or. &
             settings%n_random_trial_vectors /= &
             stability_n_random_trial_vectors_default .or. settings%n_iter /= &
             stability_n_iter_default .or. settings%verbose /= &
@@ -1151,15 +1157,16 @@ contains
         logger_funptr => logger
 
         ! call routine with optional arguments
-        call init_stability_settings(settings, jacobi_davidson=.false., &
-                                     conv_tol=1.d-3, n_random_trial_vectors=3, &
+        call init_stability_settings(settings, conv_tol=1.d-3, hess_symm=.false., &
+                                     jacobi_davidson=.true., n_random_trial_vectors=3, &
                                      n_iter=50, verbose=3, logger=logger_funptr)
 
         ! check if optional values are correctly set
-        if ((settings%jacobi_davidson .neqv. .false.) .or. &
-            abs(settings%conv_tol - 1.d-3) > tol .or. settings%n_random_trial_vectors &
-            /= 3 .or. settings%n_iter /= 50 .or. settings%verbose /= 3 .or. &
-            .not. associated(settings%logger)) then
+        if (abs(settings%conv_tol - 1.d-3) > tol .or. &
+            (settings%hess_symm .neqv. .false.) .or. &
+            (settings%jacobi_davidson .neqv. .true.) .or. &
+            settings%n_random_trial_vectors /= 3 .or. settings%n_iter /= 50 .or. &
+            settings%verbose /= 3 .or. .not. associated(settings%logger)) then
             write (stderr, *) "test_init_stability_settings failed: Optional "// &
                 "arguments not set correctly."
             test_init_stability_settings = .false.

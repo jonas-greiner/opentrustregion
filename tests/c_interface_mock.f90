@@ -41,10 +41,11 @@ contains
 
     subroutine mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
                                      n_param_c, error_c, precond_c_funptr, &
-                                     conv_check_c_funptr, stability_c_ptr, &
+                                     conv_check_c_funptr, conv_tol_c_ptr, &
+                                     stability_c_ptr, hess_symm_c_ptr, &
                                      line_search_c_ptr, davidson_c_ptr, &
                                      jacobi_davidson_c_ptr, &
-                                     prefer_jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                     prefer_jacobi_davidson_c_ptr, &
                                      n_random_trial_vectors_c_ptr, &
                                      start_trust_radius_c_ptr, n_macro_c_ptr, &
                                      n_micro_c_ptr, global_red_factor_c_ptr, &
@@ -59,10 +60,10 @@ contains
                                              logger_c_funptr
         logical(c_bool), intent(out) :: error_c
         integer(c_long), intent(in), value :: n_param_c
-        type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
+        type(c_ptr), intent(in), value :: conv_tol_c_ptr, stability_c_ptr, &
+                                          hess_symm_c_ptr, line_search_c_ptr, &
                                           davidson_c_ptr, jacobi_davidson_c_ptr, &
                                           prefer_jacobi_davidson_c_ptr, &
-                                          conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, &
                                           start_trust_radius_c_ptr, n_macro_c_ptr, &
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
@@ -80,10 +81,11 @@ contains
         type(c_ptr) :: grad_c_ptr, h_diag_c_ptr, hess_x_c_ptr, precond_residual_c_ptr
         procedure(precond_c_type), pointer :: precond_funptr
         procedure(conv_check_c_type), pointer :: conv_check_funptr
-        logical, pointer :: stability_ptr, line_search_ptr, davidson_ptr, &
-                            jacobi_davidson_ptr, prefer_jacobi_davidson_ptr
         real(c_double), pointer :: conv_tol_ptr, start_trust_radius_ptr, &
                                    global_red_factor_ptr, local_red_factor_ptr
+        logical, pointer :: stability_ptr, hess_symm_ptr, line_search_ptr, &
+                            davidson_ptr, jacobi_davidson_ptr, &
+                            prefer_jacobi_davidson_ptr
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_macro_ptr, &
                                     n_micro_ptr, seed_ptr, verbose_ptr
         procedure(logger_c_type), pointer :: logger_funptr
@@ -140,11 +142,11 @@ contains
         ! check if check if default arguments are correctly unassociated with values
         if (solver_default) then
             if (c_associated(precond_c_funptr) .or. c_associated(conv_check_c_funptr) &
-                .or. c_associated(stability_c_ptr) .or. &
+                .or. c_associated(conv_tol_c_ptr) .or. c_associated(stability_c_ptr) &
+                .or. c_associated(hess_symm_c_ptr) .or. &
                 c_associated(line_search_c_ptr) .or. c_associated(davidson_c_ptr) .or. &
                 c_associated(jacobi_davidson_c_ptr) .or. &
                 c_associated(prefer_jacobi_davidson_c_ptr) .or. &
-                c_associated(conv_tol_c_ptr) .or. &
                 c_associated(n_random_trial_vectors_c_ptr) .or. &
                 c_associated(start_trust_radius_c_ptr) .or. &
                 c_associated(n_macro_c_ptr) .or. c_associated(n_micro_c_ptr) .or. &
@@ -160,12 +162,13 @@ contains
         else
             if (.not. (c_associated(precond_c_funptr) .and. &
                        c_associated(conv_check_c_funptr) .and. &
+                       c_associated(conv_tol_c_ptr) .and. &
                        c_associated(stability_c_ptr) .and. &
+                       c_associated(hess_symm_c_ptr) .and. &
                        c_associated(line_search_c_ptr) .and. &
                        c_associated(davidson_c_ptr) .and. &
                        c_associated(jacobi_davidson_c_ptr) .and. &
                        c_associated(prefer_jacobi_davidson_c_ptr) .and. &
-                       c_associated(conv_tol_c_ptr) .and. &
                        c_associated(n_random_trial_vectors_c_ptr) .and. &
                        c_associated(start_trust_radius_c_ptr) .and. &
                        c_associated(n_macro_c_ptr) .and. &
@@ -205,13 +208,14 @@ contains
 
             ! get Fortran pointers to optional arguments and check against reference 
             ! values
+            call c_f_pointer(cptr=conv_tol_c_ptr, fptr=conv_tol_ptr)
             call c_f_pointer(cptr=stability_c_ptr, fptr=stability_ptr)
+            call c_f_pointer(cptr=hess_symm_c_ptr, fptr=hess_symm_ptr)
             call c_f_pointer(cptr=line_search_c_ptr, fptr=line_search_ptr)
             call c_f_pointer(cptr=davidson_c_ptr, fptr=davidson_ptr)
             call c_f_pointer(cptr=jacobi_davidson_c_ptr, fptr=jacobi_davidson_ptr)
             call c_f_pointer(cptr=prefer_jacobi_davidson_c_ptr, &
                              fptr=prefer_jacobi_davidson_ptr)
-            call c_f_pointer(cptr=conv_tol_c_ptr, fptr=conv_tol_ptr)
             call c_f_pointer(cptr=n_random_trial_vectors_c_ptr, &
                              fptr=n_random_trial_vectors_ptr)
             call c_f_pointer(cptr=start_trust_radius_c_ptr, fptr=start_trust_radius_ptr)
@@ -221,9 +225,9 @@ contains
             call c_f_pointer(cptr=local_red_factor_c_ptr, fptr=local_red_factor_ptr)
             call c_f_pointer(cptr=seed_c_ptr, fptr=seed_ptr)
             call c_f_pointer(cptr=verbose_c_ptr, fptr=verbose_ptr)
-            if (stability_ptr .or. .not. line_search_ptr .or. davidson_ptr .or. &
+            if (abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. stability_ptr .or. &
+                hess_symm_ptr .or. .not. line_search_ptr .or. davidson_ptr .or. &
                 jacobi_davidson_ptr .or. .not. prefer_jacobi_davidson_ptr .or. &
-                abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. &
                 n_random_trial_vectors_ptr /= 5_c_long .or. &
                 abs(start_trust_radius_ptr - 0.2_c_double) > tol .or. &
                 n_macro_ptr /= 300_c_long .or. n_micro_ptr /= 200_c_long .or. &
@@ -251,8 +255,8 @@ contains
 
     subroutine mock_stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, &
                                               stable_c, kappa_c, error_c, &
-                                              precond_c_funptr, jacobi_davidson_c_ptr, &
-                                              conv_tol_c_ptr, &
+                                              precond_c_funptr, conv_tol_c_ptr, &
+                                              hess_symm_c_ptr, jacobi_davidson_c_ptr, &
                                               n_random_trial_vectors_c_ptr, &
                                               n_iter_c_ptr, verbose_c_ptr, &
                                               logger_c_funptr) &
@@ -267,7 +271,8 @@ contains
                                              logger_c_funptr
         logical(c_bool), intent(out) :: stable_c, error_c
         real(c_double), intent(out) :: kappa_c(n_param_c)
-        type(c_ptr), value, intent(in) :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+        type(c_ptr), value, intent(in) :: conv_tol_c_ptr, hess_symm_c_ptr, &
+                                          jacobi_davidson_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr
 
@@ -276,8 +281,8 @@ contains
         type(c_ptr) :: hess_x_c_ptr, precond_residual_c_ptr
         real(c_double), pointer :: hess_x_ptr(:), precond_residual_ptr(:)
         real(c_double), dimension(n_param_c) :: x, residual
-        logical, pointer :: jacobi_davidson_ptr
         real(c_double), pointer :: conv_tol_ptr
+        logical, pointer :: hess_symm_ptr, jacobi_davidson_ptr
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_iter_ptr, verbose_ptr
         procedure(logger_c_type), pointer :: logger_funptr
         character(:), allocatable, target :: message
@@ -307,8 +312,9 @@ contains
         ! check if check if default arguments are correctly unassociated with values
         if (stability_check_default) then
             if (c_associated(precond_c_funptr) .or. &
-                c_associated(jacobi_davidson_c_ptr) .or. c_associated(conv_tol_c_ptr) &
-                .or. c_associated(n_random_trial_vectors_c_ptr) .or. &
+                c_associated(conv_tol_c_ptr) .or. c_associated(hess_symm_c_ptr) .or. &
+                c_associated(jacobi_davidson_c_ptr) .or.  &
+                c_associated(n_random_trial_vectors_c_ptr) .or. &
                 c_associated(n_iter_c_ptr) .or. c_associated(verbose_c_ptr) .or. &
                 c_associated(logger_c_funptr)) then
                 write (stderr, *) "test_stability_check_py_interface failed: "// &
@@ -318,8 +324,9 @@ contains
             ! check if check if optional arguments are associated with correct values
         else
             if (.not. (c_associated(precond_c_funptr) .and. &
-                       c_associated(jacobi_davidson_c_ptr) .and. &
                        c_associated(conv_tol_c_ptr) .and. &
+                       c_associated(jacobi_davidson_c_ptr) .and. &
+                       c_associated(hess_symm_c_ptr) .and. &
                        c_associated(n_random_trial_vectors_c_ptr) .and. &
                        c_associated(n_iter_c_ptr) .and. &
                        c_associated(verbose_c_ptr) .and. &
@@ -353,9 +360,9 @@ contains
                              fptr=n_random_trial_vectors_ptr)
             call c_f_pointer(cptr=n_iter_c_ptr, fptr=n_iter_ptr)
             call c_f_pointer(cptr=verbose_c_ptr, fptr=verbose_ptr)
-            if (jacobi_davidson_ptr .or. abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. &
-                n_random_trial_vectors_ptr /= 3_c_long .or. n_iter_ptr /= 50_c_long &
-                .or. verbose_ptr /= 3_c_long) then
+            if (abs(conv_tol_ptr - 1.e-3_c_double) > tol .or. hess_symm_ptr .or. &
+                jacobi_davidson_ptr .or. n_random_trial_vectors_ptr /= 3_c_long .or. &
+                n_iter_ptr /= 50_c_long .or. verbose_ptr /= 3_c_long) then
                 write (stderr, *) "test_stability_check_py_interface failed: "// &
                     "Passed optional arguments associated with wrong values."
                 test_stability_check_interface = .false.

@@ -53,12 +53,13 @@ The optimization process can be fine-tuned using the following optional argument
 
 - **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion.
+- **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
+- **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`line_search`** (boolean): Determines whether a line search is performed after every macro iteration.
 - **`davidson`** (boolean): Determines whether level-shifted augmented Hessian with Davidson or truncated conjugate gradient is utilized to solve the trust-region subsystem.
 - **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
 - **`prefer_jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson should be preferred over shrinking of the trust region whenever difficult convergence is encountered for Davidson iterations.
-- **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations.
 - **`start_trust_radius`** (real): Initial trust radius.
 - **`n_macro`** (integer): Maximum number of macro iterations.
@@ -82,8 +83,9 @@ A separate `stability_check` function is available to verify whether the current
 ### Optional Arguments
 
 - **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector.
-- **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
 - **`conv_tol`** (real): Convergence criterion for the residual norm.
+- **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
+- **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.
 - **`n_iter`** (integer): Maximum number of Davidson iterations.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.

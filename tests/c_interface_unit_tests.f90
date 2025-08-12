@@ -119,25 +119,25 @@ contains
                           conv_check_c_funptr = c_null_funptr, &
                           logger_c_funptr = c_null_funptr
         logical(c_bool) :: error
-        integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
-                                   n_macro = 300_c_long, n_micro = 200_c_long, &
-                                   seed = 33_c_long, verbose = 3_c_long
-        logical(c_bool), target :: stability = .false., line_search = .true., &
-                                   davidson = .false., jacobi_davidson = .false., &
-                                   prefer_jacobi_davidson = .true.
         real(c_double), target :: conv_tol = 1e-3_c_double, &
                                   start_trust_radius = 0.2_c_double, &
                                   global_red_factor = 1e-2_c_double, &
                                   local_red_factor = 1e-3_c_double
-        type(c_ptr) :: stability_c_ptr = c_null_ptr, line_search_c_ptr = c_null_ptr, &
+        logical(c_bool), target :: stability = .false., hess_symm = .false., &
+                                   line_search = .true., davidson = .false., &
+                                   jacobi_davidson = .false., &
+                                   prefer_jacobi_davidson = .true.
+        integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
+                                   n_macro = 300_c_long, n_micro = 200_c_long, &
+                                   seed = 33_c_long, verbose = 3_c_long
+        type(c_ptr) :: conv_tol_c_ptr = c_null_ptr, stability_c_ptr = c_null_ptr, &
+                       hess_symm_c_ptr = c_null_ptr, line_search_c_ptr = c_null_ptr, &
                        davidson_c_ptr = c_null_ptr, &
                        jacobi_davidson_c_ptr = c_null_ptr, &
                        prefer_jacobi_davidson_c_ptr = c_null_ptr, &
-                       conv_tol_c_ptr = c_null_ptr, &
                        n_random_trial_vectors_c_ptr = c_null_ptr, &
                        start_trust_radius_c_ptr = c_null_ptr, &
-                       n_macro_c_ptr = c_null_ptr, &
-                       n_micro_c_ptr = c_null_ptr, &
+                       n_macro_c_ptr = c_null_ptr, n_micro_c_ptr = c_null_ptr, &
                        global_red_factor_c_ptr = c_null_ptr, &
                        local_red_factor_c_ptr = c_null_ptr, &
                        seed_c_ptr = c_null_ptr, verbose_c_ptr = c_null_ptr
@@ -155,14 +155,14 @@ contains
         ! call solver first without associated optional arguments which should produce
         ! default values
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
-                              precond_c_funptr, conv_check_c_funptr, stability_c_ptr, &
-                              line_search_c_ptr, davidson_c_ptr, &
-                              jacobi_davidson_c_ptr, prefer_jacobi_davidson_c_ptr, &
-                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                              start_trust_radius_c_ptr, n_macro_c_ptr, n_micro_c_ptr, &
-                              global_red_factor_c_ptr, local_red_factor_c_ptr, &
-                              seed_c_ptr, verbose_c_ptr, logger_c_funptr)
-                              
+                              precond_c_funptr, conv_check_c_funptr, conv_tol_c_ptr, &
+                              stability_c_ptr, hess_symm_c_ptr, line_search_c_ptr, &
+                              davidson_c_ptr, jacobi_davidson_c_ptr, &
+                              prefer_jacobi_davidson_c_ptr, &
+                              n_random_trial_vectors_c_ptr, start_trust_radius_c_ptr, &
+                              n_macro_c_ptr, n_micro_c_ptr, global_red_factor_c_ptr, &
+                              local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
+                              logger_c_funptr)
 
         ! check if test has passed
         test_solver_c_wrapper = test_passed
@@ -177,12 +177,13 @@ contains
         ! associate optional arguments with values
         precond_c_funptr = c_funloc(mock_precond)
         conv_check_c_funptr = c_funloc(mock_conv_check)
+        conv_tol_c_ptr = c_loc(conv_tol)
         stability_c_ptr = c_loc(stability)
+        hess_symm_c_ptr = c_loc(hess_symm)
         line_search_c_ptr = c_loc(line_search)
         davidson_c_ptr = c_loc(davidson)
         jacobi_davidson_c_ptr = c_loc(jacobi_davidson)
         prefer_jacobi_davidson_c_ptr = c_loc(prefer_jacobi_davidson)
-        conv_tol_c_ptr = c_loc(conv_tol)
         n_random_trial_vectors_c_ptr = c_loc(n_random_trial_vectors)
         start_trust_radius_c_ptr = c_loc(start_trust_radius)
         n_macro_c_ptr = c_loc(n_macro)
@@ -198,13 +199,14 @@ contains
 
         ! call solver with associated optional arguments
         call solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, error, &
-                              precond_c_funptr, conv_check_c_funptr, stability_c_ptr, &
-                              line_search_c_ptr, davidson_c_ptr, &
-                              jacobi_davidson_c_ptr, prefer_jacobi_davidson_c_ptr, &
-                              conv_tol_c_ptr, n_random_trial_vectors_c_ptr, &
-                              start_trust_radius_c_ptr, n_macro_c_ptr, n_micro_c_ptr, &
-                              global_red_factor_c_ptr, local_red_factor_c_ptr, &
-                              seed_c_ptr, verbose_c_ptr, logger_c_funptr)
+                              precond_c_funptr, conv_check_c_funptr, conv_tol_c_ptr, &
+                              stability_c_ptr, hess_symm_c_ptr, line_search_c_ptr, &
+                              davidson_c_ptr, jacobi_davidson_c_ptr, &
+                              prefer_jacobi_davidson_c_ptr, &
+                              n_random_trial_vectors_c_ptr, start_trust_radius_c_ptr, &
+                              n_macro_c_ptr, n_micro_c_ptr, global_red_factor_c_ptr, &
+                              local_red_factor_c_ptr, seed_c_ptr, verbose_c_ptr, &
+                              logger_c_funptr)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -236,12 +238,13 @@ contains
         type(c_funptr) :: hess_x_c_funptr, precond_c_funptr = c_null_funptr, &
                           logger_c_funptr = c_null_funptr
         logical(c_bool) :: stable, error
-        logical(c_bool), target :: jacobi_davidson = .false.
         real(c_double), target :: conv_tol = 1e-3_c_double
+        logical(c_bool), target :: hess_symm = .false., jacobi_davidson = .false.
         integer(c_long), target :: n_random_trial_vectors = 3_c_long, &
                                    n_iter = 50_c_long, verbose = 3_c_long
-        type(c_ptr) :: jacobi_davidson_c_ptr = c_null_ptr, &
-                       conv_tol_c_ptr = c_null_ptr, &
+        type(c_ptr) :: conv_tol_c_ptr = c_null_ptr, &
+                       hess_symm_c_ptr = c_null_ptr, &
+                       jacobi_davidson_c_ptr = c_null_ptr, &
                        n_random_trial_vectors_c_ptr = c_null_ptr, &
                        n_iter_c_ptr = c_null_ptr, verbose_c_ptr = c_null_ptr
 
@@ -261,7 +264,8 @@ contains
         ! produce default values
         call stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param, stable, &
                                        kappa, error, precond_c_funptr, &
-                                       jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                       conv_tol_c_ptr, hess_symm_c_ptr, &
+                                       jacobi_davidson_c_ptr, &
                                        n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                        verbose_c_ptr, logger_c_funptr)
 
@@ -289,8 +293,9 @@ contains
 
         ! associate optional arguments with values
         precond_c_funptr = c_funloc(mock_precond)
-        jacobi_davidson_c_ptr = c_loc(jacobi_davidson)
         conv_tol_c_ptr = c_loc(conv_tol)
+        hess_symm_c_ptr = c_loc(hess_symm)
+        jacobi_davidson_c_ptr = c_loc(jacobi_davidson)
         n_random_trial_vectors_c_ptr = c_loc(n_random_trial_vectors)
         n_iter_c_ptr = c_loc(n_iter)
         verbose_c_ptr = c_loc(verbose)
@@ -302,9 +307,9 @@ contains
         ! call stability check with associated optional arguments
         call stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param, stable, &
                                        kappa, error, precond_c_funptr, &
-                                       jacobi_davidson_c_ptr, conv_tol_c_ptr, &
-                                       n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
-                                       verbose_c_ptr, logger_c_funptr)
+                                       conv_tol_c_ptr, jacobi_davidson_c_ptr, &
+                                       hess_symm_c_ptr, n_random_trial_vectors_c_ptr, &
+                                       n_iter_c_ptr, verbose_c_ptr, logger_c_funptr)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
