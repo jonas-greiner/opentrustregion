@@ -581,7 +581,7 @@ contains
         deallocate (red_space_basis)
 
         ! determine if saddle point
-        stable = eigval > -1.d-4
+        stable = eigval > -1.d-2
         if (stable) then
             kappa = 0.d0
         else
@@ -747,7 +747,7 @@ contains
             if (error) return
 
             ! check if eigenvector has level-shift component
-            if (abs(eigvec(1)) < 1d-14) then
+            if (abs(eigvec(1)) == 0.d0) then
                 call settings%log("Trial subspace too small. Increase "// &
                     "n_random_trial_vectors.", 1, .true.)
                 error = .true.
@@ -1161,7 +1161,7 @@ contains
         ! initialize error flag
         error = .false.
 
-        if (dnrm2(size(vector), vector, 1) < 1.d-12) then
+        if (dnrm2(size(vector), vector, 1) < 1.d-16) then
             call settings%log("Vector passed to Gram-Schmidt procedure is "// &
                 "numerically zero.", 1, .true.)
             error = .true.
