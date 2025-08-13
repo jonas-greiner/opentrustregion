@@ -671,6 +671,7 @@ contains
 
         real(rp) :: lower_alpha, middle_alpha, upper_alpha, lower_trust_dist, &
                     middle_trust_dist, upper_trust_dist
+        integer(ip) :: iter
         real(rp), external :: dnrm2
 
         ! initialize error flag
@@ -707,6 +708,7 @@ contains
 
         ! perform bisection to find root, converge to relative threshold to avoid 
         ! precision issues
+        iter = 0
         do while (upper_alpha - lower_alpha > 1.d-12 * upper_alpha)
             ! targeted trust radius is in upper bracket
             if (lower_trust_dist*middle_trust_dist > 0.d0) then
@@ -722,6 +724,14 @@ contains
             call get_ah_lowest_eigenvec(middle_alpha)
             if (error) return
             middle_trust_dist = dnrm2(size(solution), solution, 1) - trust_radius
+            ! check if maximum number of iterations is reached
+            iter = iter + 1
+            if (iter > 100) then
+                call settings%log("Maximum number of bisection iterations reached.", &
+                                  1, .true.)
+                error = .true.
+                return
+            end if
         end do
 
         bracketed = .true.
@@ -778,6 +788,7 @@ contains
 
         real(rp) :: n_kappa, f_upper, f_lower, n_a, n_b, n_c, n_u, f_a, f_b, f_c, f_u, &
                     n_u_lim, tmp1, tmp2, val, denom
+        integer(ip) :: iter
         real(rp), parameter :: golden_ratio = (1.d0 + sqrt(5.d0))/2.d0, &
                                grow_limit = 110.d0
 
@@ -806,6 +817,7 @@ contains
         f_c = obj_func(n_c*kappa)
 
         ! continue looping until function at middle point is lower than at brackets
+        iter = 0
         do while (f_c < f_b)
             ! compute value u by parabolic extrapolation
             tmp1 = (n_b - n_a)*(f_b - f_c)
@@ -868,7 +880,14 @@ contains
             f_a = f_b
             f_b = f_c
             f_c = f_u
-
+            ! check if maximum number of iterations is reached
+            iter = iter + 1
+            if (iter > 100) then
+                call settings%log("Maximum number of bracketing iterations reached.", &
+                                  1, .true.)
+                error = .true.
+                return
+            end if
         end do
 
         ! check if miniumum is bracketed
@@ -1155,7 +1174,7 @@ contains
 
         real(rp) :: orth(size(space, 2)), dot, norm
 
-        integer(ip) :: i
+        integer(ip) :: iter, i
         real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
@@ -1173,6 +1192,7 @@ contains
             return
         end if
 
+        iter = 0
         if (.not. (present(lin_trans_vector) .and. present(lin_trans_space))) then
             do while (.true.)
                 do i = 1, size(space, 2)
@@ -1183,6 +1203,13 @@ contains
                 call dgemv("T", size(vector), size(space, 2), 1.d0, space, &
                            size(vector), vector, 1, 0.d0, orth, 1)
                 if (maxval(abs(orth)) < 1.d-14) exit
+                iter = iter + 1
+                if (iter > 100) then
+                    call settings%log("Maximum number of Gram-Schmidt iterations "// &
+                                      "reached.", 1, .true.)
+                    error = .true.
+                    return
+                end if
             end do
         else
             do while (.true.)
@@ -1198,6 +1225,13 @@ contains
                 call dgemv("T", size(vector), size(space, 2), 1.d0, space, &
                            size(vector), vector, 1, 0.d0, orth, 1)
                 if (maxval(abs(orth)) < 1.d-14) exit
+                iter = iter + 1
+                if (iter > 100) then
+                    call settings%log("Maximum number of Gram-Schmidt iterations "// &
+                                      "reached.", 1, .true.)
+                    error = .true.
+                    return
+                end if
             end do
         end if
 
@@ -2173,11 +2207,11 @@ contains
         ! evaluate function at predicted point
         new_func = obj_func(solution)
 
-        ! calculate ratio of evaluated function and predicted function
-        ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                         grad + 0.5d0*h_solution, 1)
-
         if (abs(new_func - func) / max(abs(new_func), abs(func)) > 1.d-14) then
+            ! calculate ratio of evaluated function and predicted function
+            ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                             grad + 0.5d0*h_solution, 1)
+
             ! reduce trust region until step is accepted
             do while (.true.)
                 ! decide whether to accept step and modify trust radius
