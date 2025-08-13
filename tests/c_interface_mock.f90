@@ -355,6 +355,7 @@ contains
             ! get Fortran pointers to optional arguments and check against reference 
             ! values
             call c_f_pointer(cptr=conv_tol_c_ptr, fptr=conv_tol_ptr)
+            call c_f_pointer(cptr=hess_symm_c_ptr, fptr=hess_symm_ptr)
             call c_f_pointer(cptr=jacobi_davidson_c_ptr, fptr=jacobi_davidson_ptr)
             call c_f_pointer(cptr=n_random_trial_vectors_c_ptr, &
                              fptr=n_random_trial_vectors_ptr)
