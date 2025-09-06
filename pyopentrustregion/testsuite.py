@@ -44,12 +44,17 @@ except OSError:
 # define all tests
 fortran_tests = {
     "opentrustregion_tests": [
+        "truncated_conjugate_gradient",
+        "level_shifted_davidson",
+        "sanity_check",
+        "accept_trust_region_step",
         "split_string_by_space",
         "log",
         "print_results",
         "minres",
         "jacobi_davidson_correction",
         "orthogonal_projection",
+        "abs_diag_precond",
         "level_shifted_diag_precond",
         "set_default",
         "init_solver_settings",

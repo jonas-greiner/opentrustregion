@@ -537,11 +537,24 @@ contains
 
         ! define lower and upper bound
         lower = 0.d0
-        upper = 1.d0
+        upper = 0.5d0
 
         ! perform bracket and determine if new point decreases objective function in
         ! comparison to lower and upper bound
         n = bracket(obj_func, vars, lower, upper, settings, error)
+        if (error) then
+            write (stderr, *) "test_bracket failed: Produced error."
+            test_bracket = .false.
+        end if
+        if (obj_func(n*vars) >= obj_func(lower*vars) .and. obj_func(n*vars) >= &
+            obj_func(upper*vars)) then
+            write (stderr, *) "test_bracket failed: Line search does not produce "// &
+                "lower function value than starting points."
+            test_bracket = .false.
+        end if
+
+        ! try different order
+        n = bracket(obj_func, vars, upper, lower, settings, error)
         if (error) then
             write (stderr, *) "test_bracket failed: Produced error."
             test_bracket = .false.
@@ -1228,7 +1241,7 @@ contains
 
     logical(c_bool) function test_level_shifted_diag_precond() bind(C)
         !
-        ! this function tests the subroutine that constructs the default diagonal 
+        ! this function tests the subroutine that constructs the level-shifted diagonal 
         ! preconditioner
         !
         use opentrustregion, only: level_shifted_diag_precond
@@ -1240,17 +1253,43 @@ contains
 
         ! initialize quantities
         residual = [1.d0, 1.d0, 1.d0]
-        h_diag = [-1.d0, 1.d0, 2.d0]
+        h_diag = [-2.d0, 1.d0, 2.d0]
 
         ! call function and check if results match
         if (any(abs(level_shifted_diag_precond(residual, -2.d0, h_diag) - &
-                    [1.d0, 1.d0 / 3, 0.25d0]) > tol)) then
+                    [1.d10, 1.d0 / 3, 0.25d0]) > tol)) then
             write (stderr, *) "test_level_shifted_diag_precond failed: Returned "// &
                 "preconditioned residual not correct."
             test_level_shifted_diag_precond = .false.
         end if
 
     end function test_level_shifted_diag_precond
+
+    logical(c_bool) function test_abs_diag_precond() bind(C)
+        !
+        ! this function tests the subroutine that constructs the absolute diagonal 
+        ! preconditioner
+        !
+        use opentrustregion, only: abs_diag_precond
+
+        real(rp) :: residual(3), h_diag(3)
+
+        ! assume tests pass
+        test_abs_diag_precond = .true.
+
+        ! initialize quantities
+        residual = [1.d0, 1.d0, 1.d0]
+        h_diag = [-2.d0, 0.d0, 2.d0]
+
+        ! call function and check if results match
+        if (any(abs(abs_diag_precond(residual, h_diag) - [0.5d0, 1.d10, 0.5d0]) > &
+            tol)) then
+            write (stderr, *) "test_abs_diag_precond failed: Returned "// &
+                "preconditioned residual not correct."
+            test_abs_diag_precond = .false.
+        end if
+
+    end function test_abs_diag_precond
 
     logical(c_bool) function test_orthogonal_projection() bind(C)
         !
@@ -1383,6 +1422,21 @@ contains
             test_minres = .false.
         end if
 
+        ! run minimum residual method for vanishing right hand side
+        rhs = 0.d0
+        call minres(-rhs, hess_x_funptr, solution, mu, 1d-14, vector, hess_vector, &
+                    settings, error)
+        if (sum(abs(vector)) > tol) then
+            write (stderr, *) "test_minres failed: Returned solution is not zero "// &
+                "for a vanishing rhs."
+            test_minres = .false.
+        end if
+        if (sum(abs(hess_vector)) > tol) then
+            write (stderr, *) "test_minres failed: Returned Hessian linear "// &
+                "transformation is not zero for a vanishing rhs."
+            test_minres = .false.
+        end if
+
     end function test_minres
 
     logical(c_bool) function test_print_results() bind(C)
@@ -1496,5 +1550,466 @@ contains
         end if
 
     end function test_split_string_by_space
+
+    logical(c_bool) function test_accept_trust_region_step() bind(C)
+        !
+        ! this function tests the subroutine which determines whether to accept a 
+        ! trust-region step
+        !
+        use opentrustregion, only: solver_settings_type, &
+                                   accept_trust_region_step, &
+                                   trust_radius_shrink_ratio, &
+                                   trust_radius_expand_ratio, &
+                                   trust_radius_shrink_factor, &
+                                   trust_radius_expand_factor
+
+        logical :: accept_step, max_precision_reached
+        real(rp) :: solution(3), trust_radius
+        type(solver_settings_type) :: settings
+
+        ! assume tests pass
+        test_accept_trust_region_step = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        solution = [0.3d0, 0.3d0, 0.3d0]
+
+        ! check if step is rejected and trust radius is correctly reduced if micro 
+        ! iterations have not converged
+        trust_radius = 1.d0
+        accept_step = accept_trust_region_step(solution, 1.d0, .false., settings, &
+                                               trust_radius, max_precision_reached)
+        if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
+                "or trust radius not correctly reduced when micro iterations have "// &
+                "not converged."
+            test_accept_trust_region_step = .false.
+        end if
+
+        ! check if step is rejected and trust radius is correctly reduced if ratio is 
+        ! negative
+        trust_radius = 1.d0
+        accept_step = accept_trust_region_step(solution, -1.d0, .true., settings, &
+                                               trust_radius, max_precision_reached)
+        if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// & 
+                "or trust radius not correctly reduced when ratio is negative."
+            test_accept_trust_region_step = .false.
+        end if
+
+        ! check if step is rejected and trust radius is correctly reduced if 
+        ! individual rotations are too large
+        trust_radius = 1.d0
+        solution(1) = 1.d0
+        accept_step = accept_trust_region_step(solution, 1.d0, .true., settings, &
+                                               trust_radius, max_precision_reached)
+        if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
+                "or trust radius not correctly reduced when individual rotations "// &
+                "are too large."
+            test_accept_trust_region_step = .false.
+        end if
+        solution(1) = 0.3d0
+
+        ! check if step is accepted and trust radius is correctly reduced if ratio is 
+        ! too small
+        trust_radius = 1.d0
+        accept_step = accept_trust_region_step(solution, &
+                                               0.9d0 * trust_radius_shrink_ratio, &
+                                               .true., settings, trust_radius, &
+                                               max_precision_reached)
+        if (.not. accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > &
+            tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
+                "accepted or trust radius not correctly reduced when ratio is too "// &
+                "small."
+            test_accept_trust_region_step = .false.
+        end if
+
+        ! check if step is accepted and trust radius is correctly reduced if ratio is 
+        ! ok
+        trust_radius = 1.d0
+        accept_step = accept_trust_region_step(solution, &
+                                               0.5d0 * (trust_radius_shrink_ratio + &
+                                               trust_radius_expand_ratio), .true., &
+                                               settings, trust_radius, &
+                                               max_precision_reached)
+        if (.not. accept_step .or. abs(trust_radius - 1.d0) > tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
+                "accepted or trust radius changed when ratio is acceptable."
+            test_accept_trust_region_step = .false.
+        end if
+
+        ! check if step is accepted and trust radius is correctly expanded if ratio is 
+        ! too large
+        trust_radius = 1.d0
+        accept_step = accept_trust_region_step(solution, &
+                                               1.1d0 * trust_radius_expand_ratio, &
+                                               .true., settings, trust_radius, &
+                                               max_precision_reached)
+        if (.not. accept_step .or. abs(trust_radius - trust_radius_expand_factor) > &
+            tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
+                "accepted or trust radius not correctly expanded when ratio is too "// &
+                "large."
+            test_accept_trust_region_step = .false.
+        end if
+
+    end function test_accept_trust_region_step
+
+    logical(c_bool) function test_sanity_check() bind(C)
+        !
+        ! this function tests the subroutine which performs a sanity check
+        !
+        use opentrustregion, only: solver_settings_type, sanity_check
+
+        type(solver_settings_type) :: settings
+        real(rp) :: grad(3)
+        logical :: error
+
+        ! assume tests pass
+        test_sanity_check = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! check if error is incorrectly thrown for finite and non-negative number of 
+        ! parameters
+        settings%davidson = .true.
+        settings%n_random_trial_vectors = 0
+        call sanity_check(settings, 3, grad, error)
+        if (error) then
+            write(stderr, *) "test_sanity_check failed: Error thrown for "// &
+                "non-negative and non-vanishing number of parameters."
+            test_sanity_check = .false.
+        end if
+
+        ! check if error is correctly thrown for vanishing number of parameters
+        call sanity_check(settings, 0, grad, error)
+        if (.not. error) then
+            write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
+                "vanishing number of parameters."
+            test_sanity_check = .false.
+        end if
+
+        ! check if error is correctly thrown for negative number of parameters
+        call sanity_check(settings, -1, grad, error)
+        if (.not. error) then
+            write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
+                "negative number of parameters."
+            test_sanity_check = .false.
+        end if
+
+        ! check if number of random trial vectors is reduced correctly
+        settings%n_random_trial_vectors = 3
+        call sanity_check(settings, 3, grad, error)
+        if (settings%n_random_trial_vectors /= 1) then
+            write(stderr, *) "test_sanity_check failed: Number of random trial not "// &
+                "correctly set."
+            test_sanity_check = .false.
+        end if
+
+        ! check if gradient size is treated correctly
+        call sanity_check(settings, 3, grad, error)
+        if (error) then
+            write(stderr, *) "test_sanity_check failed: Error thrown for correct "// &
+                "gradient size."
+            test_sanity_check = .false.
+        end if
+        call sanity_check(settings, 4, grad, error)
+        if (.not. error) then
+            write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
+                "incorrect gradient size."
+            test_sanity_check = .false.
+        end if
+
+    end function test_sanity_check
+
+    logical(c_bool) function test_level_shifted_davidson() bind(C)
+        !
+        ! this function tests the level-shifted Davidson subroutine
+        !
+        use opentrustregion, only: obj_func_type, hess_x_type, precond_type, &
+                                   solver_settings_type, level_shifted_davidson, &
+                                   trust_radius_shrink_ratio, &
+                                   trust_radius_expand_ratio, &
+                                   trust_radius_shrink_factor, &
+                                   trust_radius_expand_factor
+
+        integer(ip), parameter :: n_param = 6
+        real(rp) :: func, grad_norm, trust_radius, mu, ratio, solution_norm
+        real(rp), dimension(n_param) :: grad, h_diag, solution
+        integer(ip) :: i, imicro, imicro_jacobi_davidson
+        procedure(obj_func_type), pointer :: obj_func_funptr
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        procedure(precond_type), pointer :: precond_funptr
+        type(solver_settings_type) :: settings
+        logical :: jacobi_davidson_started, max_precision_reached, error
+
+        ! assume tests pass
+        test_level_shifted_davidson = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+        settings%n_random_trial_vectors = 1
+        settings%n_micro = 50
+        settings%global_red_factor = 1d-3
+        settings%local_red_factor = 1d-4
+        settings%jacobi_davidson = .false.
+        settings%prefer_jacobi_davidson = .false.
+
+        ! initialize variables
+        trust_radius = 0.4d0
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x
+
+        ! start in quadratic region near minimum
+        curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        func = hartmann6d_func(curr_vars)
+        call hartmann6d_gradient(curr_vars, grad)
+        grad_norm = norm2(grad)
+        call hartmann6d_hessian(curr_vars)
+        h_diag = [(hess(i, i), i=1, size(h_diag))]
+
+        ! run level-shifted Davidson, check if error has occured, whether the level 
+        ! shift vanishes and whether the solution stays within trust region and 
+        ! describes the Newton step
+        call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+                                    obj_func_funptr, hess_x_funptr, settings, &
+                                    .false., precond_funptr, trust_radius, solution, &
+                                    mu, imicro, imicro_jacobi_davidson, &
+                                    jacobi_davidson_started, max_precision_reached, &
+                                    error)
+        if (error) then
+            write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "near minimum."
+            test_level_shifted_davidson = .false.
+        end if
+        if (abs(mu) > tol) then
+            write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
+                "not zero near minimum."
+            test_level_shifted_davidson = .false.
+        end if
+        if (sum(abs(grad + hess_x(solution))) > settings%local_red_factor * grad_norm) &
+            then
+            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
+                "not describe Newton step near minimum."
+            test_level_shifted_davidson = .false.
+        end if
+        ratio = (obj_func_funptr(solution) - func) / &
+                dot_product(solution, grad + 0.5d0*hess_x_funptr(solution))
+        solution_norm = norm2(solution)
+        if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
+             / trust_radius_shrink_factor) .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. solution_norm > trust_radius) .or. &
+            (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius &
+            / trust_radius_expand_factor)) then
+            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
+                "not stay within trust region near minimum."
+            test_level_shifted_davidson = .false.
+        end if
+
+        ! start near saddle point
+        curr_vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        func = hartmann6d_func(curr_vars)
+        call hartmann6d_gradient(curr_vars, grad)
+        grad_norm = norm2(grad)
+        call hartmann6d_hessian(curr_vars)
+        h_diag = [(hess(i, i), i=1, size(h_diag))]
+        trust_radius = 0.4d0
+
+        ! run level-shifted Davidson, check if error has occured, whether the level 
+        ! shift is negative and whether the solution lies at the trust region boundary 
+        ! and describes a level-shifted Newton step
+        call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+                                    obj_func_funptr, hess_x_funptr, settings, &
+                                    .false., precond_funptr, trust_radius, solution, &
+                                    mu, imicro, imicro_jacobi_davidson, &
+                                    jacobi_davidson_started, max_precision_reached, &
+                                    error)
+        if (error) then
+            write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "near saddle point."
+            test_level_shifted_davidson = .false.
+        end if
+        if (mu >= 0.d0) then
+            write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
+                "not negative near saddle point."
+            test_level_shifted_davidson = .false.
+        end if
+        if (sum(abs(grad + hess_x(solution) - mu * solution)) > &
+            settings%global_red_factor * grad_norm) then
+            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
+                "not describe level-shifted Newton step near saddle point."
+            test_level_shifted_davidson = .false.
+        end if
+        ratio = (obj_func_funptr(solution) - func) / &
+                dot_product(solution, grad + 0.5d0*hess_x_funptr(solution))
+        solution_norm = norm2(solution)
+        if ((trust_radius_shrink_ratio > ratio .and. &
+             abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
+             tol) .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. abs(solution_norm - trust_radius ** 2) < tol) .or. &
+            (ratio > trust_radius_expand_ratio .and. &
+             abs(solution_norm - (trust_radius / trust_radius_expand_factor) ** 2) < &
+             tol)) then
+            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
+                "not lie at trust region boundary near saddle point."
+            test_level_shifted_davidson = .false.
+        end if
+
+        ! test Jacobi-Davidson near saddle point
+        settings%jacobi_davidson = .true.
+        trust_radius = 0.4d0
+
+        ! run level-shifted Jacobi-Davidson, check if error has occured, whether the 
+        ! level shift is negative and whether the solution lies at the trust region 
+        ! boundary and describes a level-shifted Newton step
+        call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+                                    obj_func_funptr, hess_x_funptr, settings, &
+                                    .false., precond_funptr, trust_radius, solution, &
+                                    mu, imicro, imicro_jacobi_davidson, &
+                                    jacobi_davidson_started, max_precision_reached, &
+                                    error)
+        if (error) then
+            write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "near saddle point with Jacobi-Davidson solver."
+            test_level_shifted_davidson = .false.
+        end if
+        if (mu >= 0.d0) then
+            write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
+                "not negative near saddle point with Jacobi-Davidson solver."
+            test_level_shifted_davidson = .false.
+        end if
+        if (sum(abs(grad + hess_x(solution) - mu * solution)) > &
+            settings%global_red_factor * grad_norm) then
+            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
+                "not describe level-shifted Newton step near saddle point with "// &
+                "Jacobi-Davidson solver."
+            test_level_shifted_davidson = .false.
+        end if
+        ratio = (obj_func_funptr(solution) - func) / &
+                dot_product(solution, grad + 0.5d0*hess_x_funptr(solution))
+        solution_norm = norm2(solution)
+        if ((trust_radius_shrink_ratio > ratio .and. &
+             abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
+             tol) .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. abs(solution_norm - trust_radius ** 2) < tol) .or. &
+            (ratio > trust_radius_expand_ratio .and. &
+             abs(solution_norm - (trust_radius / trust_radius_expand_factor) ** 2) < &
+             tol)) then
+            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
+                "not lie at trust region boundary near saddle point with "// &
+                "Jacobi-Davidson solver."
+            test_level_shifted_davidson = .false.
+        end if
+
+    end function test_level_shifted_davidson
+
+    logical(c_bool) function test_truncated_conjugate_gradient() bind(C)
+        !
+        ! this function tests the truncated conjugate gradient subroutine
+        !
+        use opentrustregion, only: obj_func_type, hess_x_type, precond_type, &
+                                   solver_settings_type, truncated_conjugate_gradient, &
+                                   trust_radius_shrink_ratio, &
+                                   trust_radius_expand_ratio, &
+                                   trust_radius_shrink_factor, &
+                                   trust_radius_expand_factor
+
+        integer(ip), parameter :: n_param = 6
+        real(rp) :: func, trust_radius, ratio, solution_norm
+        real(rp), dimension(n_param) :: grad, h_diag, solution
+        integer(ip) :: i, imicro
+        procedure(obj_func_type), pointer :: obj_func_funptr
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        procedure(precond_type), pointer :: precond_funptr
+        type(solver_settings_type) :: settings
+        logical :: max_precision_reached, error
+
+        ! assume tests pass
+        test_truncated_conjugate_gradient = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+        settings%n_micro = 50
+
+        ! initialize variables
+        trust_radius = 0.4d0
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x
+
+        ! start in quadratic region near minimum
+        curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        func = hartmann6d_func(curr_vars)
+        call hartmann6d_gradient(curr_vars, grad)
+        call hartmann6d_hessian(curr_vars)
+        h_diag = [(hess(i, i), i=1, size(h_diag))]
+
+        ! run truncated conjugate gradient, check whether the solution lies at the 
+        ! trust region boundary and reduces the function value
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, .false., &
+                                          precond_funptr, settings, trust_radius, &
+                                          solution, imicro, max_precision_reached)
+        ratio = (obj_func_funptr(solution) - func) / &
+                dot_product(solution, grad + 0.5d0*hess_x_funptr(solution))
+        if (ratio <= 0.d0) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "does not reduce function value near minimum."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        solution_norm = dot_product(solution, solution / max(abs(h_diag), 1.d-10))
+        if ((ratio < trust_radius_shrink_ratio .and. solution_norm > (trust_radius / &
+             trust_radius_shrink_factor) ** 2) .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. solution_norm > trust_radius ** 2) .or. &
+            (ratio > trust_radius_expand_ratio .and. solution_norm > (trust_radius / &
+             trust_radius_expand_factor) ** 2)) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "does not stay within trust region near minimum."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
+        ! start near saddle point
+        curr_vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        func = hartmann6d_func(curr_vars)
+        call hartmann6d_gradient(curr_vars, grad)
+        call hartmann6d_hessian(curr_vars)
+        h_diag = [(hess(i, i), i=1, size(h_diag))]
+        trust_radius = 0.4d0
+
+        ! run truncated conjugate gradient, check whether the solution lies at the 
+        ! trust region boundary and reduces the function value
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, .false., &
+                                          precond_funptr, settings, trust_radius, &
+                                          solution, imicro, max_precision_reached)
+        ratio = (obj_func_funptr(solution) - func) / &
+                dot_product(solution, grad + 0.5d0*hess_x_funptr(solution))
+        if (ratio <= 0.d0) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "does not reduce function value near saddle point."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        solution_norm = dot_product(solution, solution / max(abs(h_diag), 1.d-10))
+        if ((trust_radius_shrink_ratio > ratio .and. &
+             abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
+             tol) .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. abs(solution_norm - trust_radius ** 2) < tol) .or. &
+            (ratio > trust_radius_expand_ratio .and. &
+             abs(solution_norm - (trust_radius / trust_radius_expand_factor) ** 2) < &
+             tol)) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "does not lie at trust region boundary near saddle point."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
+    end function test_truncated_conjugate_gradient
 
 end module opentrustregion_unit_tests

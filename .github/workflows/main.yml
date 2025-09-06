@@ -59,7 +59,12 @@ jobs:
       with:
         python-version: 3.x
 
-    - name: Install GNU compilers
+    - name: Install Fortran compiler on MacOS
+      if: ${{ contains(matrix.os, 'macos') }}
+      run: |
+        echo "FC=$(ls $(brew --prefix)/bin/gfortran-* | tail -1)" >> $GITHUB_ENV
+
+    - name: Install GNU compilers on Linux
       if: ${{ matrix.compiler == 'gnu' && matrix.os == 'linux' }}
       run: |
         sudo apt update
