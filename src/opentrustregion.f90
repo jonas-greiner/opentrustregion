@@ -43,6 +43,12 @@ module opentrustregion
                               stability_n_iter_default = 100, &
                               stability_verbose_default = 0
 
+    ! define trust region parameters
+    real(rp), parameter :: trust_radius_shrink_ratio = 0.25d0, &
+                           trust_radius_expand_ratio = 0.75d0, &
+                           trust_radius_shrink_factor = 0.7d0, &
+                           trust_radius_expand_factor = 1.2d0
+
     ! derived type for solver settings
     type :: settings_type
         real(rp) :: conv_tol
@@ -163,7 +169,7 @@ contains
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr
-        real(rp), external :: dnrm2
+        real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
         error = .false.
@@ -191,15 +197,6 @@ contains
         ! initialize orbital rotation matrix
         kappa = 0.d0
 
-        ! check that number of random trial vectors is below number of parameters
-        if (settings%n_random_trial_vectors > n_param/2) then
-            settings%n_random_trial_vectors = n_param/2
-            write (msg, '(A, I0, A)') "Number of random trial vectors should be "// &
-                "smaller than half the number of parameters. Setting to ", &
-                settings%n_random_trial_vectors, "."
-            call settings%log(msg, 2)
-        end if
-
         ! initialize starting trust radius
         trust_radius = settings%start_trust_radius
 
@@ -223,13 +220,10 @@ contains
                 ! calculate cost function, gradient and Hessian diagonal
                 call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
 
-                ! sanity check for array size
-                if (imacro == 1 .and. size(grad) /= n_param) then
-                    call settings%log("Size of gradient array returned by "// &
-                                      "subroutine update_orbs does not equal "// &
-                                      "number of parameters", 1, .true.)
-                    error = .true.
-                    return
+                ! perform sanity check
+                if (imacro == 1) then
+                    call sanity_check(settings, n_param, grad, error)
+                    if (error) return
                 end if
 
                 ! calculate gradient norm
@@ -246,11 +240,15 @@ contains
                         kappa_norm = dnrm2(n_param, kappa, 1)
                     else
                         if (use_precond) then
-                            kappa_norm = sqrt(dot_product(kappa, precond(kappa, 0.d0)))
+                            kappa_norm = sqrt(ddot(n_param, kappa, 1, &
+                                                   precond(kappa, 0.d0), 1))
+                            
                         else
-                            kappa_norm = sqrt( &
-                                dot_product(kappa, abs_diag_precond(kappa, h_diag)))
+                            kappa_norm = sqrt(ddot(n_param, kappa, 1, &
+                                                   abs_diag_precond(kappa, h_diag), 1))
                         end if
+                        mu = 0.d0
+                        jacobi_davidson_started = .false.
                     end if
                     if (.not. stable) then
                         call settings%print_results(imacro - 1, func, grad_rms, &
@@ -350,8 +348,7 @@ contains
                 call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                                   obj_func, hess_x_funptr, &
                                                   use_precond, precond, settings, &
-                                                  trust_radius, solution, mu, imicro, &
-                                                  jacobi_davidson_started, &
+                                                  trust_radius, solution, imicro, &
                                                   max_precision_reached)
             end if
 
@@ -1690,7 +1687,8 @@ contains
 
         ! solution must be zero vector if rhs vanishes
         if (dnrm2(n, rhs, 1) < 1d-14) then
-            vec = rhs
+            vec = 0.d0
+            hvec = 0.d0
             return
         end if
 
@@ -1915,7 +1913,7 @@ contains
             else
                 if (.not. present(error)) then
                     out_unit = stdout
-                else if (error) then
+                else if (.not. error) then
                     out_unit = stdout
                 else
                     out_unit = stderr
@@ -2238,8 +2236,7 @@ contains
 
     subroutine truncated_conjugate_gradient(func, grad, h_diag, n_param, obj_func, &
                                             hess_x_funptr, use_precond, precond, &
-                                            settings, trust_radius, solution, mu, &
-                                            imicro, jacobi_davidson_started, &
+                                            settings, trust_radius, solution, imicro, &
                                             max_precision_reached)
         !
         ! this subroutine performs truncated conjugate gradient to solve the trust 
@@ -2253,9 +2250,9 @@ contains
         logical, intent(in) :: use_precond
         procedure(precond_type), intent(in), pointer, optional :: precond
         real(rp), intent(inout) :: trust_radius
-        real(rp), intent(out) :: solution(:), mu
+        real(rp), intent(out) :: solution(:)
         integer(ip), intent(out) :: imicro
-        logical, intent(out) :: jacobi_davidson_started, max_precision_reached
+        logical, intent(out) :: max_precision_reached
 
         logical :: accept_step, micro_converged
         real(rp) :: model_func, initial_residual_norm, curvature, step_size, &
@@ -2291,9 +2288,9 @@ contains
             call random_number(random_vector)
             random_vector = 2 * random_vector - 1
         end do
-        residual = residual + 1.d-4 * norm2(residual) * random_vector / &
-                   norm2(random_vector)
-        initial_residual_norm = norm2(residual)
+        residual = residual + 1.d-4 * dnrm2(n_param, residual, 1) * random_vector / &
+                   dnrm2(n_param, random_vector, 1)
+        initial_residual_norm = dnrm2(n_param, residual, 1)
 
         ! initialize preconditioned residual and direction,
         if (use_precond) then
@@ -2381,7 +2378,7 @@ contains
             end if
 
             ! check for linear or superlinear (in this case quadratic) convergence
-            if (norm2(residual_new) <= initial_residual_norm * &
+            if (dnrm2(n_param, residual_new, 1) <= initial_residual_norm * &
                 min(1.d-3, initial_residual_norm)) then
                 micro_converged = .true.
                 exit
@@ -2418,12 +2415,12 @@ contains
                 if (accept_step .or. max_precision_reached) exit
 
                 ! check if step exceeds new trust region boundary
-                if (dot_product(solution, abs_diag_precond(solution, h_diag)) > &
-                    trust_radius ** 2) then
+                if (ddot(n_param, solution, 1, abs_diag_precond(solution, h_diag), 1) &
+                    > trust_radius ** 2) then
                     ! find step that exceeds trust region boundary
                     do i = 1, size(solutions, 2)
-                        if (dot_product(solutions(:, i), &
-                            abs_diag_precond(solutions(:, i), h_diag)) > &
+                        if (ddot(n_param, solutions(:, i), 1, &
+                                 abs_diag_precond(solutions(:, i), h_diag), 1) > &
                             trust_radius ** 2) then
                             ! get previous step
                             solution = solutions(:, i - 1)
@@ -2483,12 +2480,6 @@ contains
             max_precision_reached = .true.
         end if
 
-        ! no level shift is used
-        mu = 0.d0
-
-        ! no Jacobi-Davidson is used
-        jacobi_davidson_started = .false.
-
         ! deallocate arrays
         deallocate (h_solution)
         deallocate (random_vector)
@@ -2510,6 +2501,9 @@ contains
         real(rp), intent(inout) :: trust_radius
         logical, intent(out) :: max_precision_reached
 
+        ! default to maximum precision not yet reached
+        max_precision_reached = .false.
+
         ! decrease trust radius if micro iterations are unable to converge, if function 
         ! value has not decreased or if individual orbitals change too much
         if (.not. micro_converged .or. ratio < 0.d0 .or. &
@@ -2525,18 +2519,60 @@ contains
                 return
             end if
         ! check if step is too long
-        else if (ratio < 0.25d0) then
-            trust_radius = 0.7d0*trust_radius
+        else if (ratio < trust_radius_shrink_ratio) then
+            trust_radius = trust_radius_shrink_factor * trust_radius
             accept_trust_region_step = .true.
         ! check if quadratic approximation is valid
-        else if (ratio < 0.75d0) then
+        else if (ratio < trust_radius_expand_ratio) then
             accept_trust_region_step = .true.
         ! check if step is potentially too short
         else
-            trust_radius = 1.2d0*trust_radius
+            trust_radius = trust_radius_expand_factor * trust_radius
             accept_trust_region_step = .true.
         end if
 
     end function accept_trust_region_step
+
+    subroutine sanity_check(settings, n_param, grad, error)
+        !
+        ! this subroutine performs a sanity check for input parameters
+        !
+        class(solver_settings_type), intent(inout) :: settings
+        integer(ip), intent(in) :: n_param
+        real(rp), intent(in) :: grad(:)
+        logical, intent(out) :: error
+
+        character(300) :: msg
+
+        ! initialize error flag
+        error = .false.
+
+        ! check that number of parameters is positive
+        if (n_param < 1) then
+            call settings%log("Number of parameters should be larger than 0.", 1, &
+                              .true.)
+            error = .true.
+            return
+        end if
+
+        ! check that number of random trial vectors is below number of parameters
+        if (settings%davidson .and. settings%n_random_trial_vectors > n_param/2) then
+            settings%n_random_trial_vectors = n_param/2
+            write (msg, '(A, I0, A)') "Number of random trial vectors should be "// &
+                "smaller than half the number of parameters. Setting to ", &
+                settings%n_random_trial_vectors, "."
+            call settings%log(msg, 2)
+        end if
+
+        ! sanity check for gradient size
+        if (size(grad) /= n_param) then
+            call settings%log("Size of gradient array returned by subroutine "// &
+                              "update_orbs does not equal number of parameters ", 1, &
+                              .true.)
+            error = .true.
+            return
+        end if
+
+    end subroutine sanity_check
 
 end module opentrustregion
