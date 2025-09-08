@@ -942,7 +942,6 @@ contains
         real(rp) :: space(4, 2), symm_matrix(4, 4), lin_trans_space(4, 2), &
                     space_small(2, 2)
         logical :: error
-        character(100) :: line
 
         ! assume tests pass
         test_gram_schmidt = .true.

@@ -663,7 +663,7 @@ contains
         else
             ! general linear system solver since the Hessian can be non-symmetric for 
             ! Hessian approximations
-            call dgesv(nred, 1, red_hess, nred, ipiv, red_space_solution, nred, INFO) 	
+            call dgesv(nred, 1, red_hess, nred, ipiv, red_space_solution, nred, info)
 
             ! check for errors
             if (info /= 0) then
@@ -820,6 +820,9 @@ contains
 
         ! initialize error flag
         error = .false.
+
+        ! set default multiplier
+        n_kappa = 0.d0
 
         ! evaluate function at upper and lower bounds
         f_lower = obj_func(lower*kappa)
