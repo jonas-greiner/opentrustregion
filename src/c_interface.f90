@@ -26,52 +26,52 @@ module c_interface
     abstract interface
         function update_orbs_c_type(kappa_c, func_c, grad_c_ptr, h_diag_c_ptr, &
                                     hess_x_c_funptr) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_funptr, c_bool
+            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_funptr, c_long
 
             real(c_double), intent(in) :: kappa_c(*)
             real(c_double), intent(out) :: func_c
             type(c_ptr), intent(out) :: grad_c_ptr, h_diag_c_ptr
             type(c_funptr), intent(out) :: hess_x_c_funptr
-            logical(c_bool) :: error
+            integer(c_long) :: error
         end function update_orbs_c_type
     end interface
 
     abstract interface
         function hess_x_c_type(x_c, hess_x_c_ptr) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_bool
+            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_long
 
             real(c_double), intent(in) :: x_c(*)
             type(c_ptr), intent(out) :: hess_x_c_ptr
-            logical(c_bool) :: error
+            integer(c_long) :: error
         end function hess_x_c_type
     end interface
 
     abstract interface
         function obj_func_c_type(kappa_c, func) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_bool
+            use, intrinsic :: iso_c_binding, only: c_double, c_long
 
             real(c_double), intent(in) :: kappa_c(*)
             real(c_double), intent(out) :: func
-            logical(c_bool) :: error
+            integer(c_long) :: error
         end function obj_func_c_type
     end interface
 
     abstract interface
         function precond_c_type(residual_c, mu_c, precond_residual_c_ptr) &
             result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_bool
+            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_long
 
             real(c_double), intent(in) :: residual_c(*), mu_c
             type(c_ptr), intent(out) :: precond_residual_c_ptr
-            logical(c_bool) :: error
+            integer(c_long) :: error
         end function precond_c_type
     end interface
 
     abstract interface
         function conv_check_c_type(converged) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_bool
+            use, intrinsic :: iso_c_binding, only: c_bool, c_long
 
-            logical(c_bool) :: error
+            integer(c_long) :: error
             logical(c_bool), intent(out) :: converged
         end function conv_check_c_type
     end interface
@@ -106,7 +106,7 @@ module c_interface
             procedure(update_orbs_type), intent(in), pointer :: update_orbs
             procedure(obj_func_type), intent(in), pointer :: obj_func
             integer(ip), intent(in) :: n_param
-            logical, intent(out) :: error
+            integer(ip), intent(out) :: error
             procedure(precond_type), intent(in), pointer, optional :: precond
             procedure(conv_check_type), intent(in), pointer, optional :: conv_check
             logical, intent(in), optional :: stability, line_search, davidson, &
@@ -130,7 +130,8 @@ module c_interface
 
             real(rp), intent(in) :: h_diag(:)
             procedure(hess_x_type), intent(in), pointer :: hess_x
-            logical, intent(out) :: stable, error
+            logical, intent(out) :: stable
+            integer(ip), intent(out) :: error
             real(rp), intent(out) :: kappa(:)
             procedure(precond_type), intent(in), pointer, optional :: precond
             logical, intent(in), optional :: jacobi_davidson
@@ -188,12 +189,13 @@ contains
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
                                           local_red_factor_c_ptr, seed_c_ptr, &
                                           verbose_c_ptr
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
-        logical :: error, stability, line_search, davidson, jacobi_davidson, &
+        logical :: stability, line_search, davidson, jacobi_davidson, &
                    prefer_jacobi_davidson
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
-        integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, seed, verbose
+        integer(ip) :: n_param, n_random_trial_vectors, n_macro, n_micro, seed, &
+                       verbose, error
         procedure(update_orbs_c_wrapper), pointer :: update_orbs
         procedure(obj_func_c_wrapper), pointer :: obj_func
         procedure(precond_c_wrapper), pointer :: precond
@@ -291,12 +293,12 @@ contains
         type(c_ptr), intent(in), value :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
         real(rp) :: conv_tol, h_diag(n_param_c)
         real(rp) :: kappa(n_param_c)
-        logical :: stable, error, jacobi_davidson
-        integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose
+        logical :: stable, jacobi_davidson
+        integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose, error
         procedure(hess_x_c_wrapper), pointer :: hess_x
         procedure(precond_c_wrapper), pointer :: precond
         procedure(logger_c_wrapper), pointer :: logger
@@ -357,14 +359,14 @@ contains
         real(rp), intent(in) :: kappa(:)
         real(rp), intent(out) :: func, grad(:), h_diag(:)
         procedure(hess_x_type), intent(out), pointer :: hess_x
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
 
         real(c_double) :: func_c
         real(c_double) :: kappa_c(size(kappa))
         type(c_ptr) :: grad_c_ptr, h_diag_c_ptr
         type(c_funptr) :: hess_x_c_funptr
         real(c_double), pointer :: grad_ptr(:), h_diag_ptr(:)
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
         ! convert dummy argument to C kind
         kappa_c = kappa
@@ -398,13 +400,13 @@ contains
         ! to Fortran variables
         !
         real(rp), intent(in) :: x(:)
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
         real(rp) :: hess_x(size(x))
 
         real(c_double) :: x_c(size(x))
         type(c_ptr) :: hess_x_c_ptr
         real(c_double), pointer :: hess_x_ptr(:)
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
         ! convert trial vector to C kind
         x_c = x
@@ -427,11 +429,11 @@ contains
         ! variables
         !
         real(rp), intent(in) :: kappa(:)
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
         real(rp) :: obj_func
 
         real(c_double) :: kappa_c(size(kappa)), func_c
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
         ! convert dummy argument to C kind
         kappa_c = kappa
@@ -451,13 +453,13 @@ contains
         ! Fortran variables
         !
         real(rp), intent(in) :: residual(:), mu
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
         real(rp) :: precond_residual(size(residual))
 
         real(c_double) :: residual_c(size(residual)), mu_c
         type(c_ptr) :: precond_residual_c_ptr
         real(c_double), pointer :: precond_residual_ptr(:)
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
         ! convert dummy argument to C kind
         residual_c = residual
@@ -481,10 +483,11 @@ contains
         ! this function wraps the convergence check function to convert C variables to 
         ! Fortran variables
         !
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
         logical :: converged
 
-        logical(c_bool) :: error_c, converged_c
+        integer(c_long) :: error_c
+        logical(c_bool) :: converged_c
 
         ! call conv_check C function
         error_c = conv_check_before_wrapping(converged_c)

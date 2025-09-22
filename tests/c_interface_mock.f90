@@ -66,7 +66,7 @@ contains
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
                                           local_red_factor_c_ptr, seed_c_ptr, &
                                           verbose_c_ptr
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
         type(c_funptr) :: hess_x_c_funptr
         procedure(update_orbs_c_type), pointer :: update_orbs_funptr
@@ -87,7 +87,8 @@ contains
                                     n_micro_ptr, seed_ptr, verbose_ptr
         procedure(logger_c_type), pointer :: logger_funptr
         character(:), allocatable, target :: message
-        logical(c_bool) :: error, converged
+        logical(c_bool) :: converged
+        integer(c_long) :: error
 
         ! get Fortran pointer to passed orbital update routine and call it
         call c_f_procpointer(cptr=update_orbs_c_funptr, fptr=update_orbs_funptr)
@@ -96,7 +97,7 @@ contains
                                    hess_x_c_funptr)
 
         ! check for error
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_solver_py_interface failed: Passed orbital "// &
                 "updating function returned error."
             test_solver_interface = .false.
@@ -108,7 +109,7 @@ contains
         error = hess_x_funptr(x, hess_x_c_ptr)
 
         ! check for error
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_solver_py_interface failed: Passed Hessian "// &
                 "linear transformation function returned error."
             test_solver_interface = .false.
@@ -146,7 +147,7 @@ contains
         error = obj_func_funptr(kappa, func)
 
         ! check for error
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_solver_py_interface failed: Passed objective "// &
                 "function returned error."
             test_solver_interface = .false.
@@ -206,7 +207,7 @@ contains
             call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_funptr)
             residual = 1.0_c_double
             error = precond_funptr(residual, 5.0_c_double, precond_residual_c_ptr)
-            if (error) then
+            if (error /= 0) then
                 write (stderr, *) "test_solver_py_interface failed: Passed "// &
                     "preconditioner function returned error."
                 test_solver_interface = .false.
@@ -223,7 +224,7 @@ contains
             ! check result
             call c_f_procpointer(cptr=conv_check_c_funptr, fptr=conv_check_funptr)
             error = conv_check_funptr(converged)
-            if (error) then
+            if (error /= 0) then
                 write (stderr, *) "test_solver_py_interface failed: Passed "// &
                     "convergence check function returned error."
                 test_solver_interface = .false.
@@ -273,7 +274,7 @@ contains
         end if
 
         ! set return arguments
-        error_c = .false.
+        error_c = 0
 
         ! move on to optional argument test for next test
         solver_default = .false.
@@ -300,7 +301,7 @@ contains
         type(c_ptr), value, intent(in) :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr
-        logical(c_bool) :: error_c
+        integer(c_long) :: error_c
 
         procedure(hess_x_c_type), pointer :: hess_x_funptr
         procedure(precond_c_type), pointer :: precond_funptr
@@ -312,7 +313,7 @@ contains
         integer(c_long), pointer :: n_random_trial_vectors_ptr, n_iter_ptr, verbose_ptr
         procedure(logger_c_type), pointer :: logger_funptr
         character(:), allocatable, target :: message
-        logical :: error
+        integer(c_long) :: error
 
         ! check if Hessian diagonal is passed correctly
         if (any(abs(h_diag_c - 3.0_c_double) > tol)) then
@@ -326,7 +327,7 @@ contains
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_funptr)
         x = 1.0_c_double
         error = hess_x_funptr(x, hess_x_c_ptr)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_stability_check_py_interface failed: Passed "// &
                 "Hessian linear transformation function returned error."
             test_stability_check_interface = .false.
@@ -368,7 +369,7 @@ contains
             call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_funptr)
             residual = 1.0_c_double
             error = precond_funptr(residual, 5.0_c_double, precond_residual_c_ptr)
-            if (error) then
+            if (error /= 0) then
                 write (stderr, *) "test_stability_check_py_interface failed: "// &
                     "Passed preconditioner function returned error."
                 test_stability_check_interface = .false.
@@ -407,7 +408,7 @@ contains
         ! set return arguments
         stable_c = .false.
         kappa_c = 1.0_c_double
-        error_c = .false.
+        error_c = 0
 
         ! move on to optional argument test for next test
         stability_check_default = .false.

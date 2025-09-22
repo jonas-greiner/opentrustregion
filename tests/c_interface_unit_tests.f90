@@ -6,7 +6,7 @@
 
 module c_interface_unit_tests
 
-    use opentrustregion, only: rp, stderr
+    use opentrustregion, only: rp, ip, stderr
     use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_loc, &
                                            c_null_ptr, c_funptr, c_funloc, &
                                            c_null_funptr, c_char
@@ -35,7 +35,7 @@ contains
         real(c_double), intent(out) :: func
         type(c_ptr), intent(out) :: grad_c_ptr, h_diag_c_ptr
         type(c_funptr), intent(out) :: hess_x_c_funptr
-        logical(c_bool) :: error
+        integer(c_long) :: error
 
         func = sum(kappa(:n_param))
 
@@ -47,7 +47,7 @@ contains
 
         hess_x_c_funptr = c_funloc(mock_hess_x)
 
-        error = .false.
+        error = 0
 
     end function mock_update_orbs
 
@@ -58,12 +58,12 @@ contains
         !
         real(c_double), intent(in) :: x(*)
         type(c_ptr), intent(out) :: hess_x_c_ptr
-        logical(c_bool) :: error
+        integer(c_long) :: error
 
         hess_x_c = 4*x(:n_param)
         hess_x_c_ptr = c_loc(hess_x_c)
 
-        error = .false.
+        error = 0
 
     end function mock_hess_x
 
@@ -73,11 +73,11 @@ contains
         !
         real(c_double), intent(in) :: kappa(*)
         real(c_double), intent(out) :: func
-        logical(c_bool) :: error
+        integer(c_long) :: error
 
         func = sum(kappa(:n_param))
 
-        error = .false.
+        error = 0
 
     end function mock_obj_func
 
@@ -87,12 +87,12 @@ contains
         !
         real(c_double), intent(in) :: residual(*), mu
         type(c_ptr), intent(out) :: precond_residual_c_ptr
-        logical(c_bool) :: error
+        integer(c_long) :: error
 
         precond_residual_c = mu*residual(:n_param)
         precond_residual_c_ptr = c_loc(precond_residual_c)
 
-        error = .false.
+        error = 0
 
     end function mock_precond
 
@@ -101,11 +101,11 @@ contains
         ! this function is a test function for the convergence check function
         !
         logical(c_bool), intent(out) :: converged
-        logical(c_bool) :: error
+        integer(c_long) :: error
 
         converged = .true.
 
-        error = .false.
+        error = 0
         
     end function mock_conv_check
 
@@ -132,7 +132,7 @@ contains
                           precond_c_funptr = c_null_funptr, &
                           conv_check_c_funptr = c_null_funptr, &
                           logger_c_funptr = c_null_funptr
-        logical(c_bool) :: error
+        integer(c_long) :: error
         integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
                                    n_macro = 300_c_long, n_micro = 200_c_long, &
                                    seed = 33_c_long, verbose = 3_c_long
@@ -183,7 +183,7 @@ contains
         test_solver_c_wrapper = test_passed
 
         ! check if output variables are as expected
-        if (error) then
+        if (error /= 0) then
             test_solver_c_wrapper = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned error "// &
                 "boolean wrong."
@@ -230,7 +230,7 @@ contains
         end if
 
         ! check if output variables are as expected
-        if (error) then
+        if (error /= 0) then
             test_solver_c_wrapper = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned error "// &
                 "boolean wrong."
@@ -251,7 +251,8 @@ contains
         real(c_double), dimension(n_param) :: kappa
         type(c_funptr) :: hess_x_c_funptr, precond_c_funptr = c_null_funptr, &
                           logger_c_funptr = c_null_funptr
-        logical(c_bool) :: stable, error
+        logical(c_bool) :: stable
+        integer(c_long) :: error
         logical(c_bool), target :: jacobi_davidson = .false.
         real(c_double), target :: conv_tol = 1e-3_c_double
         integer(c_long), target :: n_random_trial_vectors = 3_c_long, &
@@ -297,7 +298,7 @@ contains
                 "direction wrong."
         end if
 
-        if (error) then
+        if (error /= 0) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                 "error boolean wrong."
@@ -342,7 +343,7 @@ contains
                 "direction wrong."
         end if
 
-        if (error) then
+        if (error /= 0) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                 "error boolean wrong."
@@ -364,7 +365,7 @@ contains
         real(rp), dimension(n_param) :: kappa, grad, h_diag, x, hess_x
         real(rp) :: func
         procedure(hess_x_type), pointer :: hess_x_funptr
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_update_orbs_c_wrapper = .true.
@@ -379,7 +380,7 @@ contains
         call update_orbs_c_wrapper(kappa, func, grad, h_diag, hess_x_funptr, error)
 
         ! check if error is as expected
-        if (error) then
+        if (error /= 0) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned error."
         end if
@@ -410,7 +411,7 @@ contains
         hess_x = hess_x_funptr(x, error)
 
         ! check if error is as expected
-        if (error) then
+        if (error /= 0) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
                 "linear transformation function produced error."
@@ -433,7 +434,7 @@ contains
         use c_interface, only: hess_x_before_wrapping, hess_x_c_wrapper
 
         real(rp), dimension(n_param) :: x, hess_x
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_hess_x_c_wrapper = .true.
@@ -446,7 +447,7 @@ contains
         hess_x = hess_x_c_wrapper(x, error)
 
         ! check if error is as expected
-        if (error) then
+        if (error /= 0) then
             test_hess_x_c_wrapper = .false.
             write (stderr, *) "test_hess_x_c_wrapper failed: Returned error."
         end if
@@ -468,7 +469,7 @@ contains
         use c_interface, only: obj_func_before_wrapping, obj_func_c_wrapper
 
         real(rp) :: kappa(n_param), obj_func
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_obj_func_c_wrapper = .true.
@@ -483,7 +484,7 @@ contains
         obj_func = obj_func_c_wrapper(kappa, error)
 
         ! check if error is as expected
-        if (error) then
+        if (error /= 0) then
             test_obj_func_c_wrapper = .false.
             write (stderr, *) "test_obj_func_c_wrapper failed: Returned error."
         end if
@@ -504,7 +505,7 @@ contains
         use c_interface, only: precond_before_wrapping, precond_c_wrapper
 
         real(rp), dimension(n_param) :: residual, precond_residual
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_precond_c_wrapper = .true.
@@ -519,7 +520,7 @@ contains
         precond_residual = precond_c_wrapper(residual, 5.d0, error)
 
         ! check if error is as expected
-        if (error) then
+        if (error /= 0) then
             test_precond_c_wrapper = .false.
             write (stderr, *) "test_precond_c_wrapper failed: Returned error."
         end if
@@ -539,7 +540,8 @@ contains
         !
         use c_interface, only: conv_check_before_wrapping, conv_check_c_wrapper
 
-        logical :: converged, error
+        logical :: converged
+        integer(ip) :: error
 
         ! assume tests pass
         test_conv_check_c_wrapper = .true.
@@ -551,7 +553,7 @@ contains
         converged = conv_check_c_wrapper(error)
 
         ! check if error is as expected
-        if (error) then
+        if (error /= 0) then
             test_conv_check_c_wrapper = .false.
             write (stderr, *) "test_conv_check_c_wrapper failed: Returned error."
         end if
@@ -570,8 +572,6 @@ contains
         ! this function tests the C wrapper for the logging function
         !
         use c_interface, only: logger_before_wrapping, logger_c_wrapper
-
-        logical :: error
 
         ! assume tests pass
         test_logger_c_wrapper = .true.

@@ -74,21 +74,21 @@ def solver(
     # types so we interface to Fortran subroutines by creating pointers to the relevant
     # data
     hess_x_interface_type = CFUNCTYPE(
-        c_bool, POINTER(c_double), POINTER(POINTER(c_double))
+        c_long, POINTER(c_double), POINTER(POINTER(c_double))
     )
     update_orbs_interface_type = CFUNCTYPE(
-        c_bool,
+        c_long,
         POINTER(c_double),
         POINTER(c_double),
         POINTER(POINTER(c_double)),
         POINTER(POINTER(c_double)),
         POINTER(hess_x_interface_type),
     )
-    obj_func_interface_type = CFUNCTYPE(c_bool, POINTER(c_double), POINTER(c_double))
+    obj_func_interface_type = CFUNCTYPE(c_long, POINTER(c_double), POINTER(c_double))
     precond_interface_type = CFUNCTYPE(
-        c_bool, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
+        c_long, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
     )
-    conv_check_interface_type = CFUNCTYPE(c_bool, POINTER(c_bool))
+    conv_check_interface_type = CFUNCTYPE(c_long, POINTER(c_bool))
     logger_interface_type = CFUNCTYPE(None, c_char_p)
 
     @update_orbs_interface_type
@@ -203,7 +203,7 @@ def solver(
         logger(string_at(message).decode("utf-8"))
 
     # define result and argument types
-    libopentrustregion.solver.restype = c_bool
+    libopentrustregion.solver.restype = c_long
     libopentrustregion.solver.argtypes = [
         c_void_p,
         c_void_p,
@@ -278,10 +278,10 @@ def stability_check(
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating data to the relevant data
     hess_x_interface_type = CFUNCTYPE(
-        c_bool, POINTER(c_double), POINTER(POINTER(c_double))
+        c_long, POINTER(c_double), POINTER(POINTER(c_double))
     )
     precond_interface_type = CFUNCTYPE(
-        c_bool, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
+        c_long, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
     )
     logger_interface_type = CFUNCTYPE(None, c_char_p)
 
@@ -332,7 +332,7 @@ def stability_check(
         logger(string_at(message).decode("utf-8"))
 
     # define result and argument types
-    libopentrustregion.stability_check.restype = c_bool
+    libopentrustregion.stability_check.restype = c_long
     libopentrustregion.stability_check.argtypes = [
         POINTER(c_double),
         c_void_p,

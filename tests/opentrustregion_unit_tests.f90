@@ -127,12 +127,12 @@ contains
         ! Hartmann 6D function
         !
         real(rp), intent(in) :: x(:)
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
 
         real(rp) :: hess_x(size(x))
 
         ! initialize error flag
-        error = .false.
+        error = 0
 
         hess_x = hartmann6d_hess_x(x)
 
@@ -144,12 +144,12 @@ contains
         ! 6D function
         !
         real(rp), intent(in) :: delta_vars(:)
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
 
         real(rp) :: func
 
         ! initialize error flag
-        error = .false.
+        error = 0
 
         func = hartmann6d_func(curr_vars + delta_vars)
 
@@ -165,12 +165,12 @@ contains
         real(rp), intent(in) :: delta_vars(:)
         real(rp), intent(out) :: func, grad(:), h_diag(:)
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
 
         integer(ip) :: i
 
         ! initialize error flag
-        error = .false.
+        error = 0
 
         ! update variables
         curr_vars = curr_vars + delta_vars
@@ -214,7 +214,7 @@ contains
                                    solver_conv_tol_default
 
         integer(ip), parameter :: n_param = 6
-        logical :: error
+        integer(ip) :: error
         real(rp) :: final_grad(n_param)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
@@ -230,7 +230,7 @@ contains
         ! run solver, check if error has occured and check whether gradient is zero and 
         ! agrees with correct minimum
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
         end if
@@ -254,7 +254,7 @@ contains
         ! run solver, check if error has occured and check whether gradient is zero and 
         ! agrees with correct minimum
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
         end if
@@ -279,7 +279,7 @@ contains
         ! run solver, check if error has occured and check whether gradient is zero and 
         ! agrees with correct minimum
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_solver failed: Produced error."
             test_solver = .false.
         end if
@@ -306,8 +306,8 @@ contains
 
         real(rp) :: vars(6), h_diag(6), direction(6)
         procedure(hess_x_type), pointer :: hess_x_funptr
-        logical :: stable, error
-        integer(ip) :: i
+        logical :: stable
+        integer(ip) :: error, i
 
         ! assume tests pass
         test_stability_check = .true.
@@ -322,7 +322,7 @@ contains
         ! run stability, check if error has occured check and determine whether minimum 
         ! is stable and the returned direction vanishes
         call stability_check(h_diag, hess_x_funptr, stable, direction, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
         end if
@@ -347,7 +347,7 @@ contains
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
         call stability_check(h_diag, hess_x_funptr, stable, direction, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
         end if
@@ -377,8 +377,7 @@ contains
         type(settings_type) :: settings
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
                     aug_hess(4, 4), solution(6), red_space_solution(3)
-        integer(ip) :: i, j
-        logical :: error
+        integer(ip) :: i, j, error
 
         ! assume tests pass
         test_newton_step = .true.
@@ -413,7 +412,7 @@ contains
         ! resulting solution is correct in reduced and full space
         call newton_step(aug_hess, grad_norm, red_space_basis, solution, &
                          red_space_solution, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_newton_step failed: Produced error."
             test_newton_step = .false.
         end if
@@ -441,8 +440,8 @@ contains
         type(settings_type) :: settings
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
                     aug_hess(4, 4), solution(6), red_space_solution(3), trust_radius, mu
-        integer(ip) :: i, j
-        logical :: bracketed, error
+        integer(ip) :: i, j, error
+        logical :: bracketed
 
         ! assume tests pass
         test_bisection = .true.
@@ -480,7 +479,7 @@ contains
         ! reduced and full space and respects target trust radius
         call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
                        red_space_solution, mu, bracketed, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_bisection failed: Produced error."
             test_bisection = .false.
         end if
@@ -525,7 +524,7 @@ contains
         ! minimum is closer than target trust radius and no level shift is necessary
         call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
                        red_space_solution, mu, bracketed, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_bisection failed: Produced error."
             test_bisection = .false.
         end if
@@ -546,7 +545,7 @@ contains
         type(settings_type) :: settings
         procedure(obj_func_type), pointer :: obj_func_funptr
         real(rp) :: vars(6), lower, upper, n
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_bracket = .true.
@@ -567,7 +566,7 @@ contains
         ! perform bracket and determine if new point decreases objective function in
         ! comparison to lower and upper bound
         n = bracket(obj_func_funptr, vars, lower, upper, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_bracket failed: Produced error."
             test_bracket = .false.
         end if
@@ -580,7 +579,7 @@ contains
 
         ! try different order
         n = bracket(obj_func_funptr, vars, upper, lower, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_bracket failed: Produced error."
             test_bracket = .false.
         end if
@@ -685,7 +684,7 @@ contains
         type(settings_type) :: settings
         real(rp) :: matrix(3, 3)
         real(rp) :: eigval, eigvec(3)
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_symm_mat_min_eig = .true.
@@ -701,7 +700,7 @@ contains
         ! call routine and determine if lowest eigenvalue and corresponding eigenvector
         ! are found
         call symm_mat_min_eig(matrix, eigval, eigvec, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_symm_mat_min_eig failed: Produced error."
             test_symm_mat_min_eig = .false.
         end if
@@ -727,7 +726,7 @@ contains
 
         type(settings_type) :: settings
         real(rp) :: matrix(3, 3), matrix_min_eigval
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_min_eigval = .true.
@@ -742,7 +741,7 @@ contains
 
         ! call function and determine if lowest eigenvalue is found
         matrix_min_eigval = min_eigval(matrix, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_min_eigval failed: Produced error."
             test_min_eigval = .false.
         end if
@@ -815,8 +814,7 @@ contains
         type(settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
         real(rp) :: grad(4), h_diag(4), grad_norm
-        logical :: error
-        integer(ip) :: i, j
+        integer(ip) :: error, i, j
 
         ! assume tests pass
         test_generate_trial_vectors = .true.
@@ -836,7 +834,7 @@ contains
         ! number of orthonormal trial vectors
         red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
                                                  error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_generate_trial_vectors failed: Produced error."
             test_generate_trial_vectors = .false.
         end if
@@ -873,7 +871,7 @@ contains
         ! number of orthonormal trial vectors
         red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
                                                  error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_generate_trial_vectors failed: Produced error."
             test_generate_trial_vectors = .false.
         end if
@@ -914,8 +912,7 @@ contains
 
         type(settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
-        logical :: error
-        integer(ip) :: i, j
+        integer(ip) :: error, i, j
 
         ! assume tests pass
         test_generate_random_trial_vectors = .true.
@@ -932,7 +929,7 @@ contains
         ! generate trial vectors and determine whether function returns orthonormal 
         ! trial vectors
         call generate_random_trial_vectors(red_space_basis, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_generate_trial_vectors failed: Produced error."
             test_generate_random_trial_vectors = .false.
         end if
@@ -965,7 +962,7 @@ contains
         real(rp), dimension(2) :: vector_small
         real(rp) :: space(4, 2), symm_matrix(4, 4), lin_trans_space(4, 2), &
                     space_small(2, 2)
-        logical :: error
+        integer(ip) :: error
         character(100) :: line
 
         ! assume tests pass
@@ -982,7 +979,7 @@ contains
         ! perform Gram-Schmidt orthogonalization and determine whether added vector is
         ! orthonormalized
         call gram_schmidt(vector, space, settings, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_gram_schmidt failed: Produced error."
             test_gram_schmidt = .false.
         end if
@@ -1014,7 +1011,7 @@ contains
         ! orthonormalized and linear transformation is correct
         call gram_schmidt(vector, space, settings, error, lin_trans_vector, &
                           lin_trans_space)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_gram_schmidt failed: Produced error."
             test_gram_schmidt = .false.
         end if
@@ -1039,7 +1036,7 @@ contains
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
         call gram_schmidt(vector, space, settings, error)
-        if ((.not. error) .or. (log_message /= " Vector passed to Gram-Schmidt "// &
+        if ((error == 0) .or. (log_message /= " Vector passed to Gram-Schmidt "// &
                                 "procedure is numerically zero.")) then
             write (stderr, *) "test_gram_schmidt failed: No error returned during "// &
                 "orthogonalization for zero vector."
@@ -1054,7 +1051,7 @@ contains
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
         call gram_schmidt(vector_small, space_small, settings, error)
-        if (.not. error .or. (log_message /= " Number of vectors in Gram-Schmidt "// &
+        if (error == 0 .or. (log_message /= " Number of vectors in Gram-Schmidt "// &
                               "procedure larger than dimension of vector space.")) then
             write (stderr, *) "test_gram_schmidt failed: No error returned during "// &
                 "orthogonalization when number of vectors is larger than dimension "// &
@@ -1351,7 +1348,7 @@ contains
 
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, vector, solution, corr_vector, hess_vector
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_jacobi_davidson_correction = .true.
@@ -1371,7 +1368,7 @@ contains
         ! calculate Jacobi-Davidson correction and compare values
         call jacobi_davidson_correction(hess_x_funptr, vector, solution, 0.5d0, &
                                         corr_vector, hess_vector, error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_jacobi_davidson_correction failed: Returned error."
             test_jacobi_davidson_correction = .false.
         end if
@@ -1402,7 +1399,7 @@ contains
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, rhs, solution, vector, hess_vector, corr_vector
         real(rp) :: mu
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_minres = .true.
@@ -1437,6 +1434,10 @@ contains
         ! transformation of the vector itself
         call minres(-rhs, hess_x_funptr, solution, mu, 1d-14, vector, hess_vector, &
                     settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_minres failed: Returned error."
+            test_minres = .false.
+        end if
         corr_vector = vector - dot_product(vector, solution) * solution
         corr_vector = hartmann6d_hess_x(corr_vector) - mu * corr_vector
         corr_vector = corr_vector - dot_product(corr_vector, solution) * solution
@@ -1457,6 +1458,10 @@ contains
         rhs = 0.d0
         call minres(-rhs, hess_x_funptr, solution, mu, 1d-14, vector, hess_vector, &
                     settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_minres failed: Returned error."
+            test_minres = .false.
+        end if
         if (sum(abs(vector)) > tol) then
             write (stderr, *) "test_minres failed: Returned solution is not zero "// &
                 "for a vanishing rhs."
@@ -1697,7 +1702,7 @@ contains
 
         type(solver_settings_type) :: settings
         real(rp) :: grad(3)
-        logical :: error
+        integer(ip) :: error
 
         ! assume tests pass
         test_sanity_check = .true.
@@ -1710,7 +1715,7 @@ contains
         settings%davidson = .true.
         settings%n_random_trial_vectors = 0
         call sanity_check(settings, 3, grad, error)
-        if (error) then
+        if (error /= 0) then
             write(stderr, *) "test_sanity_check failed: Error thrown for "// &
                 "non-negative and non-vanishing number of parameters."
             test_sanity_check = .false.
@@ -1718,7 +1723,7 @@ contains
 
         ! check if error is correctly thrown for vanishing number of parameters
         call sanity_check(settings, 0, grad, error)
-        if (.not. error) then
+        if (error == 0) then
             write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
                 "vanishing number of parameters."
             test_sanity_check = .false.
@@ -1726,7 +1731,7 @@ contains
 
         ! check if error is correctly thrown for negative number of parameters
         call sanity_check(settings, -1, grad, error)
-        if (.not. error) then
+        if (error == 0) then
             write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
                 "negative number of parameters."
             test_sanity_check = .false.
@@ -1743,13 +1748,13 @@ contains
 
         ! check if gradient size is treated correctly
         call sanity_check(settings, 3, grad, error)
-        if (error) then
+        if (error /= 0) then
             write(stderr, *) "test_sanity_check failed: Error thrown for correct "// &
                 "gradient size."
             test_sanity_check = .false.
         end if
         call sanity_check(settings, 4, grad, error)
-        if (.not. error) then
+        if (error == 0) then
             write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
                 "incorrect gradient size."
             test_sanity_check = .false.
@@ -1771,12 +1776,12 @@ contains
         integer(ip), parameter :: n_param = 6
         real(rp) :: func, grad_norm, trust_radius, mu, ratio, solution_norm
         real(rp), dimension(n_param) :: grad, h_diag, solution
-        integer(ip) :: i, imicro, imicro_jacobi_davidson
+        integer(ip) :: i, imicro, imicro_jacobi_davidson, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
         procedure(precond_type), pointer :: precond_funptr
         type(solver_settings_type) :: settings
-        logical :: jacobi_davidson_started, max_precision_reached, error
+        logical :: jacobi_davidson_started, max_precision_reached
 
         ! assume tests pass
         test_level_shifted_davidson = .true.
@@ -1812,7 +1817,7 @@ contains
                                     mu, imicro, imicro_jacobi_davidson, &
                                     jacobi_davidson_started, max_precision_reached, &
                                     error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
                 "near minimum."
             test_level_shifted_davidson = .false.
@@ -1860,7 +1865,7 @@ contains
                                     mu, imicro, imicro_jacobi_davidson, &
                                     jacobi_davidson_started, max_precision_reached, &
                                     error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
                 "near saddle point."
             test_level_shifted_davidson = .false.
@@ -1905,7 +1910,7 @@ contains
                                     mu, imicro, imicro_jacobi_davidson, &
                                     jacobi_davidson_started, max_precision_reached, &
                                     error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
                 "near saddle point with Jacobi-Davidson solver."
             test_level_shifted_davidson = .false.
@@ -1955,12 +1960,12 @@ contains
         integer(ip), parameter :: n_param = 6
         real(rp) :: func, trust_radius, ratio, solution_norm
         real(rp), dimension(n_param) :: grad, h_diag, solution
-        integer(ip) :: i, imicro
+        integer(ip) :: i, imicro, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
         procedure(precond_type), pointer :: precond_funptr
         type(solver_settings_type) :: settings
-        logical :: max_precision_reached, error
+        logical :: max_precision_reached
 
         ! assume tests pass
         test_truncated_conjugate_gradient = .true.
@@ -1988,7 +1993,7 @@ contains
                                           precond_funptr, settings, trust_radius, &
                                           solution, imicro, max_precision_reached, &
                                           error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_truncated_jacobi_davidson failed: Produced "// &
                 "error near minimum."
             test_truncated_conjugate_gradient = .false.
@@ -2027,7 +2032,7 @@ contains
                                           precond_funptr, settings, trust_radius, &
                                           solution, imicro, max_precision_reached, &
                                           error)
-        if (error) then
+        if (error /= 0) then
             write (stderr, *) "test_truncated_jacobi_davidson failed: Produced "// &
                 "error near saddle point."
             test_truncated_conjugate_gradient = .false.
