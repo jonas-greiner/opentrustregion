@@ -1,6 +1,7 @@
 ![License](https://img.shields.io/github/license/eriksen-lab/opentrustregion)
 ![CI](https://github.com/eriksen-lab/opentrustregion/actions/workflows/main.yml/badge.svg)
 [![codecov](https://codecov.io/github/eriksen-lab/opentrustregion/graph/badge.svg?token=NJIM6FDADD)](https://codecov.io/github/eriksen-lab/opentrustregion)
+[![DOI](https://zenodo.org/badge/855894860.svg)](https://doi.org/10.5281/zenodo.17142554)
 
 # OpenTrustRegion: A Reusable Library for Second-Order Trust Region Orbital Optimization
 
@@ -43,16 +44,17 @@ The optimization process is initiated by calling a solver function. This functio
   - The objective function value
   - The gradient
   - The Hessian diagonal
-  - A `hess_x` function that performs a Hessian linear transformation for a trial function
+  - A `hess_x` function that performs a Hessian linear transformation for a trial function, also returns an integer which indicates whether the function has encountered an error
+  - An integer which indicates whether the function has encountered an error
 - **`obj_func`** (function): Accepts the variable change and returns the objective function value.
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
-- **`error`** (boolean): Returns whether the solver has produced an error.
+- **`error`** (integer): Returns whether the solver has produced an error.
 
 ### Optional Arguments
 The optimization process can be fine-tuned using the following optional arguments:
 
-- **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector.
-- **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion.
+- **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector and an integer which indicates whether the function has encountered an error.
+- **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion and an integer which indicates whether the function has encountered an error.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
@@ -76,13 +78,13 @@ A separate `stability_check` function is available to verify whether the current
 ### Required Arguments
 
 - **`h_diag`** (real array): Represents the Hessian diagonal at the current point.
-- **`hess_x`** (function): Performs a Hessian linear transformation of a trial vector at the current point.
+- **`hess_x`** (function): Performs a Hessian linear transformation of a trial vector at the current point, also returns an integer which indicates whether the function has encountered an error.
 - **`stable`** (boolean): Returns whether the current point is stable.
 - **`kappa`** (boolean): Returns descent direction if current point is not stable
 
 ### Optional Arguments
 
-- **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector.
+- **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector and an integer which indicates whether the function has encountered an error.
 - **`conv_tol`** (real): Convergence criterion for the residual norm.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
