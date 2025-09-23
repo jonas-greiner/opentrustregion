@@ -112,7 +112,7 @@ def solver(
         try:
             func_ptr[0], grad, h_diag, hess_x = update_orbs(kappa)
         except RuntimeError:
-            return True
+            return 1
 
         # convert numpy arrays to pointers
         grad_ptr[0] = grad.ctypes.data_as(POINTER(c_double))
@@ -131,17 +131,17 @@ def solver(
             try:
                 hx = hess_x(x)
             except RuntimeError:
-                return True
+                return 1
 
             # convert numpy array to pointer
             hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
-            return False
+            return 0
 
         # store the function pointer in hess_x_ptr
         hess_x_funptr[0] = hess_x_interface
 
-        return False
+        return 0
 
     @obj_func_interface_type
     def obj_func_interface(kappa_ptr, func_ptr):
@@ -154,9 +154,9 @@ def solver(
         try:
             func_ptr[0] = obj_func(kappa)
         except RuntimeError:
-            return True
+            return 1
 
-        return False
+        return 0
 
     @precond_interface_type
     def precond_interface(residual_ptr, mu_ptr, precond_residual_ptr):
@@ -175,12 +175,12 @@ def solver(
         try:
             precond_residual = precond(residual, mu)
         except RuntimeError:
-            return True
+            return 1
 
         # convert numpy array to pointer
         precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
 
-        return False
+        return 0
 
     @conv_check_interface_type
     def conv_check_interface(conv_ptr):
@@ -190,9 +190,9 @@ def solver(
         try:
             conv_ptr[0] = conv_check()
         except RuntimeError:
-            return True
+            return 1
 
-        return False
+        return 0
 
     @logger_interface_type
     def logger_interface(message):
@@ -298,12 +298,12 @@ def stability_check(
         try:
             hx = hess_x(x)
         except RuntimeError:
-            return True
+            return 1
 
         # convert numpy array to pointer
         hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
-        return False
+        return 0
 
     @precond_interface_type
     def precond_interface(residual_ptr, mu_ptr, precond_residual_ptr):
@@ -319,12 +319,12 @@ def stability_check(
         try:
             precond_residual = precond(residual, mu)
         except RuntimeError:
-            return True
+            return 1
 
         # convert numpy array to pointer
         precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
 
-        return False
+        return 0
 
     @logger_interface_type
     def logger_interface(message):

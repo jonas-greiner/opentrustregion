@@ -110,7 +110,7 @@ contains
 
     function hartmann6d_hess_x(x)
         !
-        ! this function defiones the Hessian linear transformation operation for the
+        ! this function defines the Hessian linear transformation operation for the
         ! Hartmann 6D function
         !
         real(rp), intent(in) :: x(:)
