@@ -2060,4 +2060,35 @@ contains
 
     end function test_truncated_conjugate_gradient
 
+    logical(c_bool) function test_add_error_origin() bind(C)
+        !
+        ! this function tests the subroutine that adds the error origin to an error 
+        ! code
+        !
+        use opentrustregion, only: add_error_origin
+
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_add_error_origin = .true.
+
+        ! check if subroutine adds error origin correctly if no origin is present
+        error = 1
+        call add_error_origin(error, 100)
+        if (error /= 101) then
+            write (stderr, *) "test_add_error_origin failed: Error origin not "// &
+                "correctly added."
+            test_add_error_origin = .false.
+        end if
+
+        ! check if subroutine skips adding error origin if origin is already present
+        call add_error_origin(error, 100)
+        if (error /= 101) then
+            write (stderr, *) "test_add_error_origin failed: Error code modified "// &
+                "even though error origin is already present."
+            test_add_error_origin = .false.
+        end if
+
+    end function test_add_error_origin
+
 end module opentrustregion_unit_tests

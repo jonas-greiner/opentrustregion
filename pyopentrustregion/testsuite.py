@@ -44,6 +44,7 @@ except OSError:
 # define all tests
 fortran_tests = {
     "opentrustregion_tests": [
+        "add_error_origin",
         "truncated_conjugate_gradient",
         "level_shifted_davidson",
         "sanity_check",
