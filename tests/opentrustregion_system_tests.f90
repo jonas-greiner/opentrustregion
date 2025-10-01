@@ -45,17 +45,13 @@ contains
         ! set size parameters for system
         n_ao = 13
         n_mo = 5
-        n_param = n_mo*(n_mo - 1)/2
+        n_param = n_mo * (n_mo - 1) / 2
 
         ! allocate arrays
-        allocate (mo_coeff(n_ao, n_mo))
-        allocate (r_ao_ints(3, n_ao, n_ao))
-        allocate (r2_ao_ints(n_ao, n_ao))
-        allocate (r_mo_ints(3, n_mo, n_mo))
-        allocate (rii_rij_rjj_rji(n_mo, n_mo))
-        allocate (kappa(n_param))
-        allocate (grad(n_param))
-        allocate (h_diag(n_param))
+        allocate(mo_coeff(n_ao, n_mo), r_ao_ints(3, n_ao, n_ao), &
+                  r2_ao_ints(n_ao, n_ao), r_mo_ints(3, n_mo, n_mo), &
+                  rii_rij_rjj_rji(n_mo, n_mo), kappa(n_param), grad(n_param), &
+                  h_diag(n_param))
 
         ! read raw binary data
         open (unit=10, file=data_dir//"/h2o_atomic_mo_coeff.bin", form="unformatted", &
@@ -101,7 +97,7 @@ contains
         end if
 
         ! perform stability check
-        call stability_check(h_diag, hess_x_funptr, stable, kappa, error)
+        call stability_check(h_diag, hess_x_funptr, stable, error)
 
         ! check if error has occured
         if (error /= 0) then
@@ -118,14 +114,8 @@ contains
         end if
 
         ! deallocate arrays
-        deallocate (mo_coeff)
-        deallocate (r_ao_ints)
-        deallocate (r2_ao_ints)
-        deallocate (r_mo_ints)
-        deallocate (rii_rij_rjj_rji)
-        deallocate (kappa)
-        deallocate (grad)
-        deallocate (h_diag)
+        deallocate(mo_coeff, r_ao_ints, r2_ao_ints, r_mo_ints, rii_rij_rjj_rji, kappa, &
+                   grad, h_diag)
 
     end function test_h2o_atomic_fb
 
@@ -154,14 +144,10 @@ contains
         n_param = n_mo*(n_mo - 1)/2
 
         ! allocate arrays
-        allocate (mo_coeff(n_ao, n_mo))
-        allocate (r_ao_ints(3, n_ao, n_ao))
-        allocate (r2_ao_ints(n_ao, n_ao))
-        allocate (r_mo_ints(3, n_mo, n_mo))
-        allocate (rii_rij_rjj_rji(n_mo, n_mo))
-        allocate (kappa(n_param))
-        allocate (grad(n_param))
-        allocate (h_diag(n_param))
+        allocate(mo_coeff(n_ao, n_mo), r_ao_ints(3, n_ao, n_ao), &
+                 r2_ao_ints(n_ao, n_ao), r_mo_ints(3, n_mo, n_mo), &
+                 rii_rij_rjj_rji(n_mo, n_mo), kappa(n_param), grad(n_param), &
+                 h_diag(n_param))
 
         ! read raw binary data
         open (unit=10, file=data_dir//"/h2o_saddle_mo_coeff.bin", form="unformatted", &
@@ -207,7 +193,7 @@ contains
         end if
 
         ! perform stability check
-        call stability_check(h_diag, hess_x_funptr, stable, kappa, error)
+        call stability_check(h_diag, hess_x_funptr, stable, error)
 
         ! check if error has occured
         if (error /= 0) then
@@ -224,14 +210,8 @@ contains
         end if
 
         ! deallocate arrays
-        deallocate (mo_coeff)
-        deallocate (r_ao_ints)
-        deallocate (r2_ao_ints)
-        deallocate (r_mo_ints)
-        deallocate (rii_rij_rjj_rji)
-        deallocate (kappa)
-        deallocate (grad)
-        deallocate (h_diag)
+        deallocate(mo_coeff, r_ao_ints, r2_ao_ints, r_mo_ints, rii_rij_rjj_rji, kappa, &
+                   grad, h_diag)
 
     end function test_h2o_saddle_fb
 
@@ -240,17 +220,17 @@ contains
         ! this function calculates the Foster-Boys orbital localization objective 
         ! function
         !
-        real(rp), intent(in) :: kappa(:)
+        real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
 
-        real(rp), dimension(n_mo, n_mo) :: kappa_full, u
-        real(rp) :: mo_coeff_tmp(n_ao, n_mo)
+        real(rp), allocatable :: kappa_full(:, :), mo_coeff_tmp(:, :)
         integer(ip) :: xyz, i, j, idx
 
         ! initialize error flag
         error = 0
 
         ! unpack orbital rotation
+        allocate(kappa_full(n_mo, n_mo))
         kappa_full = 0.0
         idx = 1
         do i = 2, n_mo
@@ -261,11 +241,9 @@ contains
             end do
         end do
 
-        ! get rotation matrix
-        u = exp_asymm_mat(kappa_full)
-
         ! rotate orbitals
-        mo_coeff_tmp = matmul(mo_coeff, u)
+        mo_coeff_tmp = matmul(mo_coeff, exp_asymm_mat(kappa_full))
+        deallocate(kappa_full)
 
         ! compute cost function
         obj_func = 0.d0
@@ -280,6 +258,7 @@ contains
                                                 mo_coeff_tmp(:, i)))**2
             end do
         end do
+        deallocate(mo_coeff_tmp)
 
     end function obj_func
 
@@ -289,18 +268,20 @@ contains
         !
         use opentrustregion, only: hess_x_type
 
-        real(rp), intent(in) :: kappa(:)
-        real(rp), intent(out) :: func, grad(:), h_diag(:)
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
 
         integer(ip) :: xyz, i, j, idx
-        real(rp), dimension(n_mo, n_mo) :: kappa_full, u, h_diag_tmp, tmp1
+        real(rp), allocatable :: kappa_full(:, :), h_diag_tmp(:, :), tmp1(:, :)
 
         ! initialize error flag
         error = 0
 
         ! unpack orbital rotation
+        allocate(kappa_full(n_mo, n_mo))
         kappa_full = 0.0
         idx = 1
         do i = 2, n_mo
@@ -311,11 +292,9 @@ contains
             end do
         end do
 
-        ! get rotation matrix
-        u = exp_asymm_mat(kappa_full)
-
         ! rotate orbitals
-        mo_coeff = matmul(mo_coeff, u)
+        mo_coeff = matmul(mo_coeff, exp_asymm_mat(kappa_full))
+        deallocate(kappa_full)
 
         ! transform integrals to MO basis
         do xyz = 1, 3
@@ -332,6 +311,7 @@ contains
         end do
 
         ! construct temporary intermediate
+        allocate(tmp1(n_mo, n_mo))
         do i = 1, n_mo
             do j = 1, n_mo
                 tmp1(i, j) = sum(r_mo_ints(:, j, j)*r_mo_ints(:, j, i))
@@ -348,6 +328,7 @@ contains
         end do
 
         ! construct Hessian diagonal
+        allocate(h_diag_tmp(n_mo, n_mo))
         do i = 1, n_mo
             do j = 1, n_mo
                 h_diag_tmp(i, j) = 2*sum(r_mo_ints(:, j, j)*r_mo_ints(:, i, i) + &
@@ -365,33 +346,36 @@ contains
                 idx = idx + 1
             end do
         end do
+        deallocate(h_diag_tmp)
 
         ! save for Hessian linear transformation
         rii_rij_rjj_rji = tmp1 + transpose(tmp1)
+        deallocate(tmp1)
 
         ! get function pointer to Hessian linear transformation
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
     end subroutine update_orbs
 
-    function hess_x(x, error)
+    subroutine hess_x_fun(x, hess_x, error)
         !
         ! this function performs the Hessian linear transformation for Foster-Boys 
         ! orbital localization, it cannot be defined within update_orbs as it would 
         ! otherwise go out of scope when that subroutine returns
         !
-        real(rp), intent(in) :: x(:)
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
-        real(rp) :: hess_x(n_param)
 
-        real(rp) :: x_full(n_mo, n_mo), hess_x_full(n_mo, n_mo), tmp2(3, n_mo), &
-                    tmp3(3, n_mo, n_mo)
+        real(rp), allocatable :: x_full(:, :), hess_x_full(:, :), tmp2(:, :), &
+                                 tmp3(:, :, :)
         integer(ip) :: xyz1, i1, j1, idx1
 
         ! initialize error flag
         error = 0
 
         ! unpack trial vector
+        allocate(x_full(n_mo, n_mo))
         x_full = 0.0
         idx1 = 1
         do i1 = 2, n_mo
@@ -403,6 +387,7 @@ contains
         end do
 
         ! construct intermediates
+        allocate(tmp2(3, n_mo), tmp3(3, n_mo, n_mo))
         do xyz1 = 1, 3
             do i1 = 1, n_mo
                 tmp2(xyz1, i1) = sum(x_full(:, i1)*r_mo_ints(xyz1, i1, :))
@@ -413,6 +398,7 @@ contains
         end do
 
         ! construct Hessian linear transformation
+        allocate(hess_x_full(n_mo, n_mo))
         hess_x_full = matmul(transpose(x_full), transpose(rii_rij_rjj_rji))
         do i1 = 1, n_mo
             do j1 = 1, n_mo
@@ -422,6 +408,7 @@ contains
                                             r_mo_ints(:, j1, i1)*tmp2(:, i1))
             end do
         end do
+        deallocate(x_full, tmp2, tmp3)
 
         ! extract lower triagonal
         idx1 = 1
@@ -431,8 +418,9 @@ contains
                 idx1 = idx1 + 1
             end do
         end do
+        deallocate(hess_x_full)
 
-    end function hess_x
+    end subroutine hess_x_fun
 
     function exp_asymm_mat(mat)
         !
@@ -442,10 +430,9 @@ contains
         real(rp) :: exp_asymm_mat(size(mat, 1), size(mat, 2))
 
         integer(ip) :: n, lwork, info, i
-        complex(rp), allocatable :: work(:)
-        real(rp) :: eigvals(size(mat, 1)), rwork(3*size(mat, 1) - 2)
-        complex(rp) :: tmp(size(mat, 1), size(mat, 2)), &
-                       eigvecs(size(mat, 1), size(mat, 2))
+        real(rp), allocatable :: eigvals(:), rwork(:)
+        complex(rp), allocatable :: work(:), eigvecs(:, :), tmp(:, :)
+                       
         external :: zheev
 
         ! size of matrix
@@ -456,24 +443,24 @@ contains
 
         ! query optimal workspace size
         lwork = -1
-        allocate (work(1))
+        allocate(eigvals(n), work(1), rwork(3 * n - 2))
         call zheev("V", "U", n, eigvecs, n, eigvals, work, lwork, rwork, info)
         lwork = int(work(1))
-        deallocate (work)
-        allocate (work(lwork))
+        deallocate(work)
+        allocate(work(lwork))
 
         ! perform eigendecomposition
         call zheev("V", "U", n, eigvecs, n, eigvals, work, lwork, rwork, info)
+        deallocate(work, rwork)
 
         ! compute matrix exponential under assumption that eigenvalues are purely
         ! imaginary
+        allocate(tmp(n, n))
         do i = 1, n
             tmp(:, i) = eigvecs(:, i)*cmplx(cos(eigvals(i)), sin(eigvals(i)), kind=rp)
         end do
         exp_asymm_mat = real(transpose(matmul(tmp, conjg(transpose(eigvecs)))))
-
-        ! deallocate work array
-        deallocate (work)
+        deallocate(eigvecs, eigvals, tmp)
 
     end function exp_asymm_mat
 
