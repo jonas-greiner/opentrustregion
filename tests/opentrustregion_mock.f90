@@ -43,7 +43,7 @@ contains
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         integer(ip), intent(in) :: n_param
-        logical, intent(out) :: error
+        integer(ip), intent(out) :: error
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         procedure(conv_check_type), intent(in), pointer, optional :: conv_check_funptr
         logical, intent(in), optional :: stability, line_search, davidson, &
@@ -57,13 +57,19 @@ contains
         real(rp), dimension(n_param) :: kappa, x, grad, h_diag, hess_x, residual
         real(rp) :: func
         procedure(hess_x_type), pointer :: hess_x_funptr
+        logical :: converged
 
         ! initialize logical
         test_passed = .true.
 
         ! check if passed orbital updating subroutine produces correct quantities
         kappa = 1.d0
-        call update_orbs_funptr(kappa, func, grad, h_diag, hess_x_funptr)
+        call update_orbs_funptr(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_solver_c_wrapper failed: Passed orbital "// &
+                "updating function produced error."
+        end if
         if (abs(func - 3.d0) > tol) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned objective "// &
@@ -80,7 +86,13 @@ contains
                 "diagonal of passed orbital updating function wrong."
         end if
         x = 1.d0
-        hess_x = hess_x_funptr(x)
+        hess_x = hess_x_funptr(x, error)
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_solver_c_wrapper failed: Hessian linear "// &
+                "transformation function returned by passed orbital updating "// &
+                "function produced error."
+        end if
         if (any(abs(hess_x - 4.d0) > tol)) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned Hessian "// &
@@ -89,7 +101,12 @@ contains
         end if
 
         ! check if passed objective function produces correct quantities
-        func = obj_func_funptr(kappa)
+        func = obj_func_funptr(kappa, error)
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_solver_c_wrapper failed: Passed objective "// &
+                "function produced error."
+        end if
         if (abs(func - 3.d0) > tol) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned objective "// &
@@ -104,7 +121,7 @@ contains
         end if
 
         ! set output quantities
-        error = .false.
+        error = 0
 
         ! check if optional preconditioner function is correctly passed
         if (solver_default) then
@@ -126,7 +143,12 @@ contains
                     "preconditioner function not associated with value."
             end if
             residual = 1.d0
-            residual = precond_funptr(residual, 5.d0)
+            residual = precond_funptr(residual, 5.d0, error)
+            if (error /= 0) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "preconditioner function produced error."
+            end if
             if (any(abs(residual - 5.d0) > tol)) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Returned "// &
@@ -148,12 +170,18 @@ contains
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
                     "convergence check function not associated with value."
-            else if (.not. associated(precond_funptr)) then
+            else if (.not. associated(conv_check_funptr)) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
                     "convergence check function not associated with value."
             end if
-            if (.not. conv_check_funptr()) then
+            converged = conv_check_funptr(error)
+            if (error /= 0) then
+                test_passed = .false.
+                write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
+                    "convergence check function produced error."
+            end if
+            if (.not. converged) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Returned "// &
                     "convergence logical of passed convergence check function wrong."
@@ -249,7 +277,8 @@ contains
 
         real(rp), intent(in) :: h_diag(:)
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
-        logical, intent(out) :: stable, error
+        logical, intent(out) :: stable
+        integer(ip), intent(out) :: error
         real(rp), intent(out) :: kappa(:)
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         logical, intent(in), optional :: jacobi_davidson
@@ -272,7 +301,12 @@ contains
         ! check if passed Hessian linear transformation function produces correct
         ! quantity
         x = 1.d0
-        hess_x = hess_x_funptr(x)
+        hess_x = hess_x_funptr(x, error)
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                "Hessian linear transformation function produced error."
+        end if
         if (any(abs(hess_x - 4.d0) > tol)) then
             test_passed = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Hessian "// &
@@ -283,7 +317,7 @@ contains
         ! set output quantities
         stable = .false.
         kappa = 1.d0
-        error = .false.
+        error = 0
 
         ! check if optional preconditioner function is correctly passed
         if (stability_check_default) then
@@ -305,7 +339,12 @@ contains
                     "preconditioner function not associated with value."
             end if
             residual = 1.d0
-            residual = precond_funptr(residual, 5.d0)
+            residual = precond_funptr(residual, 5.d0, error)
+            if (error /= 0) then
+                test_passed = .false.
+                write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
+                    "preconditioner function produced error."
+            end if
             if (any(abs(residual - 5.d0) > tol)) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &

@@ -34,10 +34,10 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
-        integer(ip) :: ios
+        integer(ip) :: ios, error
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
         real(rp) :: func
-        logical :: stable, error
+        logical :: stable
 
         ! assume tests pass
         test_h2o_atomic_fb = .true.
@@ -82,30 +82,38 @@ contains
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
 
         ! check if error has occured
-        if (error) then
-            write (stderr, *) "test_h2o_atomic_fb failed: Solver produced error."
+        if (error /= 0) then
+            write (stderr, *) "test_h2o_atomic_fb failed: Solver subroutine "// &
+                "produced error."
             test_h2o_atomic_fb = .false.
         end if
 
         ! get gradient, Hessian diagonal and Hessian linear transformation function
         ! pointer
         kappa = 0.d0
-        call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
+        call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+
+        ! check if error has occured
+        if (error /= 0) then
+            write (stderr, *) "test_h2o_atomic_fb failed: Orbital updating "// &
+            "subroutine produced error."
+            test_h2o_atomic_fb = .false.
+        end if
 
         ! perform stability check
         call stability_check(h_diag, hess_x_funptr, stable, kappa, error)
 
         ! check if error has occured
-        if (error) then
-            write (stderr, *) "test_h2o_atomic_fb failed: Stability check produced "// &
-            "error."
+        if (error /= 0) then
+            write (stderr, *) "test_h2o_atomic_fb failed: Stability check "// &
+            "subroutine produced error."
             test_h2o_atomic_fb = .false.
         end if
 
         ! test if solution is stable
         if (.not. stable) then
-            write (stderr, *) "test_h2o_atomic_fb failed: Stability check did not "// &
-                "converge to minimum."
+            write (stderr, *) "test_h2o_atomic_fb failed: Solver did not converge "// &
+                "to minimum."
             test_h2o_atomic_fb = .false.
         end if
 
@@ -132,10 +140,10 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
-        integer(ip) :: ios
+        integer(ip) :: ios, error
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
         real(rp) :: func
-        logical :: stable, error
+        logical :: stable
 
         ! assume tests pass
         test_h2o_saddle_fb = .true.
@@ -180,30 +188,38 @@ contains
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error)
 
         ! check if error has occured
-        if (error) then
-            write (stderr, *) "test_h2o_saddle_fb failed: Solver produced error."
+        if (error /= 0) then
+            write (stderr, *) "test_h2o_saddle_fb failed: Solver subroutine "// &
+                "produced error."
             test_h2o_saddle_fb = .false.
         end if
 
         ! get gradient, Hessian diagonal and Hessian linear transformation function
         ! pointer
         kappa = 0.d0
-        call update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
+        call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+
+        ! check if error has occured
+        if (error /= 0) then
+            write (stderr, *) "test_h2o_saddle_fb failed: Orbital update "// &
+            "subroutine produced error."
+            test_h2o_saddle_fb = .false.
+        end if
 
         ! perform stability check
         call stability_check(h_diag, hess_x_funptr, stable, kappa, error)
 
         ! check if error has occured
-        if (error) then
-            write (stderr, *) "test_h2o_saddle_fb failed: Stability check produced "// &
-            "error."
+        if (error /= 0) then
+            write (stderr, *) "test_h2o_saddle_fb failed: Stability check "// &
+            "subroutine produced error."
             test_h2o_saddle_fb = .false.
         end if
 
         ! test if solution is stable
         if (.not. stable) then
-            write (stderr, *) "test_h2o_saddle_fb failed: Stability check did not "// &
-                "converge to minimum."
+            write (stderr, *) "test_h2o_saddle_fb failed: Solver did not converge "// &
+                "to minimum."
             test_h2o_saddle_fb = .false.
         end if
 
@@ -219,16 +235,20 @@ contains
 
     end function test_h2o_saddle_fb
 
-    real(rp) function obj_func(kappa)
+    real(rp) function obj_func(kappa, error)
         !
         ! this function calculates the Foster-Boys orbital localization objective 
         ! function
         !
         real(rp), intent(in) :: kappa(:)
+        integer(ip), intent(out) :: error
 
         real(rp), dimension(n_mo, n_mo) :: kappa_full, u
         real(rp) :: mo_coeff_tmp(n_ao, n_mo)
         integer(ip) :: xyz, i, j, idx
+
+        ! initialize error flag
+        error = 0
 
         ! unpack orbital rotation
         kappa_full = 0.0
@@ -263,7 +283,7 @@ contains
 
     end function obj_func
 
-    subroutine update_orbs(kappa, func, grad, h_diag, hess_x_funptr)
+    subroutine update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
         !
         ! this function updates the orbitals for Foster-Boys orbital localization
         !
@@ -272,9 +292,13 @@ contains
         real(rp), intent(in) :: kappa(:)
         real(rp), intent(out) :: func, grad(:), h_diag(:)
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
 
         integer(ip) :: xyz, i, j, idx
         real(rp), dimension(n_mo, n_mo) :: kappa_full, u, h_diag_tmp, tmp1
+
+        ! initialize error flag
+        error = 0
 
         ! unpack orbital rotation
         kappa_full = 0.0
@@ -350,18 +374,22 @@ contains
 
     end subroutine update_orbs
 
-    function hess_x(x)
+    function hess_x(x, error)
         !
         ! this function performs the Hessian linear transformation for Foster-Boys 
         ! orbital localization, it cannot be defined within update_orbs as it would 
         ! otherwise go out of scope when that subroutine returns
         !
         real(rp), intent(in) :: x(:)
+        integer(ip), intent(out) :: error
         real(rp) :: hess_x(n_param)
 
         real(rp) :: x_full(n_mo, n_mo), hess_x_full(n_mo, n_mo), tmp2(3, n_mo), &
                     tmp3(3, n_mo, n_mo)
         integer(ip) :: xyz1, i1, j1, idx1
+
+        ! initialize error flag
+        error = 0
 
         ! unpack trial vector
         x_full = 0.0
