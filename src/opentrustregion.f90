@@ -226,18 +226,14 @@ contains
             if (.not. max_precision_reached) then
                 ! calculate cost function, gradient and Hessian diagonal
                 call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_update_orbs)
-                    return
-                end if
+                call add_error_origin(error, error_update_orbs, settings)
+                if (error /= 0) return
 
                 ! perform sanity check
                 if (imacro == 1) then
                     call sanity_check(settings, n_param, grad, error)
-                    if (error /= 0) then
-                        call add_error_origin(error, error_solver)
-                        return
-                    end if
+                    call add_error_origin(error, error_solver, settings)
+                    if (error /= 0) return
                 end if
 
                 ! calculate gradient norm
@@ -256,10 +252,8 @@ contains
                         if (use_precond) then
                             kappa_norm = sqrt(ddot(n_param, kappa, 1, &
                                                    precond(kappa, 0.d0, error), 1))
-                            if (error /= 0) then
-                                call add_error_origin(error, error_precond)
-                                return
-                            end if
+                            call add_error_origin(error, error_precond, settings)
+                            if (error /= 0) return
                             
                         else
                             kappa_norm = sqrt(ddot(n_param, kappa, 1, &
@@ -292,10 +286,8 @@ contains
             if (present(conv_check)) then
                 if (associated(conv_check)) then
                     conv_check_passed = conv_check(error)
-                    if (error /= 0) then
-                        call add_error_origin(error, error_conv_check)
-                        return
-                    end if
+                    call add_error_origin(error, error_conv_check, settings)
+                    if (error /= 0) return
                 else
                     conv_check_passed = .false.
                 end if
@@ -309,20 +301,16 @@ contains
                     call stability_check(h_diag, hess_x_funptr, stable, kappa, error, &
                                          precond=precond, verbose=settings%verbose, &
                                          logger=logger)
-                    if (error /= 0) then
-                        call add_error_origin(error, error_stability_check)
-                        return
-                    end if
+                    call add_error_origin(error, error_stability_check, settings)
+                    if (error /= 0) return
                     if (.not. stable) then
                         ! logarithmic line search
                         do i = 1, stability_n_points
                             n_kappa = 10.d0**(-(i - 1)/ &
                                               real(stability_n_points - 1, rp)*10.d0)
                             new_func = obj_func(n_kappa*kappa, error)
-                            if (error /= 0) then
-                                call add_error_origin(error, error_obj_func)
-                                return
-                            end if
+                            call add_error_origin(error, error_obj_func, settings)
+                            if (error /= 0) return
                             if (new_func < func) then
                                 kappa = n_kappa*kappa
                                 exit
@@ -371,10 +359,8 @@ contains
                                             jacobi_davidson_started, &
                                             max_precision_reached, &
                                             error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_solver)
-                    return
-                end if
+                call add_error_origin(error, error_solver, settings)
+                if (error /= 0) return
             else
                 ! solve trust region subproblem with truncated conjugate gradient
                 call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
@@ -382,10 +368,8 @@ contains
                                                   use_precond, precond, settings, &
                                                   trust_radius, solution, imicro, &
                                                   max_precision_reached, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_solver)
-                    return
-                end if
+                call add_error_origin(error, error_solver, settings)
+                if (error /= 0) return
             end if
 
             ! perform line search
@@ -393,10 +377,8 @@ contains
                 n_kappa = 0.d0
             else if (settings%line_search) then
                 n_kappa = bracket(obj_func, solution, 0.d0, 1.d0, settings, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_solver)
-                    return
-                end if
+                call add_error_origin(error, error_solver, settings)
+                if (error /= 0) return
             else
                 n_kappa = 1.d0
             end if
@@ -500,10 +482,8 @@ contains
         red_space_basis(:, 1) = 0.d0
         red_space_basis(minloc(h_diag), 1) = 1.d0
         call generate_random_trial_vectors(red_space_basis, settings, error)
-        if (error /= 0) then
-            call add_error_origin(error, error_stability_check)
-            return
-        end if
+        call add_error_origin(error, error_stability_check, settings)
+        if (error /= 0) return
 
         ! number of trial vectors
         ntrial = size(red_space_basis, 2)
@@ -512,10 +492,8 @@ contains
         allocate (h_basis(n_param, ntrial))
         do i = 1, ntrial
             h_basis(:, i) = hess_x_funptr(red_space_basis(:, i), error)
-            if (error /= 0) then
-                call add_error_origin(error, error_hess_x)
-                return
-            end if
+            call add_error_origin(error, error_hess_x, settings)
+            if (error /= 0) return
         end do
 
         ! construct augmented Hessian in reduced space
@@ -531,10 +509,8 @@ contains
             ! solve reduced space problem
             call symm_mat_min_eig(red_space_hess, eigval, red_space_solution, &
                                   settings, error)
-            if (error /= 0) then
-                call add_error_origin(error, error_stability_check)
-                return
-            end if
+            call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
 
             ! get full space solution
             call dgemv("N", size(red_space_basis, 1), size(red_space_basis, 2), 1.d0, &
@@ -556,27 +532,21 @@ contains
                 ! precondition residual
                 if (use_precond) then
                     basis_vec = precond(residual, 0.d0, error)
-                    if (error /= 0) then
-                        call add_error_origin(error, error_precond)
-                        return
-                    end if
+                    call add_error_origin(error, error_precond, settings)
+                    if (error /= 0) return
                 else
                     basis_vec = level_shifted_diag_precond(residual, 0.d0, h_diag)
                 end if
 
                 ! orthonormalize to current orbital space to get new basis vector
                 call gram_schmidt(basis_vec, red_space_basis, settings, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_stability_check)
-                    return
-                end if
+                call add_error_origin(error, error_stability_check, settings)
+                if (error /= 0) return
 
                 ! add linear transformation of new basis vector
                 h_basis_vec = hess_x_funptr(basis_vec, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_hess_x)
-                    return
-                end if
+                call add_error_origin(error, error_hess_x, settings)
+                if (error /= 0) return
 
                 ! increment Hessian linear transformations
                 tot_hess_x = tot_hess_x + 1
@@ -586,19 +556,15 @@ contains
                 minres_tol = 3.d0 ** (-(iter - 31))
                 call minres(-residual, hess_x_funptr, solution, eigval, minres_tol, &
                             basis_vec, h_basis_vec, settings, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_stability_check)
-                    return
-                end if
+                call add_error_origin(error, error_stability_check, settings)
+                if (error /= 0) return
 
                 ! orthonormalize to current orbital space to get new basis 
                 ! vector
                 call gram_schmidt(basis_vec, red_space_basis, settings, error, &
                                   lin_trans_vector=h_basis_vec, lin_trans_space=h_basis)
-                if (error /= 0) then
-                    call add_error_origin(error, error_stability_check)
-                    return
-                end if
+                call add_error_origin(error, error_stability_check, settings)
+                if (error /= 0) return
 
                 ! check if resulting linear transformation still respects Hessian 
                 ! symmetry which can happen due to numerical noise accumulation
@@ -607,10 +573,8 @@ contains
                         ddot(n_param, basis_vec, 1, &
                              h_basis(:, size(red_space_basis, 2)), 1)) > 1d-12) then
                     h_basis_vec = hess_x_funptr(basis_vec, error)
-                    if (error /= 0) then
-                        call add_error_origin(error, error_hess_x)
-                        return
-                    end if
+                    call add_error_origin(error, error_hess_x, settings)
+                    if (error /= 0) return
                 end if
                 
             end if
@@ -868,15 +832,11 @@ contains
 
         ! evaluate function at upper and lower bounds
         f_lower = obj_func(lower*kappa, error)
-        if (error /= 0) then
-            call add_error_origin(error, error_obj_func)
-            return
-        end if
+        call add_error_origin(error, error_obj_func, settings)
+        if (error /= 0) return
         f_upper = obj_func(upper*kappa, error)
-        if (error /= 0) then
-            call add_error_origin(error, error_obj_func)
-            return
-        end if
+        call add_error_origin(error, error_obj_func, settings)
+        if (error /= 0) return
 
         ! ensure f_a > f_b
         if (f_upper > f_lower) then
@@ -894,10 +854,8 @@ contains
         ! default step
         n_c = n_b + golden_ratio*(n_b - n_a)
         f_c = obj_func(n_c*kappa, error)
-        if (error /= 0) then
-            call add_error_origin(error, error_obj_func)
-            return
-        end if
+        call add_error_origin(error, error_obj_func, settings)
+        if (error /= 0) return
 
         ! continue looping until function at middle point is lower than at brackets
         iter = 0
@@ -916,10 +874,8 @@ contains
             if ((n_u - n_c)*(n_b - n_u) > 0.0) then
                 ! evaluate function at n_u
                 f_u = obj_func(n_u*kappa, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_obj_func)
-                    return
-                end if
+                call add_error_origin(error, error_obj_func, settings)
+                if (error /= 0) return
 
                 ! check if minimum between n_b and n_c
                 if (f_u < f_c) then
@@ -938,26 +894,20 @@ contains
                 ! parabolic fit did not help, default step
                 n_u = n_c + golden_ratio*(n_c - n_b)
                 f_u = obj_func(n_u*kappa, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_obj_func)
-                    return
-                end if
+                call add_error_origin(error, error_obj_func, settings)
+                if (error /= 0) return
             ! limit parabolic fit to its maximum allowed value
             else if ((n_u - n_u_lim)*(n_u_lim - n_c) >= 0.d0) then
                 n_u = n_u_lim
                 f_u = obj_func(n_u*kappa, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_obj_func)
-                    return
-                end if
+                call add_error_origin(error, error_obj_func, settings)
+                if (error /= 0) return
             ! parabolic fit is between n_c and its allowed limit
             else if ((n_u - n_u_lim)*(n_c - n_u) > 0.d0) then
                 ! evaluate function at n_u
                 f_u = obj_func(n_u*kappa, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_obj_func)
-                    return
-                end if
+                call add_error_origin(error, error_obj_func, settings)
+                if (error /= 0) return
 
                 if (f_u < f_c) then
                     n_b = n_c
@@ -966,19 +916,15 @@ contains
                     f_b = f_c
                     f_c = f_u
                     f_u = obj_func(n_u*kappa, error)
-                    if (error /= 0) then
-                        call add_error_origin(error, error_obj_func)
-                        return
-                    end if
+                    call add_error_origin(error, error_obj_func, settings)
+                    if (error /= 0) return
                 end if
             ! reject parabolic fit and use default step
             else
                 n_u = n_c + golden_ratio*(n_c - n_b)
                 f_u = obj_func(n_u*kappa, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_obj_func)
-                    return
-                end if
+                call add_error_origin(error, error_obj_func, settings)
+                if (error /= 0) return
             end if
             ! remove oldest point
             n_a = n_b
@@ -1517,7 +1463,7 @@ contains
     end function orthogonal_projection
 
     subroutine jacobi_davidson_correction(hess_x_funptr, vector, solution, eigval, &
-                                          corr_vector, hess_vector, error)
+                                          corr_vector, hess_vector, settings, error)
         !
         ! this subroutine performs the Jacobi-Davidson correction but also returns the 
         ! Hessian linear transformation since this can be reused
@@ -1525,6 +1471,7 @@ contains
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(in) :: vector(:), solution(:), eigval
         real(rp), intent(out) :: corr_vector(:), hess_vector(:)
+        type(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         real(rp), allocatable :: proj_vector(:)
@@ -1537,10 +1484,8 @@ contains
 
         ! get Hessian linear transformation of projected vector
         hess_vector = hess_x_funptr(proj_vector, error)
-        if (error /= 0) then
-            call add_error_origin(error, error_hess_x)
-            return
-        end if
+        call add_error_origin(error, error_hess_x, settings)
+        if (error /= 0) return
 
         ! finish construction of correction
         corr_vector = orthogonal_projection(hess_vector - eigval * proj_vector, &
@@ -1600,7 +1545,7 @@ contains
         if (present(guess)) then
             vec = guess
             call jacobi_davidson_correction(hess_x_funptr, vec, solution, eigval, &
-                                            matvec, hvec, error)
+                                            matvec, hvec, settings, error)
             if (error /= 0) return
             tot_hess_x = tot_hess_x + 1
         else
@@ -1656,7 +1601,7 @@ contains
 
             ! apply Jacobi-Davidson projector to trial vector
             call jacobi_davidson_correction(hess_x_funptr, v, solution, eigval, y, hv, &
-                                            error)
+                                            settings, error)
             if (error /= 0) return
             tot_hess_x = tot_hess_x + 1
 
@@ -1970,10 +1915,8 @@ contains
         allocate (h_basis(n_param, ntrial))
         do i = 1, ntrial
             h_basis(:, i) = hess_x_funptr(red_space_basis(:, i), error)
-            if (error /= 0) then
-                call add_error_origin(error, error_hess_x)
-                return
-            end if
+            call add_error_origin(error, error_hess_x, settings)
+            if (error /= 0) return
         end do
 
         ! construct augmented Hessian in reduced space
@@ -2057,10 +2000,8 @@ contains
                         imicro > 0.8 * settings%n_micro) then
                         ! evaluate function at approximate point
                         new_func = obj_func(solution, error)
-                        if (error /= 0) then
-                            call add_error_origin(error, error_obj_func)
-                            return
-                        end if
+                        call add_error_origin(error, error_obj_func, settings)
+                        if (error /= 0) return
 
                         ! calculate ratio of evaluated function and predicted function
                         ratio = (new_func - func) / ddot(n_param, solution, 1, &
@@ -2092,10 +2033,8 @@ contains
                     ! precondition residual
                     if (use_precond) then
                         basis_vec = precond(residual, mu, error)
-                        if (error /= 0) then
-                            call add_error_origin(error, error_precond)
-                            return
-                        end if
+                        call add_error_origin(error, error_precond, settings)
+                        if (error /= 0) return
                     else
                         basis_vec = level_shifted_diag_precond(residual, mu, h_diag)
                     end if
@@ -2106,10 +2045,8 @@ contains
 
                     ! add linear transformation of new basis vector
                     h_basis_vec = hess_x_funptr(basis_vec, error)
-                    if (error /= 0) then
-                        call add_error_origin(error, error_hess_x)
-                        return
-                    end if
+                    call add_error_origin(error, error_hess_x, settings)
+                    if (error /= 0) return
 
                     ! increment Hessian linear transformations
                     tot_hess_x = tot_hess_x + 1
@@ -2135,10 +2072,8 @@ contains
                             ddot(n_param, basis_vec, 1, &
                                  h_basis(:, size(red_space_basis, 2)), 1)) > 1d-12) then
                         h_basis_vec = hess_x_funptr(basis_vec, error)
-                        if (error /= 0) then
-                            call add_error_origin(error, error_hess_x)
-                            return
-                        end if
+                        call add_error_origin(error, error_hess_x, settings)
+                        if (error /= 0) return
                     end if
 
                 end if
@@ -2167,10 +2102,8 @@ contains
             if (.not. func_evaluated) then
                 ! evaluate function at predicted point
                 new_func = obj_func(solution, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_obj_func)
-                    return
-                end if
+                call add_error_origin(error, error_obj_func, settings)
+                if (error /= 0) return
 
                 ! calculate ratio of evaluated function and predicted function
                 ratio = (new_func - func) / ddot(n_param, solution, 1, &
@@ -2256,10 +2189,8 @@ contains
         ! initialize preconditioned residual and direction,
         if (use_precond) then
             precond_residual = precond(residual, 0.d0, error)
-            if (error /= 0) then
-                call add_error_origin(error, error_precond)
-                return
-            end if
+            call add_error_origin(error, error_precond, settings)
+            if (error /= 0) return
         else
             precond_residual = abs_diag_precond(residual, h_diag)
         end if
@@ -2270,10 +2201,8 @@ contains
         do imicro = 1, settings%n_micro - 1
             ! get Hessian linear transformation of direction
             hess_direction = hess_x_funptr(direction, error)
-            if (error /= 0) then
-                call add_error_origin(error, error_hess_x)
-                return
-            end if
+            call add_error_origin(error, error_hess_x, settings)
+            if (error /= 0) return
 
             ! increment Hessian linear transformations
             tot_hess_x = tot_hess_x + 1
@@ -2287,15 +2216,11 @@ contains
             ! precondition current solution and direction
             if (use_precond) then
                 precond_solution = precond(solution, 0.d0, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_precond)
-                    return
-                end if
+                call add_error_origin(error, error_precond, settings)
+                if (error /= 0) return
                 precond_direction = precond(direction, 0.d0, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_precond)
-                    return
-                end if
+                call add_error_origin(error, error_precond, settings)
+                if (error /= 0) return
             else
                 precond_solution = abs_diag_precond(solution, h_diag)
                 precond_direction = abs_diag_precond(direction, h_diag)
@@ -2350,10 +2275,8 @@ contains
             residual_new = residual + step_size * hess_direction
             if (use_precond) then
                 precond_residual_new = precond(residual_new, 0.d0, error)
-                if (error /= 0) then
-                    call add_error_origin(error, error_precond)
-                    return
-                end if
+                call add_error_origin(error, error_precond, settings)
+                if (error /= 0) return
             else
                 precond_residual_new = abs_diag_precond(residual_new, h_diag)
             end if
@@ -2380,10 +2303,8 @@ contains
 
         ! evaluate function at predicted point
         new_func = obj_func(solution, error)
-        if (error /= 0) then
-            call add_error_origin(error, error_obj_func)
-            return
-        end if
+        call add_error_origin(error, error_obj_func, settings)
+        if (error /= 0) return
 
         if (abs(new_func - func) / max(abs(new_func), abs(func)) > 1.d-14) then
             ! calculate ratio of evaluated function and predicted function
@@ -2418,15 +2339,11 @@ contains
                             ! precondition current solution and direction
                             if (use_precond) then
                                 precond_solution = precond(solution, 0.d0, error)
-                                if (error /= 0) then
-                                    call add_error_origin(error, error_precond)
-                                    return
-                                end if
+                                call add_error_origin(error, error_precond, settings)
+                                if (error /= 0) return
                                 precond_direction = precond(direction, 0.d0, error)
-                                if (error /= 0) then
-                                    call add_error_origin(error, error_precond)
-                                    return
-                                end if
+                                call add_error_origin(error, error_precond, settings)
+                                if (error /= 0) return
                             else
                                 precond_solution = abs_diag_precond(solution, h_diag)
                                 precond_direction = abs_diag_precond(direction, h_diag)
@@ -2453,10 +2370,8 @@ contains
 
                             ! evaluate function at predicted point
                             new_func = obj_func(solution, error)
-                            if (error /= 0) then
-                                call add_error_origin(error, error_obj_func)
-                                return
-                            end if
+                            call add_error_origin(error, error_obj_func, settings)
+                            if (error /= 0) return
 
                             ! calculate ratio of evaluated function and predicted 
                             ! function
@@ -2564,7 +2479,7 @@ contains
         ! sanity check for gradient size
         if (size(grad) /= n_param) then
             call settings%log("Size of gradient array returned by subroutine "// &
-                              "update_orbs does not equal number of parameters ", 1, &
+                              "update_orbs does not equal number of parameters.", 1, &
                               .true.)
             error = 1
             return
@@ -2572,15 +2487,21 @@ contains
 
     end subroutine sanity_check
 
-    subroutine add_error_origin(error_code, error_origin)
+    subroutine add_error_origin(error_code, error_origin, settings)
         !
         ! this function modifies the error code by adding the error's origin if it is 
-        ! already added
+        ! not already added
         !
+        class(settings_type), intent(in) :: settings
         integer(ip), intent(inout) :: error_code
         integer(ip), intent(in) :: error_origin
 
-        if (error_code < 100) error_code = error_origin + error_code
+        if (error_code > 0) then
+            if (error_code < 100) error_code = error_origin + error_code
+        else if (error_code < 0) then
+            call settings%log("Negative error code encountered.", 1, .true.)
+            error_code = error_origin + 1
+        end if
 
     end subroutine add_error_origin
 
