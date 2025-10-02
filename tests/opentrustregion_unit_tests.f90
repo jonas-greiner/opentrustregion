@@ -1347,12 +1347,16 @@ contains
         !
         use opentrustregion, only: hess_x_type, jacobi_davidson_correction
 
+        type(settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, vector, solution, corr_vector, hess_vector
         integer(ip) :: error
 
         ! assume tests pass
         test_jacobi_davidson_correction = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! define point near saddle point, define trial vector, and solution to be 
         ! projected out
@@ -1368,7 +1372,7 @@ contains
 
         ! calculate Jacobi-Davidson correction and compare values
         call jacobi_davidson_correction(hess_x_funptr, vector, solution, 0.5d0, &
-                                        corr_vector, hess_vector, error)
+                                        corr_vector, hess_vector, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_jacobi_davidson_correction failed: Returned error."
             test_jacobi_davidson_correction = .false.
@@ -2068,14 +2072,18 @@ contains
         !
         use opentrustregion, only: add_error_origin
 
+        type(settings_type) :: settings
         integer(ip) :: error
 
         ! assume tests pass
         test_add_error_origin = .true.
 
+        ! setup settings object
+        call setup_settings(settings)
+
         ! check if subroutine adds error origin correctly if no origin is present
         error = 1
-        call add_error_origin(error, 100)
+        call add_error_origin(error, 100, settings)
         if (error /= 101) then
             write (stderr, *) "test_add_error_origin failed: Error origin not "// &
                 "correctly added."
@@ -2083,10 +2091,28 @@ contains
         end if
 
         ! check if subroutine skips adding error origin if origin is already present
-        call add_error_origin(error, 100)
+        call add_error_origin(error, 100, settings)
         if (error /= 101) then
             write (stderr, *) "test_add_error_origin failed: Error code modified "// &
                 "even though error origin is already present."
+            test_add_error_origin = .false.
+        end if
+
+        ! check if subroutine does not modify error code when no error is encountered
+        error = 0
+        call add_error_origin(error, 100, settings)
+        if (error /= 0) then
+            write (stderr, *) "test_add_error_origin failed: Error code modified "// &
+                "even though error code of zero was passed."
+            test_add_error_origin = .false.
+        end if
+
+        ! check if subroutine raises error for invalid error code
+        error = -1
+        call add_error_origin(error, 100, settings)
+        if (error /= 101) then
+            write (stderr, *) "test_add_error_origin failed: Error code not "// &
+                "correctly returned for invalid (negative) error code."
             test_add_error_origin = .false.
         end if
 
