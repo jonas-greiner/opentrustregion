@@ -63,12 +63,6 @@ target_link_libraries(
     PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
 )
 
-# get the absolute path to the test data directory and add it as a definition so the
-# Fortran code can access it
-set(TEST_DATA_PATH "${CMAKE_SOURCE_DIR}/tests/data")
-add_definitions(-DTEST_DATA_PATH=\"${TEST_DATA_PATH}\")
-target_compile_definitions(testsuite PRIVATE TEST_DATA_PATH="${TEST_DATA_PATH}")
-
 # enable preprocessing
 set_source_files_properties(tests/opentrustregion_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)
 
