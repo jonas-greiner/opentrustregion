@@ -48,11 +48,11 @@ except OSError:
 def solver(
     obj_func: Callable[[np.ndarray], float],
     update_orbs: Callable[
-        [np.ndarray],
-        Tuple[float, np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]],
+        [np.ndarray, np.ndarray, np.ndarray],
+        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
     n_param: int,
-    precond: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
+    precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]] = None,
     conv_check: Optional[Callable[[None], bool]] = None,
     conv_tol: Optional[float] = None,
     stability: Optional[bool] = None,
@@ -74,20 +74,18 @@ def solver(
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating pointers to the relevant
     # data
-    hess_x_interface_type = CFUNCTYPE(
-        c_long, POINTER(c_double), POINTER(POINTER(c_double))
-    )
+    hess_x_interface_type = CFUNCTYPE(c_long, POINTER(c_double), POINTER(c_double))
     update_orbs_interface_type = CFUNCTYPE(
         c_long,
         POINTER(c_double),
         POINTER(c_double),
-        POINTER(POINTER(c_double)),
-        POINTER(POINTER(c_double)),
+        POINTER(c_double),
+        POINTER(c_double),
         POINTER(hess_x_interface_type),
     )
     obj_func_interface_type = CFUNCTYPE(c_long, POINTER(c_double), POINTER(c_double))
     precond_interface_type = CFUNCTYPE(
-        c_long, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
+        c_long, POINTER(c_double), POINTER(c_double), POINTER(c_double)
     )
     conv_check_interface_type = CFUNCTYPE(c_long, POINTER(c_bool))
     logger_interface_type = CFUNCTYPE(None, c_char_p)
@@ -99,45 +97,35 @@ def solver(
         gradient, Hessian diagonal and returns a procedure function to the Hessian
         linear transformation
         """
-        # variables need to be defined as a global to ensure that they are not garbage
-        # collected when the current function completes
-        global grad
-        global h_diag
-        global hess_x_interface
-
         # convert orbital rotation matrix pointer to numpy array
         kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
+        grad = np.ctypeslib.as_array(grad_ptr, shape=(n_param,))
+        h_diag = np.ctypeslib.as_array(h_diag_ptr, shape=(n_param,))
 
         # update orbitals and retrieve objective function, gradient, Hessian diagonal
         # and Hessian linear transformation function
         try:
-            func_ptr[0], grad, h_diag, hess_x = update_orbs(kappa)
+            func_ptr[0], hess_x = update_orbs(kappa, grad, h_diag)
         except RuntimeError:
             return 1
 
-        # convert numpy arrays to pointers
-        grad_ptr[0] = grad.ctypes.data_as(POINTER(c_double))
-        h_diag_ptr[0] = h_diag.ctypes.data_as(POINTER(c_double))
-
         @hess_x_interface_type
         def hess_x_interface(x_ptr, hx_ptr):
-            # variables need to be defined as a global to ensure that they are not
-            # garbage collected when the current function completes
-            global hx
-
             # convert trial vector pointer to numpy array
             x = np.ctypeslib.as_array(x_ptr, shape=(n_param,))
+            hx = np.ctypeslib.as_array(hx_ptr, shape=(n_param,))
 
             # perform linear transformation
             try:
-                hx = hess_x(x)
+                hess_x(x, hx)
             except RuntimeError:
                 return 1
 
-            # convert numpy array to pointer
-            hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
-
             return 0
+
+        # attach the function to some object that persists in Fortran to ensure that it
+        # is not garbage collected when the current function completes
+        grad_ptr._hess_x_interface = hess_x_interface
 
         # store the function pointer in hess_x_ptr
         hess_x_funptr[0] = hess_x_interface
@@ -164,22 +152,16 @@ def solver(
         """
         this function returns the preconditioner
         """
-        # variables need to be defined as a global to ensure that they are not
-        # garbage collected when the current function completes
-        global precond_residual
-
         # convert pointers to numpy array and float
         residual = np.ctypeslib.as_array(residual_ptr, shape=(n_param,))
         mu = mu_ptr[0]
+        precond_residual = np.ctypeslib.as_array(precond_residual_ptr, shape=(n_param,))
 
         # get preconditioner
         try:
-            precond_residual = precond(residual, mu)
+            precond(residual, mu, precond_residual)
         except RuntimeError:
             return 1
-
-        # convert numpy array to pointer
-        precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
 
         return 0
 
@@ -206,11 +188,11 @@ def solver(
     # define result and argument types
     libopentrustregion.solver.restype = c_long
     libopentrustregion.solver.argtypes = [
-        c_void_p,
-        c_void_p,
+        update_orbs_interface_type,
+        obj_func_interface_type,
         c_long,
-        c_void_p,
-        c_void_p,
+        c_void_p if precond is None else precond_interface_type,
+        c_void_p if conv_check is None else conv_check_interface_type,
         POINTER(c_double),
         POINTER(c_bool),
         POINTER(c_bool),
@@ -226,7 +208,7 @@ def solver(
         POINTER(c_double),
         POINTER(c_long),
         POINTER(c_long),
-        c_void_p,
+        c_void_p if logger is None else logger_interface_type,
     ]
 
     # call Fortran function
@@ -268,9 +250,9 @@ def solver(
 
 def stability_check(
     h_diag: np.ndarray,
-    hess_x: Callable[[np.ndarray], np.ndarray],
+    hess_x: Callable[[np.ndarray, np.ndarray], None],
     n_param: int,
-    precond: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
+    precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]] = None,
     conv_tol: Optional[float] = None,
     hess_symm: Optional[bool] = None,
     jacobi_davidson: Optional[bool] = None,
@@ -281,52 +263,38 @@ def stability_check(
 ) -> Tuple[bool, np.ndarray]:
     # callback function ctypes specifications, ctypes can only deal with simple return
     # types so we interface to Fortran subroutines by creating data to the relevant data
-    hess_x_interface_type = CFUNCTYPE(
-        c_long, POINTER(c_double), POINTER(POINTER(c_double))
-    )
+    hess_x_interface_type = CFUNCTYPE(c_long, POINTER(c_double), POINTER(c_double))
     precond_interface_type = CFUNCTYPE(
-        c_long, POINTER(c_double), POINTER(c_double), POINTER(POINTER(c_double))
+        c_long, POINTER(c_double), POINTER(c_double), POINTER(c_double)
     )
     logger_interface_type = CFUNCTYPE(None, c_char_p)
 
     @hess_x_interface_type
     def hess_x_interface(x_ptr, hx_ptr):
-        # variables need to be defined as a global to ensure that they are not
-        # garbage collected when the current function completes
-        global hx
-
         # convert trial vector pointer to numpy array
         x = np.ctypeslib.as_array(x_ptr, shape=(n_param,))
+        hx = np.ctypeslib.as_array(hx_ptr, shape=(n_param,))
 
         # perform linear transformation
         try:
-            hx = hess_x(x)
+            hess_x(x, hx)
         except RuntimeError:
             return 1
-
-        # convert numpy array to pointer
-        hx_ptr[0] = hx.ctypes.data_as(POINTER(c_double))
 
         return 0
 
     @precond_interface_type
     def precond_interface(residual_ptr, mu_ptr, precond_residual_ptr):
-        # variables need to be defined as a global to ensure that they are not
-        # garbage collected when the current function completes
-        global precond_residual
-
         # convert pointers to numpy array and float
         residual = np.ctypeslib.as_array(residual_ptr, shape=(n_param,))
         mu = mu_ptr[0]
+        precond_residual = np.ctypeslib.as_array(precond_residual_ptr, shape=(n_param,))
 
         # perform linear transformation
         try:
-            precond_residual = precond(residual, mu)
+            precond(residual, mu, precond_residual)
         except RuntimeError:
             return 1
-
-        # convert numpy array to pointer
-        precond_residual_ptr[0] = precond_residual.ctypes.data_as(POINTER(c_double))
 
         return 0
 
@@ -339,18 +307,18 @@ def stability_check(
     libopentrustregion.stability_check.restype = c_long
     libopentrustregion.stability_check.argtypes = [
         POINTER(c_double),
-        c_void_p,
+        hess_x_interface_type,
         c_long,
         POINTER(c_bool),
         POINTER(c_double),
-        c_void_p,
+        c_void_p if precond is None else precond_interface_type,
         POINTER(c_double),
         POINTER(c_bool),
         POINTER(c_bool),
         POINTER(c_long),
         POINTER(c_long),
         POINTER(c_long),
-        c_void_p,
+        c_void_p if logger is None else logger_interface_type,
     ]
 
     # initialize return variables

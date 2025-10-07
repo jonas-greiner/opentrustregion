@@ -6,8 +6,9 @@
 
 module opentrustregion_mock
 
-    use opentrustregion, only: rp, ip, stderr, update_orbs_type, hess_x_type, &
-                               obj_func_type, precond_type, conv_check_type, logger_type
+    use opentrustregion, only: rp, ip, stderr, solver_type, stability_check_type, &
+                               update_orbs_type, hess_x_type, obj_func_type, &
+                               precond_type, conv_check_type, logger_type
 
     implicit none
 
@@ -15,6 +16,11 @@ module opentrustregion_mock
 
     logical :: solver_default = .true., stability_check_default = .true., &
                test_passed
+
+    ! create function pointers to ensure that routines comply with interface
+    procedure(solver_type), pointer :: mock_solver_ptr => mock_solver
+    procedure(stability_check_type), pointer :: mock_stability_check_ptr => &
+        mock_stability_check
 
 contains
 
@@ -54,7 +60,8 @@ contains
                                              seed, verbose
         procedure(logger_type), intent(in), pointer, optional :: logger_funptr
 
-        real(rp), dimension(n_param) :: kappa, x, grad, h_diag, hess_x, residual
+        real(rp), allocatable :: kappa(:), x(:), grad(:), h_diag(:), hess_x(:), &
+                                 residual(:), precond_residual(:)
         real(rp) :: func
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: converged
@@ -63,6 +70,7 @@ contains
         test_passed = .true.
 
         ! check if passed orbital updating subroutine produces correct quantities
+        allocate(kappa(n_param), grad(n_param), h_diag(n_param))
         kappa = 1.d0
         call update_orbs_funptr(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
@@ -85,8 +93,10 @@ contains
             write (stderr, *) "test_solver_c_wrapper failed: Returned Hessian "// &
                 "diagonal of passed orbital updating function wrong."
         end if
+        deallocate(grad, h_diag)
+        allocate(x(n_param), hess_x(n_param))
         x = 1.d0
-        hess_x = hess_x_funptr(x, error)
+        call hess_x_funptr(x, hess_x, error)
         if (error /= 0) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Hessian linear "// &
@@ -99,6 +109,7 @@ contains
                 "linear transformation of Hessian linear transformation function "// &
                 "returned by passed orbital updating function wrong."
         end if
+        deallocate(x, hess_x)
 
         ! check if passed objective function produces correct quantities
         func = obj_func_funptr(kappa, error)
@@ -112,6 +123,7 @@ contains
             write (stderr, *) "test_solver_c_wrapper failed: Returned objective "// &
                 "function value of passed objective function wrong."
         end if
+        deallocate(kappa)
 
         ! check number of parameters
         if (n_param /= 3) then
@@ -142,18 +154,20 @@ contains
                 write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
                     "preconditioner function not associated with value."
             end if
+            allocate(residual(n_param), precond_residual(n_param))
             residual = 1.d0
-            residual = precond_funptr(residual, 5.d0, error)
+            call precond_funptr(residual, 5.d0, precond_residual, error)
             if (error /= 0) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
                     "preconditioner function produced error."
             end if
-            if (any(abs(residual - 5.d0) > tol)) then
+            if (any(abs(precond_residual - 5.d0) > tol)) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Returned "// &
                     "preconditioner of passed preconditioner function wrong."
             end if
+            deallocate(residual, precond_residual)
         end if
 
         ! check if optional convergence check function is correctly passed
@@ -264,7 +278,7 @@ contains
 
     end subroutine mock_solver
 
-    subroutine mock_stability_check(h_diag, hess_x_funptr, stable, kappa, error, &
+    subroutine mock_stability_check(h_diag, hess_x_funptr, stable, error, kappa, &
                                     precond_funptr, conv_tol, hess_symm, &
                                     jacobi_davidson, n_random_trial_vectors, n_iter, &
                                     verbose, logger_funptr)
@@ -282,14 +296,14 @@ contains
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable
         integer(ip), intent(out) :: error
-        real(rp), intent(out) :: kappa(:)
+        real(rp), intent(out), optional :: kappa(:)
         procedure(precond_type), intent(in), pointer, optional :: precond_funptr
         real(rp), intent(in), optional :: conv_tol
         logical, intent(in), optional :: hess_symm, jacobi_davidson
         integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
         procedure(logger_type), intent(in), pointer, optional :: logger_funptr
 
-        real(rp), dimension(size(h_diag)) :: x, hess_x, residual
+        real(rp), allocatable :: x(:), hess_x(:), residual(:), precond_residual(:)
 
         ! initialize logical
         test_passed = .true.
@@ -303,8 +317,9 @@ contains
 
         ! check if passed Hessian linear transformation function produces correct
         ! quantity
+        allocate(x(size(h_diag)), hess_x(size(h_diag)))
         x = 1.d0
-        hess_x = hess_x_funptr(x, error)
+        call hess_x_funptr(x, hess_x, error)
         if (error /= 0) then
             test_passed = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
@@ -316,10 +331,11 @@ contains
                 "linear transformation returned by passed Hessian linear "// &
                 "transformation function wrong."
         end if
+        deallocate(x, hess_x)
 
         ! set output quantities
         stable = .false.
-        kappa = 1.d0
+        if (present(kappa)) kappa = 1.d0
         error = 0
 
         ! check if optional preconditioner function is correctly passed
@@ -341,18 +357,20 @@ contains
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                     "preconditioner function not associated with value."
             end if
+            allocate(residual(size(h_diag)), precond_residual(size(h_diag)))
             residual = 1.d0
-            residual = precond_funptr(residual, 5.d0, error)
+            call precond_funptr(residual, 5.d0, precond_residual, error)
             if (error /= 0) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                     "preconditioner function produced error."
             end if
-            if (any(abs(residual - 5.d0) > tol)) then
+            if (any(abs(precond_residual - 5.d0) > tol)) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                     "preconditioner of passed preconditioner function wrong."
             end if
+            deallocate(residual, precond_residual)
         end if
 
         ! check if optional arguments are associated with values

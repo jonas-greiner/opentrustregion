@@ -70,7 +70,7 @@ contains
         ! this subroutine defines the Hartmann 6D function's gradient
         !
         real(rp), intent(in) :: vars(:)
-        real(rp), intent(out) :: grad(size(vars))
+        real(rp), intent(out) :: grad(:)
         real(rp) :: exp_term(4)
         integer(ip) :: i, j
 
@@ -114,38 +114,35 @@ contains
         ! Hartmann 6D function
         !
         real(rp), intent(in) :: x(:)
-
         real(rp) :: hartmann6d_hess_x(size(x))
 
         hartmann6d_hess_x = matmul(hess, x)
 
     end function hartmann6d_hess_x
 
-    function hess_x(x, error)
+    subroutine hess_x_fun(x, hess_x, error)
         !
         ! this function describes the Hessian linear transformation operation for the
         ! Hartmann 6D function
         !
-        real(rp), intent(in) :: x(:)
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
-
-        real(rp) :: hess_x(size(x))
 
         ! initialize error flag
         error = 0
 
         hess_x = hartmann6d_hess_x(x)
 
-    end function hess_x
+    end subroutine hess_x_fun
 
     function obj_func(delta_vars, error) result(func)
         !
         ! this function describes the objective function evaluation for the Hartmann
         ! 6D function
         !
-        real(rp), intent(in) :: delta_vars(:)
+        real(rp), intent(in), target :: delta_vars(:)
         integer(ip), intent(out) :: error
-
         real(rp) :: func
 
         ! initialize error flag
@@ -162,8 +159,9 @@ contains
         !
         use opentrustregion, only: hess_x_type
 
-        real(rp), intent(in) :: delta_vars(:)
-        real(rp), intent(out) :: func, grad(:), h_diag(:)
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
 
@@ -181,7 +179,7 @@ contains
         call hartmann6d_gradient(curr_vars, grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
     end subroutine update_orbs
 
@@ -215,7 +213,7 @@ contains
 
         integer(ip), parameter :: n_param = 6
         integer(ip) :: error
-        real(rp) :: final_grad(n_param)
+        real(rp), allocatable :: final_grad(:)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
 
@@ -226,6 +224,9 @@ contains
         curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
         update_orbs_funptr => update_orbs
         obj_func_funptr => obj_func
+
+        ! allocate space for the final gradient
+        allocate(final_grad(n_param))
 
         ! run solver, check if error has occured and check whether gradient is zero and 
         ! agrees with correct minimum
@@ -296,6 +297,9 @@ contains
             test_solver = .false.
         end if
 
+        ! deallocate space for the gradient
+        deallocate(final_grad)
+
     end function test_solver
 
     logical(c_bool) function test_stability_check() bind(C)
@@ -317,11 +321,11 @@ contains
         vars = minimum1
         call hartmann6d_hessian(vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
         ! run stability, check if error has occured check and determine whether minimum 
         ! is stable and the returned direction vanishes
-        call stability_check(h_diag, hess_x_funptr, stable, direction, error)
+        call stability_check(h_diag, hess_x_funptr, stable, error, direction)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -342,11 +346,11 @@ contains
         vars = saddle_point
         call hartmann6d_hessian(vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
-        call stability_check(h_diag, hess_x_funptr, stable, direction, error)
+        call stability_check(h_diag, hess_x_funptr, stable, error, direction)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -384,6 +388,7 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
+        settings%hess_symm = .true.
 
         ! defined a reduced space basis
         red_space_basis = &
@@ -448,6 +453,7 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
+        settings%hess_symm = .true.
 
         ! defined a reduced space basis
         red_space_basis = &
@@ -605,7 +611,7 @@ contains
         test_extend_matrix = .true.
 
         ! allocate and initialize symmetric matrix and vector to be added
-        allocate (matrix(2, 2))
+        allocate(matrix(2, 2))
         matrix = reshape([1.d0, 2.d0, &
                           2.d0, 3.d0], [2, 2])
         vector1 = [4.d0, 5.d0, 6.d0]
@@ -630,7 +636,7 @@ contains
         end if
 
         ! deallocate matrix
-        deallocate (matrix)
+        deallocate(matrix)
 
     end function test_extend_matrix
 
@@ -647,7 +653,7 @@ contains
         test_add_column = .true.
 
         ! allocate and initialize matrix and vector to be added
-        allocate (matrix(3, 2))
+        allocate(matrix(3, 2))
         matrix = reshape([1.d0, 2.d0, 3.d0, &
                           4.d0, 5.d0, 6.d0], [3, 2])
         new_col = [7.d0, 8.d0, 9.d0]
@@ -671,7 +677,7 @@ contains
         end if
 
         ! deallocate matrix
-        deallocate (matrix)
+        deallocate(matrix)
 
     end function test_add_column
 
@@ -863,7 +869,7 @@ contains
         end do
 
         ! deallocate reduced space basis
-        deallocate (red_space_basis)
+        deallocate(red_space_basis)
 
         ! define Hessian diagonal with negative elements
         h_diag = [-1.d0, 2.d0, 3.d0, 4.d0]
@@ -900,7 +906,7 @@ contains
         end do
 
         ! deallocate reduced space basis
-        deallocate (red_space_basis)
+        deallocate(red_space_basis)
 
     end function test_generate_trial_vectors
 
@@ -923,7 +929,7 @@ contains
         settings%n_random_trial_vectors = 2
 
         ! allocate reduced space basis and set first normalized basis vector
-        allocate (red_space_basis(4, 3))
+        allocate(red_space_basis(4, 3))
         red_space_basis(:, 1) = [1.d0, 2.d0, 3.d0, 4.d0]
         red_space_basis(:, 1) = red_space_basis(:, 1) / norm2(red_space_basis(:, 1))
 
@@ -947,7 +953,7 @@ contains
         end do
 
         ! deallocate reduced space basis
-        deallocate (red_space_basis)
+        deallocate(red_space_basis)
 
     end function test_generate_random_trial_vectors
 
@@ -959,10 +965,8 @@ contains
         use opentrustregion, only: gram_schmidt
 
         type(settings_type) :: settings
-        real(rp), dimension(4) :: vector, lin_trans_vector
-        real(rp), dimension(2) :: vector_small
-        real(rp) :: space(4, 2), symm_matrix(4, 4), lin_trans_space(4, 2), &
-                    space_small(2, 2)
+        real(rp) :: vector(4), lin_trans_vector(4), vector_small(2), space(4, 2), &
+                    symm_matrix(4, 4), lin_trans_space(4, 2), space_small(2, 2)
         integer(ip) :: error
 
         ! assume tests pass
@@ -1274,7 +1278,7 @@ contains
         !
         use opentrustregion, only: level_shifted_diag_precond
 
-        real(rp) :: residual(3), h_diag(3)
+        real(rp) :: residual(3), h_diag(3), precond_residual(3)
 
         ! assume tests pass
         test_level_shifted_diag_precond = .true.
@@ -1283,9 +1287,9 @@ contains
         residual = [1.d0, 1.d0, 1.d0]
         h_diag = [-2.d0, 1.d0, 2.d0]
 
-        ! call function and check if results match
-        if (any(abs(level_shifted_diag_precond(residual, -2.d0, h_diag) - &
-                    [1.d10, 1.d0 / 3, 0.25d0]) > tol)) then
+        ! call subroutine and check if results match
+        call level_shifted_diag_precond(residual, -2.d0, h_diag, precond_residual)
+        if (any(abs(precond_residual - [1.d10, 1.d0 / 3, 0.25d0]) > tol)) then
             write (stderr, *) "test_level_shifted_diag_precond failed: Returned "// &
                 "preconditioned residual not correct."
             test_level_shifted_diag_precond = .false.
@@ -1300,7 +1304,7 @@ contains
         !
         use opentrustregion, only: abs_diag_precond
 
-        real(rp) :: residual(3), h_diag(3)
+        real(rp) :: residual(3), h_diag(3), precond_residual(3)
 
         ! assume tests pass
         test_abs_diag_precond = .true.
@@ -1309,9 +1313,9 @@ contains
         residual = [1.d0, 1.d0, 1.d0]
         h_diag = [-2.d0, 0.d0, 2.d0]
 
-        ! call function and check if results match
-        if (any(abs(abs_diag_precond(residual, h_diag) - [0.5d0, 1.d10, 0.5d0]) > &
-            tol)) then
+        ! call subroutine and check if results match
+        call abs_diag_precond(residual, h_diag, precond_residual)
+        if (any(abs(precond_residual - [0.5d0, 1.d10, 0.5d0]) > tol)) then
             write (stderr, *) "test_abs_diag_precond failed: Returned "// &
                 "preconditioned residual not correct."
             test_abs_diag_precond = .false.
@@ -1352,12 +1356,16 @@ contains
         !
         use opentrustregion, only: hess_x_type, jacobi_davidson_correction
 
+        type(settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, vector, solution, corr_vector, hess_vector
         integer(ip) :: error
 
         ! assume tests pass
         test_jacobi_davidson_correction = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
 
         ! define point near saddle point, define trial vector, and solution to be 
         ! projected out
@@ -1369,11 +1377,11 @@ contains
         call hartmann6d_hessian(vars)
 
         ! define Hessian linear transformation
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
         ! calculate Jacobi-Davidson correction and compare values
         call jacobi_davidson_correction(hess_x_funptr, vector, solution, 0.5d0, &
-                                        corr_vector, hess_vector, error)
+                                        corr_vector, hess_vector, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_jacobi_davidson_correction failed: Returned error."
             test_jacobi_davidson_correction = .false.
@@ -1423,7 +1431,7 @@ contains
         call hartmann6d_hessian(vars)
 
         ! define Hessian linear transformation
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
         ! define Rayleigh quotient
         mu = dot_product(solution, hartmann6d_hess_x(solution))
@@ -1794,6 +1802,7 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
+        settings%hess_symm = .true.
         settings%n_random_trial_vectors = 1
         settings%n_micro = 50
         settings%global_red_factor = 1d-3
@@ -1804,7 +1813,7 @@ contains
         ! initialize variables
         trust_radius = 0.4d0
         obj_func_funptr => obj_func
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
         ! start in quadratic region near minimum
         curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
@@ -1983,7 +1992,7 @@ contains
         ! initialize variables
         trust_radius = 0.4d0
         obj_func_funptr => obj_func
-        hess_x_funptr => hess_x
+        hess_x_funptr => hess_x_fun
 
         ! start in quadratic region near minimum
         curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
@@ -2065,5 +2074,58 @@ contains
         end if
 
     end function test_truncated_conjugate_gradient
+
+    logical(c_bool) function test_add_error_origin() bind(C)
+        !
+        ! this function tests the subroutine that adds the error origin to an error 
+        ! code
+        !
+        use opentrustregion, only: add_error_origin
+
+        type(settings_type) :: settings
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_add_error_origin = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! check if subroutine adds error origin correctly if no origin is present
+        error = 1
+        call add_error_origin(error, 100, settings)
+        if (error /= 101) then
+            write (stderr, *) "test_add_error_origin failed: Error origin not "// &
+                "correctly added."
+            test_add_error_origin = .false.
+        end if
+
+        ! check if subroutine skips adding error origin if origin is already present
+        call add_error_origin(error, 100, settings)
+        if (error /= 101) then
+            write (stderr, *) "test_add_error_origin failed: Error code modified "// &
+                "even though error origin is already present."
+            test_add_error_origin = .false.
+        end if
+
+        ! check if subroutine does not modify error code when no error is encountered
+        error = 0
+        call add_error_origin(error, 100, settings)
+        if (error /= 0) then
+            write (stderr, *) "test_add_error_origin failed: Error code modified "// &
+                "even though error code of zero was passed."
+            test_add_error_origin = .false.
+        end if
+
+        ! check if subroutine raises error for invalid error code
+        error = -1
+        call add_error_origin(error, 100, settings)
+        if (error /= 101) then
+            write (stderr, *) "test_add_error_origin failed: Error code not "// &
+                "correctly returned for invalid (negative) error code."
+            test_add_error_origin = .false.
+        end if
+
+    end function test_add_error_origin
 
 end module opentrustregion_unit_tests

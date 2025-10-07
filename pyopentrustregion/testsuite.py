@@ -10,6 +10,7 @@ import unittest
 from importlib import resources
 from ctypes import CDLL, c_bool
 from unittest.mock import patch
+from pathlib import Path
 
 # check if numpy is available
 try:
@@ -41,48 +42,49 @@ except OSError:
         raise FileNotFoundError("Cannot find testsuite library.")
 
 
-# define all tests
+# define all tests in alphabetical order
 fortran_tests = {
     "opentrustregion_tests": [
-        "truncated_conjugate_gradient",
-        "level_shifted_davidson",
-        "sanity_check",
-        "accept_trust_region_step",
-        "split_string_by_space",
-        "log",
-        "print_results",
-        "minres",
-        "jacobi_davidson_correction",
-        "orthogonal_projection",
+        "add_error_origin",
         "abs_diag_precond",
-        "level_shifted_diag_precond",
-        "set_default",
-        "init_solver_settings",
-        "init_stability_settings",
-        "init_rng",
-        "gram_schmidt",
+        "accept_trust_region_step",
+        "add_column",
+        "bisection",
+        "bracket",
+        "extend_matrix",
         "generate_random_trial_vectors",
         "generate_trial_vectors",
-        "add_column",
-        "extend_matrix",
-        "symm_mat_min_eigval",
-        "symm_mat_min_eig",
-        "bracket",
+        "gram_schmidt",
+        "init_rng",
+        "init_solver_settings",
+        "init_stability_settings",
+        "jacobi_davidson_correction",
+        "level_shifted_davidson",
+        "level_shifted_diag_precond",
+        "log",
+        "minres",
         "newton_step",
-        "bisection",
+        "orthogonal_projection",
+        "print_results",
+        "sanity_check",
+        "set_default",
         "solver",
+        "split_string_by_space",
         "stability_check",
+        "symm_mat_min_eig",
+        "symm_mat_min_eigval",
+        "truncated_conjugate_gradient",
     ],
     "c_interface_tests": [
+        "conv_check_c_wrapper",
+        "hess_x_c_wrapper",
+        "logger_c_wrapper",
+        "obj_func_c_wrapper",
+        "precond_c_wrapper",
+        "set_default_c_ptr",
         "solver_c_wrapper",
         "stability_check_c_wrapper",
         "update_orbs_c_wrapper",
-        "hess_x_c_wrapper",
-        "obj_func_c_wrapper",
-        "precond_c_wrapper",
-        "conv_check_c_wrapper",
-        "logger_c_wrapper",
-        "set_default_c_ptr",
     ],
     "system_tests": ["h2o_atomic_fb", "h2o_saddle_fb"],
 }
@@ -172,24 +174,24 @@ class PyInterfaceTests(unittest.TestCase):
             """
             return np.sum(kappa)
 
-        def mock_update_orbs(kappa):
+        def mock_update_orbs(kappa, grad, h_diag):
             """
             this function is a mock function for the orbital update function
             """
             func = np.sum(kappa)
-            grad = 2 * kappa
-            h_diag = 3 * kappa
+            grad[:] = 2 * kappa
+            h_diag[:] = 3 * kappa
 
-            def hess_x(x):
-                return 4 * x
+            def hess_x(x, hess_x):
+                hess_x[:] = 4 * x
 
-            return func, grad, h_diag, hess_x
+            return func, hess_x
 
-        def mock_precond(residual, mu):
+        def mock_precond(residual, mu, precond_residual):
             """
             this function is a mock function for the preconditioner function
             """
-            return mu * residual
+            precond_residual[:] = mu * residual
 
         def mock_conv_check():
             """
@@ -258,14 +260,14 @@ class PyInterfaceTests(unittest.TestCase):
         """
         h_diag = np.full(3, 3.0, dtype=np.float64)
 
-        def mock_hess_x(x):
-            return 4 * x
+        def mock_hess_x(x, hess_x):
+            hess_x[:] = 4 * x
 
-        def mock_precond(residual, mu):
+        def mock_precond(residual, mu, precond_residual):
             """
             this function is a mock function for the preconditioner function
             """
-            return mu * residual
+            precond_residual[:] = mu * residual
 
         def mock_logger(message):
             """
@@ -348,6 +350,12 @@ class SystemTests(unittest.TestCase):
         print(50 * "-")
         print("Running system tests for OpenTrustRegion...")
         print(50 * "-")
+        test_data = Path(__file__).parent / "test_data"
+        if not os.path.isdir(test_data):
+            raise RuntimeError(
+                "test_data directory does not exist in same directory as testsuite.py."
+            )
+        libtestsuite.set_test_data_path(str(test_data).encode("utf-8"))
         return super().setUpClass()
 
 
