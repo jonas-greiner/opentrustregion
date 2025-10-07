@@ -12,7 +12,7 @@ module opentrustregion_mock
 
     implicit none
 
-    real(rp), parameter :: tol = 1.d-10
+    real(rp), parameter :: tol = 1e-10_rp
 
     logical :: solver_default = .true., stability_check_default = .true., &
                test_passed
@@ -71,31 +71,31 @@ contains
 
         ! check if passed orbital updating subroutine produces correct quantities
         allocate(kappa(n_param), grad(n_param), h_diag(n_param))
-        kappa = 1.d0
+        kappa = 1.0_rp
         call update_orbs_funptr(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Passed orbital "// &
                 "updating function produced error."
         end if
-        if (abs(func - 3.d0) > tol) then
+        if (abs(func - 3.0_rp) > tol) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned objective "// &
                 "function value of passed orbital updating function wrong."
         end if
-        if (any(abs(grad - 2.d0) > tol)) then
+        if (any(abs(grad - 2.0_rp) > tol)) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned gradient of "// &
                 "passed orbital updating function wrong."
         end if
-        if (any(abs(h_diag - 3.d0) > tol)) then
+        if (any(abs(h_diag - 3.0_rp) > tol)) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned Hessian "// &
                 "diagonal of passed orbital updating function wrong."
         end if
         deallocate(grad, h_diag)
         allocate(x(n_param), hess_x(n_param))
-        x = 1.d0
+        x = 1.0_rp
         call hess_x_funptr(x, hess_x, error)
         if (error /= 0) then
             test_passed = .false.
@@ -103,7 +103,7 @@ contains
                 "transformation function returned by passed orbital updating "// &
                 "function produced error."
         end if
-        if (any(abs(hess_x - 4.d0) > tol)) then
+        if (any(abs(hess_x - 4.0_rp) > tol)) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned Hessian "// &
                 "linear transformation of Hessian linear transformation function "// &
@@ -118,7 +118,7 @@ contains
             write (stderr, *) "test_solver_c_wrapper failed: Passed objective "// &
                 "function produced error."
         end if
-        if (abs(func - 3.d0) > tol) then
+        if (abs(func - 3.0_rp) > tol) then
             test_passed = .false.
             write (stderr, *) "test_solver_c_wrapper failed: Returned objective "// &
                 "function value of passed objective function wrong."
@@ -155,14 +155,14 @@ contains
                     "preconditioner function not associated with value."
             end if
             allocate(residual(n_param), precond_residual(n_param))
-            residual = 1.d0
-            call precond_funptr(residual, 5.d0, precond_residual, error)
+            residual = 1.0_rp
+            call precond_funptr(residual, 5.0_rp, precond_residual, error)
             if (error /= 0) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed "// &
                     "preconditioner function produced error."
             end if
-            if (any(abs(precond_residual - 5.d0) > tol)) then
+            if (any(abs(precond_residual - 5.0_rp) > tol)) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Returned "// &
                     "preconditioner of passed preconditioner function wrong."
@@ -237,12 +237,12 @@ contains
             ! check if optional arguments are correctly passed
         else
             if (stability .or. .not. line_search .or. davidson .or. jacobi_davidson &
-                .or. .not. prefer_jacobi_davidson .or. abs(conv_tol - 1.d-3) > tol &
+                .or. .not. prefer_jacobi_davidson .or. abs(conv_tol - 1e-3_rp) > tol &
                 .or. n_random_trial_vectors /= 5 .or. &
-                abs(start_trust_radius - 0.2d0) > tol .or. n_macro /= 300 .or. &
-                n_micro /= 200 .or. abs(global_red_factor - 1.d-2) > tol .or. &
-                abs(local_red_factor - 1.d-3) > tol .or. seed /= 33 .or. verbose /= 3) &
-                then
+                abs(start_trust_radius - 0.2_rp) > tol .or. n_macro /= 300 .or. &
+                n_micro /= 200 .or. abs(global_red_factor - 1e-2_rp) > tol .or. &
+                abs(local_red_factor - 1e-3_rp) > tol .or. seed /= 33 .or. &
+                verbose /= 3) then
                 test_passed = .false.
                 write (stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                     "arguments associated with wrong values."
@@ -306,7 +306,7 @@ contains
         test_passed = .true.
 
         ! check Hessian diagonal
-        if (any(abs(h_diag - 3.d0) > tol)) then
+        if (any(abs(h_diag - 3.0_rp) > tol)) then
             test_passed = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                 "Hessian diagonal wrong."
@@ -315,14 +315,14 @@ contains
         ! check if passed Hessian linear transformation function produces correct
         ! quantity
         allocate(x(size(h_diag)), hess_x(size(h_diag)))
-        x = 1.d0
+        x = 1.0_rp
         call hess_x_funptr(x, hess_x, error)
         if (error /= 0) then
             test_passed = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                 "Hessian linear transformation function produced error."
         end if
-        if (any(abs(hess_x - 4.d0) > tol)) then
+        if (any(abs(hess_x - 4.0_rp) > tol)) then
             test_passed = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Hessian "// &
                 "linear transformation returned by passed Hessian linear "// &
@@ -332,7 +332,7 @@ contains
 
         ! set output quantities
         stable = .false.
-        if (present(kappa)) kappa = 1.d0
+        if (present(kappa)) kappa = 1.0_rp
         error = 0
 
         ! check if optional preconditioner function is correctly passed
@@ -355,14 +355,14 @@ contains
                     "preconditioner function not associated with value."
             end if
             allocate(residual(size(h_diag)), precond_residual(size(h_diag)))
-            residual = 1.d0
-            call precond_funptr(residual, 5.d0, precond_residual, error)
+            residual = 1.0_rp
+            call precond_funptr(residual, 5.0_rp, precond_residual, error)
             if (error /= 0) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
                     "preconditioner function produced error."
             end if
-            if (any(abs(precond_residual - 5.d0) > tol)) then
+            if (any(abs(precond_residual - 5.0_rp) > tol)) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                     "preconditioner of passed preconditioner function wrong."
@@ -392,7 +392,7 @@ contains
             end if
             ! check if optional arguments are correctly passed
         else
-            if (jacobi_davidson .or. abs(conv_tol - 1.d-3) > tol .or. &
+            if (jacobi_davidson .or. abs(conv_tol - 1e-3_rp) > tol .or. &
                 n_random_trial_vectors /= 3 .or. n_iter /= 50 .or. verbose /= 3) then
                 test_passed = .false.
                 write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &

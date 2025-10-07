@@ -13,7 +13,7 @@ module c_interface_unit_tests
 
     implicit none
 
-    real(rp), parameter :: tol = 1.d-10
+    real(rp), parameter :: tol = 1e-10_rp
 
     ! number of parameters
     integer(c_ip), parameter :: n_param = 3_c_ip
@@ -265,7 +265,7 @@ contains
         ! initialize Hessian diagonal and get C pointers
         allocate(h_diag(n_param))
         h_diag_c_ptr = c_loc(h_diag)
-        h_diag = 3.d0
+        h_diag = 3.0_c_rp
 
         ! call stability check first without associated optional arguments which should 
         ! produce default values
@@ -326,7 +326,7 @@ contains
                 "stability boolean wrong."
         end if
 
-        if (any(abs(kappa - 1.d0) > tol)) then
+        if (any(abs(kappa - 1.0_c_rp) > tol)) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                 "direction wrong."
@@ -367,7 +367,7 @@ contains
         update_orbs_before_wrapping => mock_update_orbs
 
         ! call orbital updating subroutine
-        kappa = 1.d0
+        kappa = 1.0_rp
         call update_orbs_c_wrapper(kappa, func, grad, h_diag, hess_x_funptr, error)
 
         ! check if error is as expected
@@ -377,21 +377,21 @@ contains
         end if
 
         ! check if function value is as expected
-        if (abs(func - 3.d0) > tol) then
+        if (abs(func - 3.0_rp) > tol) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned "// &
                 "objective function wrong."
         end if
 
         ! check if gradient is as expected
-        if (any(abs(grad - 2.d0) > tol)) then
+        if (any(abs(grad - 2.0_rp) > tol)) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned "// &
                 "gradient wrong."
         end if
 
         ! check if Hessian diagonal is as expected
-        if (any(abs(h_diag - 3.d0) > tol)) then
+        if (any(abs(h_diag - 3.0_rp) > tol)) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
                 "diagonal wrong."
@@ -404,7 +404,7 @@ contains
         allocate(x(n_param), hess_x(n_param))
 
         ! call Hessian linear transformation function
-        x = 1.d0
+        x = 1.0_rp
         call hess_x_funptr(x, hess_x, error)
 
         ! check if error is as expected
@@ -415,7 +415,7 @@ contains
         end if
 
         ! check if Hessian linear transformation is as expected
-        if (any(abs(hess_x - 4.d0) > tol)) then
+        if (any(abs(hess_x - 4.0_rp) > tol)) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
                 "linear transformation of returned Hessian linear transformation "// &
@@ -446,7 +446,7 @@ contains
         hess_x_before_wrapping => mock_hess_x
 
         ! call function
-        x = 1.d0
+        x = 1.0_rp
         call hess_x_c_wrapper(x, hess_x, error)
 
         ! check if error is as expected
@@ -456,7 +456,7 @@ contains
         end if
 
         ! check if Hessian linear transformation is as expected
-        if (any(abs(hess_x - 4.d0) > tol)) then
+        if (any(abs(hess_x - 4.0_rp) > tol)) then
             test_hess_x_c_wrapper = .false.
             write (stderr, *) "test_hess_x_c_wrapper failed: Returned Hessian "// &
                 "linear transformation of returned Hessian linear transformation "// &
@@ -488,7 +488,7 @@ contains
         obj_func_before_wrapping => mock_obj_func
 
         ! call function
-        kappa = 1.d0
+        kappa = 1.0_rp
         obj_func = obj_func_c_wrapper(kappa, error)
 
         ! deallocate kappa
@@ -501,7 +501,7 @@ contains
         end if
 
         ! check if function value is as expected
-        if (abs(obj_func - 3.d0) > tol) then
+        if (abs(obj_func - 3.0_rp) > tol) then
             test_obj_func_c_wrapper = .false.
             write (stderr, *) "test_obj_func_c_wrapper failed: Returned objective "// &
                 "function wrong."
@@ -528,8 +528,8 @@ contains
         precond_before_wrapping => mock_precond
 
         ! call function
-        residual = 1.d0
-        call precond_c_wrapper(residual, 5.d0, precond_residual, error)
+        residual = 1.0_rp
+        call precond_c_wrapper(residual, 5.0_rp, precond_residual, error)
 
         ! check if error is as expected
         if (error /= 0) then
@@ -538,7 +538,7 @@ contains
         end if
 
         ! check if preconditioned residual is as expected
-        if (any(abs(precond_residual - 5.d0) > tol)) then
+        if (any(abs(precond_residual - 5.0_rp) > tol)) then
             test_precond_c_wrapper = .false.
             write (stderr, *) "test_precond_c_wrapper failed: Returned "// &
                 "preconditioner wrong."
@@ -621,13 +621,13 @@ contains
         test_set_default_c_ptr = .true.
 
         ! test different combinations and types of optional and default arguments
-        if (abs(set_default_c_ptr(c_loc(real_target), 1.d0) - 2.d0) > tol) then
+        if (abs(set_default_c_ptr(c_loc(real_target), 1.0_rp) - 2.0_rp) > tol) then
             write (stderr, *) "test_set_default_c_ptr failed: Optional real "// &
                 "argument not set correctly."
             test_set_default_c_ptr = .false.
         end if
 
-        if (abs(set_default_c_ptr(c_null_ptr, 1.d0) - 1.d0) > tol) then
+        if (abs(set_default_c_ptr(c_null_ptr, 1.0_rp) - 1.0_rp) > tol) then
             write (stderr, *) "test_set_default_c_ptr failed: Default real "// &
                 "argument not set correctly."
             test_set_default_c_ptr = .false.

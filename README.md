@@ -47,19 +47,19 @@ The optimization process is initiated by calling a `solver` subroutine. This rou
   - Hessian diagonal (real array, written in-place)
   - A **`hess_x`** subroutine that performs Hessian-vector products:
     - Accepts a trial vector and writes the result of the Hessian transformation into an output array
-    - Returns an integer error code (0 for success, positive integers < 100 for recoverable errors)
-  - Returns an integer error code (0 for success, positive integers < 100 for recoverable errors)
+    - Returns an integer error code (0 for success, positive integers < 100 for errors)
+  - Returns an integer error code (0 for success, positive integers < 100 for errors)
 - **`obj_func`** (function):  
   Accepts and applies a variable update (e.g., orbital rotation) and returns:
   - Objective function value (real)
-  - An integer error code (0 for success, positive integers < 100 for recoverable errors)
+  - An integer error code (0 for success, positive integers < 100 for errors)
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 
 ### Optional Arguments
 The optimization process can be fine-tuned using the following optional arguments:
 
-- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for recoverable errors).
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
 - **`line_search`** (boolean): Determines whether a line search is performed after every macro iteration.
@@ -85,14 +85,14 @@ A separate `stability_check` subroutine is available to verify whether the curre
 - **`h_diag`** (real array): Represents the Hessian diagonal at the current point.
 - **`hess_x`** (subroutine): Performs Hessian-vector products at the current point:
   - Accepts a trial vector and writes the result of the Hessian transformation into an output array
-  - Returns an integer error code (0 for success, positive integers < 100 for recoverable errors)
+  - Returns an integer error code (0 for success, positive integers < 100 for errors)
 - **`stable`** (boolean): Returns whether the current point is stable.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 
 ### Optional Arguments
 
-- **`kappa`** (real array): If the memory is provided, returns descent direction if current point is not stable otherwise returns zeros.
-- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for recoverable errors).
+- **`kappa`** (real array): If the memory is provided and the current point is not stable (as can be checked from return code of `stable`), the descent direction is written in-place in this array.
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
 - **`conv_tol`** (real): Convergence criterion for the residual norm.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.

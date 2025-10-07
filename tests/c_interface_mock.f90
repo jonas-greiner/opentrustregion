@@ -19,7 +19,7 @@ module c_interface_mock
     logical :: solver_default = .true., stability_check_default = .true.
     logical(c_bool) :: test_solver_interface = .true., &
                        test_stability_check_interface = .true.
-    real(c_rp), parameter :: tol = 1.d-10
+    real(c_rp), parameter :: tol = 1e-10_c_rp
 
     ! create function pointers to ensure that routines comply with interface
     procedure(solver_c_wrapper_type), pointer :: solver_c_wrapper_ptr => &
@@ -260,12 +260,12 @@ contains
             call c_f_pointer(cptr=verbose_c_ptr, fptr=verbose_ptr)
             if (stability_ptr .or. .not. line_search_ptr .or. davidson_ptr .or. &
                 jacobi_davidson_ptr .or. .not. prefer_jacobi_davidson_ptr .or. &
-                abs(conv_tol_ptr - 1.e-3_c_rp) > tol .or. &
+                abs(conv_tol_ptr - 1e-3_c_rp) > tol .or. &
                 n_random_trial_vectors_ptr /= 5_c_ip .or. &
                 abs(start_trust_radius_ptr - 0.2_c_rp) > tol .or. &
                 n_macro_ptr /= 300_c_ip .or. n_micro_ptr /= 200_c_ip .or. &
-                abs(global_red_factor_ptr - 1.e-2_c_rp) > tol .or. &
-                abs(local_red_factor_ptr - 1.e-3_c_rp) > tol .or. &
+                abs(global_red_factor_ptr - 1e-2_c_rp) > tol .or. &
+                abs(local_red_factor_ptr - 1e-3_c_rp) > tol .or. &
                 seed_ptr /= 33_c_ip .or. verbose_ptr /= 3_c_ip) then
                 write (stderr, *) "test_solver_py_interface failed: Passed "// &
                     "optional arguments associated with wrong values."
@@ -395,7 +395,7 @@ contains
                              fptr=n_random_trial_vectors_ptr)
             call c_f_pointer(cptr=n_iter_c_ptr, fptr=n_iter_ptr)
             call c_f_pointer(cptr=verbose_c_ptr, fptr=verbose_ptr)
-            if (jacobi_davidson_ptr .or. abs(conv_tol_ptr - 1.e-3_c_rp) > tol .or. &
+            if (jacobi_davidson_ptr .or. abs(conv_tol_ptr - 1e-3_c_rp) > tol .or. &
                 n_random_trial_vectors_ptr /= 3_c_ip .or. n_iter_ptr /= 50_c_ip .or. &
                 verbose_ptr /= 3_c_ip) then
                 write (stderr, *) "test_stability_check_py_interface failed: "// &

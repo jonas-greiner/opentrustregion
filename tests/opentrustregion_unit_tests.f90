@@ -11,32 +11,33 @@ module opentrustregion_unit_tests
 
     implicit none
 
-    real(rp), parameter :: tol = 1.d-10
+    real(rp), parameter :: tol = 1e-10_rp
 
     ! parameters for 6D Hartmann function
-    real(rp), parameter :: alpha(4) = [1.0d0, 1.2d0, 3.0d0, 3.2d0]
-    real(rp), parameter :: A(4, 6) = reshape([10.d0, 0.05d0, 3.0d0, 17.0d0, &
-                                              3.d0, 10.d0, 3.5d0, 8.0d0, &
-                                              17.d0, 17.d0, 1.7d0, 0.05d0, &
-                                              3.5d0, 0.1d0, 10.d0, 10.0d0, &
-                                              1.7d0, 8.d0, 17.d0, 0.1d0, &
-                                              8.d0, 14.d0, 8.d0, 14.d0], [4, 6])
-    real(rp), parameter :: P(4, 6) = reshape([0.1312d0, 0.2329d0, 0.2348d0, 0.4047d0, &
-                                              0.1696d0, 0.4135d0, 0.1451d0, 0.8828d0, &
-                                              0.5569d0, 0.8307d0, 0.3522d0, 0.8732d0, &
-                                              0.0124d0, 0.3736d0, 0.2883d0, 0.5743d0, &
-                                              0.8283d0, 0.1004d0, 0.3047d0, 0.1091d0, &
-                                              0.5886d0, 0.9991d0, 0.6650d0, 0.0381d0], &
-                                             [4, 6])
+    real(rp), parameter :: alpha(4) = [1.0_rp, 1.2_rp, 3.0_rp, 3.2_rp]
+    real(rp), parameter :: A(4, 6) = reshape([10.0_rp, 0.05_rp, 3.0_rp, 17.0_rp, &
+                                              3.0_rp, 10.0_rp, 3.5_rp, 8.0_rp, &
+                                              17.0_rp, 17.0_rp, 1.7_rp, 0.05_rp, &
+                                              3.5_rp, 0.1_rp, 10.0_rp, 10.0_rp, &
+                                              1.7_rp, 8.0_rp, 17.0_rp, 0.1_rp, &
+                                              8.0_rp, 14.0_rp, 8.0_rp, 14.0_rp], [4, 6])
+    real(rp), parameter :: P(4, 6) = reshape([0.1312_rp, 0.2329_rp, 0.2348_rp, &
+                                              0.4047_rp, 0.1696_rp, 0.4135_rp, &
+                                              0.1451_rp, 0.8828_rp, 0.5569_rp, &
+                                              0.8307_rp, 0.3522_rp, 0.8732_rp, &
+                                              0.0124_rp, 0.3736_rp, 0.2883_rp, &
+                                              0.5743_rp, 0.8283_rp, 0.1004_rp, &
+                                              0.3047_rp, 0.1091_rp, 0.5886_rp, &
+                                              0.9991_rp, 0.6650_rp, 0.0381_rp], [4, 6])
 
     ! stationary points of 6D Hartmann function
-    real(rp), parameter :: minimum1(6) = [0.20168951d0, 0.15001069d0, 0.47687398d0, &
-                                          0.27533243d0, 0.31165162d0, 0.65730053d0]
-    real(rp), parameter :: minimum2(6) = [0.40465313d0, 0.88244493d0, 0.84610160d0, &
-                                          0.57398969d0, 0.13892673d0, 0.03849589d0]
-    real(rp), parameter :: saddle_point(6) = [0.35278250d0, 0.59374767d0, &
-                                              0.47631257d0, 0.40058250d0, &
-                                              0.31111531d0, 0.32397158d0]
+    real(rp), parameter :: minimum1(6) = [0.20168951_rp, 0.15001069_rp, 0.47687398_rp, &
+                                          0.27533243_rp, 0.31165162_rp, 0.65730053_rp]
+    real(rp), parameter :: minimum2(6) = [0.40465313_rp, 0.88244493_rp, 0.84610160_rp, &
+                                          0.57398969_rp, 0.13892673_rp, 0.03849589_rp]
+    real(rp), parameter :: saddle_point(6) = [0.35278250_rp, 0.59374767_rp, &
+                                              0.47631257_rp, 0.40058250_rp, &
+                                              0.31111531_rp, 0.32397158_rp]
 
     ! define global current variable and 6D Hartmann Hessian so that these can be 
     ! accessed by procedure pointers
@@ -79,7 +80,7 @@ contains
         end do
 
         do j = 1, size(vars)
-            grad(j) = sum(2.d0*alpha*A(:, j)*(vars(j) - P(:, j))*exp_term)
+            grad(j) = sum(2.0_rp*alpha*A(:, j)*(vars(j) - P(:, j))*exp_term)
         end do
 
     end subroutine hartmann6d_gradient
@@ -97,11 +98,11 @@ contains
         end do
 
         do i = 1, size(vars)
-            hess(i, i) = 2.d0*sum(alpha*A(:, i)*exp_term* &
-                                  (1.d0 - 2.d0*A(:, i)*(vars(i) - P(:, i))**2))
+            hess(i, i) = 2.0_rp*sum(alpha*A(:, i)*exp_term* &
+                                    (1.0_rp - 2.0_rp*A(:, i)*(vars(i) - P(:, i))**2))
             do j = 1, i - 1
-                hess(i, j) = -4.d0*sum(alpha*A(:, i)*A(:, j)*(vars(i) - P(:, i))* &
-                                       (vars(j) - P(:, j))*exp_term)
+                hess(i, j) = -4.0_rp*sum(alpha*A(:, i)*A(:, j)*(vars(i) - P(:, i))* &
+                                         (vars(j) - P(:, j))*exp_term)
                 hess(j, i) = hess(i, j)
             end do
         end do
@@ -212,6 +213,7 @@ contains
                                    solver_conv_tol_default
 
         integer(ip), parameter :: n_param = 6
+        real(rp), parameter :: var_thres = 1e-6_rp
         integer(ip) :: error
         real(rp), allocatable :: final_grad(:)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
@@ -221,7 +223,7 @@ contains
         test_solver = .true.
 
         ! start in quadratic region near minimum
-        curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
         update_orbs_funptr => update_orbs
         obj_func_funptr => obj_func
 
@@ -242,13 +244,13 @@ contains
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(curr_vars - minimum1) > 1d-8)) then
+        if (any(abs(curr_vars - minimum1) > var_thres)) then
             write (stderr, *) "test_solver failed: Solver did not find correct minimum."
             test_solver = .false.
         end if
 
         ! start near saddle point
-        curr_vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         update_orbs_funptr => update_orbs
         obj_func_funptr => obj_func
 
@@ -266,8 +268,8 @@ contains
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(curr_vars - minimum1) > 1d-6) .and. &
-            any(abs(curr_vars - minimum2) > 1d-6)) then
+        if (any(abs(curr_vars - minimum1) > var_thres) .and. &
+            any(abs(curr_vars - minimum2) > var_thres)) then
             write (stderr, *) "test_solver failed: Solver did not find correct minimum."
             test_solver = .false.
         end if
@@ -291,8 +293,8 @@ contains
                 "point."
             test_solver = .false.
         end if
-        if (any(abs(curr_vars - minimum1) > 1d-6) .and. &
-            any(abs(curr_vars - minimum2) > 1d-6)) then
+        if (any(abs(curr_vars - minimum1) > var_thres) .and. &
+            any(abs(curr_vars - minimum2) > var_thres)) then
             write (stderr, *) "test_solver failed: Solver did not find minimum."
             test_solver = .false.
         end if
@@ -361,10 +363,10 @@ contains
             test_stability_check = .false.
         end if
         if (abs(abs(dot_product(direction, &
-                                [-0.173375920238d0, -0.518489821791d0, &
-                                 -6.432848975252d-3, -0.340127852882d0, &
-                                 3.066460316955d-3, 0.765095650196d0])) - 1.d0) > tol) &
-            then
+                                [-0.173375920238_rp, -0.518489821791_rp, &
+                                 -6.432848975252e-3_rp, -0.340127852882_rp, &
+                                 3.066460316955e-3_rp, 0.765095650196_rp])) - 1.0_rp) &
+            > tol) then
             write (stderr, *) "test_stability_check failed: Stability check does "// &
                 "not return correct direction for saddle point."
             test_stability_check = .false.
@@ -391,19 +393,21 @@ contains
 
         ! defined a reduced space basis
         red_space_basis = &
-            reshape([1.d0/sqrt(2.d0), -1.d0/sqrt(2.d0), 0.d0, 0.d0, 0.d0, 0.d0, &
-                     1.d0/sqrt(6.d0), -1.d0/sqrt(6.d0), -2.d0/sqrt(6.d0), 0.d0, 0.d0, &
-                     0.d0, 1.d0/sqrt(12.d0), -1.d0/sqrt(12.d0), 1.d0/sqrt(12.d0), &
-                     -3.d0/sqrt(12.d0), 0.d0, 0.d0], [6, 3])
+            reshape([1.0_rp/sqrt(2.0_rp), -1.0_rp/sqrt(2.0_rp), 0.0_rp, 0.0_rp, &
+                     0.0_rp, 0.0_rp, 1.0_rp/sqrt(6.0_rp), -1.0_rp/sqrt(6.0_rp), &
+                     -2.0_rp/sqrt(6.0_rp), 0.0_rp, 0.0_rp, 0.0_rp, &
+                     1.0_rp/sqrt(12.0_rp), -1.0_rp/sqrt(12.0_rp), &
+                     1.0_rp/sqrt(12.0_rp), -3.0_rp/sqrt(12.0_rp), 0.0_rp, 0.0_rp], &
+                    [6, 3])
 
         ! point in quadratic region near minimum
-        vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
 
         ! calculate gradient and Hessian to define augmented Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(vars)
-        aug_hess = 0.d0
+        aug_hess = 0.0_rp
         do i = 1, 3
             do j = 1, 3
                 aug_hess(i + 1, j + 1) = &
@@ -420,9 +424,9 @@ contains
             write (stderr, *) "test_newton_step failed: Produced error."
             test_newton_step = .false.
         end if
-        if (any(abs(red_space_solution - &
-                    [-2.555959788079d-2, 1.565498761914d-2, 4.727080080611d-3]) > &
-                tol)) then
+        if (any(abs(red_space_solution - [-2.555959788079e-2_rp, &
+                                          1.565498761914e-2_rp, &
+                                          4.727080080611e-3_rp]) > tol)) then
             write (stderr, *) "test_newton_step failed: Reduced space solution not "// &
                 "correct."
             test_newton_step = .false.
@@ -455,22 +459,24 @@ contains
 
         ! defined a reduced space basis
         red_space_basis = &
-            reshape([1.d0/sqrt(2.d0), -1.d0/sqrt(2.d0), 0.d0, 0.d0, 0.d0, 0.d0, &
-                     1.d0/sqrt(6.d0), -1.d0/sqrt(6.d0), -2.d0/sqrt(6.d0), 0.d0, 0.d0, &
-                     0.d0, 1.d0/sqrt(12.d0), -1.d0/sqrt(12.d0), 1.d0/sqrt(12.d0), &
-                     -3.d0/sqrt(12.d0), 0.d0, 0.d0], [6, 3])
+            reshape([1.0_rp/sqrt(2.0_rp), -1.0_rp/sqrt(2.0_rp), 0.0_rp, 0.0_rp, &
+                     0.0_rp, 0.0_rp, 1.0_rp/sqrt(6.0_rp), -1.0_rp/sqrt(6.0_rp), &
+                     -2.0_rp/sqrt(6.0_rp), 0.0_rp, 0.0_rp, 0.0_rp, &
+                     1.0_rp/sqrt(12.0_rp), -1.0_rp/sqrt(12.0_rp), &
+                     1.0_rp/sqrt(12.0_rp), -3.0_rp/sqrt(12.0_rp), 0.0_rp, 0.0_rp], &
+                    [6, 3])
 
         ! choose target trust radius
-        trust_radius = 0.4d0
+        trust_radius = 0.4_rp
 
         ! point with strong negative curvature
-        vars = [0.29d0, 0.47d0, 0.66d0, 0.41d0, 0.23d0, 0.26d0]
+        vars = [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
 
         ! calculate gradient and Hessian to define augmented Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(vars)
-        aug_hess = 0.d0
+        aug_hess = 0.0_rp
         do i = 1, 3
             do j = 1, 3
                 aug_hess(i + 1, j + 1) = dot_product(red_space_basis(:, i), &
@@ -496,8 +502,8 @@ contains
                 "trust radius."
             test_bisection = .false.
         end if
-        if (any(abs(red_space_solution - &
-                    [-0.483593823965d0, 0.482091645228d0, 0.153783319727d0]) > tol)) &
+        if (any(abs(red_space_solution - [-0.483593823965_rp, 0.482091645228_rp, &
+                                          0.153783319727_rp]) > tol)) &
             then
             write (stderr, *) "test_bisection failed: Reduced space solution not "// &
                 "correct."
@@ -509,13 +515,13 @@ contains
         end if
 
         ! point in quadratic region near minimum
-        vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
 
         ! calculate gradient and Hessian to define augmented Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(vars)
-        aug_hess = 0.d0
+        aug_hess = 0.0_rp
         do i = 1, 3
             do j = 1, 3
                 aug_hess(i + 1, j + 1) = &
@@ -561,11 +567,11 @@ contains
         obj_func_funptr => obj_func
 
         ! define direction
-        vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
 
         ! define lower and upper bound
-        lower = 0.d0
-        upper = 0.5d0
+        lower = 0.0_rp
+        upper = 0.5_rp
 
         ! perform bracket and determine if new point decreases objective function in
         ! comparison to lower and upper bound
@@ -610,14 +616,14 @@ contains
 
         ! allocate and initialize symmetric matrix and vector to be added
         allocate(matrix(2, 2))
-        matrix = reshape([1.d0, 2.d0, &
-                          2.d0, 3.d0], [2, 2])
-        vector = [4.d0, 5.d0, 6.d0]
+        matrix = reshape([1.0_rp, 2.0_rp, &
+                          2.0_rp, 3.0_rp], [2, 2])
+        vector = [4.0_rp, 5.0_rp, 6.0_rp]
 
         ! initialize expected matrix
-        expected = reshape([1.d0, 2.d0, 4.d0, &
-                            2.d0, 3.d0, 5.d0, &
-                            4.d0, 5.d0, 6.d0], [3, 3])
+        expected = reshape([1.0_rp, 2.0_rp, 4.0_rp, &
+                            2.0_rp, 3.0_rp, 5.0_rp, &
+                            4.0_rp, 5.0_rp, 6.0_rp], [3, 3])
 
         ! call routine and determine if dimensions and values of resulting matrix match
         call extend_symm_matrix(matrix, vector)
@@ -651,14 +657,14 @@ contains
 
         ! allocate and initialize matrix and vector to be added
         allocate(matrix(3, 2))
-        matrix = reshape([1.d0, 2.d0, 3.d0, &
-                          4.d0, 5.d0, 6.d0], [3, 2])
-        new_col = [7.d0, 8.d0, 9.d0]
+        matrix = reshape([1.0_rp, 2.0_rp, 3.0_rp, &
+                          4.0_rp, 5.0_rp, 6.0_rp], [3, 2])
+        new_col = [7.0_rp, 8.0_rp, 9.0_rp]
 
         ! initialize expected matrix
-        expected = reshape([1.d0, 2.d0, 3.d0, &
-                            4.d0, 5.d0, 6.d0, &
-                            7.d0, 8.d0, 9.d0], [3, 3])
+        expected = reshape([1.0_rp, 2.0_rp, 3.0_rp, &
+                            4.0_rp, 5.0_rp, 6.0_rp, &
+                            7.0_rp, 8.0_rp, 9.0_rp], [3, 3])
 
         ! call routine and determine if dimensions and values of resulting matrix match
         call add_column(matrix, new_col)
@@ -697,9 +703,9 @@ contains
         call setup_settings(settings)
 
         ! initialize symmetric matrix
-        matrix = reshape([3.d0, 1.d0, 1.d0, &
-                          1.d0, 4.d0, 2.d0, &
-                          1.d0, 2.d0, 5.d0], [3, 3])
+        matrix = reshape([3.0_rp, 1.0_rp, 1.0_rp, &
+                          1.0_rp, 4.0_rp, 2.0_rp, &
+                          1.0_rp, 2.0_rp, 5.0_rp], [3, 3])
 
         ! call routine and determine if lowest eigenvalue and corresponding eigenvector
         ! are found
@@ -708,7 +714,7 @@ contains
             write (stderr, *) "test_symm_mat_min_eig failed: Produced error."
             test_symm_mat_min_eig = .false.
         end if
-        if (abs(eigval - 2.30797852837d0) > tol) then
+        if (abs(eigval - 2.30797852837_rp) > tol) then
             write (stderr, *) "test_symm_mat_min_eig failed: Incorrect minimum "// &
                 "eigenvalue for matrix."
             test_symm_mat_min_eig = .false.
@@ -739,9 +745,9 @@ contains
         call setup_settings(settings)
 
         ! initialize symmetric matrix
-        matrix = reshape([3.d0, 1.d0, 1.d0, &
-                          1.d0, 4.d0, 2.d0, &
-                          1.d0, 2.d0, 5.d0], [3, 3])
+        matrix = reshape([3.0_rp, 1.0_rp, 1.0_rp, &
+                          1.0_rp, 4.0_rp, 2.0_rp, &
+                          1.0_rp, 2.0_rp, 5.0_rp], [3, 3])
 
         ! call function and determine if lowest eigenvalue is found
         matrix_min_eigval = min_eigval(matrix, settings, error)
@@ -749,7 +755,7 @@ contains
             write (stderr, *) "test_min_eigval failed: Produced error."
             test_min_eigval = .false.
         end if
-        if (abs(matrix_min_eigval - 2.30797852837d0) > tol) then
+        if (abs(matrix_min_eigval - 2.30797852837_rp) > tol) then
             write (stderr, *) "test_min_eigval failed: Incorrect minimum "// &
                 "eigenvalue for matrix."
             test_min_eigval = .false.
@@ -828,11 +834,11 @@ contains
         settings%n_random_trial_vectors = 2
 
         ! define gradient
-        grad = [1.d0, 2.d0, 3.d0, 4.d0]
+        grad = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
         grad_norm = norm2(grad)
 
         ! define all positive Hessian diagonal elements
-        h_diag = [1.d0, 2.d0, 3.d0, 4.d0]
+        h_diag = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
 
         ! generate trial vectors and determine whether function returns the correct
         ! number of orthonormal trial vectors
@@ -869,7 +875,7 @@ contains
         deallocate(red_space_basis)
 
         ! define Hessian diagonal with negative elements
-        h_diag = [-1.d0, 2.d0, 3.d0, 4.d0]
+        h_diag = [-1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
 
         ! generate trial vectors and determine whether function returns the correct
         ! number of orthonormal trial vectors
@@ -927,7 +933,7 @@ contains
 
         ! allocate reduced space basis and set first normalized basis vector
         allocate(red_space_basis(4, 3))
-        red_space_basis(:, 1) = [1.d0, 2.d0, 3.d0, 4.d0]
+        red_space_basis(:, 1) = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
         red_space_basis(:, 1) = red_space_basis(:, 1) / norm2(red_space_basis(:, 1))
 
         ! generate trial vectors and determine whether function returns orthonormal 
@@ -973,9 +979,9 @@ contains
         call setup_settings(settings)
 
         ! define vector to be orthogonalized and space
-        vector = [1.d0, 2.d0, 3.d0, 4.d0]
-        space(:, 1) = [0.d0, 1.d0, 0.d0, 0.d0]
-        space(:, 2) = [0.d0, 0.d0, 1.d0, 0.d0]
+        vector = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
+        space(:, 1) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
+        space(:, 2) = [0.0_rp, 0.0_rp, 1.0_rp, 0.0_rp]
 
         ! perform Gram-Schmidt orthogonalization and determine whether added vector is
         ! orthonormalized
@@ -989,21 +995,21 @@ contains
             write (stderr, *) "test_gram_schmidt failed: Added vector not orthogonal."
             test_gram_schmidt = .false.
         end if
-        if (abs(norm2(vector) - 1.d0) > tol) then
+        if (abs(norm2(vector) - 1.0_rp) > tol) then
             write (stderr, *) "test_gram_schmidt failed: Added vector not normalized."
             test_gram_schmidt = .false.
         end if
 
         ! define vector to be orthogonalized and space
-        vector = [1.d0, 2.d0, 3.d0, 4.d0]
-        space(:, 1) = [0.d0, 1.d0, 0.d0, 0.d0]
-        space(:, 2) = [0.d0, 0.d0, 1.d0, 0.d0]
+        vector = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
+        space(:, 1) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
+        space(:, 2) = [0.0_rp, 0.0_rp, 1.0_rp, 0.0_rp]
 
         ! define symmetric linear transformation and corresponding vector and space
-        symm_matrix = reshape([ 1.d0, -5.d0,  8.d0,  0.d0, &
-                               -5.d0,  2.d0, -6.d0,  9.d0, &
-                                8.d0, -6.d0,  3.d0, -7.d0, &
-                                0.d0,  9.d0, -7.d0,  4.d0], &
+        symm_matrix = reshape([ 1.0_rp, -5.0_rp,  8.0_rp,  0.0_rp, &
+                               -5.0_rp,  2.0_rp, -6.0_rp,  9.0_rp, &
+                                8.0_rp, -6.0_rp,  3.0_rp, -7.0_rp, &
+                                0.0_rp,  9.0_rp, -7.0_rp,  4.0_rp], &
                               shape(symm_matrix), order=[2,1])
         lin_trans_vector = matmul(symm_matrix, vector)
         lin_trans_space = matmul(symm_matrix, space)
@@ -1021,7 +1027,7 @@ contains
             write (stderr, *) "test_gram_schmidt failed: Added vector not orthogonal."
             test_gram_schmidt = .false.
         end if
-        if (abs(norm2(vector) - 1.d0) > tol) then
+        if (abs(norm2(vector) - 1.0_rp) > tol) then
             write (stderr, *) "test_gram_schmidt failed: Added vector not normalized."
             test_gram_schmidt = .false.
         end if
@@ -1032,7 +1038,7 @@ contains
         end if
 
         ! define zero vector
-        vector = [0.d0, 0.d0, 0.d0, 0.d0]
+        vector = [0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
 
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
@@ -1045,9 +1051,9 @@ contains
         end if
 
         ! define vector in space that is already complete
-        vector_small = [1.d0, 2.d0]
-        space_small(:, 1) = [1.d0, 0.d0]
-        space_small(:, 2) = [0.d0, 1.d0]
+        vector_small = [1.0_rp, 2.0_rp]
+        space_small(:, 1) = [1.0_rp, 0.0_rp]
+        space_small(:, 2) = [0.0_rp, 1.0_rp]
 
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
         ! throws error
@@ -1117,10 +1123,10 @@ contains
         ! call routine with optional arguments
         call init_solver_settings(settings, stability=.false., line_search=.true., &
                                   davidson=.false., jacobi_davidson=.false., &
-                                  prefer_jacobi_davidson=.true., conv_tol=1.d-3, &
-                                  n_random_trial_vectors=5, start_trust_radius=0.2d0, &
-                                  n_macro=300, n_micro=200, global_red_factor=1.d-2, &
-                                  local_red_factor=1.d-3, seed=33, verbose=3, &
+                                  prefer_jacobi_davidson=.true., conv_tol=1e-3_rp, &
+                                  n_random_trial_vectors=5, start_trust_radius=0.2_rp, &
+                                  n_macro=300, n_micro=200, global_red_factor=1e-2_rp, &
+                                  local_red_factor=1e-3_rp, seed=33, verbose=3, &
                                   logger=logger_funptr)
 
         ! check if optional values are correctly set
@@ -1129,12 +1135,12 @@ contains
             (settings%davidson .neqv. .false.) .or. &
             (settings%jacobi_davidson .neqv. .false.) .or. &
             (settings%prefer_jacobi_davidson .neqv. .true.) .or. &
-            abs(settings%conv_tol - 1.d-3) > tol .or. &
+            abs(settings%conv_tol - 1e-3_rp) > tol .or. &
             settings%n_random_trial_vectors /= 5 .or. &
-            abs(settings%start_trust_radius - 0.2d0) > tol .or. settings%n_macro &
+            abs(settings%start_trust_radius - 0.2_rp) > tol .or. settings%n_macro &
             /= 300 .or. settings%n_micro /= 200 .or. &
-            abs(settings%global_red_factor - 1.d-2) > tol .or. &
-            abs(settings%local_red_factor - 1.d-3) > tol .or. &
+            abs(settings%global_red_factor - 1e-2_rp) > tol .or. &
+            abs(settings%local_red_factor - 1e-3_rp) > tol .or. &
             settings%seed /= 33 .or. settings%verbose /= 3 .or. &
             .not. associated(settings%logger)) then
             write (stderr, *) "test_init_solver_settings failed: Optional "// &
@@ -1188,14 +1194,14 @@ contains
 
         ! call routine with optional arguments
         call init_stability_settings(settings, jacobi_davidson=.false., &
-                                     conv_tol=1.d-3, n_random_trial_vectors=3, &
+                                     conv_tol=1e-3_rp, n_random_trial_vectors=3, &
                                      n_iter=50, verbose=3, logger=logger_funptr)
 
         ! check if optional values are correctly set
         if ((settings%jacobi_davidson .neqv. .false.) .or. &
-            abs(settings%conv_tol - 1.d-3) > tol .or. settings%n_random_trial_vectors &
-            /= 3 .or. settings%n_iter /= 50 .or. settings%verbose /= 3 .or. &
-            .not. associated(settings%logger)) then
+            abs(settings%conv_tol - 1e-3_rp) > tol .or. &
+            settings%n_random_trial_vectors /= 3 .or. settings%n_iter /= 50 .or. &
+            settings%verbose /= 3 .or. .not. associated(settings%logger)) then
             write (stderr, *) "test_init_stability_settings failed: Optional "// &
                 "arguments not set correctly."
             test_init_stability_settings = .false.
@@ -1219,14 +1225,14 @@ contains
         test_set_default = .true.
 
         ! check if optional arguments are correctly set for reals
-        if (abs(set_default(2.d0, 1.d0) - 2.d0) > tol) then
+        if (abs(set_default(2.0_rp, 1.0_rp) - 2.0_rp) > tol) then
             write (stderr, *) "test_set_default failed: Optional real argument not "// &
                 "set correctly."
             test_set_default = .false.
         end if
 
         ! check if default arguments are correctly set for reals
-        if (abs(set_default(default_value=1.d0) - 1.d0) > tol) then
+        if (abs(set_default(default_value=1.0_rp) - 1.0_rp) > tol) then
             write (stderr, *) "test_set_default failed: Default real argument not "// &
                 "set correctly."
             test_set_default = .false.
@@ -1275,12 +1281,12 @@ contains
         test_level_shifted_diag_precond = .true.
 
         ! initialize quantities
-        residual = [1.d0, 1.d0, 1.d0]
-        h_diag = [-2.d0, 1.d0, 2.d0]
+        residual = [1.0_rp, 1.0_rp, 1.0_rp]
+        h_diag = [-2.0_rp, 1.0_rp, 2.0_rp]
 
         ! call subroutine and check if results match
-        call level_shifted_diag_precond(residual, -2.d0, h_diag, precond_residual)
-        if (any(abs(precond_residual - [1.d10, 1.d0 / 3, 0.25d0]) > tol)) then
+        call level_shifted_diag_precond(residual, -2.0_rp, h_diag, precond_residual)
+        if (any(abs(precond_residual - [1e10_rp, 1.0_rp / 3, 0.25_rp]) > tol)) then
             write (stderr, *) "test_level_shifted_diag_precond failed: Returned "// &
                 "preconditioned residual not correct."
             test_level_shifted_diag_precond = .false.
@@ -1301,12 +1307,12 @@ contains
         test_abs_diag_precond = .true.
 
         ! initialize quantities
-        residual = [1.d0, 1.d0, 1.d0]
-        h_diag = [-2.d0, 0.d0, 2.d0]
+        residual = [1.0_rp, 1.0_rp, 1.0_rp]
+        h_diag = [-2.0_rp, 0.0_rp, 2.0_rp]
 
         ! call subroutine and check if results match
         call abs_diag_precond(residual, h_diag, precond_residual)
-        if (any(abs(precond_residual - [0.5d0, 1.d10, 0.5d0]) > tol)) then
+        if (any(abs(precond_residual - [0.5_rp, 1e10_rp, 0.5_rp]) > tol)) then
             write (stderr, *) "test_abs_diag_precond failed: Returned "// &
                 "preconditioned residual not correct."
             test_abs_diag_precond = .false.
@@ -1328,8 +1334,8 @@ contains
 
         ! define vector and direction to be projected out, the latter needs to be 
         ! normalized
-        vector = [1.d0, 2.d0, 3.d0, 4.d0]
-        direction = [0.d0, 1.d0, 2.d0, 0.d0] / sqrt(5.d0)
+        vector = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
+        direction = [0.0_rp, 1.0_rp, 2.0_rp, 0.0_rp] / sqrt(5.0_rp)
 
         ! perform orthogonal projection and determine whether vector contains direction
         vector = orthogonal_projection(vector, direction)
@@ -1360,9 +1366,9 @@ contains
 
         ! define point near saddle point, define trial vector, and solution to be 
         ! projected out
-        vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
-        vector = [0.1d0, 0.2d0, 0.3d0, 0.4d0, 0.5d0, 0.6d0]
-        solution = [1.d0, -2.d0, 2.d0, -1.d0, 1.d0, -2.d0]
+        vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
+        vector = [0.1_rp, 0.2_rp, 0.3_rp, 0.4_rp, 0.5_rp, 0.6_rp]
+        solution = [1.0_rp, -2.0_rp, 2.0_rp, -1.0_rp, 1.0_rp, -2.0_rp]
 
         ! generate Hessian
         call hartmann6d_hessian(vars)
@@ -1371,22 +1377,22 @@ contains
         hess_x_funptr => hess_x_fun
 
         ! calculate Jacobi-Davidson correction and compare values
-        call jacobi_davidson_correction(hess_x_funptr, vector, solution, 0.5d0, &
+        call jacobi_davidson_correction(hess_x_funptr, vector, solution, 0.5_rp, &
                                         corr_vector, hess_vector, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_jacobi_davidson_correction failed: Returned error."
             test_jacobi_davidson_correction = .false.
         end if
-        if (sum(abs(corr_vector - [-96.940677944d0, 203.929698480d0, -216.199768920d0, &
-                                   100.656941418d0, -90.624469448d0, 212.045768918d0]) &
-                ) > 1d-8) then
+        if (sum(abs(corr_vector - [-96.940677944_rp, 203.929698480_rp, &
+                                   -216.199768920_rp, 100.656941418_rp, &
+                                   -90.624469448_rp, 212.045768918_rp])) > 1e-8_rp) then
             write (stderr, *) "test_jacobi_davidson_correction failed: Returned "// &
                 "correction vector wrong."
             test_jacobi_davidson_correction = .false.
         end if
-        if (sum(abs(hess_vector - [14.407362159d0, -18.566381727d0, 6.546311286d0, &
-                                   -10.441098685d0, 20.923570656d0, -10.250311288d0]) &
-                ) > 1d-8) then
+        if (sum(abs(hess_vector - [14.407362159_rp, -18.566381727_rp, &
+                                   6.546311286_rp, -10.441098685_rp, &
+                                   20.923570656_rp, -10.250311288_rp])) > 1e-8_rp) then
             write (stderr, *) "test_jacobi_davidson_correction failed: Returned "// &
                 "Hessian linear transformation wrong."
             test_jacobi_davidson_correction = .false.
@@ -1404,6 +1410,7 @@ contains
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp), dimension(6) :: vars, rhs, solution, vector, hess_vector, corr_vector
         real(rp) :: mu
+        real(rp), parameter :: rtol = 1e-14_rp
         integer(ip) :: error
 
         ! assume tests pass
@@ -1413,10 +1420,10 @@ contains
         call setup_settings(settings)
 
         ! define point near saddle point
-        vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
 
         ! define solution to be projected out
-        solution = [1.d0, 2.d0, 3.d0, 4.d0, 5.d0, 6.d0] / sqrt(91.d0)
+        solution = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp, 5.0_rp, 6.0_rp] / sqrt(91.0_rp)
 
         ! generate Hessian
         call hartmann6d_hessian(vars)
@@ -1437,7 +1444,7 @@ contains
         ! orthogonal to the solution vector and consequently the Hessian linear 
         ! transformation of the projected vector is equivalent to the Hessian linear 
         ! transformation of the vector itself
-        call minres(-rhs, hess_x_funptr, solution, mu, 1d-14, vector, hess_vector, &
+        call minres(-rhs, hess_x_funptr, solution, mu, rtol, vector, hess_vector, &
                     settings, error)
         if (error /= 0) then
             write (stderr, *) "test_minres failed: Returned error."
@@ -1460,8 +1467,8 @@ contains
         end if
 
         ! run minimum residual method for vanishing right hand side
-        rhs = 0.d0
-        call minres(-rhs, hess_x_funptr, solution, mu, 1d-14, vector, hess_vector, &
+        rhs = 0.0_rp
+        call minres(-rhs, hess_x_funptr, solution, mu, rtol, vector, hess_vector, &
                     settings, error)
         if (error /= 0) then
             write (stderr, *) "test_minres failed: Returned error."
@@ -1496,7 +1503,7 @@ contains
 
         ! print row of results table without optional arguments and check if row is 
         ! correct
-        call print_results(settings, 1, 2.d0, 3.d0)
+        call print_results(settings, 1, 2.0_rp, 3.0_rp)
         if (log_message /= "        1   |     2.00000000000000E+00   "// &
             "|   3.00E+00   |      -      |        -   |        -     |      -   ") then
             write (stderr, *) "test_print_results failed: Printed row without "// &
@@ -1505,7 +1512,7 @@ contains
         end if
 
         ! print row of results table with optional arguments
-        call print_results(settings, 1, 2.d0, 3.d0, 4.d0, 5, 6, 7.d0, 8.d0)
+        call print_results(settings, 1, 2.0_rp, 3.0_rp, 4.0_rp, 5, 6, 7.0_rp, 8.0_rp)
         if (log_message /= "        1   |     2.00000000000000E+00   "// &
             "|   3.00E+00   |   4.00E+00  |   0 |   5  |    7.00E+00  |  8.00E+00") then
             write (stderr, *) "test_print_results failed: Printed row with "// &
@@ -1614,12 +1621,12 @@ contains
         ! setup settings object
         call setup_settings(settings)
 
-        solution = [0.3d0, 0.3d0, 0.3d0]
+        solution = [0.3_rp, 0.3_rp, 0.3_rp]
 
         ! check if step is rejected and trust radius is correctly reduced if micro 
         ! iterations have not converged
-        trust_radius = 1.d0
-        accept_step = accept_trust_region_step(solution, 1.d0, .false., settings, &
+        trust_radius = 1.0_rp
+        accept_step = accept_trust_region_step(solution, 1.0_rp, .false., settings, &
                                                trust_radius, max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
@@ -1630,8 +1637,8 @@ contains
 
         ! check if step is rejected and trust radius is correctly reduced if ratio is 
         ! negative
-        trust_radius = 1.d0
-        accept_step = accept_trust_region_step(solution, -1.d0, .true., settings, &
+        trust_radius = 1.0_rp
+        accept_step = accept_trust_region_step(solution, -1.0_rp, .true., settings, &
                                                trust_radius, max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// & 
@@ -1641,9 +1648,9 @@ contains
 
         ! check if step is rejected and trust radius is correctly reduced if 
         ! individual rotations are too large
-        trust_radius = 1.d0
-        solution(1) = 1.d0
-        accept_step = accept_trust_region_step(solution, 1.d0, .true., settings, &
+        trust_radius = 1.0_rp
+        solution(1) = 1.0_rp
+        accept_step = accept_trust_region_step(solution, 1.0_rp, .true., settings, &
                                                trust_radius, max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
@@ -1651,13 +1658,13 @@ contains
                 "are too large."
             test_accept_trust_region_step = .false.
         end if
-        solution(1) = 0.3d0
+        solution(1) = 0.3_rp
 
         ! check if step is accepted and trust radius is correctly reduced if ratio is 
         ! too small
-        trust_radius = 1.d0
+        trust_radius = 1.0_rp
         accept_step = accept_trust_region_step(solution, &
-                                               0.9d0 * trust_radius_shrink_ratio, &
+                                               0.9_rp * trust_radius_shrink_ratio, &
                                                .true., settings, trust_radius, &
                                                max_precision_reached)
         if (.not. accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > &
@@ -1670,13 +1677,13 @@ contains
 
         ! check if step is accepted and trust radius is correctly reduced if ratio is 
         ! ok
-        trust_radius = 1.d0
+        trust_radius = 1.0_rp
         accept_step = accept_trust_region_step(solution, &
-                                               0.5d0 * (trust_radius_shrink_ratio + &
+                                               0.5_rp * (trust_radius_shrink_ratio + &
                                                trust_radius_expand_ratio), .true., &
                                                settings, trust_radius, &
                                                max_precision_reached)
-        if (.not. accept_step .or. abs(trust_radius - 1.d0) > tol) then
+        if (.not. accept_step .or. abs(trust_radius - 1.0_rp) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
                 "accepted or trust radius changed when ratio is acceptable."
             test_accept_trust_region_step = .false.
@@ -1684,9 +1691,9 @@ contains
 
         ! check if step is accepted and trust radius is correctly expanded if ratio is 
         ! too large
-        trust_radius = 1.d0
+        trust_radius = 1.0_rp
         accept_step = accept_trust_region_step(solution, &
-                                               1.1d0 * trust_radius_expand_ratio, &
+                                               1.1_rp * trust_radius_expand_ratio, &
                                                .true., settings, trust_radius, &
                                                max_precision_reached)
         if (.not. accept_step .or. abs(trust_radius - trust_radius_expand_factor) > &
@@ -1795,18 +1802,18 @@ contains
         call setup_settings(settings)
         settings%n_random_trial_vectors = 1
         settings%n_micro = 50
-        settings%global_red_factor = 1d-3
-        settings%local_red_factor = 1d-4
+        settings%global_red_factor = 1e-3_rp
+        settings%local_red_factor = 1e-4_rp
         settings%jacobi_davidson = .false.
         settings%prefer_jacobi_davidson = .false.
 
         ! initialize variables
-        trust_radius = 0.4d0
+        trust_radius = 0.4_rp
         obj_func_funptr => obj_func
         hess_x_funptr => hess_x_fun
 
         ! start in quadratic region near minimum
-        curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
         grad_norm = norm2(grad)
@@ -1839,7 +1846,7 @@ contains
             test_level_shifted_davidson = .false.
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5d0*hartmann6d_hess_x(solution))
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
         solution_norm = norm2(solution)
         if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
              / trust_radius_shrink_factor) .or. &
@@ -1853,13 +1860,13 @@ contains
         end if
 
         ! start near saddle point
-        curr_vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
-        trust_radius = 0.4d0
+        trust_radius = 0.4_rp
 
         ! run level-shifted Davidson, check if error has occured, whether the level 
         ! shift is negative and whether the solution lies at the trust region boundary 
@@ -1875,7 +1882,7 @@ contains
                 "near saddle point."
             test_level_shifted_davidson = .false.
         end if
-        if (mu >= 0.d0) then
+        if (mu >= 0.0_rp) then
             write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
                 "not negative near saddle point."
             test_level_shifted_davidson = .false.
@@ -1887,7 +1894,7 @@ contains
             test_level_shifted_davidson = .false.
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5d0*hartmann6d_hess_x(solution))
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
         solution_norm = norm2(solution)
         if ((trust_radius_shrink_ratio > ratio .and. &
              abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
@@ -1904,7 +1911,7 @@ contains
 
         ! test Jacobi-Davidson near saddle point
         settings%jacobi_davidson = .true.
-        trust_radius = 0.4d0
+        trust_radius = 0.4_rp
 
         ! run level-shifted Jacobi-Davidson, check if error has occured, whether the 
         ! level shift is negative and whether the solution lies at the trust region 
@@ -1920,7 +1927,7 @@ contains
                 "near saddle point with Jacobi-Davidson solver."
             test_level_shifted_davidson = .false.
         end if
-        if (mu >= 0.d0) then
+        if (mu >= 0.0_rp) then
             write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
                 "not negative near saddle point with Jacobi-Davidson solver."
             test_level_shifted_davidson = .false.
@@ -1933,7 +1940,7 @@ contains
             test_level_shifted_davidson = .false.
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5d0*hartmann6d_hess_x(solution))
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
         solution_norm = norm2(solution)
         if ((trust_radius_shrink_ratio > ratio .and. &
              abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
@@ -1971,6 +1978,7 @@ contains
         procedure(precond_type), pointer :: precond_funptr
         type(solver_settings_type) :: settings
         logical :: max_precision_reached
+        real(rp), parameter :: h_diag_floor = 1e-10_rp
 
         ! assume tests pass
         test_truncated_conjugate_gradient = .true.
@@ -1980,12 +1988,12 @@ contains
         settings%n_micro = 50
 
         ! initialize variables
-        trust_radius = 0.4d0
+        trust_radius = 0.4_rp
         obj_func_funptr => obj_func
         hess_x_funptr => hess_x_fun
 
         ! start in quadratic region near minimum
-        curr_vars = [0.20d0, 0.15d0, 0.48d0, 0.28d0, 0.31d0, 0.66d0]
+        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
         call hartmann6d_hessian(curr_vars)
@@ -2004,13 +2012,13 @@ contains
             test_truncated_conjugate_gradient = .false.
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5d0*hartmann6d_hess_x(solution))
-        if (ratio <= 0.d0) then
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if (ratio <= 0.0_rp) then
             write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not reduce function value near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
-        solution_norm = dot_product(solution, solution / max(abs(h_diag), 1.d-10))
+        solution_norm = dot_product(solution, solution / max(abs(h_diag), h_diag_floor))
         if ((ratio < trust_radius_shrink_ratio .and. solution_norm > (trust_radius / &
              trust_radius_shrink_factor) ** 2) .or. &
             (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
@@ -2023,12 +2031,12 @@ contains
         end if
 
         ! start near saddle point
-        curr_vars = [0.35d0, 0.59d0, 0.48d0, 0.40d0, 0.31d0, 0.32d0]
+        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
-        trust_radius = 0.4d0
+        trust_radius = 0.4_rp
 
         ! run truncated conjugate gradient, check whether the solution lies at the 
         ! trust region boundary and reduces the function value
@@ -2043,13 +2051,13 @@ contains
             test_truncated_conjugate_gradient = .false.
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5d0*hartmann6d_hess_x(solution))
-        if (ratio <= 0.d0) then
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if (ratio <= 0.0_rp) then
             write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not reduce function value near saddle point."
             test_truncated_conjugate_gradient = .false.
         end if
-        solution_norm = dot_product(solution, solution / max(abs(h_diag), 1.d-10))
+        solution_norm = dot_product(solution, solution / max(abs(h_diag), h_diag_floor))
         if ((trust_radius_shrink_ratio > ratio .and. &
              abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
              tol) .or. &
