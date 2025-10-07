@@ -41,7 +41,7 @@ else()
     message(STATUS "Using BLAS/LAPACK with 32-bit integers (LP64)")
 endif()
 
-# define shared source files
+# define source files
 set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
 
 # add dynamic library
