@@ -6,7 +6,7 @@ include(GNUInstallDirs)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
-option(BUILD_TESTS "Build the test suite" ON)
+
 # set flags for build types
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
     set(CMAKE_Fortran_FLAGS_DEBUG "-g -Wall -Wextra -fcheck=all -fbacktrace")
@@ -41,41 +41,58 @@ else()
     message(STATUS "Using BLAS/LAPACK with 32-bit integers (LP64)")
 endif()
 
-# add source files
-if(BUILD_SHARED_LIBS)
-  add_library(opentrustregion SHARED src/opentrustregion.f90 src/c_interface.f90)
-else()
-  add_library(opentrustregion STATIC src/opentrustregion.f90)
-endif()
-# enable preprocessing
-set_source_files_properties(src/opentrustregion.f90 PROPERTIES Fortran_PREPROCESS ON)
+# define shared source files
+set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
 
-# link against BLAS and LAPACK
-target_link_libraries(opentrustregion PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+# add dynamic library
+add_library(opentrustregion_shared SHARED ${OPENTRUSTREGION_SOURCES})
+
+# add static library
+add_library(opentrustregion_static STATIC ${OPENTRUSTREGION_SOURCES})
+
+# common settings
+foreach(target opentrustregion_shared opentrustregion_static)
+    # output name
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME opentrustregion)
+
+    # link against BLAS and LAPACK
+    target_link_libraries(${target} PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+
+    # set include directories
+    target_include_directories(${target} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
+endforeach()
+
+# enable preprocessing
+set_source_files_properties(${OPENTRUSTREGION_SOURCES} PROPERTIES Fortran_PREPROCESS ON)
+
+# option to build testsuite
+option(BUILD_TESTS "Build the testsuite" ON)
 
 if (BUILD_TESTS)
-  # create test executable
-  add_library(
-      testsuite SHARED
-      tests/opentrustregion_unit_tests.f90
-      tests/c_interface_unit_tests.f90
-      tests/opentrustregion_mock.f90
-      tests/c_interface_mock.f90
-      tests/opentrustregion_system_tests.f90
-  )
-  target_link_libraries(
-      testsuite
-      PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
-  )
+    # create shared test library which is then called from Python for testing
+    add_library(
+        testsuite SHARED
+        tests/opentrustregion_unit_tests.f90
+        tests/c_interface_unit_tests.f90
+        tests/opentrustregion_mock.f90
+        tests/c_interface_mock.f90
+        tests/opentrustregion_system_tests.f90
+    )
   
-  # get the absolute path to the test data directory and add it as a definition so the
-  # Fortran code can access it
-  set(TEST_DATA_PATH "${CMAKE_SOURCE_DIR}/tests/data")
-  add_definitions(-DTEST_DATA_PATH=\"${TEST_DATA_PATH}\")
-  target_compile_definitions(testsuite PRIVATE TEST_DATA_PATH="${TEST_DATA_PATH}")
+    # link against BLAS and LAPACK and against OpenTrustRegion
+    target_link_libraries(
+        testsuite
+        PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion_shared
+    )
   
-  # enable preprocessing
-  set_source_files_properties(tests/opentrustregion_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)
+    # get the absolute path to the test data directory and add it as a definition so the
+    # Fortran code can access it
+    set(TEST_DATA_PATH "${CMAKE_SOURCE_DIR}/tests/data")
+    add_definitions(-DTEST_DATA_PATH=\"${TEST_DATA_PATH}\")
+    target_compile_definitions(testsuite PRIVATE TEST_DATA_PATH="${TEST_DATA_PATH}")
+    
+    # enable preprocessing
+    set_source_files_properties(tests/opentrustregion_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)
 endif()
 
 # set paths to find module files, header files and library in build directory
@@ -90,10 +107,10 @@ configure_file(
 )
 
 # export the target to make OpenTrustRegion::OpenTrustRegion usable
-install(TARGETS opentrustregion
+install(TARGETS opentrustregion_shared opentrustregion_static
         EXPORT OpenTrustRegionTargets
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib # shared libraries (.so, .dylib)
+        ARCHIVE DESTINATION lib # static libraries (.a)
         INCLUDES DESTINATION include)
 install(FILES include/opentrustregion.h DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/)
 
