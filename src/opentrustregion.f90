@@ -877,7 +877,7 @@ contains
             if (error /= 0) return
 
             ! check if eigenvector has level-shift component
-            if (abs(eigvec(1)) < numerical_zero) then
+            if (abs(eigvec(1)) <= numerical_zero) then
                 call settings%log("Trial subspace too small. Increase "// &
                     "n_random_trial_vectors.", 1, .true.)
                 error = 1
