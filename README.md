@@ -46,7 +46,7 @@ The optimization process is initiated by calling a `solver` subroutine. This rou
   - Gradient (real array, written in-place)
   - Hessian diagonal (real array, written in-place)
   - A **`hess_x`** subroutine that performs Hessian-vector products:
-    - Accepts a trial vector and writes the result of the Hessian transformation into an output array
+    - Accepts a trial vector and writes the result of the Hessian transformation into an output array (real array, written in-place)
     - Returns an integer error code (0 for success, positive integers < 100 for errors)
   - Returns an integer error code (0 for success, positive integers < 100 for errors)
 - **`obj_func`** (function):  
@@ -78,13 +78,13 @@ The optimization process can be fine-tuned using the following optional argument
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout.
 
 ## Stability Check
-A separate `stability_check` subroutine is available to verify whether the current solution corresponds to a minimum. If not, it returns a boolean indicating instability and optionally an additional direction along the eigenvector corresponding to the negative eigenvalue.
+A separate `stability_check` subroutine is available to verify whether the current solution corresponds to a minimum. If not, it returns a boolean indicating instability and optionally, writes the eigenvector corresponding to the negative eigenvalue in-place to the provided memory.
 
 ### Required Arguments
 
 - **`h_diag`** (real array): Represents the Hessian diagonal at the current point.
 - **`hess_x`** (subroutine): Performs Hessian-vector products at the current point:
-  - Accepts a trial vector and writes the result of the Hessian transformation into an output array
+  - Accepts a trial vector and writes the result of the Hessian transformation into an output array (real array, written in-place)
   - Returns an integer error code (0 for success, positive integers < 100 for errors)
 - **`stable`** (boolean): Returns whether the current point is stable.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
