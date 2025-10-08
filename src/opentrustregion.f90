@@ -56,6 +56,7 @@ module opentrustregion
     ! define useful parameters
     real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
                            hess_symm_thres = 1e-12_rp
+    integer(ip), parameter :: jacobi_davidson_start = 30
 
     ! derived type for solver settings
     type :: settings_type
@@ -597,7 +598,7 @@ contains
             stability_rms = dnrm2(n_param, residual, 1) / sqrt(real(n_param, kind=rp))
             if (stability_rms < settings%conv_tol) exit
 
-            if (.not. settings%jacobi_davidson .or. iter <= 30) then
+            if (.not. settings%jacobi_davidson .or. iter <= jacobi_davidson_start) then
                 ! precondition residual
                 if (use_precond) then
                     call precond(residual, 0.0_rp, basis_vec, error)
@@ -622,7 +623,7 @@ contains
 
             else
                 ! solve Jacobi-Davidson correction equations
-                minres_tol = 3.0_rp ** (-(iter - 31))
+                minres_tol = 3.0_rp ** (-(iter - jacobi_davidson_start - 1))
                 call minres(-residual, hess_x_funptr, solution, eigval, minres_tol, &
                             basis_vec, h_basis_vec, settings, error)
                 call add_error_origin(error, error_stability_check, settings)
