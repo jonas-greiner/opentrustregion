@@ -343,7 +343,7 @@ contains
 
         ! convert C pointers
         if (rp == c_rp) then
-                call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr, shape=[n_param_c])
+            call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr, shape=[n_param_c])
         else
             call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr_c, shape=[n_param_c])
             allocate(h_diag_ptr(n_param_c))
