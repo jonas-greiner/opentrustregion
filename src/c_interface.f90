@@ -6,13 +6,22 @@
 
 module c_interface
 
-    use opentrustregion, only: rp, ip, standard_solver => solver, &
+    use opentrustregion, only: rp, ip, solver_type, stability_check_type, &
+                               standard_solver => solver, &
                                standard_stability_check => stability_check
-    use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_funptr, &
-                                           c_f_pointer, c_f_procpointer, c_associated, &
-                                           c_char, c_null_char
+    use, intrinsic :: iso_c_binding, only: c_double, c_int64_t, c_int32_t, c_bool, &
+                                           c_ptr, c_funptr, c_f_pointer, &
+                                           c_f_procpointer, c_associated, c_char, &
+                                           c_null_char
 
     implicit none
+
+    integer, parameter :: c_rp = c_double
+#ifdef USE_ILP64
+    integer, parameter :: c_ip = c_int64_t  ! 64-bit integers
+#else
+    integer, parameter :: c_ip = c_int32_t  ! 32-bit integers
+#endif
 
     ! define procedure pointer which will point to the Fortran procedures
     procedure(update_orbs_c_type), pointer :: update_orbs_before_wrapping => null()
@@ -24,61 +33,61 @@ module c_interface
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
-        function update_orbs_c_type(kappa_c, func_c, grad_c_ptr, h_diag_c_ptr, &
+        function update_orbs_c_type(kappa_c, func_c, grad_c, h_diag_c, &
                                     hess_x_c_funptr) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_funptr, c_long
+            import :: c_rp, c_funptr, c_ip
 
-            real(c_double), intent(in) :: kappa_c(*)
-            real(c_double), intent(out) :: func_c
-            type(c_ptr), intent(out) :: grad_c_ptr, h_diag_c_ptr
+            real(c_rp), intent(in) :: kappa_c(*)
+            real(c_rp), intent(out) :: func_c
+            real(c_rp), intent(out) :: grad_c(*), h_diag_c(*)
             type(c_funptr), intent(out) :: hess_x_c_funptr
-            integer(c_long) :: error
+            integer(c_ip) :: error
         end function update_orbs_c_type
     end interface
 
     abstract interface
-        function hess_x_c_type(x_c, hess_x_c_ptr) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_long
+        function hess_x_c_type(x_c, hess_x_c) result(error) bind(C)
+            import :: c_rp, c_ip
 
-            real(c_double), intent(in) :: x_c(*)
-            type(c_ptr), intent(out) :: hess_x_c_ptr
-            integer(c_long) :: error
+            real(c_rp), intent(in) :: x_c(*)
+            real(c_rp), intent(out) :: hess_x_c(*)
+            integer(c_ip) :: error
         end function hess_x_c_type
     end interface
 
     abstract interface
         function obj_func_c_type(kappa_c, func) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_long
+            import :: c_rp, c_ip
 
-            real(c_double), intent(in) :: kappa_c(*)
-            real(c_double), intent(out) :: func
-            integer(c_long) :: error
+            real(c_rp), intent(in) :: kappa_c(*)
+            real(c_rp), intent(out) :: func
+            integer(c_ip) :: error
         end function obj_func_c_type
     end interface
 
     abstract interface
-        function precond_c_type(residual_c, mu_c, precond_residual_c_ptr) &
-            result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_long
+        function precond_c_type(residual_c, mu_c, precond_residual_c) result(error) &
+            bind(C)
+            import :: c_rp, c_ip
 
-            real(c_double), intent(in) :: residual_c(*), mu_c
-            type(c_ptr), intent(out) :: precond_residual_c_ptr
-            integer(c_long) :: error
+            real(c_rp), intent(in) :: residual_c(*), mu_c
+            real(c_rp), intent(out) :: precond_residual_c(*)
+            integer(c_ip) :: error
         end function precond_c_type
     end interface
 
     abstract interface
         function conv_check_c_type(converged) result(error) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_bool, c_long
+            import :: c_bool, c_ip
 
-            integer(c_long) :: error
             logical(c_bool), intent(out) :: converged
+            integer(c_ip) :: error
         end function conv_check_c_type
     end interface
 
     abstract interface
         subroutine logger_c_type(message) bind(C)
-            use, intrinsic :: iso_c_binding, only: c_char
+            import :: c_char
 
             character(kind=c_char), intent(in) :: message(*)
         end subroutine logger_c_type
@@ -90,62 +99,75 @@ module c_interface
             set_default_c_ptr_logical
     end interface
 
-    ! interfaces for solver and stability subroutines, different routines can be
-    ! injected, for example for testing
+    ! interfaces for solver and stability C wrapper subroutines
     interface
-        subroutine solver_type(update_orbs, obj_func, n_param, error, precond, &
-                               conv_check, stability, line_search, davidson, &
-                               jacobi_davidson, prefer_jacobi_davidson, conv_tol, &
-                               n_random_trial_vectors, start_trust_radius, &
-                               n_macro, n_micro, global_red_factor, local_red_factor, &
-                               seed, verbose, logger)
+        function solver_c_wrapper_type(update_orbs_c_funptr, obj_func_c_funptr, &
+                                       n_param_c, precond_c_funptr, &
+                                       conv_check_c_funptr, stability_c_ptr, &
+                                       line_search_c_ptr, davidson_c_ptr, &
+                                       jacobi_davidson_c_ptr, &
+                                       prefer_jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                       n_random_trial_vectors_c_ptr, &
+                                       start_trust_radius_c_ptr, n_macro_c_ptr, &
+                                       n_micro_c_ptr, global_red_factor_c_ptr, &
+                                       local_red_factor_c_ptr, seed_c_ptr, &
+                                       verbose_c_ptr, logger_c_funptr) result(error_c) &
+            bind(C, name="solver")
 
-            use opentrustregion, only: rp, ip, update_orbs_type, obj_func_type, &
-                                       precond_type, conv_check_type, logger_type
+        import :: c_funptr, c_ip, c_ptr      
 
-            procedure(update_orbs_type), intent(in), pointer :: update_orbs
-            procedure(obj_func_type), intent(in), pointer :: obj_func
-            integer(ip), intent(in) :: n_param
-            integer(ip), intent(out) :: error
-            procedure(precond_type), intent(in), pointer, optional :: precond
-            procedure(conv_check_type), intent(in), pointer, optional :: conv_check
-            logical, intent(in), optional :: stability, line_search, davidson, &
-                                             jacobi_davidson, prefer_jacobi_davidson
-            real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
-                                              global_red_factor, local_red_factor
-            integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
-                                                 n_micro, seed, verbose
-            procedure(logger_type), intent(in), pointer, optional :: logger       
+        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
+                                             precond_c_funptr, conv_check_c_funptr, &
+                                             logger_c_funptr
+        integer(c_ip), intent(in), value :: n_param_c
+        type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
+                                          davidson_c_ptr, jacobi_davidson_c_ptr, &
+                                          prefer_jacobi_davidson_c_ptr, &
+                                          conv_tol_c_ptr, &
+                                          n_random_trial_vectors_c_ptr, &
+                                          start_trust_radius_c_ptr, n_macro_c_ptr, &
+                                          n_micro_c_ptr, global_red_factor_c_ptr, &
+                                          local_red_factor_c_ptr, seed_c_ptr, &
+                                          verbose_c_ptr
+        integer(c_ip) :: error_c
 
-        end subroutine solver_type
+        end function solver_c_wrapper_type
     end interface
 
     interface
-        subroutine stability_check_type(h_diag, hess_x, stable, kappa, error, precond, &
-                                        jacobi_davidson, conv_tol, &
-                                        n_random_trial_vectors, n_iter, verbose, logger)
+        function stability_check_c_wrapper_type(h_diag_c_ptr, hess_x_c_funptr, &
+                                                n_param_c, stable_c, kappa_c_ptr, &
+                                                precond_c_funptr, &
+                                                jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                                n_random_trial_vectors_c_ptr, &
+                                                n_iter_c_ptr, verbose_c_ptr, &
+                                                logger_c_funptr) result(error_c) &
+            bind(C, name="stability_check")
 
-            use opentrustregion, only: rp, ip, hess_x_type, precond_type, &
-                                       conv_check_type, logger_type
+            import :: c_ptr, c_ip, c_funptr, c_bool
 
-            real(rp), intent(in) :: h_diag(:)
-            procedure(hess_x_type), intent(in), pointer :: hess_x
-            logical, intent(out) :: stable
-            integer(ip), intent(out) :: error
-            real(rp), intent(out) :: kappa(:)
-            procedure(precond_type), intent(in), pointer, optional :: precond
-            logical, intent(in), optional :: jacobi_davidson
-            real(rp), intent(in), optional :: conv_tol
-            integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, &
-                                                 verbose
-            procedure(logger_type), intent(in), pointer, optional :: logger   
+            type(c_ptr), intent(in), value :: h_diag_c_ptr, kappa_c_ptr, &
+                                               jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+                                               n_random_trial_vectors_c_ptr, &
+                                               n_iter_c_ptr, verbose_c_ptr
+            integer(c_ip), intent(in), value :: n_param_c
+            type(c_funptr), intent(in), value :: hess_x_c_funptr, precond_c_funptr, &
+                                                 logger_c_funptr
+            logical(c_bool), intent(out) :: stable_c
+            integer(c_ip) :: error_c
 
-        end subroutine stability_check_type
+        end function stability_check_c_wrapper_type
     end interface
 
     procedure(solver_type), pointer :: solver => standard_solver
     procedure(stability_check_type), pointer :: stability_check => &
         standard_stability_check
+
+    ! create function pointers to ensure that routines comply with interface
+    procedure(solver_c_wrapper_type), pointer :: solver_c_wrapper_ptr => &
+        solver_c_wrapper
+    procedure(stability_check_c_wrapper_type), pointer :: &
+        stability_check_c_wrapper_ptr => stability_check_c_wrapper
 
 contains
 
@@ -176,10 +198,10 @@ contains
                                    solver_seed_default, solver_verbose_default
                                    
 
-        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
-        integer(c_long), intent(in), value :: n_param_c
-        type(c_funptr), intent(in), value :: precond_c_funptr, conv_check_c_funptr, &
+        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
+                                             precond_c_funptr, conv_check_c_funptr, &
                                              logger_c_funptr
+        integer(c_ip), intent(in), value :: n_param_c
         type(c_ptr), intent(in), value :: stability_c_ptr, line_search_c_ptr, &
                                           davidson_c_ptr, jacobi_davidson_c_ptr, &
                                           prefer_jacobi_davidson_c_ptr, &
@@ -189,7 +211,7 @@ contains
                                           n_micro_c_ptr, global_red_factor_c_ptr, &
                                           local_red_factor_c_ptr, seed_c_ptr, &
                                           verbose_c_ptr
-        integer(c_long) :: error_c
+        integer(c_ip) :: error_c
 
         logical :: stability, line_search, davidson, jacobi_davidson, &
                    prefer_jacobi_davidson
@@ -264,12 +286,12 @@ contains
                     local_red_factor, seed, verbose, logger)
 
         ! convert return arguments to C kind
-        error_c = error
+        error_c = int(error, kind=c_ip)
 
     end function solver_c_wrapper
 
-    function stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, stable_c, &
-                                       kappa_c, precond_c_funptr, &
+    function stability_check_c_wrapper(h_diag_c_ptr, hess_x_c_funptr, n_param_c, &
+                                       stable_c, kappa_c_ptr, precond_c_funptr, &
                                        jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                        n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                        verbose_c_ptr, logger_c_funptr) result(error_c) &
@@ -284,21 +306,21 @@ contains
                                    stability_n_iter_default, &
                                    stability_verbose_default
 
-        integer(c_long), intent(in), value :: n_param_c
-        real(c_double), intent(in), dimension(n_param_c) :: h_diag_c
-        type(c_funptr), intent(in), value :: hess_x_c_funptr
-        logical(c_bool), intent(out) :: stable_c
-        real(c_double), intent(out) :: kappa_c(n_param_c)
-        type(c_funptr), intent(in), value :: precond_c_funptr, logger_c_funptr
-        type(c_ptr), intent(in), value :: jacobi_davidson_c_ptr, conv_tol_c_ptr, &
+        type(c_ptr), intent(in), value :: h_diag_c_ptr, kappa_c_ptr, &
+                                          jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr
-        integer(c_long) :: error_c
+        integer(c_ip), intent(in), value :: n_param_c
+        type(c_funptr), intent(in), value :: hess_x_c_funptr, precond_c_funptr, &
+                                             logger_c_funptr
+        logical(c_bool), intent(out) :: stable_c
+        integer(c_ip) :: error_c
 
-        real(rp) :: conv_tol, h_diag(n_param_c)
-        real(rp) :: kappa(n_param_c)
+        real(rp) :: conv_tol
+        real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:)
+        real(c_rp), pointer :: h_diag_ptr_c(:), kappa_ptr_c(:)
         logical :: stable, jacobi_davidson
-        integer(ip) :: n_param, n_random_trial_vectors, n_iter, verbose, error
+        integer(ip) :: n_random_trial_vectors, n_iter, verbose, error
         procedure(hess_x_c_wrapper), pointer :: hess_x
         procedure(precond_c_wrapper), pointer :: precond
         procedure(logger_c_wrapper), pointer :: logger
@@ -316,16 +338,25 @@ contains
         ! procedure pointer
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_before_wrapping)
 
-        ! convert dummy argument to Fortran kind
-        n_param = int(n_param_c, kind=ip)
-
         ! associate procedure pointer to wrapper function
         hess_x => hess_x_c_wrapper
 
-        ! convert dummy argument to Fortran kind
-        h_diag = h_diag_c
-
-        ! call stability check with or without preconditioner
+        ! convert C pointers
+        if (rp == c_rp) then
+            call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr, shape=[n_param_c])
+        else
+            call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr_c, shape=[n_param_c])
+            allocate(h_diag_ptr(n_param_c))
+            h_diag_ptr = real(h_diag_ptr_c, kind=rp)
+        end if
+        if (c_associated(kappa_c_ptr)) then
+            if (rp == c_rp) then
+                call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr, shape=[n_param_c])
+            else
+                call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
+                allocate(kappa_ptr(n_param_c))
+            end if
+        end if
         if (c_associated(precond_c_funptr)) then
             call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_before_wrapping)
             precond => precond_c_wrapper
@@ -338,14 +369,28 @@ contains
         else
             logger => null()
         end if
-        call stability_check(h_diag, hess_x, stable, kappa, error, precond, &
-                             jacobi_davidson, conv_tol, n_random_trial_vectors, &
-                             n_iter, verbose, logger)
+
+        ! call stability check
+        if (c_associated(kappa_c_ptr)) then
+            call stability_check(h_diag_ptr, hess_x, stable, error, kappa_ptr, &
+                                 precond, jacobi_davidson, conv_tol, &
+                                 n_random_trial_vectors, n_iter, verbose, logger)
+            if (rp /= c_rp) then
+                call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
+                kappa_ptr_c = kappa_ptr
+                deallocate(kappa_ptr)
+            end if
+        else
+            call stability_check(h_diag_ptr, hess_x, stable, error, precond=precond, &
+                                 jacobi_davidson=jacobi_davidson, conv_tol=conv_tol, &
+                                 n_random_trial_vectors=n_random_trial_vectors, &
+                                 n_iter=n_iter, verbose=verbose, logger=logger)
+        end if
+        if (rp /= c_rp) deallocate(h_diag_ptr)
 
         ! convert return arguments to C kind
-        stable_c = stable
-        kappa_c = kappa
-        error_c = error
+        stable_c = logical(stable, kind=c_bool)
+        error_c = int(error, kind=c_ip)
 
     end function stability_check_c_wrapper
 
@@ -356,28 +401,43 @@ contains
         !
         use opentrustregion, only: hess_x_type
 
-        real(rp), intent(in) :: kappa(:)
-        real(rp), intent(out) :: func, grad(:), h_diag(:)
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
         procedure(hess_x_type), intent(out), pointer :: hess_x
         integer(ip), intent(out) :: error
 
-        real(c_double) :: func_c
-        real(c_double) :: kappa_c(size(kappa))
-        type(c_ptr) :: grad_c_ptr, h_diag_c_ptr
+        real(c_rp) :: func_c
+        real(c_rp), pointer :: kappa_c(:), grad_c(:), h_diag_c(:)
         type(c_funptr) :: hess_x_c_funptr
-        real(c_double), pointer :: grad_ptr(:), h_diag_ptr(:)
-        integer(c_long) :: error_c
+        integer(c_ip) :: error_c
 
-        ! convert dummy argument to C kind
-        kappa_c = kappa
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            kappa_c => kappa
+            grad_c => grad
+            h_diag_c => h_diag
+        else
+            allocate(kappa_c(size(kappa)))
+            allocate(grad_c(size(kappa)))
+            allocate(h_diag_c(size(kappa)))
+            kappa_c = real(kappa, kind=c_rp)
+        end if
 
         ! call update_orbs C function
-        error_c = update_orbs_before_wrapping(kappa_c, func_c, grad_c_ptr, &
-                                              h_diag_c_ptr, hess_x_c_funptr)
+        error_c = update_orbs_before_wrapping(kappa_c, func_c, grad_c, h_diag_c, &
+                                              hess_x_c_funptr)
 
-        ! associate C pointer to arrays with Fortran pointer
-        call c_f_pointer(cptr=grad_c_ptr, fptr=grad_ptr, shape=[size(kappa)])
-        call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr, shape=[size(kappa)])
+        ! convert arguments to Fortran kind
+        func = real(func_c, kind=rp)
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            grad = real(grad_c, kind=rp)
+            h_diag = real(h_diag_c, kind=rp)
+            deallocate(kappa_c)
+            deallocate(grad_c)
+            deallocate(h_diag_c)
+        end if
 
         ! associate the input C pointer to hess_x function to a Fortran procedure
         ! pointer
@@ -386,97 +446,113 @@ contains
         ! associate procedure pointer to wrapper function
         hess_x => hess_x_c_wrapper
 
-        ! convert arguments to Fortran kind
-        func = func_c
-        grad = grad_ptr
-        h_diag = h_diag_ptr
-        error = error_c
-
     end subroutine update_orbs_c_wrapper
 
-    function hess_x_c_wrapper(x, error) result(hess_x)
+    subroutine hess_x_c_wrapper(x, hess_x, error)
         !
-        ! this function wraps the Hessian linear transformation to convert C variables
+        ! this subroutine wraps the Hessian linear transformation to convert C variables
         ! to Fortran variables
         !
-        real(rp), intent(in) :: x(:)
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
-        real(rp) :: hess_x(size(x))
 
-        real(c_double) :: x_c(size(x))
-        type(c_ptr) :: hess_x_c_ptr
-        real(c_double), pointer :: hess_x_ptr(:)
-        integer(c_long) :: error_c
+        real(c_rp), pointer :: x_c(:), hess_x_c(:)
+        integer(c_ip) :: error_c
 
-        ! convert trial vector to C kind
-        x_c = x
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            x_c => x
+            hess_x_c => hess_x
+        else
+            allocate(x_c(size(x)))
+            allocate(hess_x_c(size(x)))
+            x_c = real(x, kind=c_rp)
+        end if
 
         ! call C function
-        error_c = hess_x_before_wrapping(x_c, hess_x_c_ptr)
-
-        ! associate C pointer to arrays with Fortran pointer
-        call c_f_pointer(cptr=hess_x_c_ptr, fptr=hess_x_ptr, shape=[size(x)])
+        error_c = hess_x_before_wrapping(x_c, hess_x_c)
 
         ! convert arguments to Fortran kind
-        hess_x = hess_x_ptr
-        error = error_c
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            hess_x = real(hess_x_c, kind=rp)
+            deallocate(x_c)
+            deallocate(hess_x_c)
+        end if
 
-    end function hess_x_c_wrapper
+    end subroutine hess_x_c_wrapper
 
     function obj_func_c_wrapper(kappa, error) result(obj_func)
         !
         ! this function wraps the objective function to convert C variables to Fortran
         ! variables
         !
-        real(rp), intent(in) :: kappa(:)
+        real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
         real(rp) :: obj_func
 
-        real(c_double) :: kappa_c(size(kappa)), func_c
-        integer(c_long) :: error_c
+        real(c_rp) :: obj_func_c
+        real(c_rp), pointer :: kappa_c(:)
+        integer(c_ip) :: error_c
 
-        ! convert dummy argument to C kind
-        kappa_c = kappa
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            kappa_c => kappa
+        else
+            allocate(kappa_c(size(kappa)))
+            kappa_c = real(kappa, kind=c_rp)
+        end if
 
         ! call obj_func C function
-        error_c = obj_func_before_wrapping(kappa_c, func_c)
+        error_c = obj_func_before_wrapping(kappa_c, obj_func_c)
 
         ! convert arguments to Fortran kind
-        obj_func = func_c
-        error = error_c
+        obj_func = real(obj_func_c, kind=rp)
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            deallocate(kappa_c)
+        end if
 
     end function obj_func_c_wrapper
 
-    function precond_c_wrapper(residual, mu, error) result(precond_residual)
+    subroutine precond_c_wrapper(residual, mu, precond_residual, error)
         !
-        ! this function wraps the preconditioner function to convert C variables to 
+        ! this subroutine wraps the preconditioner function to convert C variables to 
         ! Fortran variables
         !
-        real(rp), intent(in) :: residual(:), mu
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
-        real(rp) :: precond_residual(size(residual))
 
-        real(c_double) :: residual_c(size(residual)), mu_c
-        type(c_ptr) :: precond_residual_c_ptr
-        real(c_double), pointer :: precond_residual_ptr(:)
-        integer(c_long) :: error_c
+        real(c_rp) :: mu_c
+        real(c_rp), pointer :: residual_c(:), precond_residual_c(:)
+        integer(c_ip) :: error_c
 
-        ! convert dummy argument to C kind
-        residual_c = residual
-        mu_c = mu
+        ! convert arguments to C kind
+        mu_c = real(mu, kind=c_rp)
+        if (rp == c_rp) then
+            residual_c => residual
+            precond_residual_c => precond_residual
+        else
+            allocate(residual_c(size(residual)))
+            allocate(precond_residual_c(size(residual)))
+            residual_c = real(residual, kind=c_rp)
+        end if
 
         ! call precond C function
-        error_c = precond_before_wrapping(residual_c, mu_c, precond_residual_c_ptr)
-
-        ! associate C pointer to arrays with Fortran pointer
-        call c_f_pointer(cptr=precond_residual_c_ptr, fptr=precond_residual_ptr, &
-                         shape=[size(residual)])
+        error_c = precond_before_wrapping(residual_c, mu_c, precond_residual_c)
 
         ! convert arguments to Fortran kind
-        precond_residual = precond_residual_ptr
-        error = error_c
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            precond_residual = real(precond_residual_c, kind=rp)
+            deallocate(residual_c)
+            deallocate(precond_residual_c)
+        end if
 
-    end function precond_c_wrapper
+    end subroutine precond_c_wrapper
 
     function conv_check_c_wrapper(error) result(converged)
         !
@@ -486,15 +562,15 @@ contains
         integer(ip), intent(out) :: error
         logical :: converged
 
-        integer(c_long) :: error_c
+        integer(c_ip) :: error_c
         logical(c_bool) :: converged_c
 
         ! call conv_check C function
         error_c = conv_check_before_wrapping(converged_c)
 
         ! convert arguments to Fortran kind
-        converged = converged_c
-        error = error_c
+        converged = logical(converged_c)
+        error = int(error_c, kind=ip)
 
     end function conv_check_c_wrapper
 
@@ -520,6 +596,7 @@ contains
 
         ! call logging C function
         call logger_before_wrapping(message_c)
+        deallocate(message_c)
 
     end subroutine logger_c_wrapper
 
@@ -532,7 +609,7 @@ contains
 
         integer(ip) :: variable
 
-        integer(c_long), pointer :: variable_ptr
+        integer(c_ip), pointer :: variable_ptr
 
         if (c_associated(optional_value)) then
             call c_f_pointer(cptr=optional_value, fptr=variable_ptr)
@@ -552,11 +629,11 @@ contains
 
         real(rp) :: variable
 
-        real(c_double), pointer :: variable_ptr
+        real(c_rp), pointer :: variable_ptr
 
         if (c_associated(optional_value)) then
             call c_f_pointer(cptr=optional_value, fptr=variable_ptr)
-            variable = variable_ptr
+            variable = real(variable_ptr, kind=rp)
         else
             variable = default_value
         end if
@@ -576,7 +653,7 @@ contains
 
         if (c_associated(optional_value)) then
             call c_f_pointer(cptr=optional_value, fptr=variable_ptr)
-            variable = variable_ptr
+            variable = logical(variable_ptr)
         else
             variable = default_value
         end if

@@ -45,7 +45,7 @@ endif()
 add_library(opentrustregion SHARED src/opentrustregion.f90 src/c_interface.f90)
 
 # enable preprocessing
-set_source_files_properties(src/opentrustregion.f90 PROPERTIES Fortran_PREPROCESS ON)
+set_source_files_properties(src/opentrustregion.f90 src/c_interface.f90 PROPERTIES Fortran_PREPROCESS ON)
 
 # link against BLAS and LAPACK
 target_link_libraries(opentrustregion PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})

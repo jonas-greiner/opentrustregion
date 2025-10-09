@@ -11,10 +11,10 @@ extern "C" {
 #endif
 
 int64_t solver(
-    const int64_t (*update_orbs)(const double*, double*, double**, double**, int64_t (**)(const double*, double**)),
+    const int64_t (*update_orbs)(const double*, double*, double*, double*, int64_t (**hess_x)(const double*, double*)),
     const int64_t (*obj_func)(const double*, double*),
     const int64_t n_param,
-    const int64_t (*precond)(const double*, const double, double**),
+    const int64_t (*precond)(const double*, const double*, double*),
     const int64_t (*conv_check)(bool*),
     const bool* stability_ptr,
     const bool* line_search_ptr,
@@ -35,11 +35,11 @@ int64_t solver(
 
 int64_t stability_check(
     const double* h_diag,
-    const int64_t (*hess_x)(const double*, double**),
+    const int64_t (*hess_x)(const double*, double*),
     const int64_t n_param,
     bool stable,
     double* kappa,
-    const int64_t (*precond)(const double*, const double, double**),
+    const int64_t (*precond)(const double*, const double*, double*),
     const bool* jacobi_davidson_ptr,
     const double* conv_tol_ptr,
     const int64_t* n_random_trial_vectors_ptr,

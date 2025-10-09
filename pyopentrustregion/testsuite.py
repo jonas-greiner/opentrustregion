@@ -173,24 +173,24 @@ class PyInterfaceTests(unittest.TestCase):
             """
             return np.sum(kappa)
 
-        def mock_update_orbs(kappa):
+        def mock_update_orbs(kappa, grad, h_diag):
             """
             this function is a mock function for the orbital update function
             """
             func = np.sum(kappa)
-            grad = 2 * kappa
-            h_diag = 3 * kappa
+            grad[:] = 2 * kappa
+            h_diag[:] = 3 * kappa
 
-            def hess_x(x):
-                return 4 * x
+            def hess_x(x, hess_x):
+                hess_x[:] = 4 * x
 
-            return func, grad, h_diag, hess_x
+            return func, hess_x
 
-        def mock_precond(residual, mu):
+        def mock_precond(residual, mu, precond_residual):
             """
             this function is a mock function for the preconditioner function
             """
-            return mu * residual
+            precond_residual[:] = mu * residual
 
         def mock_conv_check():
             """
@@ -258,14 +258,14 @@ class PyInterfaceTests(unittest.TestCase):
         """
         h_diag = np.full(3, 3.0, dtype=np.float64)
 
-        def mock_hess_x(x):
-            return 4 * x
+        def mock_hess_x(x, hess_x):
+            hess_x[:] = 4 * x
 
-        def mock_precond(residual, mu):
+        def mock_precond(residual, mu, precond_residual):
             """
             this function is a mock function for the preconditioner function
             """
-            return mu * residual
+            precond_residual[:] = mu * residual
 
         def mock_logger(message):
             """
