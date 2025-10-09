@@ -44,23 +44,22 @@ endif()
 # define source files
 set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
 
-# add dynamic library
-add_library(opentrustregion_shared SHARED ${OPENTRUSTREGION_SOURCES})
+add_library(opentrustregion ${OPENTRUSTREGION_SOURCES})
 
-# add static library
-add_library(opentrustregion_static STATIC ${OPENTRUSTREGION_SOURCES})
+# common settings (moved from foreach)
+set_target_properties(opentrustregion PROPERTIES
+    OUTPUT_NAME opentrustregion
+    POSITION_INDEPENDENT_CODE ON
+)
 
-# common settings
-foreach(target opentrustregion_shared opentrustregion_static)
-    # output name
-    set_target_properties(${target} PROPERTIES OUTPUT_NAME opentrustregion)
+# link against BLAS and LAPACK
+target_link_libraries(opentrustregion PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
 
-    # link against BLAS and LAPACK
-    target_link_libraries(${target} PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-
-    # set include directories
-    target_include_directories(${target} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
-endforeach()
+# set include directories
+target_include_directories(opentrustregion PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
 
 # enable preprocessing
 set_source_files_properties(${OPENTRUSTREGION_SOURCES} PROPERTIES Fortran_PREPROCESS ON)
@@ -82,7 +81,7 @@ if (BUILD_TESTS)
     # link against BLAS and LAPACK and against OpenTrustRegion
     target_link_libraries(
         testsuite
-        PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion_shared
+        PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
     )
   
     # get the absolute path to the test data directory and add it as a definition so the
@@ -97,7 +96,8 @@ endif()
 
 # set paths to find module files, header files and library in build directory
 set(OpenTrustRegion_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include/ ${CMAKE_BINARY_DIR})
-set(OpenTrustRegion_LIBRARY ${CMAKE_BINARY_DIR}/libopentrustregion${CMAKE_SHARED_LIBRARY_SUFFIX})
+
+set(OpenTrustRegion_LIBRARY $<TARGET_FILE:opentrustregion>)
 
 # create the OpenTrustRegionConfig.cmake from the template
 configure_file(
@@ -107,7 +107,7 @@ configure_file(
 )
 
 # export the target to make OpenTrustRegion::OpenTrustRegion usable
-install(TARGETS opentrustregion_shared opentrustregion_static
+install(TARGETS opentrustregion
         EXPORT OpenTrustRegionTargets
         LIBRARY DESTINATION lib # shared libraries (.so, .dylib)
         ARCHIVE DESTINATION lib # static libraries (.a)
