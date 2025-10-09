@@ -11,7 +11,7 @@ module opentrustregion_system_tests
 
     implicit none
 
-    real(rp), parameter :: tol = 1.d-10
+    real(rp), parameter :: tol = 1e-10_rp
 
     integer(ip) :: n_ao, n_mo, n_param
     real(rp), allocatable :: r_ao_ints(:, :, :), r2_ao_ints(:, :), mo_coeff(:, :), &
@@ -107,7 +107,7 @@ contains
 
         ! get gradient, Hessian diagonal and Hessian linear transformation function
         ! pointer
-        kappa = 0.d0
+        kappa = 0.0_rp
         call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
 
         ! check if error has occured
@@ -207,7 +207,7 @@ contains
 
         ! get gradient, Hessian diagonal and Hessian linear transformation function
         ! pointer
-        kappa = 0.d0
+        kappa = 0.0_rp
         call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
 
         ! check if error has occured
@@ -271,7 +271,7 @@ contains
         deallocate(kappa_full)
 
         ! compute cost function
-        obj_func = 0.d0
+        obj_func = 0.0_rp
         do i = 1, n_mo
             obj_func = obj_func &
                        + dot_product(mo_coeff_tmp(:, i), &
@@ -328,7 +328,7 @@ contains
         end do
 
         ! compute cost function
-        func = 0.d0
+        func = 0.0_rp
         do i = 1, n_mo
             func = func &
                    + dot_product(mo_coeff(:, i), matmul(r2_ao_ints, mo_coeff(:, i))) &
@@ -464,7 +464,7 @@ contains
         n = size(mat, 1)
 
         ! convert to Hermitian matrix
-        eigvecs = cmplx(0.d0, mat, kind=rp)
+        eigvecs = cmplx(0.0_rp, mat, kind=rp)
 
         ! query optimal workspace size
         lwork = -1

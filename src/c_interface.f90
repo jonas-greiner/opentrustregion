@@ -342,16 +342,15 @@ contains
         hess_x => hess_x_c_wrapper
 
         ! convert C pointers
-        if (kind(1.0_rp) == kind(1.0_c_rp)) then
-                call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr, shape=[n_param_c])
-            else
-                call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr_c, &
-                                 shape=[n_param_c])
-                allocate(h_diag_ptr(n_param_c))
-                h_diag_ptr = real(h_diag_ptr_c, kind=rp)
-            end if
+        if (rp == c_rp) then
+            call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr, shape=[n_param_c])
+        else
+            call c_f_pointer(cptr=h_diag_c_ptr, fptr=h_diag_ptr_c, shape=[n_param_c])
+            allocate(h_diag_ptr(n_param_c))
+            h_diag_ptr = real(h_diag_ptr_c, kind=rp)
+        end if
         if (c_associated(kappa_c_ptr)) then
-            if (kind(1.0_rp) == kind(1.0_c_rp)) then
+            if (rp == c_rp) then
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr, shape=[n_param_c])
             else
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
@@ -376,8 +375,7 @@ contains
             call stability_check(h_diag_ptr, hess_x, stable, error, kappa_ptr, &
                                  precond, jacobi_davidson, conv_tol, &
                                  n_random_trial_vectors, n_iter, verbose, logger)
-            if (kind(1.0_rp) /= kind(1.0_c_rp)) then
-                deallocate(h_diag_ptr)
+            if (rp /= c_rp) then
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
                 kappa_ptr_c = kappa_ptr
                 deallocate(kappa_ptr)
@@ -388,7 +386,7 @@ contains
                                  n_random_trial_vectors=n_random_trial_vectors, &
                                  n_iter=n_iter, verbose=verbose, logger=logger)
         end if
-        if (kind(1.0_rp) /= kind(1.0_c_rp)) deallocate(h_diag_ptr)
+        if (rp /= c_rp) deallocate(h_diag_ptr)
 
         ! convert return arguments to C kind
         stable_c = logical(stable, kind=c_bool)
@@ -415,7 +413,7 @@ contains
         integer(c_ip) :: error_c
 
         ! convert arguments to C kind
-        if (kind(1.0_rp) == kind(1.0_c_rp)) then
+        if (rp == c_rp) then
             kappa_c => kappa
             grad_c => grad
             h_diag_c => h_diag
@@ -433,7 +431,7 @@ contains
         ! convert arguments to Fortran kind
         func = real(func_c, kind=rp)
         error = int(error_c, kind=ip)
-        if (kind(1.0_rp) /= kind(1.0_c_rp)) then
+        if (rp /= c_rp) then
             grad = real(grad_c, kind=rp)
             h_diag = real(h_diag_c, kind=rp)
             deallocate(kappa_c)
@@ -463,7 +461,7 @@ contains
         integer(c_ip) :: error_c
 
         ! convert arguments to C kind
-        if (kind(1.0_rp) == kind(1.0_c_rp)) then
+        if (rp == c_rp) then
             x_c => x
             hess_x_c => hess_x
         else
@@ -477,7 +475,7 @@ contains
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)
-        if (kind(1.0_rp) /= kind(1.0_c_rp)) then
+        if (rp /= c_rp) then
             hess_x = real(hess_x_c, kind=rp)
             deallocate(x_c)
             deallocate(hess_x_c)
@@ -499,7 +497,7 @@ contains
         integer(c_ip) :: error_c
 
         ! convert arguments to C kind
-        if (kind(1.0_rp) == kind(1.0_c_rp)) then
+        if (rp == c_rp) then
             kappa_c => kappa
         else
             allocate(kappa_c(size(kappa)))
@@ -512,7 +510,7 @@ contains
         ! convert arguments to Fortran kind
         obj_func = real(obj_func_c, kind=rp)
         error = int(error_c, kind=ip)
-        if (kind(1.0_rp) /= kind(1.0_c_rp)) then
+        if (rp /= c_rp) then
             deallocate(kappa_c)
         end if
 
@@ -534,7 +532,7 @@ contains
 
         ! convert arguments to C kind
         mu_c = real(mu, kind=c_rp)
-        if (kind(1.0_rp) == kind(1.0_c_rp)) then
+        if (rp == c_rp) then
             residual_c => residual
             precond_residual_c => precond_residual
         else
@@ -548,7 +546,7 @@ contains
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)
-        if (kind(1.0_rp) /= kind(1.0_c_rp)) then
+        if (rp /= c_rp) then
             precond_residual = real(precond_residual_c, kind=rp)
             deallocate(residual_c)
             deallocate(precond_residual_c)

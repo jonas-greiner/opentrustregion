@@ -110,6 +110,10 @@ def solver(
 
         @hess_x_interface_type
         def hess_x_interface(x_ptr, hx_ptr):
+            """
+            this function is returned by the orbital update function and calculates the
+            Hessian linear transformation for a trial vector for the updated orbitals
+            """
             # convert trial vector pointer to numpy array
             x = np.ctypeslib.as_array(x_ptr, shape=(n_param,))
             hx = np.ctypeslib.as_array(hx_ptr, shape=(n_param,))
@@ -126,7 +130,7 @@ def solver(
         # is not garbage collected when the current function completes
         grad_ptr._hess_x_interface = hess_x_interface
 
-        # store the function pointer in hess_x_ptr
+        # store the function pointer in hess_x_ptr so that it can be accessed by Fortran
         hess_x_funptr[0] = hess_x_interface
 
         return 0

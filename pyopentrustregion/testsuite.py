@@ -45,10 +45,10 @@ except OSError:
 # define all tests in alphabetical order
 fortran_tests = {
     "opentrustregion_tests": [
-        "add_error_origin",
         "abs_diag_precond",
         "accept_trust_region_step",
         "add_column",
+        "add_error_origin",
         "bisection",
         "bracket",
         "extend_symm_matrix",
