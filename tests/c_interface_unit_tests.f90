@@ -7,61 +7,54 @@
 module c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
-    use, intrinsic :: iso_c_binding, only: c_long, c_double, c_bool, c_ptr, c_loc, &
-                                           c_null_ptr, c_funptr, c_funloc, &
-                                           c_null_funptr, c_char
+    use c_interface, only: c_rp, c_ip
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_null_ptr, c_funptr, &
+                                           c_funloc, c_null_funptr, c_char
 
     implicit none
 
-    real(rp), parameter :: tol = 1.d-10
+    real(rp), parameter :: tol = 1e-10_rp
 
-    ! these pointer targets need to be defined out here to ensure that these arrays
-    ! do not go out of scope when mock_update_orbs or mock_hess_x exit
-    integer(c_long), parameter :: n_param = 3_c_long
-    real(c_double), dimension(n_param), target :: grad_c, h_diag_c, hess_x_c, &
-                                                  precond_residual_c
+    ! number of parameters
+    integer(c_ip), parameter :: n_param = 3_c_ip
 
     ! logical to test logging function
     logical :: test_logger
 
 contains
 
-    function mock_update_orbs(kappa, func, grad_c_ptr, h_diag_c_ptr, &
-                                hess_x_c_funptr) result(error) bind(C)
+    function mock_update_orbs(kappa, func, grad, h_diag, hess_x_c_funptr) &
+        result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the orbital update C function
         !
-        real(c_double), intent(in) :: kappa(*)
-        real(c_double), intent(out) :: func
-        type(c_ptr), intent(out) :: grad_c_ptr, h_diag_c_ptr
+        real(c_rp), intent(in) :: kappa(*)
+        real(c_rp), intent(out) :: func, grad(*), h_diag(*)
         type(c_funptr), intent(out) :: hess_x_c_funptr
-        integer(c_long) :: error
+        integer(c_ip) :: error
 
         func = sum(kappa(:n_param))
 
-        grad_c = 2*kappa(:n_param)
-        grad_c_ptr = c_loc(grad_c)
+        grad(:n_param) = 2*kappa(:n_param)
 
-        h_diag_c = 3*kappa(:n_param)
-        h_diag_c_ptr = c_loc(h_diag_c)
+        h_diag(:n_param) = 3*kappa(:n_param)
 
         hess_x_c_funptr = c_funloc(mock_hess_x)
 
-        error = 0
+        error = 0_c_ip
 
     end function mock_update_orbs
 
-    function mock_hess_x(x, hess_x_c_ptr) result(error) bind(C)
+    function mock_hess_x(x, hess_x) result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the Hessian linear transformation
         ! C function
         !
-        real(c_double), intent(in) :: x(*)
-        type(c_ptr), intent(out) :: hess_x_c_ptr
-        integer(c_long) :: error
+        real(c_rp), intent(in) :: x(*)
+        real(c_rp), intent(out) :: hess_x(*)
+        integer(c_ip) :: error
 
-        hess_x_c = 4*x(:n_param)
-        hess_x_c_ptr = c_loc(hess_x_c)
+        hess_x(:n_param) = 4*x(:n_param)
 
         error = 0
 
@@ -71,9 +64,9 @@ contains
         !
         ! this function is a test function for the C objective function
         !
-        real(c_double), intent(in) :: kappa(*)
-        real(c_double), intent(out) :: func
-        integer(c_long) :: error
+        real(c_rp), intent(in) :: kappa(*)
+        real(c_rp), intent(out) :: func
+        integer(c_ip) :: error
 
         func = sum(kappa(:n_param))
 
@@ -81,16 +74,15 @@ contains
 
     end function mock_obj_func
 
-    function mock_precond(residual, mu, precond_residual_c_ptr) result(error) bind(C)
+    function mock_precond(residual, mu, precond_residual) result(error) bind(C)
         !
         ! this function is a test function for the C preconditioner function
         !
-        real(c_double), intent(in) :: residual(*), mu
-        type(c_ptr), intent(out) :: precond_residual_c_ptr
-        integer(c_long) :: error
+        real(c_rp), intent(in) :: residual(*), mu
+        real(c_rp), intent(out) :: precond_residual(*)
+        integer(c_ip) :: error
 
-        precond_residual_c = mu*residual(:n_param)
-        precond_residual_c_ptr = c_loc(precond_residual_c)
+        precond_residual(:n_param) = mu * residual(:n_param)
 
         error = 0
 
@@ -101,7 +93,7 @@ contains
         ! this function is a test function for the convergence check function
         !
         logical(c_bool), intent(out) :: converged
-        integer(c_long) :: error
+        integer(c_ip) :: error
 
         converged = .true.
 
@@ -132,17 +124,15 @@ contains
                           precond_c_funptr = c_null_funptr, &
                           conv_check_c_funptr = c_null_funptr, &
                           logger_c_funptr = c_null_funptr
-        integer(c_long) :: error
-        integer(c_long), target :: n_random_trial_vectors = 5_c_long, &
-                                   n_macro = 300_c_long, n_micro = 200_c_long, &
-                                   seed = 33_c_long, verbose = 3_c_long
+        integer(c_ip) :: error
+        integer(c_ip), target :: n_random_trial_vectors = 5_c_ip, n_macro = 300_c_ip, &
+                                 n_micro = 200_c_ip, seed = 33_c_ip, verbose = 3_c_ip
         logical(c_bool), target :: stability = .false., line_search = .true., &
                                    davidson = .false., jacobi_davidson = .false., &
                                    prefer_jacobi_davidson = .true.
-        real(c_double), target :: conv_tol = 1e-3_c_double, &
-                                  start_trust_radius = 0.2_c_double, &
-                                  global_red_factor = 1e-2_c_double, &
-                                  local_red_factor = 1e-3_c_double
+        real(c_rp), target :: conv_tol = 1e-3_c_rp, start_trust_radius = 0.2_c_rp, &
+                              global_red_factor = 1e-2_c_rp, &
+                              local_red_factor = 1e-3_c_rp
         type(c_ptr) :: stability_c_ptr = c_null_ptr, line_search_c_ptr = c_null_ptr, &
                        davidson_c_ptr = c_null_ptr, &
                        jacobi_davidson_c_ptr = c_null_ptr, &
@@ -248,15 +238,16 @@ contains
         use c_interface, only: stability_check, stability_check_c_wrapper
         use opentrustregion_mock, only: mock_stability_check, test_passed
 
-        real(c_double), dimension(n_param) :: kappa
+        real(c_rp), allocatable, target :: h_diag(:), kappa(:)
         type(c_funptr) :: hess_x_c_funptr, precond_c_funptr = c_null_funptr, &
                           logger_c_funptr = c_null_funptr
         logical(c_bool) :: stable
-        integer(c_long) :: error
+        type(c_ptr) :: h_diag_c_ptr, kappa_c_ptr
+        integer(c_ip) :: error
         logical(c_bool), target :: jacobi_davidson = .false.
-        real(c_double), target :: conv_tol = 1e-3_c_double
-        integer(c_long), target :: n_random_trial_vectors = 3_c_long, &
-                                   n_iter = 50_c_long, verbose = 3_c_long
+        real(c_rp), target :: conv_tol = 1e-3_c_rp
+        integer(c_ip), target :: n_random_trial_vectors = 3_c_ip, n_iter = 50_c_ip, &
+                                 verbose = 3_c_ip
         type(c_ptr) :: jacobi_davidson_c_ptr = c_null_ptr, &
                        conv_tol_c_ptr = c_null_ptr, &
                        n_random_trial_vectors_c_ptr = c_null_ptr, &
@@ -272,12 +263,14 @@ contains
         hess_x_c_funptr = c_funloc(mock_hess_x)
 
         ! initialize Hessian diagonal and get C pointers
-        h_diag_c = 3.d0
+        allocate(h_diag(n_param))
+        h_diag_c_ptr = c_loc(h_diag)
+        h_diag = 3.0_c_rp
 
         ! call stability check first without associated optional arguments which should 
         ! produce default values
-        error = stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param, stable, &
-                                          kappa, precond_c_funptr, &
+        error = stability_check_c_wrapper(h_diag_c_ptr, hess_x_c_funptr, n_param, &
+                                          stable, kappa_c_ptr, precond_c_funptr, &
                                           jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr, logger_c_funptr)
@@ -292,12 +285,6 @@ contains
                 "stability boolean wrong."
         end if
 
-        if (any(abs(kappa - 1.d0) > tol)) then
-            test_stability_check_c_wrapper = .false.
-            write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
-                "direction wrong."
-        end if
-
         if (error /= 0) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
@@ -305,6 +292,8 @@ contains
         end if
 
         ! associate optional arguments with values
+        allocate(kappa(n_param))
+        kappa_c_ptr = c_loc(kappa)
         precond_c_funptr = c_funloc(mock_precond)
         jacobi_davidson_c_ptr = c_loc(jacobi_davidson)
         conv_tol_c_ptr = c_loc(conv_tol)
@@ -317,8 +306,8 @@ contains
         test_logger = .true.
 
         ! call stability check with associated optional arguments
-        error = stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param, stable, &
-                                          kappa, precond_c_funptr, &
+        error = stability_check_c_wrapper(h_diag_c_ptr, hess_x_c_funptr, n_param, &
+                                          stable, kappa_c_ptr, precond_c_funptr, &
                                           jacobi_davidson_c_ptr, conv_tol_c_ptr, &
                                           n_random_trial_vectors_c_ptr, n_iter_c_ptr, &
                                           verbose_c_ptr, logger_c_funptr)
@@ -337,7 +326,7 @@ contains
                 "stability boolean wrong."
         end if
 
-        if (any(abs(kappa - 1.d0) > tol)) then
+        if (any(abs(kappa - 1.0_c_rp) > tol)) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                 "direction wrong."
@@ -348,6 +337,7 @@ contains
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                 "error boolean wrong."
         end if
+        deallocate(h_diag, kappa)
 
         ! check if test has passed
         test_stability_check_c_wrapper = test_passed .and. &
@@ -362,7 +352,7 @@ contains
         use opentrustregion, only: hess_x_type
         use c_interface, only: update_orbs_before_wrapping, update_orbs_c_wrapper
 
-        real(rp), dimension(n_param) :: kappa, grad, h_diag, x, hess_x
+        real(rp), allocatable :: kappa(:), grad(:), h_diag(:), x(:), hess_x(:)
         real(rp) :: func
         procedure(hess_x_type), pointer :: hess_x_funptr
         integer(ip) :: error
@@ -370,13 +360,14 @@ contains
         ! assume tests pass
         test_update_orbs_c_wrapper = .true.
 
-        ! initialize kappa
-        kappa = 1.d0
+        ! allocate arrays
+        allocate(kappa(n_param), grad(n_param), h_diag(n_param))
 
         ! inject mock subroutine
         update_orbs_before_wrapping => mock_update_orbs
 
         ! call orbital updating subroutine
+        kappa = 1.0_rp
         call update_orbs_c_wrapper(kappa, func, grad, h_diag, hess_x_funptr, error)
 
         ! check if error is as expected
@@ -386,29 +377,35 @@ contains
         end if
 
         ! check if function value is as expected
-        if (abs(func - 3.d0) > tol) then
+        if (abs(func - 3.0_rp) > tol) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned "// &
                 "objective function wrong."
         end if
 
         ! check if gradient is as expected
-        if (any(abs(grad - 2.d0) > tol)) then
+        if (any(abs(grad - 2.0_rp) > tol)) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned "// &
                 "gradient wrong."
         end if
 
         ! check if Hessian diagonal is as expected
-        if (any(abs(h_diag - 3.d0) > tol)) then
+        if (any(abs(h_diag - 3.0_rp) > tol)) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
                 "diagonal wrong."
         end if
 
+        ! deallocate arrays
+        deallocate(kappa, grad, h_diag)
+
+        ! allocate arrays
+        allocate(x(n_param), hess_x(n_param))
+
         ! call Hessian linear transformation function
-        x = 1.d0
-        hess_x = hess_x_funptr(x, error)
+        x = 1.0_rp
+        call hess_x_funptr(x, hess_x, error)
 
         ! check if error is as expected
         if (error /= 0) then
@@ -418,12 +415,15 @@ contains
         end if
 
         ! check if Hessian linear transformation is as expected
-        if (any(abs(hess_x - 4.d0) > tol)) then
+        if (any(abs(hess_x - 4.0_rp) > tol)) then
             test_update_orbs_c_wrapper = .false.
             write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
                 "linear transformation of returned Hessian linear transformation "// &
                 "function wrong."
         end if
+
+        ! deallocate arrays
+        deallocate(x, hess_x)
 
     end function test_update_orbs_c_wrapper
 
@@ -433,18 +433,21 @@ contains
         !
         use c_interface, only: hess_x_before_wrapping, hess_x_c_wrapper
 
-        real(rp), dimension(n_param) :: x, hess_x
+        real(rp), allocatable :: x(:), hess_x(:)
         integer(ip) :: error
 
         ! assume tests pass
         test_hess_x_c_wrapper = .true.
 
+        ! allocate arrays
+        allocate(x(n_param), hess_x(n_param))
+
         ! inject mock subroutine
         hess_x_before_wrapping => mock_hess_x
 
         ! call function
-        x = 1.d0
-        hess_x = hess_x_c_wrapper(x, error)
+        x = 1.0_rp
+        call hess_x_c_wrapper(x, hess_x, error)
 
         ! check if error is as expected
         if (error /= 0) then
@@ -453,12 +456,15 @@ contains
         end if
 
         ! check if Hessian linear transformation is as expected
-        if (any(abs(hess_x - 4.d0) > tol)) then
+        if (any(abs(hess_x - 4.0_rp) > tol)) then
             test_hess_x_c_wrapper = .false.
             write (stderr, *) "test_hess_x_c_wrapper failed: Returned Hessian "// &
                 "linear transformation of returned Hessian linear transformation "// &
                 "function wrong."
         end if
+
+        ! deallocate arrays
+        deallocate(x, hess_x)
 
     end function test_hess_x_c_wrapper
 
@@ -468,20 +474,25 @@ contains
         !
         use c_interface, only: obj_func_before_wrapping, obj_func_c_wrapper
 
-        real(rp) :: kappa(n_param), obj_func
+        real(rp), allocatable :: kappa(:)
+        real(rp) :: obj_func
         integer(ip) :: error
 
         ! assume tests pass
         test_obj_func_c_wrapper = .true.
 
-        ! initialize kappa
-        kappa = 1.d0
+        ! allocate kappa
+        allocate(kappa(n_param))
 
         ! inject mock function
         obj_func_before_wrapping => mock_obj_func
 
         ! call function
+        kappa = 1.0_rp
         obj_func = obj_func_c_wrapper(kappa, error)
+
+        ! deallocate kappa
+        deallocate(kappa)
 
         ! check if error is as expected
         if (error /= 0) then
@@ -490,7 +501,7 @@ contains
         end if
 
         ! check if function value is as expected
-        if (abs(obj_func - 3.d0) > tol) then
+        if (abs(obj_func - 3.0_rp) > tol) then
             test_obj_func_c_wrapper = .false.
             write (stderr, *) "test_obj_func_c_wrapper failed: Returned objective "// &
                 "function wrong."
@@ -504,20 +515,21 @@ contains
         !
         use c_interface, only: precond_before_wrapping, precond_c_wrapper
 
-        real(rp), dimension(n_param) :: residual, precond_residual
+        real(rp), allocatable :: residual(:), precond_residual(:)
         integer(ip) :: error
 
         ! assume tests pass
         test_precond_c_wrapper = .true.
 
-        ! initialize kappa
-        residual = 1.d0
+        ! allocate arrays
+        allocate(residual(n_param), precond_residual(n_param))
 
         ! inject mock subroutine
         precond_before_wrapping => mock_precond
 
         ! call function
-        precond_residual = precond_c_wrapper(residual, 5.d0, error)
+        residual = 1.0_rp
+        call precond_c_wrapper(residual, 5.0_rp, precond_residual, error)
 
         ! check if error is as expected
         if (error /= 0) then
@@ -526,11 +538,14 @@ contains
         end if
 
         ! check if preconditioned residual is as expected
-        if (any(abs(precond_residual - 5.d0) > tol)) then
+        if (any(abs(precond_residual - 5.0_rp) > tol)) then
             test_precond_c_wrapper = .false.
             write (stderr, *) "test_precond_c_wrapper failed: Returned "// &
                 "preconditioner wrong."
         end if
+
+        ! deallocate arrays
+        deallocate(residual, precond_residual)
 
     end function test_precond_c_wrapper
 
@@ -598,21 +613,21 @@ contains
         !
         use c_interface, only: set_default_c_ptr
 
-        real(c_double), target :: real_target = 2.0_c_double
+        real(c_rp), target :: real_target = 2.0_c_rp
         logical(c_bool), target :: bool_target = .true.
-        integer(c_long), target :: int_target = 2_c_long
+        integer(c_ip), target :: int_target = 2_c_ip
 
         ! assume tests pass
         test_set_default_c_ptr = .true.
 
         ! test different combinations and types of optional and default arguments
-        if (abs(set_default_c_ptr(c_loc(real_target), 1.d0) - 2.d0) > tol) then
+        if (abs(set_default_c_ptr(c_loc(real_target), 1.0_rp) - 2.0_rp) > tol) then
             write (stderr, *) "test_set_default_c_ptr failed: Optional real "// &
                 "argument not set correctly."
             test_set_default_c_ptr = .false.
         end if
 
-        if (abs(set_default_c_ptr(c_null_ptr, 1.d0) - 1.d0) > tol) then
+        if (abs(set_default_c_ptr(c_null_ptr, 1.0_rp) - 1.0_rp) > tol) then
             write (stderr, *) "test_set_default_c_ptr failed: Default real "// &
                 "argument not set correctly."
             test_set_default_c_ptr = .false.

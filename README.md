@@ -36,24 +36,30 @@ python3 -m pyopentrustregion.testsuite
 
 ## Usage
 
-The optimization process is initiated by calling a solver function. This function requires the following input arguments:
+The optimization process is initiated by calling a `solver` subroutine. This routine requires the following input arguments:
 
 ### Required Arguments
 
-- **`update_orbs`** (function): Accepts the variable change (i.e., the orbital rotation), updates the variable (the orbitals), and outputs:
-  - The objective function value
-  - The gradient
-  - The Hessian diagonal
-  - A `hess_x` function that performs a Hessian linear transformation for a trial function. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
-  - An integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
-- **`obj_func`** (function): Accepts the variable change and returns the objective function value. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`update_orbs`** (subroutine):  
+  Accepts and applies a variable update (e.g., orbital rotation), updates the internal state, and provides:
+  - Objective function value (real)
+  - Gradient (real array, written in-place)
+  - Hessian diagonal (real array, written in-place)
+  - A **`hess_x`** subroutine that performs Hessian-vector products:
+    - Accepts a trial vector and writes the result of the Hessian transformation into an output array (real array, written in-place)
+    - Returns an integer error code (0 for success, positive integers < 100 for errors)
+  - Returns an integer error code (0 for success, positive integers < 100 for errors)
+- **`obj_func`** (function):  
+  Accepts and applies a variable update (e.g., orbital rotation) and returns:
+  - Objective function value (real)
+  - An integer error code (0 for success, positive integers < 100 for errors)
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 
 ### Optional Arguments
 The optimization process can be fine-tuned using the following optional arguments:
 
-- **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
 - **`line_search`** (boolean): Determines whether a line search is performed after every macro iteration.
@@ -69,22 +75,24 @@ The optimization process can be fine-tuned using the following optional argument
 - **`local_red_factor`** (real): Reduction factor for the residual during micro iterations in the local region.
 - **`verbose`** (integer): Controls the verbosity of output during optimization.
 - **`seed`** (integer): Seed value for generating random trial vectors.
-- **`logger`** (function): Accepts a log message. Logging is otherwise routed to stdout.
+- **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout.
 
 ## Stability Check
-A separate `stability_check` function is available to verify whether the current solution corresponds to a minimum. If not, it returns a boolean indicating instability and an additional direction along the eigenvector corresponding to the negative eigenvalue.
+A separate `stability_check` subroutine is available to verify whether the current solution corresponds to a minimum. If not, it returns a boolean indicating instability and optionally, writes the eigenvector corresponding to the negative eigenvalue in-place to the provided memory.
 
 ### Required Arguments
 
 - **`h_diag`** (real array): Represents the Hessian diagonal at the current point.
-- **`hess_x`** (function): Performs a Hessian linear transformation of a trial vector at the current point. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`hess_x`** (subroutine): Performs Hessian-vector products at the current point:
+  - Accepts a trial vector and writes the result of the Hessian transformation into an output array (real array, written in-place)
+  - Returns an integer error code (0 for success, positive integers < 100 for errors)
 - **`stable`** (boolean): Returns whether the current point is stable.
-- **`kappa`** (boolean): Returns descent direction if current point is not stable.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 
 ### Optional Arguments
 
-- **`precond`** (function): Accepts a vector and a level shift and outputs a preconditioned vector. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`kappa`** (real array): If the memory is provided and the current point is not stable (as can be checked from return code of `stable`), the descent direction is written in-place in this array.
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
 - **`conv_tol`** (real): Convergence criterion for the residual norm.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.
@@ -93,7 +101,7 @@ A separate `stability_check` function is available to verify whether the current
 - **`logger`** (function): Accepts a log message. Logging is otherwise routed to stdout.
 
 ---
-Both the solver and stability check functions can be directly accessed from Fortran, C, or Python using the same arguments but within the appropriate language.
+Both the `solver` and `stability_check` functions can be directly accessed from Fortran, C, or Python using the same arguments but within the appropriate language.
 
 ## Error Code Structure
 
