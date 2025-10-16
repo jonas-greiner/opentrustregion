@@ -40,18 +40,29 @@ else()
     message(STATUS "Using BLAS/LAPACK with 32-bit integers (LP64)")
 endif()
 
+# default to static libraries
+option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+if(BUILD_SHARED_LIBS)
+    message(STATUS "Building OpenTrustRegion as a SHARED library")
+else()
+    message(STATUS "Building OpenTrustRegion as a STATIC library (default)")
+endif()
+
 # define source files
 set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
 
+# add library
 add_library(opentrustregion ${OPENTRUSTREGION_SOURCES})
 
-# common settings (moved from foreach)
+# compile position-independent code - this is not automatically enabled for static 
+# libraries, but is required when linking a static library into a shared library
 set_target_properties(opentrustregion PROPERTIES
     OUTPUT_NAME opentrustregion
     POSITION_INDEPENDENT_CODE ON
 )
+
 # enable preprocessing
-set_source_files_properties(src/opentrustregion.f90 src/c_interface.f90 PROPERTIES Fortran_PREPROCESS ON)
+set_source_files_properties(${OPENTRUSTREGION_SOURCES} PROPERTIES Fortran_PREPROCESS ON)
 
 # link against BLAS and LAPACK
 target_link_libraries(opentrustregion PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
@@ -61,9 +72,6 @@ target_include_directories(opentrustregion PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
-
-# enable preprocessing
-set_source_files_properties(${OPENTRUSTREGION_SOURCES} PROPERTIES Fortran_PREPROCESS ON)
 
 # option to build testsuite
 option(BUILD_TESTS "Build the testsuite" ON)

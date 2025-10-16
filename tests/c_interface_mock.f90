@@ -22,10 +22,10 @@ module c_interface_mock
     real(c_rp), parameter :: tol = 1e-10_c_rp
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(solver_c_wrapper_type), pointer :: solver_c_wrapper_ptr => &
+    procedure(solver_c_wrapper_type), pointer :: mock_solver_c_wrapper_ptr => &
         mock_solver_c_wrapper
     procedure(stability_check_c_wrapper_type), pointer :: &
-        stability_check_c_wrapper_ptr => mock_stability_check_c_wrapper
+        mock_stability_check_c_wrapper_ptr => mock_stability_check_c_wrapper
 
 contains
 
