@@ -7,6 +7,12 @@
 
 This library provides a robust and flexible implementation for second-order trust region orbital optimization, with extensive customization options to suit various use cases.
 
+The following paper documents the development of the OpenTrustRegion library and the theory it implements:
+
+- A Reusable Library for Second-Order Orbital Optimization Using the Trust Region Method\
+  Greiner, J., Høyvik, I.-M., Lehtola, S., Eriksen, J. J.\
+  [arXiv:2509.13931](https://arxiv.org/abs/2509.13931)
+
 ## Installation
 
 ### Fortran or C Usage
