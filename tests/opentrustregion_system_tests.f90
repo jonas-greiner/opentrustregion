@@ -7,7 +7,6 @@
 module opentrustregion_system_tests
 
     use opentrustregion, only: rp, ip, stderr
-    use opentrustregion_unit_tests, only: tol
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -15,13 +14,30 @@ module opentrustregion_system_tests
     integer(ip) :: n_ao, n_mo, n_param
     real(rp), allocatable :: r_ao_ints(:, :, :), r2_ao_ints(:, :), mo_coeff(:, :), &
                              r_mo_ints(:, :, :), rii_rij_rjj_rji(:, :)
-#ifdef TEST_DATA_PATH
-    character(*), parameter :: data_dir = TEST_DATA_PATH
-#else
-    character(*), parameter :: data_dir = "../tests/data"
-#endif
+    character(:), allocatable :: data_dir
 
 contains
+
+    subroutine set_test_data_path(path) bind(C)
+        !
+        ! this subroutine sets the path to test data
+        !
+        use, intrinsic :: iso_c_binding, only: c_ptr, c_char, c_f_pointer, c_null_char
+
+        type(c_ptr), intent(in), value :: path 
+        character(kind=c_char), pointer :: c_path(:)
+        integer(ip) :: len, i
+
+        call c_f_pointer(path, c_path, [256])
+        len = 0
+        do i = 1, size(c_path)
+            if (c_path(i) == c_null_char) exit
+            len = len + 1
+        end do
+        allocate(character(len=len) :: data_dir)
+        data_dir = transfer(c_path(1:len), data_dir)
+
+    end subroutine set_test_data_path
 
     logical(c_bool) function test_h2o_atomic_fb() bind(C)
         !
@@ -54,6 +70,10 @@ contains
                  r2_ao_ints(n_ao, n_ao), r_mo_ints(3, n_mo, n_mo), &
                  rii_rij_rjj_rji(n_mo, n_mo), kappa(n_param), grad(n_param), &
                  h_diag(n_param))
+
+        ! check if test data variable is set
+        if (.not. allocated(data_dir)) error stop "Test data directory not set "// &
+            "through set_test_data_path subroutine before calling system test."
 
         ! read raw binary data
         open (unit=10, file=data_dir//"/h2o_atomic_mo_coeff.bin", form="unformatted", &
@@ -160,6 +180,10 @@ contains
                  r2_ao_ints(n_ao, n_ao), r_mo_ints(3, n_mo, n_mo), &
                  rii_rij_rjj_rji(n_mo, n_mo), kappa(n_param), grad(n_param), &
                  h_diag(n_param))
+
+        ! check if test data variable is set
+        if (.not. allocated(data_dir)) error stop "Test data directory not set "// &
+            "through set_test_data_path subroutine before calling system test."
 
         ! read raw binary data
         open (unit=10, file=data_dir//"/h2o_saddle_mo_coeff.bin", form="unformatted", &
