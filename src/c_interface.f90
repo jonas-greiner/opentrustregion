@@ -181,7 +181,7 @@ module c_interface
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
-        type(solver_settings_type_c), intent(in) :: settings_c
+        type(solver_settings_type_c), intent(in), value :: settings_c
         integer(c_ip) :: error_c
 
         end function solver_c_wrapper_type
@@ -199,7 +199,7 @@ module c_interface
             integer(c_ip), intent(in), value :: n_param_c
             type(c_funptr), intent(in), value :: hess_x_c_funptr
             logical(c_bool), intent(out) :: stable_c
-            type(stability_settings_type_c), intent(in) :: settings_c
+            type(stability_settings_type_c), intent(in), value :: settings_c
             integer(c_ip) :: error_c
 
         end function stability_check_c_wrapper_type
@@ -233,7 +233,7 @@ contains
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
-        type(solver_settings_type_c), intent(in) :: settings_c
+        type(solver_settings_type_c), intent(in), value :: settings_c
         integer(c_ip) :: error_c
 
         procedure(update_orbs_c_wrapper), pointer :: update_orbs
@@ -278,7 +278,7 @@ contains
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: hess_x_c_funptr
         logical(c_bool), intent(out) :: stable_c
-        type(stability_settings_type_c), intent(in) :: settings_c
+        type(stability_settings_type_c), intent(in), value :: settings_c
         integer(c_ip) :: error_c
 
         real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:)
