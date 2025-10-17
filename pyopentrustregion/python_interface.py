@@ -30,30 +30,28 @@ if TYPE_CHECKING:
 
 # load the opentrustregion library, fallback to testsuite in case opentrustregion was
 # statically compiled
-def load_library() -> CDLL:
-    ext = "dylib" if sys.platform == "darwin" else "so"
-    lib_candidates = [f"libopentrustregion.{ext}", f"libtestsuite.{ext}"]
-
-    for lib_name in lib_candidates:
+ext = "dylib" if sys.platform == "darwin" else "so"
+lib_candidates = [f"libopentrustregion.{ext}", f"libtestsuite.{ext}"]
+for lib_name in lib_candidates:
+    try:
+        with resources.path("pyopentrustregion", lib_name) as lib_path:
+            lib = CDLL(str(lib_path))
+            break
+    except OSError:
+        # fallback for non-installed or dev build
         try:
-            with resources.path("pyopentrustregion", lib_name) as lib_path:
-                return CDLL(str(lib_path))
-        except OSError:
-            # fallback for non-installed or dev build
-            fallback_path = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "../build", lib_name)
+            lib = CDLL(
+                os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "../build", lib_name)
+                )
             )
-            try:
-                return CDLL(fallback_path)
-            except OSError:
-                continue
-
+            break
+        except OSError:
+            pass
+else:
     raise FileNotFoundError(
         f"Cannot find either opentrustregion or testsuite library ({lib_candidates})"
     )
-
-
-lib = load_library()
 
 
 def solver(
