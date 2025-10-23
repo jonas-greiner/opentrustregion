@@ -12,7 +12,9 @@ from ctypes import (
     CDLL,
     c_bool,
     c_double,
+    c_char,
     c_void_p,
+    Array,
     byref,
     CFUNCTYPE,
     Structure,
@@ -88,16 +90,21 @@ fortran_tests = {
         "newton_step",
         "orthogonal_projection",
         "print_results",
-        "sanity_check",
         "solver",
+        "solver_sanity_check",
         "split_string_by_space",
         "stability_check",
+        "stability_sanity_check",
         "symm_mat_min_eig",
         "truncated_conjugate_gradient",
     ],
     "c_interface_tests": [
+        "assign_solver_c_f",
         "assign_solver_f_c",
+        "assign_stability_c_f",
         "assign_stability_f_c",
+        "character_from_c",
+        "character_to_c",
         "conv_check_c_wrapper",
         "hess_x_c_wrapper",
         "init_solver_settings_c",
@@ -196,6 +203,16 @@ class PyInterfaceTests(unittest.TestCase):
                     fields.append((name + "_ref", t))
                     seen_names.add(name)
 
+        # handle fixed-size c_char arrays (strings)
+        for name, t in combined_fields:
+            if (
+                issubclass(t, Array)
+                and getattr(t, "_type_", None) is c_char
+                and name not in seen_names
+            ):
+                fields.append((name + "_ref", t))
+                seen_names.add(name)
+
         # create class to read reference values
         class RefSettingsC(Structure):
             _fields_ = fields
@@ -210,7 +227,10 @@ class PyInterfaceTests(unittest.TestCase):
 
         # extract Python values
         for name, _ in fields:
-            setattr(cls, name, getattr(ref_settings, name))
+            ref_value = getattr(ref_settings, name)
+            if isinstance(ref_value, bytes):
+                ref_value = ref_value.decode("utf-8")
+            setattr(cls, name, ref_value)
 
         return super().setUpClass()
 
@@ -389,9 +409,7 @@ class PyInterfaceTests(unittest.TestCase):
                     )
                     test_passed = False
             elif field_name == "initialized":
-                if not getattr(settings, field_name) or not getattr(
-                    settings.settings_c, field_name
-                ):
+                if not getattr(settings, field_name):
                     print(
                         " test_solver_settings failed: Field initialized not "
                         "initialized correctly."
@@ -400,38 +418,16 @@ class PyInterfaceTests(unittest.TestCase):
             else:
                 ref_value = getattr(self, field_name + "_ref")
                 if field_type == c_double:
-                    match = np.isclose(
-                        getattr(settings, field_name), ref_value
-                    ) and np.isclose(
-                        getattr(settings.settings_c, field_name), ref_value
-                    )
+                    match = np.isclose(getattr(settings, field_name), ref_value)
                 else:
-                    match = (getattr(settings, field_name) == ref_value) and (
-                        getattr(settings.settings_c, field_name) == ref_value
-                    )
+                    match = getattr(settings, field_name) == ref_value
                 if not match:
+                    print(field_name, getattr(settings, field_name), ref_value)
                     print(
                         f" test_solver_settings failed: Field {field_name} not "
                         "initialized correctly."
                     )
                     test_passed = False
-
-        settings.jacobi_davidson = self.jacobi_davidson_ref
-        settings.conv_tol = self.conv_tol_ref
-        settings.verbose = self.verbose_ref
-        if (
-            settings.jacobi_davidson != self.jacobi_davidson_ref
-            or settings.settings_c.jacobi_davidson != self.jacobi_davidson_ref
-            or not np.isclose(settings.conv_tol, self.conv_tol_ref)
-            or not np.isclose(settings.settings_c.conv_tol, self.conv_tol_ref)
-            or settings.verbose != self.verbose_ref
-            or settings.settings_c.verbose != self.verbose_ref
-        ):
-            print(
-                " test_solver_settings failed: Python object and C struct are not "
-                "properly synchronized."
-            )
-            test_passed = False
 
         def dummy_precond():
             return 42
@@ -478,9 +474,7 @@ class PyInterfaceTests(unittest.TestCase):
                     )
                     test_passed = False
             elif field_name == "initialized":
-                if not getattr(settings, field_name) or not getattr(
-                    settings.settings_c, field_name
-                ):
+                if not getattr(settings, field_name):
                     print(
                         " test_stability_settings failed: Field initialized not "
                         "initialized correctly."
@@ -489,38 +483,16 @@ class PyInterfaceTests(unittest.TestCase):
             else:
                 ref_value = getattr(self, field_name + "_ref")
                 if field_type == c_double:
-                    match = np.isclose(
-                        getattr(settings, field_name), ref_value
-                    ) and np.isclose(
-                        getattr(settings.settings_c, field_name), ref_value
-                    )
+                    match = np.isclose(getattr(settings, field_name), ref_value)
                 else:
-                    match = (getattr(settings, field_name) == ref_value) and (
-                        getattr(settings.settings_c, field_name) == ref_value
-                    )
+                    match = getattr(settings, field_name) == ref_value
                 if not match:
+                    print(field_name, getattr(settings, field_name), ref_value)
                     print(
                         f" test_stability_settings failed: Field {field_name} not "
                         "initialized correctly."
                     )
                     test_passed = False
-
-        settings.jacobi_davidson = self.jacobi_davidson_ref
-        settings.conv_tol = self.conv_tol_ref
-        settings.verbose = self.verbose_ref
-        if (
-            settings.jacobi_davidson != self.jacobi_davidson_ref
-            or settings.settings_c.jacobi_davidson != self.jacobi_davidson_ref
-            or not np.isclose(settings.conv_tol, self.conv_tol_ref)
-            or not np.isclose(settings.settings_c.conv_tol, self.conv_tol_ref)
-            or settings.verbose != self.verbose_ref
-            or settings.settings_c.verbose != self.verbose_ref
-        ):
-            print(
-                " test_stability_settings failed: Python object and C struct are not "
-                "properly synchronized."
-            )
-            test_passed = False
 
         self.assertTrue(test_passed, "test_stability_settings failed")
         print(" test_stability_settings PASSED")

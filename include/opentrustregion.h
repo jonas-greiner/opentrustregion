@@ -26,6 +26,11 @@ typedef double c_rp;  /* corresponds to real(c_rp) */
 typedef bool c_bool;  /* corresponds to logical(c_bool) */
 
 /* ------------------------------------------------------------------
+ * Maximum keyword length
+ * ------------------------------------------------------------------ */
+#define KW_LEN 64
+
+/* ------------------------------------------------------------------
  * Forward declarations for function pointer types
  * ------------------------------------------------------------------ */
 
@@ -65,9 +70,7 @@ typedef struct {
 
     c_bool stability;
     c_bool line_search;
-    c_bool davidson;
-    c_bool jacobi_davidson;
-    c_bool prefer_jacobi_davidson;
+    c_bool initialized;
 
     c_rp conv_tol;
     c_rp start_trust_radius;
@@ -77,11 +80,13 @@ typedef struct {
     c_ip n_random_trial_vectors;
     c_ip n_macro;
     c_ip n_micro;
+    c_ip jacobi_davidson_start;
     c_ip seed;
     c_ip verbose;
 
-    c_bool initialized;
+    char subsystem_solver[KW_LEN + 1];
 } solver_settings_type;
+
 
 /* ------------------------------------------------------------------
  * Struct corresponding to Fortran type(stability_settings_type_c)
@@ -90,14 +95,17 @@ typedef struct {
     void* precond;
     void* logger;
 
-    c_bool jacobi_davidson;
     c_bool initialized;
 
     c_rp conv_tol;
 
     c_ip n_random_trial_vectors;
     c_ip n_iter;
+    c_ip jacobi_davidson_start;
+    c_ip seed;
     c_ip verbose;
+
+    char diag_solver[KW_LEN + 1];
 } stability_settings_type;
 
 /* ------------------------------------------------------------------

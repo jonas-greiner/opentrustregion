@@ -84,6 +84,7 @@ call settings%init(error)
 ! override default settings
 settings%conv_tol = 1e-6_rp
 settings%n_macro = 100
+settings%subsystem_solver = "tcg"
 
 ! run solver
 call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
@@ -100,6 +101,7 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 
 ```c
 #include <stdint.h>
+#include <string.h>
 #include "opentrustregion.h"
 
 c_ip n_param;
@@ -115,6 +117,7 @@ struct solver_settings_type settings = solver_settings_init();
 // override default settings
 settings.conv_tol = 1e-6;
 settings.n_macro = 100;
+strcpy(settings.subsystem_solver, "tcg");
 
 // run solver
 c_ip error = solver(update_orbs_funptr, obj_func_funptr, n_param, settings);
@@ -138,6 +141,7 @@ settings = SolverSettings()
 # override default settings
 settings.conv_tol = 1e-6
 settings.n_macro = 100
+settings.subsystem_solver = "tcg"
 
 # run solver
 solver(update_orbs, obj_func, n_param, settings)
@@ -155,14 +159,16 @@ The optimization process can be fine-tuned using the following settings:
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
 - **`line_search`** (boolean): Determines whether a line search is performed after every macro iteration.
-- **`davidson`** (boolean): Determines whether level-shifted augmented Hessian with Davidson or truncated conjugate gradient is utilized to solve the trust-region subsystem.
-- **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
-- **`prefer_jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson should be preferred over shrinking of the trust region whenever difficult convergence is encountered for Davidson iterations.
+- **`subsystem_solver`** (string): Specifies which subsystem solver to use. Options include:
+  - `"davidson"`: standard Davidson method,
+  - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
+  - `"tcg"`: truncated conjugate gradient method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations.
 - **`start_trust_radius`** (real): Initial trust radius.
 - **`n_macro`** (integer): Maximum number of macro iterations.
 - **`n_micro`** (integer): Maximum number of micro iterations.
+- **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
 - **`global_red_factor`** (real): Reduction factor for the residual during micro iterations in the global region.
 - **`local_red_factor`** (real): Reduction factor for the residual during micro iterations in the local region.
 - **`verbose`** (integer): Controls the verbosity of output during optimization.
@@ -204,6 +210,7 @@ call settings%init(error)
 ! override default settings
 settings%conv_tol = 1e-6_rp
 settings%n_iter = 100
+settings%diag_solver = "jacobi-davidson"
 
 ! run stability check
 call stability_check(h_diag, hess_x_funptr, n_param, stable, error, settings, kappa=kappa)
@@ -221,6 +228,7 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 
 ```c
 #include <stdint.h>
+#include <string.h>
 #include "opentrustregion.h"
 
 c_ip n_param;
@@ -235,6 +243,7 @@ struct stability_settings_type settings = stability_settings_init();
 // override default settings
 settings.conv_tol = 1e-6;
 settings.n_iter = 100;
+strcpy(settings.diag_solver, "jacobi-davidson");
 
 // pointers to Hessian diagonal and descent direction
 double* h_diag;
@@ -263,6 +272,7 @@ settings = StabilitySettings()
 # override default settings
 settings.conv_tol = 1e-6
 settings.n_iter = 100
+settings.diag_solver = "jacobi-davidson"
 
 # Hessian diagonal and descent direction arrays
 h_diag = np.asarray(h_diag, dtype=np.float64)
@@ -282,11 +292,15 @@ stable = stability_check(h_diag, hess_x, n_param, settings, kappa=kappa)
 The stability check can be fine-tuned using the following settings:
 
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
-- **`jacobi_davidson`** (boolean): Determines whether Jacobi-Davidson is performed whenever difficult convergence is encountered for Davidson iterations.
+- **`diag_solver`** (string): Specifies which diagonalization solver to use. Options include:
+  - `"davidson"`: standard Davidson method,
+  - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations.
 - **`conv_tol`** (real): Convergence criterion for the residual norm.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.
 - **`n_iter`** (integer): Maximum number of Davidson iterations.
+- **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
+- **`seed`** (integer): Seed value for generating random trial vectors.
 - **`logger`** (function): Accepts a log message. Logging is otherwise routed to stdout.
 
 ## Error Code Structure

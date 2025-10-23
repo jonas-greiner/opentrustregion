@@ -9,7 +9,7 @@ module c_interface_mock
     use opentrustregion, only: stderr
     use c_interface, only: c_rp, c_ip, solver_c_wrapper_type, &
                            stability_check_c_wrapper_type
-    use test_reference, only: ref_settings_c
+    use test_reference, only: ref_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_null_char
 
@@ -182,7 +182,7 @@ contains
         call logger_funptr(message)
 
         ! check optional settings against reference values
-        if (settings_c /= ref_settings_c) then
+        if (settings_c /= ref_settings) then
             write (stderr, *) "test_solver_py_interface failed: Passed settings "// &
                 "associated with wrong values."
             test_solver_interface = .false.
@@ -269,7 +269,7 @@ contains
         call logger_funptr(message)
 
         ! check optional settings against reference values
-        if (settings_c /= ref_settings_c) then
+        if (settings_c /= ref_settings) then
             write (stderr, *) "test_stability_check_py_interface failed: Passed "// &
                 "settings associated with wrong values."
             test_stability_check_interface = .false.
@@ -297,7 +297,7 @@ contains
         type(solver_settings_type_c), intent(inout) :: settings
 
         ! set reference values
-        settings = ref_settings_c
+        settings = ref_settings
 
     end subroutine mock_init_solver_settings_c
 
@@ -313,7 +313,7 @@ contains
         type(stability_settings_type_c), intent(inout) :: settings
 
         ! set reference values
-        settings = ref_settings_c
+        settings = ref_settings
 
     end subroutine mock_init_stability_settings_c
 

@@ -1600,73 +1600,153 @@ contains
 
     end function test_accept_trust_region_step
 
-    logical(c_bool) function test_sanity_check() bind(C)
+    logical(c_bool) function test_solver_sanity_check() bind(C)
         !
-        ! this function tests the subroutine which performs a sanity check
+        ! this function tests the subroutine which performs a sanity check for the 
+        ! solver
         !
-        use opentrustregion, only: solver_settings_type, sanity_check
+        use opentrustregion, only: solver_settings_type, solver_sanity_check
 
         type(solver_settings_type) :: settings
         real(rp) :: grad(3)
         integer(ip) :: error
 
         ! assume tests pass
-        test_sanity_check = .true.
+        test_solver_sanity_check = .true.
 
         ! setup settings object
         call setup_settings(settings)
 
         ! check if error is incorrectly thrown for finite and non-negative number of 
         ! parameters
-        settings%davidson = .true.
         settings%n_random_trial_vectors = 0
-        call sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3, grad, error)
         if (error /= 0) then
-            write(stderr, *) "test_sanity_check failed: Error thrown for "// &
+            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
                 "non-negative and non-vanishing number of parameters."
-            test_sanity_check = .false.
+            test_solver_sanity_check = .false.
         end if
 
         ! check if error is correctly thrown for vanishing number of parameters
-        call sanity_check(settings, 0, grad, error)
+        call solver_sanity_check(settings, 0, grad, error)
         if (error == 0) then
-            write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
-                "vanishing number of parameters."
-            test_sanity_check = .false.
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for vanishing number of parameters."
+            test_solver_sanity_check = .false.
         end if
 
         ! check if error is correctly thrown for negative number of parameters
-        call sanity_check(settings, -1, grad, error)
+        call solver_sanity_check(settings, -1, grad, error)
         if (error == 0) then
-            write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
-                "negative number of parameters."
-            test_sanity_check = .false.
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for negative number of parameters."
+            test_solver_sanity_check = .false.
         end if
 
         ! check if number of random trial vectors is reduced correctly
         settings%n_random_trial_vectors = 3
-        call sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3, grad, error)
         if (settings%n_random_trial_vectors /= 1) then
-            write(stderr, *) "test_sanity_check failed: Number of random trial not "// &
-                "correctly set."
-            test_sanity_check = .false.
+            write(stderr, *) "test_solver_sanity_check failed: Number of random "// &
+                "trial not correctly set."
+            test_solver_sanity_check = .false.
         end if
 
         ! check if gradient size is treated correctly
-        call sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3, grad, error)
         if (error /= 0) then
-            write(stderr, *) "test_sanity_check failed: Error thrown for correct "// &
+            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
                 "gradient size."
-            test_sanity_check = .false.
+            test_solver_sanity_check = .false.
         end if
-        call sanity_check(settings, 4, grad, error)
+        call solver_sanity_check(settings, 4, grad, error)
         if (error == 0) then
-            write(stderr, *) "test_sanity_check failed: Error not thrown for "// &
-                "incorrect gradient size."
-            test_sanity_check = .false.
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for correct incorrect gradient size."
+            test_solver_sanity_check = .false.
         end if
 
-    end function test_sanity_check
+        ! check if subsystem solver is correctly checked
+        settings%subsystem_solver = "davidson"
+        call solver_sanity_check(settings, 3, grad, error)
+        if (error /= 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
+                "davidson subsystem solver."
+            test_solver_sanity_check = .false.
+        end if
+        settings%subsystem_solver = "jacobi-davidson"
+        call solver_sanity_check(settings, 3, grad, error)
+        if (error /= 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
+                "jacobi-davidson subsystem solver."
+            test_solver_sanity_check = .false.
+        end if
+        settings%subsystem_solver = "tcg"
+        call solver_sanity_check(settings, 3, grad, error)
+        if (error /= 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
+                "tcg subsystem solver."
+            test_solver_sanity_check = .false.
+        end if
+        settings%subsystem_solver = "unknown"
+        call solver_sanity_check(settings, 3, grad, error)
+        if (error == 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for unknown subsystem solver."
+            test_solver_sanity_check = .false.
+        end if
+
+    end function test_solver_sanity_check
+
+    logical(c_bool) function test_stability_sanity_check() bind(C)
+        !
+        ! this function tests the subroutine which performs a sanity check for the 
+        ! stability check
+        !
+        use opentrustregion, only: stability_settings_type, stability_sanity_check
+
+        type(stability_settings_type) :: settings
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_stability_sanity_check = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! check if number of random trial vectors is reduced correctly
+        settings%n_random_trial_vectors = 3
+        call stability_sanity_check(settings, 3, error)
+        if (settings%n_random_trial_vectors /= 1) then
+            write(stderr, *) "test_stability_sanity_check failed: Number of random "// &
+                "trial not correctly set."
+            test_stability_sanity_check = .false.
+        end if
+
+        ! check if subsystem solver is correctly checked
+        settings%diag_solver = "davidson"
+        call stability_sanity_check(settings, 3, error)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_sanity_check failed: Error thrown for "// &
+                "davidson diagonalization solver."
+            test_stability_sanity_check = .false.
+        end if
+        settings%diag_solver = "jacobi-davidson"
+        call stability_sanity_check(settings, 3, error)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_sanity_check failed: Error thrown for "// &
+                "jacobi-davidson diagonalization solver."
+            test_stability_sanity_check = .false.
+        end if
+        settings%diag_solver = "unknown"
+        call stability_sanity_check(settings, 3, error)
+        if (error == 0) then
+            write(stderr, *) "test_stability_sanity_check failed: Error not thrown "// &
+                "for unknown diagonalization solver."
+            test_stability_sanity_check = .false.
+        end if
+
+    end function test_stability_sanity_check
 
     logical(c_bool) function test_level_shifted_davidson() bind(C)
         !
@@ -1692,12 +1772,6 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
-        settings%n_random_trial_vectors = 1
-        settings%n_micro = 50
-        settings%global_red_factor = 1e-3_rp
-        settings%local_red_factor = 1e-4_rp
-        settings%jacobi_davidson = .false.
-        settings%prefer_jacobi_davidson = .false.
 
         ! initialize variables
         trust_radius = 0.4_rp
@@ -1800,7 +1874,7 @@ contains
         end if
 
         ! test Jacobi-Davidson near saddle point
-        settings%jacobi_davidson = .true.
+        settings%subsystem_solver = "jacobi-davidson"
         trust_radius = 0.4_rp
 
         ! run level-shifted Jacobi-Davidson, check if error has occured, whether the 
