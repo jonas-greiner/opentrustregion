@@ -31,7 +31,7 @@ ext = "dylib" if sys.platform == "darwin" else "so"
 try:
     with resources.path("pyopentrustregion", f"libtestsuite.{ext}") as lib_path:
         libtestsuite = CDLL(str(lib_path))
-# fallback location if installation was not through setup.py
+# fallback for non-installed or dev build
 except OSError:
     try:
         fallback_path = os.path.abspath(
@@ -159,10 +159,7 @@ class PyInterfaceTests(unittest.TestCase):
         return super().setUpClass()
 
     # replace original library with mock library
-    @patch(
-        "pyopentrustregion.python_interface.libopentrustregion.solver",
-        libtestsuite.mock_solver,
-    )
+    @patch("pyopentrustregion.python_interface.lib.solver", libtestsuite.mock_solver)
     def test_solver_py_interface(self):
         """
         this function tests the solver python interface
@@ -250,7 +247,7 @@ class PyInterfaceTests(unittest.TestCase):
 
     # replace original library with mock library
     @patch(
-        "pyopentrustregion.python_interface.libopentrustregion.stability_check",
+        "pyopentrustregion.python_interface.lib.stability_check",
         libtestsuite.mock_stability_check,
     )
     def test_stability_check_py_interface(self):

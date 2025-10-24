@@ -27,22 +27,31 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional
 
-# load the opentrustregion library
+
+# load the opentrustregion library, fallback to testsuite in case opentrustregion was
+# statically compiled
 ext = "dylib" if sys.platform == "darwin" else "so"
-try:
-    with resources.path("pyopentrustregion", f"libopentrustregion.{ext}") as lib_path:
-        libopentrustregion = CDLL(str(lib_path))
-# fallback location if installation was not through setup.py
-except OSError:
+lib_candidates = [f"libopentrustregion.{ext}", f"libtestsuite.{ext}"]
+for lib_name in lib_candidates:
     try:
-        fallback_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "../build", f"libopentrustregion.{ext}"
-            )
-        )
-        libopentrustregion = CDLL(fallback_path)
+        with resources.path("pyopentrustregion", lib_name) as lib_path:
+            lib = CDLL(str(lib_path))
+            break
     except OSError:
-        raise FileNotFoundError("Cannot find opentrustregion library.")
+        # fallback for non-installed or dev build
+        try:
+            lib = CDLL(
+                os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "../build", lib_name)
+                )
+            )
+            break
+        except OSError:
+            pass
+else:
+    raise FileNotFoundError(
+        f"Cannot find either opentrustregion or testsuite library ({lib_candidates})"
+    )
 
 
 def solver(
@@ -189,8 +198,8 @@ def solver(
         logger(string_at(message).decode("utf-8"))
 
     # define result and argument types
-    libopentrustregion.solver.restype = c_long
-    libopentrustregion.solver.argtypes = [
+    lib.solver.restype = c_long
+    lib.solver.argtypes = [
         update_orbs_interface_type,
         obj_func_interface_type,
         c_long,
@@ -214,7 +223,7 @@ def solver(
     ]
 
     # call Fortran function
-    error = libopentrustregion.solver(
+    error = lib.solver(
         update_orbs_interface,
         obj_func_interface,
         n_param,
@@ -304,8 +313,8 @@ def stability_check(
         logger(string_at(message).decode("utf-8"))
 
     # define result and argument types
-    libopentrustregion.stability_check.restype = c_long
-    libopentrustregion.stability_check.argtypes = [
+    lib.stability_check.restype = c_long
+    lib.stability_check.argtypes = [
         POINTER(c_double),
         hess_x_interface_type,
         c_long,
@@ -325,7 +334,7 @@ def stability_check(
     kappa = np.empty(n_param, dtype=np.float64)
 
     # call Fortran function
-    error = libopentrustregion.stability_check(
+    error = lib.stability_check(
         h_diag.ctypes.data_as(POINTER(c_double)),
         hess_x_interface,
         n_param,
