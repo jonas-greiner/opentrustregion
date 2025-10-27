@@ -209,7 +209,7 @@ settings%n_iter = 100
 call stability_check(h_diag, hess_x_funptr, n_param, stable, error, settings, kappa=kappa)
 ```
 
-- `hess_x_funptr` points to an existing Hessian–vector product implementation elsewhere in the program.
+- `hess_x_funptr` points to an existing Hessian-vector product implementation elsewhere in the program.
 - `n_param` is also assumed to be defined elsewhere.
 - Stability settings are initialized via the `init()` method of the derived type and can be overridden (here, `conv_tol` and `n_iter`).
 - The `stable` logical output receives the result of the stability check.
@@ -244,7 +244,7 @@ double* kappa;
 c_ip = stability_check(h_diag, hess_x_funptr, n_param, &stable, settings, kappa);
 ```
 
-- `hess_x_funptr` points to an existing Hessian–vector product implementation elsewhere in the program.
+- `hess_x_funptr` points to an existing Hessian-vector product implementation elsewhere in the program.
 - `n_param` and `h_diag` are assumed to be defined elsewhere.
 - Stability settings are initialized via a small helper function `stability_settings_init()`, which returns a struct with default values; individual settings (here, `conv_tol` and `n_iter`) can then be overridden.
 - The `stable` output receives the result of the stability check which directly returns an error code in typical C fashion.
@@ -272,7 +272,7 @@ kappa = np.empty(n_param, dtype=np.float64)
 stable = stability_check(h_diag, hess_x, n_param, settings, kappa=kappa)
 ```
 
-- `hess_x` is an existing Hessian–vector product implementation elsewhere in the program.
+- `hess_x` is an existing Hessian-vector product implementation elsewhere in the program.
 - `n_param` and `h_diag` are assumed to be defined elsewhere.
 - Stability settings are initialized via the `StabilitySettings` class, which returns an object with default values; individual settings (here, `conv_tol`) can then be overridden.
 - The `stable` output receives the result of the stability check and errors can be caught in pythonic fashion in the form of a `RuntimeException`.
