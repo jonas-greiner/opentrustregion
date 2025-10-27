@@ -223,6 +223,7 @@ class PyInterfaceTests(unittest.TestCase):
         """
         this function tests the solver python interface
         """
+        n_param = 3
 
         def mock_obj_func(kappa):
             """
@@ -279,7 +280,7 @@ class PyInterfaceTests(unittest.TestCase):
         test_logger = False
 
         # call solver python interface with optional arguments
-        solver(mock_obj_func, mock_update_orbs, 3, settings)
+        solver(mock_obj_func, mock_update_orbs, n_param, settings)
 
         # check if logger was called correctly
         if not test_logger:
@@ -300,7 +301,8 @@ class PyInterfaceTests(unittest.TestCase):
         """
         this function tests the stability check python interface
         """
-        h_diag = np.full(3, 3.0, dtype=np.float64)
+        n_param = 3
+        h_diag = np.full(n_param, 3.0, dtype=np.float64)
 
         def mock_hess_x(x, hess_x):
             hess_x[:] = 4 * x
@@ -331,13 +333,13 @@ class PyInterfaceTests(unittest.TestCase):
             setattr(settings, field_name, getattr(self, field_name + "_ref"))
 
         # allocate memory for descent direction
-        kappa = np.empty(3, dtype=np.float64)
+        kappa = np.empty(n_param, dtype=np.float64)
 
         # initialize logging boolean
         test_logger = False
 
         # call stability check python interface with optional arguments
-        stable = stability_check(h_diag, mock_hess_x, 3, settings, kappa=kappa)
+        stable = stability_check(h_diag, mock_hess_x, n_param, settings, kappa=kappa)
 
         # check if logger was called correctly
         if not test_logger:
@@ -352,7 +354,10 @@ class PyInterfaceTests(unittest.TestCase):
                 " test_stability_check_py_interface failed: Returned stability boolean "
                 "wrong."
             )
-        if not np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)):
+        wrong_direction = not np.allclose(
+            kappa, np.full(n_param, 1.0, dtype=np.float64)
+        )
+        if wrong_direction:
             print(
                 " test_stability_check_py_interface failed: Returned direction wrong."
             )
@@ -361,7 +366,7 @@ class PyInterfaceTests(unittest.TestCase):
             libtestsuite.test_stability_check_result()
             or not test_logger
             or stable
-            or not np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)),
+            or wrong_direction,
             "test_stability_check_py_interface failed",
         )
         print(" test_stability_check_py_interface PASSED")
@@ -433,8 +438,10 @@ class PyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        dummy_error_code = 42
+
         def dummy_precond():
-            return 42
+            return dummy_error_code
 
         settings.set_optional_callback("precond", CFUNCTYPE(c_ip)(dummy_precond))
 
@@ -445,10 +452,11 @@ class PyInterfaceTests(unittest.TestCase):
             c_ptr is None
             or (isinstance(c_ptr, c_void_p) and c_ptr.value is None)
             or not callable(c_interface)
-            or c_interface() != 42
+            or c_interface() != dummy_error_code
         ):
             print(
-                " test_solver_settings failed: Optional callbacks are not set correctly."
+                " test_solver_settings failed: Optional callbacks are not set "
+                "correctly."
             )
             test_passed = False
 
