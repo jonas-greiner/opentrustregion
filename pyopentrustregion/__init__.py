@@ -9,5 +9,6 @@ from pyopentrustregion.python_interface import (
     StabilitySettings,
     solver,
     stability_check,
-    c_ip,
+    c_int,
+    c_real,
 )

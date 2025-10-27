@@ -33,50 +33,62 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any
 
-# load the opentrustregion library
+
+# load the opentrustregion library, fallback to testsuite in case opentrustregion was
+# statically compiled
 ext = "dylib" if sys.platform == "darwin" else "so"
-try:
-    with resources.path("pyopentrustregion", f"libopentrustregion.{ext}") as lib_path:
-        libopentrustregion = CDLL(str(lib_path))
-# fallback location if installation was not through setup.py
-except OSError:
+lib_candidates = [f"libopentrustregion.{ext}", f"libtestsuite.{ext}"]
+for lib_name in lib_candidates:
     try:
-        fallback_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "../build", f"libopentrustregion.{ext}"
-            )
-        )
-        libopentrustregion = CDLL(fallback_path)
+        with resources.path("pyopentrustregion", lib_name) as lib_path:
+            lib = CDLL(str(lib_path))
+            break
     except OSError:
-        raise FileNotFoundError("Cannot find opentrustregion library.")
+        # fallback for non-installed or dev build
+        try:
+            lib = CDLL(
+                os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "../build", lib_name)
+                )
+            )
+            break
+        except OSError:
+            pass
+else:
+    raise FileNotFoundError(
+        f"Cannot find either opentrustregion or testsuite library ({lib_candidates})"
+    )
 
 # determine integer size used in library
-ilp64 = c_bool.in_dll(libopentrustregion, "ilp64")
+ilp64 = c_bool.in_dll(lib, "ilp64")
 if ilp64.value:
-    c_ip = c_int64
+    c_int = c_int64
 else:
-    c_ip = c_int32
+    c_int = c_int32
+
+# define real type
+c_real = c_double
 
 # fixed size strings for keywords
-kw_len = c_ip.in_dll(libopentrustregion, "kw_len_c").value
+kw_len = c_int.in_dll(lib, "kw_len_c").value
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-hess_x_interface_type = CFUNCTYPE(c_ip, POINTER(c_double), POINTER(c_double))
+hess_x_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 update_orbs_interface_type = CFUNCTYPE(
-    c_ip,
-    POINTER(c_double),
-    POINTER(c_double),
-    POINTER(c_double),
-    POINTER(c_double),
+    c_int,
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
     POINTER(hess_x_interface_type),
 )
-obj_func_interface_type = CFUNCTYPE(c_ip, POINTER(c_double), POINTER(c_double))
+obj_func_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 precond_interface_type = CFUNCTYPE(
-    c_ip, POINTER(c_double), POINTER(c_double), POINTER(c_double)
+    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
-conv_check_interface_type = CFUNCTYPE(c_ip, POINTER(c_bool))
+conv_check_interface_type = CFUNCTYPE(c_int, POINTER(c_bool))
 logger_interface_type = CFUNCTYPE(None, c_char_p)
 
 
@@ -188,16 +200,16 @@ class SolverSettingsC(Structure):
         ("stability", c_bool),
         ("line_search", c_bool),
         ("initialized", c_bool),
-        ("conv_tol", c_double),
-        ("start_trust_radius", c_double),
-        ("global_red_factor", c_double),
-        ("local_red_factor", c_double),
-        ("n_random_trial_vectors", c_ip),
-        ("n_macro", c_ip),
-        ("n_micro", c_ip),
-        ("jacobi_davidson_start", c_ip),
-        ("seed", c_ip),
-        ("verbose", c_ip),
+        ("conv_tol", c_real),
+        ("start_trust_radius", c_real),
+        ("global_red_factor", c_real),
+        ("local_red_factor", c_real),
+        ("n_random_trial_vectors", c_int),
+        ("n_macro", c_int),
+        ("n_micro", c_int),
+        ("jacobi_davidson_start", c_int),
+        ("seed", c_int),
+        ("verbose", c_int),
         ("subsystem_solver", c_char * (kw_len + 1)),
     ]
 
@@ -207,12 +219,12 @@ class StabilitySettingsC(Structure):
         ("precond", c_void_p),
         ("logger", c_void_p),
         ("initialized", c_bool),
-        ("conv_tol", c_double),
-        ("n_random_trial_vectors", c_ip),
-        ("n_iter", c_ip),
-        ("jacobi_davidson_start", c_ip),
-        ("seed", c_ip),
-        ("verbose", c_ip),
+        ("conv_tol", c_real),
+        ("n_random_trial_vectors", c_int),
+        ("n_iter", c_int),
+        ("jacobi_davidson_start", c_int),
+        ("seed", c_int),
+        ("verbose", c_int),
         ("diag_solver", c_char * (kw_len + 1)),
     ]
 
@@ -256,7 +268,7 @@ class Settings:
 class SolverSettings(Settings):
 
     c_struct = SolverSettingsC
-    init_c_struct = libopentrustregion.init_solver_settings
+    init_c_struct = lib.init_solver_settings
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
@@ -269,7 +281,7 @@ class SolverSettings(Settings):
 class StabilitySettings(Settings):
 
     c_struct = StabilitySettingsC
-    init_c_struct = libopentrustregion.init_stability_settings
+    init_c_struct = lib.init_stability_settings
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
@@ -368,12 +380,13 @@ def solver(
         except RuntimeError:
             return 1
 
-        # attach the function to some object that persists in Fortran to ensure that it
-        # is not garbage collected when the current function completes
-        grad_ptr._hess_x_interface = hess_x_interface_factory(hess_x, n_param)
+        # attach the Hessian-vector product function to the solver function so that it
+        # persists in Python to ensure that it is not garbage collected when the
+        # current orbital updating function completes
+        solver._hess_x_interface = hess_x_interface_factory(hess_x, n_param)
 
         # store the function pointer in hess_x_ptr so that it can be accessed by Fortran
-        hess_x_funptr[0] = grad_ptr._hess_x_interface
+        hess_x_funptr[0] = solver._hess_x_interface
 
         return 0
 
@@ -404,16 +417,16 @@ def solver(
     settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
 
     # define result and argument types
-    libopentrustregion.solver.restype = c_ip
-    libopentrustregion.solver.argtypes = [
+    lib.solver.restype = c_int
+    lib.solver.argtypes = [
         update_orbs_interface_type,
         obj_func_interface_type,
-        c_ip,
+        c_int,
         SolverSettingsC,
     ]
 
     # call Fortran function
-    error = libopentrustregion.solver(
+    error = lib.solver(
         update_orbs_interface, obj_func_interface, n_param, settings.settings_c
     )
 
@@ -440,11 +453,11 @@ def stability_check(
     settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
 
     # define result and argument types
-    libopentrustregion.stability_check.restype = c_ip
-    libopentrustregion.stability_check.argtypes = [
-        POINTER(c_double),
+    lib.stability_check.restype = c_int
+    lib.stability_check.argtypes = [
+        POINTER(c_real),
         hess_x_interface_type,
-        c_ip,
+        c_int,
         POINTER(c_bool),
         StabilitySettingsC,
         c_void_p,
@@ -454,13 +467,13 @@ def stability_check(
     stable = c_bool(False)
 
     # call Fortran function
-    error = libopentrustregion.stability_check(
-        h_diag.ctypes.data_as(POINTER(c_double)),
+    error = lib.stability_check(
+        h_diag.ctypes.data_as(POINTER(c_real)),
         hess_x_interface,
         n_param,
         byref(stable),
         settings.settings_c,
-        kappa.ctypes.data_as(POINTER(c_double)) if kappa is not None else kappa,
+        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else kappa,
     )
 
     if error:
