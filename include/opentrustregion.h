@@ -18,11 +18,11 @@ extern "C" {
  * Type aliases matching Fortran kinds
  * ------------------------------------------------------------------ */
 #ifdef USE_ILP64
-typedef int64_t c_ip; /* corresponds to integer(c_ip) */
+typedef int64_t c_int; /* corresponds to integer(c_ip) */
 #else
-typedef int32_t c_ip; /* corresponds to integer(c_ip) */
+typedef int32_t c_int; /* corresponds to integer(c_ip) */
 #endif
-typedef double c_rp;  /* corresponds to real(c_rp) */
+typedef double c_real;  /* corresponds to real(c_rp) */
 typedef bool c_bool;  /* corresponds to logical(c_bool) */
 
 /* ------------------------------------------------------------------
@@ -30,27 +30,27 @@ typedef bool c_bool;  /* corresponds to logical(c_bool) */
  * ------------------------------------------------------------------ */
 
 /* Hessian-vector product callback */
-typedef c_ip (*hess_x_type)(const c_rp* x_c, c_rp* hess_x);
+typedef c_int (*hess_x_type)(const c_real* x_c, c_real* hess_x);
 
 /* Orbital update callback */
-typedef c_ip (*update_orbs_type)(
-    const c_rp* kappa,
-    c_rp* func,
-    c_rp* grad,
-    c_rp* h_diag,
+typedef c_int (*update_orbs_type)(
+    const c_real* kappa,
+    c_real* func,
+    c_real* grad,
+    c_real* h_diag,
     void** hess_x_ptr  /* corresponds to type(c_funptr) intent(out) */
 );
 
 /* Objective function callback */
-typedef c_ip (*obj_func_type)(const c_rp* kappa, c_rp* func);
+typedef c_int (*obj_func_type)(const c_real* kappa, c_real* func);
 
 /* Preconditioner callback */
-typedef c_ip (*precond_type)(
-    const c_rp* residual, const c_rp* mu, c_rp* precond_residual
+typedef c_int (*precond_type)(
+    const c_real* residual, const c_real* mu, c_real* precond_residual
 );
 
 /* Convergence check callback */
-typedef c_ip (*conv_check_type)(c_bool* converged);
+typedef c_int (*conv_check_type)(c_bool* converged);
 
 /* Logger callback */
 typedef void (*logger_type)(const char* message);
@@ -69,16 +69,16 @@ typedef struct {
     c_bool jacobi_davidson;
     c_bool prefer_jacobi_davidson;
 
-    c_rp conv_tol;
-    c_rp start_trust_radius;
-    c_rp global_red_factor;
-    c_rp local_red_factor;
+    c_real conv_tol;
+    c_real start_trust_radius;
+    c_real global_red_factor;
+    c_real local_red_factor;
 
-    c_ip n_random_trial_vectors;
-    c_ip n_macro;
-    c_ip n_micro;
-    c_ip seed;
-    c_ip verbose;
+    c_int n_random_trial_vectors;
+    c_int n_macro;
+    c_int n_micro;
+    c_int seed;
+    c_int verbose;
 
     c_bool initialized;
 } solver_settings_type;
@@ -93,11 +93,11 @@ typedef struct {
     c_bool jacobi_davidson;
     c_bool initialized;
 
-    c_rp conv_tol;
+    c_real conv_tol;
 
-    c_ip n_random_trial_vectors;
-    c_ip n_iter;
-    c_ip verbose;
+    c_int n_random_trial_vectors;
+    c_int n_iter;
+    c_int verbose;
 } stability_settings_type;
 
 /* ------------------------------------------------------------------
@@ -113,10 +113,10 @@ typedef struct {
  * @param settings          Struct of solver settings
  * @return                  Integer error code from Fortran
  */
-c_ip solver(
+c_int solver(
     void* update_orbs_ptr, 
     void* obj_func_ptr, 
-    c_ip n_param, 
+    c_int n_param, 
     solver_settings_type settings
 );
 
@@ -131,10 +131,10 @@ c_ip solver(
  * @param kappa_ptr         Pointer to orbital rotation vector
  * @return                  Integer error code from Fortran
  */
-c_ip stability_check(
+c_int stability_check(
     const void* h_diag_ptr,
     const void* hess_x_ptr,
-    c_ip n_param,
+    c_int n_param,
     c_bool* stable,
     stability_settings_type settings,
     const void* kappa_ptr

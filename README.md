@@ -102,7 +102,7 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 #include <stdint.h>
 #include "opentrustregion.h"
 
-c_ip n_param;
+c_int n_param;
 
 // set callback function pointers to existing implementations
 update_orbs_type update_orbs_funptr = (void*)update_orbs;
@@ -117,7 +117,7 @@ settings.conv_tol = 1e-6;
 settings.n_macro = 100;
 
 // run solver
-c_ip error = solver(update_orbs_funptr, obj_func_funptr, n_param, settings);
+c_int error = solver(update_orbs_funptr, obj_func_funptr, n_param, settings);
 ```
 
 - Callback function pointers (`update_orbs_funptr`, `obj_func_funptr`) point to existing implementations elsewhere in the program.
@@ -223,7 +223,7 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 #include <stdint.h>
 #include "opentrustregion.h"
 
-c_ip n_param;
+c_int n_param;
 c_bool stable;
 
 // set callback function pointer to existing implementation
@@ -241,7 +241,7 @@ double* h_diag;
 double* kappa;
 
 // run stability check
-c_ip = stability_check(h_diag, hess_x_funptr, n_param, &stable, settings, kappa);
+c_int = stability_check(h_diag, hess_x_funptr, n_param, &stable, settings, kappa);
 ```
 
 - `hess_x_funptr` points to an existing Hessian-vector product implementation elsewhere in the program.

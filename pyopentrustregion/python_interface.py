@@ -50,27 +50,30 @@ except OSError:
 # determine integer size used in library
 libopentrustregion.is_ilp64.restype = c_bool
 if libopentrustregion.is_ilp64():
-    c_ip = c_int64
+    c_int = c_int64
 else:
-    c_ip = c_int32
+    c_int = c_int32
+
+# define real type
+c_real = c_double
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-hess_x_interface_type = CFUNCTYPE(c_ip, POINTER(c_double), POINTER(c_double))
+hess_x_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 update_orbs_interface_type = CFUNCTYPE(
-    c_ip,
-    POINTER(c_double),
-    POINTER(c_double),
-    POINTER(c_double),
-    POINTER(c_double),
+    c_int,
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
     POINTER(hess_x_interface_type),
 )
-obj_func_interface_type = CFUNCTYPE(c_ip, POINTER(c_double), POINTER(c_double))
+obj_func_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 precond_interface_type = CFUNCTYPE(
-    c_ip, POINTER(c_double), POINTER(c_double), POINTER(c_double)
+    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
-conv_check_interface_type = CFUNCTYPE(c_ip, POINTER(c_bool))
+conv_check_interface_type = CFUNCTYPE(c_int, POINTER(c_bool))
 logger_interface_type = CFUNCTYPE(None, c_char_p)
 
 
@@ -185,15 +188,15 @@ class SolverSettingsC(Structure):
         ("jacobi_davidson", c_bool),
         ("prefer_jacobi_davidson", c_bool),
         ("initialized", c_bool),
-        ("conv_tol", c_double),
-        ("start_trust_radius", c_double),
-        ("global_red_factor", c_double),
-        ("local_red_factor", c_double),
-        ("n_random_trial_vectors", c_ip),
-        ("n_macro", c_ip),
-        ("n_micro", c_ip),
-        ("seed", c_ip),
-        ("verbose", c_ip),
+        ("conv_tol", c_real),
+        ("start_trust_radius", c_real),
+        ("global_red_factor", c_real),
+        ("local_red_factor", c_real),
+        ("n_random_trial_vectors", c_int),
+        ("n_macro", c_int),
+        ("n_micro", c_int),
+        ("seed", c_int),
+        ("verbose", c_int),
     ]
 
 
@@ -203,10 +206,10 @@ class StabilitySettingsC(Structure):
         ("logger", c_void_p),
         ("jacobi_davidson", c_bool),
         ("initialized", c_bool),
-        ("conv_tol", c_double),
-        ("n_random_trial_vectors", c_ip),
-        ("n_iter", c_ip),
-        ("verbose", c_ip),
+        ("conv_tol", c_real),
+        ("n_random_trial_vectors", c_int),
+        ("n_iter", c_int),
+        ("verbose", c_int),
     ]
 
 
@@ -369,11 +372,11 @@ def solver(
     settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
 
     # define result and argument types
-    libopentrustregion.solver.restype = c_ip
+    libopentrustregion.solver.restype = c_int
     libopentrustregion.solver.argtypes = [
         update_orbs_interface_type,
         obj_func_interface_type,
-        c_ip,
+        c_int,
         SolverSettingsC,
     ]
 
@@ -405,11 +408,11 @@ def stability_check(
     settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
 
     # define result and argument types
-    libopentrustregion.stability_check.restype = c_ip
+    libopentrustregion.stability_check.restype = c_int
     libopentrustregion.stability_check.argtypes = [
-        POINTER(c_double),
+        POINTER(c_real),
         hess_x_interface_type,
-        c_ip,
+        c_int,
         POINTER(c_bool),
         StabilitySettingsC,
         c_void_p,
@@ -420,12 +423,12 @@ def stability_check(
 
     # call Fortran function
     error = libopentrustregion.stability_check(
-        h_diag.ctypes.data_as(POINTER(c_double)),
+        h_diag.ctypes.data_as(POINTER(c_real)),
         hess_x_interface,
         n_param,
         byref(stable),
         settings.settings_c,
-        kappa.ctypes.data_as(POINTER(c_double)) if kappa is not None else kappa,
+        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else kappa,
     )
 
     if error:

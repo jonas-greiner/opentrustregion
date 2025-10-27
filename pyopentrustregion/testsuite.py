@@ -8,16 +8,7 @@ import os
 import sys
 import unittest
 from importlib import resources
-from ctypes import (
-    CDLL,
-    c_bool,
-    c_double,
-    c_void_p,
-    byref,
-    CFUNCTYPE,
-    Structure,
-    POINTER,
-)
+from ctypes import CDLL, c_bool, c_void_p, byref, CFUNCTYPE, Structure, POINTER
 from unittest.mock import patch
 from pathlib import Path
 
@@ -36,7 +27,8 @@ try:
         StabilitySettings,
         solver,
         stability_check,
-        c_ip,
+        c_int,
+        c_real,
     )
 except ImportError:
     from python_interface import (
@@ -44,7 +36,8 @@ except ImportError:
         StabilitySettings,
         solver,
         stability_check,
-        c_ip,
+        c_int,
+        c_real,
     )
 
 # load the testsuite library
@@ -189,7 +182,7 @@ class PyInterfaceTests(unittest.TestCase):
         fields = []
         seen_names = set()
         # loop by type order
-        for curr_type in (c_bool, c_double, c_ip):
+        for curr_type in (c_bool, c_real, c_int):
             # solver fields of this type
             for name, t in combined_fields:
                 if t == curr_type and name not in seen_names and name != "initialized":
@@ -404,7 +397,7 @@ class PyInterfaceTests(unittest.TestCase):
                     test_passed = False
             else:
                 ref_value = getattr(self, field_name + "_ref")
-                if field_type == c_double:
+                if field_type == c_real:
                     match = np.isclose(
                         getattr(settings, field_name), ref_value
                     ) and np.isclose(
@@ -443,7 +436,7 @@ class PyInterfaceTests(unittest.TestCase):
         def dummy_precond():
             return dummy_error_code
 
-        settings.set_optional_callback("precond", CFUNCTYPE(c_ip)(dummy_precond))
+        settings.set_optional_callback("precond", CFUNCTYPE(c_int)(dummy_precond))
 
         c_ptr = getattr(settings.settings_c, "precond")
         c_interface = getattr(settings.settings_c, "precond_interface", None)
@@ -496,7 +489,7 @@ class PyInterfaceTests(unittest.TestCase):
                     test_passed = False
             else:
                 ref_value = getattr(self, field_name + "_ref")
-                if field_type == c_double:
+                if field_type == c_real:
                     match = np.isclose(
                         getattr(settings, field_name), ref_value
                     ) and np.isclose(
