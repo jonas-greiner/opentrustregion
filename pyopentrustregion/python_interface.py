@@ -30,26 +30,35 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any
 
-# load the opentrustregion library
+
+# load the opentrustregion library, fallback to testsuite in case opentrustregion was
+# statically compiled
 ext = "dylib" if sys.platform == "darwin" else "so"
-try:
-    with resources.path("pyopentrustregion", f"libopentrustregion.{ext}") as lib_path:
-        libopentrustregion = CDLL(str(lib_path))
-# fallback location if installation was not through setup.py
-except OSError:
+lib_candidates = [f"libopentrustregion.{ext}", f"libtestsuite.{ext}"]
+for lib_name in lib_candidates:
     try:
-        fallback_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "../build", f"libopentrustregion.{ext}"
-            )
-        )
-        libopentrustregion = CDLL(fallback_path)
+        with resources.path("pyopentrustregion", lib_name) as lib_path:
+            lib = CDLL(str(lib_path))
+            break
     except OSError:
-        raise FileNotFoundError("Cannot find opentrustregion library.")
+        # fallback for non-installed or dev build
+        try:
+            lib = CDLL(
+                os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "../build", lib_name)
+                )
+            )
+            break
+        except OSError:
+            pass
+else:
+    raise FileNotFoundError(
+        f"Cannot find either opentrustregion or testsuite library ({lib_candidates})"
+    )
 
 # determine integer size used in library
-libopentrustregion.is_ilp64.restype = c_bool
-if libopentrustregion.is_ilp64():
+lib.is_ilp64.restype = c_bool
+if lib.is_ilp64():
     c_int = c_int64
 else:
     c_int = c_int32
@@ -251,7 +260,7 @@ class Settings:
 class SolverSettings(Settings):
 
     c_struct = SolverSettingsC
-    init_c_struct = libopentrustregion.init_solver_settings
+    init_c_struct = lib.init_solver_settings
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
@@ -264,7 +273,7 @@ class SolverSettings(Settings):
 class StabilitySettings(Settings):
 
     c_struct = StabilitySettingsC
-    init_c_struct = libopentrustregion.init_stability_settings
+    init_c_struct = lib.init_stability_settings
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
@@ -372,8 +381,8 @@ def solver(
     settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
 
     # define result and argument types
-    libopentrustregion.solver.restype = c_int
-    libopentrustregion.solver.argtypes = [
+    lib.solver.restype = c_int
+    lib.solver.argtypes = [
         update_orbs_interface_type,
         obj_func_interface_type,
         c_int,
@@ -381,7 +390,7 @@ def solver(
     ]
 
     # call Fortran function
-    error = libopentrustregion.solver(
+    error = lib.solver(
         update_orbs_interface, obj_func_interface, n_param, settings.settings_c
     )
 
@@ -408,8 +417,8 @@ def stability_check(
     settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
 
     # define result and argument types
-    libopentrustregion.stability_check.restype = c_int
-    libopentrustregion.stability_check.argtypes = [
+    lib.stability_check.restype = c_int
+    lib.stability_check.argtypes = [
         POINTER(c_real),
         hess_x_interface_type,
         c_int,
@@ -422,7 +431,7 @@ def stability_check(
     stable = c_bool(False)
 
     # call Fortran function
-    error = libopentrustregion.stability_check(
+    error = lib.stability_check(
         h_diag.ctypes.data_as(POINTER(c_real)),
         hess_x_interface,
         n_param,

@@ -11,6 +11,7 @@ libopentrustregion_file = f"libopentrustregion.{ext}"
 libtestsuite_file = f"libtestsuite.{ext}"
 package_dir = pathlib.Path(__file__).parent.absolute()
 build_dir = package_dir / "build"
+libopentrustregion_path = build_dir / libopentrustregion_file
 
 
 class CMakeBuild(build_py):
@@ -28,11 +29,14 @@ class CMakeBuild(build_py):
         subprocess.check_call(cmake_cmd, cwd=build_dir)
         subprocess.check_call(["cmake", "--build", "."], cwd=build_dir)
 
-        # copy built binaries to package directory
-        shutil.copy(
-            build_dir / libopentrustregion_file,
-            package_dir / "pyopentrustregion" / libopentrustregion_file,
-        )
+        # copy libopentrustregion only if it exists (i.e., shared build)
+        if libopentrustregion_path.exists():
+            shutil.copy(
+                libopentrustregion_path,
+                package_dir / "pyopentrustregion" / libopentrustregion_file,
+            )
+
+        # always copy testsuite
         shutil.copy(
             build_dir / libtestsuite_file,
             package_dir / "pyopentrustregion" / libtestsuite_file,
@@ -42,9 +46,14 @@ class CMakeBuild(build_py):
         super().run()
 
 
+# update package_data dynamically
+package_data_files = [libtestsuite_file]
+if libopentrustregion_path.exists():
+    package_data_files.append(libopentrustregion_file)
+
 setup(
     packages=find_packages(),
     include_package_data=True,
-    package_data={"pyopentrustregion": [libopentrustregion_file, libtestsuite_file]},
+    package_data={"pyopentrustregion": package_data_files},
     cmdclass={"build_py": CMakeBuild},
 )
