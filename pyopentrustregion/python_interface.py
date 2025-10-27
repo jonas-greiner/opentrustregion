@@ -332,12 +332,13 @@ def solver(
         except RuntimeError:
             return 1
 
-        # attach the function to some object that persists in Fortran to ensure that it
-        # is not garbage collected when the current function completes
-        grad_ptr._hess_x_interface = hess_x_interface_factory(hess_x, n_param)
+        # attach the Hessian-vector product function to the solver function so that it
+        # persists in Python to ensure that it is not garbage collected when the
+        # current orbital updating function completes
+        solver._hess_x_interface = hess_x_interface_factory(hess_x, n_param)
 
         # store the function pointer in hess_x_ptr so that it can be accessed by Fortran
-        hess_x_funptr[0] = grad_ptr._hess_x_interface
+        hess_x_funptr[0] = solver._hess_x_interface
 
         return 0
 
