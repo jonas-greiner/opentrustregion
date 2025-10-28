@@ -58,9 +58,9 @@ endif()
 message(STATUS "Using integer size ${BLA_SIZEOF_INTEGER}")
 if(BLA_SIZEOF_INTEGER EQUAL 8)
     add_definitions(-DUSE_ILP64)
-    set(LIB_SUFFIX "64")
+    set(LIB_SUFFIX "_64")
 else()
-    set(LIB_SUFFIX "32")
+    set(LIB_SUFFIX "_32")
 endif()
 
 # default to static libraries

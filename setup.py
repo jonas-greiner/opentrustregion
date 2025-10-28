@@ -14,7 +14,7 @@ ext = "dylib" if sys.platform == "darwin" else "so"
 package_dir = pathlib.Path(__file__).parent.absolute()
 build_dir = package_dir / "build"
 libopentrustregion_file: Optional[str]
-for suffix in ["", "32", "64"]:
+for suffix in ["", "_32", "_64"]:
     libopentrustregion_file = f"libopentrustregion{suffix}.{ext}"
     libopentrustregion_path = build_dir / libopentrustregion_file
     if libopentrustregion_path.exists():

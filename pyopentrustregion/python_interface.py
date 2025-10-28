@@ -36,8 +36,8 @@ if TYPE_CHECKING:
 ext = "dylib" if sys.platform == "darwin" else "so"
 lib_candidates = [
     f"libopentrustregion.{ext}",
-    f"libopentrustregion32.{ext}",
-    f"libopentrustregion64.{ext}",
+    f"libopentrustregion_32.{ext}",
+    f"libopentrustregion_64.{ext}",
     f"libtestsuite.{ext}",
 ]
 for lib_name in lib_candidates:
