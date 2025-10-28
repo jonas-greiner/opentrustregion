@@ -40,6 +40,19 @@ The installation can be tested by running
 python3 -m pyopentrustregion.testsuite
 ```
 
+### CMake Configuration Options
+
+The build process can be customized using the following CMake options:
+
+| Option | Type | Default | Description |
+|--------|------|----------|------------|
+| **BUILD_SHARED_LIBS** | `BOOL` | `OFF` | Build shared libraries (`.so`, `.dylib`) instead of static ones. |
+| **BUILD_TESTS** | `BOOL` | `ON` | Build the project’s testsuite. |
+| **CMAKE_BUILD_TYPE** | `STRING` | `Release` | Choose the build type (`Debug`, `Release`, etc.). |
+| **INTEGER_SIZE** | `STRING` | *(auto)* | Set the integer precision to `4` (32-bit) or `8` (64-bit). Required when providing custom BLAS/LAPACK libraries. Otherwise defaults to 32-bit integers and tries to locate compatible BLAS and LAPACK libraries. Falls back to 64-bit integers if 32-bit libraries cannot be found. The resulting library name reflects the chosen integer precision (`libopentrustregion_32.*` or `libopentrustregion_64.*`) |
+| **BLAS_LIBRARIES** | `PATH` | *(auto)* | Path(s) to BLAS libraries. If not provided, CMake attempts to locate a suitable BLAS automatically. |
+| **LAPACK_LIBRARIES** | `PATH` | *(auto)* | Path(s) to LAPACK libraries. If not provided, CMake attempts to locate a suitable LAPACK automatically. |
+
 ## Usage
 
 The optimization process is initiated by calling a `solver` subroutine. This routine requires the following input arguments:
