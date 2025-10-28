@@ -106,26 +106,26 @@ if (BUILD_TESTS)
     # create shared test library which is then called from Python for testing
     add_library(
         testsuite SHARED
+        tests/test_reference.f90
         tests/opentrustregion_unit_tests.f90
         tests/c_interface_unit_tests.f90
         tests/opentrustregion_mock.f90
         tests/c_interface_mock.f90
         tests/opentrustregion_system_tests.f90
     )
-  
+
     # link against BLAS and LAPACK and against OpenTrustRegion
     target_link_libraries(
         testsuite
         PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
     )
-    
+
     # enable preprocessing
     set_source_files_properties(tests/opentrustregion_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)
 endif()
 
 # set paths to find module files, header files and library in build directory
 set(OpenTrustRegion_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include/ ${CMAKE_BINARY_DIR})
-
 set(OpenTrustRegion_LIBRARY $<TARGET_FILE:opentrustregion>)
 
 # create the OpenTrustRegionConfig.cmake from the template
