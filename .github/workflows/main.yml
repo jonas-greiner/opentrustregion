@@ -139,6 +139,10 @@ jobs:
       if: ${{matrix.build-type == 'install' && matrix.scenario == 'editable' }}
       run: pip install -e ${{github.workspace}}
 
+    - name: Install NumPy
+      if: ${{matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
+      run: pip install numpy
+
     - name: Testing pip installation
       if: ${{ matrix.build-type == 'install' && (matrix.scenario == 'installed' || matrix.scenario == 'editable') }}
       run: python -c "import pyopentrustregion.testsuite"
@@ -146,7 +150,7 @@ jobs:
     - name: Testing dev installation
       if: ${{ matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
       run: | 
-        export PYTHONPATH=${PYTHONPATH}:${GITHUB_WORKSPACE}
+        export PYTHONPATH=${GITHUB_WORKSPACE}
         python -c "import pyopentrustregion.testsuite"
 
     - name: Testing OpenTrustRegion
