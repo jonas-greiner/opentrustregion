@@ -146,7 +146,7 @@ jobs:
     - name: Testing dev installation
       if: ${{ matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
       run: | 
-        export PYTHONPATH=${GITHUB_WORKSPACE}
+        export PYTHONPATH=${PYTHONPATH}:${GITHUB_WORKSPACE}
         python -c "import pyopentrustregion.testsuite"
 
     - name: Testing OpenTrustRegion
