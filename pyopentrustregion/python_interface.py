@@ -43,23 +43,32 @@ lib_candidates = [
     f"libopentrustregion_64.{ext}",
     f"libtestsuite.{ext}",
 ]
+lib = None
+
+# try to load from installed package (site-packages)
 for lib_name in lib_candidates:
-    try:
-        with resources.path("pyopentrustregion", lib_name) as lib_path:
-            lib = CDLL(str(lib_path))
-            break
-    except OSError:
-        # fallback for non-installed or dev build
-        try:
-            lib = CDLL(
-                os.path.abspath(
-                    os.path.join(os.path.dirname(__file__), "../build", lib_name)
-                )
-            )
-            break
-        except OSError:
-            pass
-else:
+    lib_path = resources.files("pyopentrustregion") / lib_name
+    if lib_path.is_file():
+        lib = CDLL(str(lib_path))
+
+# fallback: try to load from same directory (editable install)
+if lib is None:
+    for lib_name in lib_candidates:
+        local_path = os.path.join(os.path.dirname(__file__), lib_name)
+        if os.path.exists(local_path):
+            lib = CDLL(local_path)
+
+# fallback: try to load from ../build (development build)
+if lib is None:
+    for lib_name in lib_candidates:
+        build_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "../build", lib_name)
+        )
+        if os.path.exists(build_path):
+            lib = CDLL(build_path)
+
+# if all failed
+if lib is None:
     raise FileNotFoundError(
         f"Cannot find either opentrustregion or testsuite library ({lib_candidates})"
     )

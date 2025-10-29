@@ -39,18 +39,16 @@ class CMakeBuild(build_py):
         subprocess.check_call(cmake_cmd, cwd=build_dir)
         subprocess.check_call(["cmake", "--build", "."], cwd=build_dir)
 
+        # destination directory inside the build tree
+        target_dir = pathlib.Path(self.build_lib) / "pyopentrustregion"
+        os.makedirs(target_dir, exist_ok=True)
+
         # copy libopentrustregion only if it exists (i.e., shared build)
         if libopentrustregion_file is not None:
-            shutil.copy(
-                libopentrustregion_path,
-                package_dir / "pyopentrustregion" / libopentrustregion_file,
-            )
+            shutil.copy(libopentrustregion_path, target_dir / libopentrustregion_file)
 
         # always copy testsuite
-        shutil.copy(
-            build_dir / libtestsuite_file,
-            package_dir / "pyopentrustregion" / libtestsuite_file,
-        )
+        shutil.copy(build_dir / libtestsuite_file, target_dir / libtestsuite_file)
 
         # run steps in parent class
         super().run()
