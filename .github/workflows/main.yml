@@ -139,9 +139,15 @@ jobs:
       if: ${{matrix.build-type == 'install' && matrix.scenario == 'editable' }}
       run: pip install -e ${{github.workspace}}
 
-    - name: Install NumPy
+    - name: Build & Install OpenTrustRegion
       if: ${{matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
-      run: pip install numpy
+      run: | 
+        sudo apt install -y cmake
+        pip install numpy
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
 
     - name: Testing pip installation
       if: ${{ matrix.build-type == 'install' && (matrix.scenario == 'installed' || matrix.scenario == 'editable') }}
