@@ -6,24 +6,10 @@
 
 module c_interface
 
-    use opentrustregion, only: rp, ip, solver_type, stability_check_type, &
+    use opentrustregion, only: rp, ip, kw_len, solver_type, stability_check_type, &
                                standard_solver => solver, &
                                standard_stability_check => stability_check, &
-                               solver_stability_default, solver_line_search_default, &
-                               solver_davidson_default, &
-                               solver_jacobi_davidson_default, &
-                               solver_prefer_jacobi_davidson_default, &
-                               stability_jacobi_davidson_default, &
-                               solver_conv_tol_default, &
-                               solver_start_trust_radius_default, &
-                               solver_global_red_factor_default, &
-                               solver_local_red_factor_default, &
-                               stability_conv_tol_default, &
-                               solver_n_random_trial_vectors_default, &
-                               solver_n_macro_default, solver_n_micro_default, &
-                               solver_seed_default, solver_verbose_default, &
-                               stability_n_random_trial_vectors_default, &
-                               stability_n_iter_default, stability_verbose_default
+                               default_solver_settings, default_stability_settings
     use, intrinsic :: iso_c_binding, only: c_double, c_int64_t, c_int32_t, c_bool, &
                                            c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_char, &
@@ -34,9 +20,14 @@ module c_interface
     integer, parameter :: c_rp = c_double
 #ifdef USE_ILP64
     integer, parameter :: c_ip = c_int64_t  ! 64-bit integers
+    logical(c_bool), bind(C) :: ilp64 = .true._c_bool
 #else
     integer, parameter :: c_ip = c_int32_t  ! 32-bit integers
+    logical(c_bool), bind(C) :: ilp64 = .false._c_bool
 #endif
+
+    ! maximum keyword length
+    integer(c_ip), bind(C) :: kw_len_c = kw_len
 
     ! define procedure pointer which will point to the Fortran procedures
     procedure(update_orbs_c_type), pointer :: update_orbs_before_wrapping => null()
@@ -104,72 +95,28 @@ module c_interface
         subroutine logger_c_type(message) bind(C)
             import :: c_char
 
-            character(kind=c_char), intent(in) :: message(*)
+            character(c_char), intent(in) :: message(*)
         end subroutine logger_c_type
     end interface
 
     ! derived type for solver settings
     type, bind(C) :: solver_settings_type_c
         type(c_funptr) :: precond, conv_check, logger
-        logical(c_bool) :: stability, line_search, davidson, jacobi_davidson, &
-                           prefer_jacobi_davidson, initialized
+        logical(c_bool) :: stability, line_search, initialized
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
-        integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, seed, verbose
+        integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
+                         jacobi_davidson_start, seed, verbose
+        character(c_char) :: subsystem_solver(kw_len + 1)
     end type
 
     type, bind(C) :: stability_settings_type_c
         type(c_funptr) :: precond, logger
-        logical(c_bool) :: jacobi_davidson, initialized
+        logical(c_bool) :: initialized
         real(c_rp) :: conv_tol
-        integer(c_ip) :: n_random_trial_vectors, n_iter, verbose
+        integer(c_ip) :: n_random_trial_vectors, n_iter, jacobi_davidson_start, seed, &
+                         verbose
+        character(c_char) :: diag_solver(kw_len + 1)
     end type
-
-    ! default settings
-    type(solver_settings_type_c) :: default_solver_settings_c = &
-        solver_settings_type_c(precond = c_null_funptr, conv_check = c_null_funptr, &
-                               logger = c_null_funptr, &
-                               stability = logical(solver_stability_default, &
-                                                   kind=c_bool), &
-                               line_search = logical(solver_line_search_default, &
-                                                     kind=c_bool), &
-                               davidson = logical(solver_davidson_default, &
-                                                  kind=c_bool), &
-                               jacobi_davidson = &
-                                   logical(solver_jacobi_davidson_default, &
-                                           kind=c_bool), &
-                               prefer_jacobi_davidson = &
-                                   logical(solver_prefer_jacobi_davidson_default, &
-                                           kind=c_bool), &
-                               initialized = .true._c_bool, &
-                               conv_tol = real(solver_conv_tol_default, kind=c_rp), &
-                               start_trust_radius = &
-                                   real(solver_start_trust_radius_default, kind=c_rp), &
-                               global_red_factor = &
-                                   real(solver_global_red_factor_default, kind=c_rp), &
-                               local_red_factor = &
-                                   real(solver_local_red_factor_default, kind=c_rp), &
-
-                               n_random_trial_vectors = &
-                                   int(solver_n_random_trial_vectors_default, &
-                                       kind=c_ip), &
-                               n_macro = int(solver_n_macro_default, kind=c_ip), &
-                               n_micro = int(solver_n_micro_default, kind=c_ip), &
-                               seed = int(solver_seed_default, kind=c_ip), &
-                               verbose = int(solver_verbose_default, kind=c_ip))
-    
-    type(stability_settings_type_c) :: default_stability_settings_c = &
-        stability_settings_type_c(precond = c_null_funptr, logger = c_null_funptr, &
-                                  jacobi_davidson = &
-                                      logical(stability_jacobi_davidson_default, &
-                                      kind=c_bool), &
-                                  initialized = .true._c_bool, &
-                                  conv_tol = real(stability_conv_tol_default, &
-                                                  kind=c_rp), &
-                                  n_random_trial_vectors = &
-                                      int(stability_n_random_trial_vectors_default, &
-                                          kind=c_ip), &
-                                  n_iter = int(stability_n_iter_default, kind=c_ip), &
-                                  verbose = int(stability_verbose_default, kind=c_ip)) 
 
     ! interfaces for solver and stability C wrapper subroutines
     interface
@@ -219,6 +166,8 @@ module c_interface
     interface assignment(=)
         module procedure assign_solver_f_c
         module procedure assign_stability_f_c
+        module procedure assign_solver_c_f
+        module procedure assign_stability_c_f
     end interface
 
 contains
@@ -547,7 +496,7 @@ contains
         !
         type(solver_settings_type_c), intent(inout) :: settings
 
-        settings = default_solver_settings_c
+        settings = default_solver_settings
 
     end subroutine init_solver_settings_c
 
@@ -558,7 +507,7 @@ contains
         !
         type(stability_settings_type_c), intent(inout) :: settings
 
-        settings = default_stability_settings_c
+        settings = default_stability_settings
 
     end subroutine init_stability_settings_c
 
@@ -598,9 +547,6 @@ contains
             ! convert logicals
             settings%stability = logical(settings_c%stability)
             settings%line_search = logical(settings_c%line_search)
-            settings%davidson = logical(settings_c%davidson)
-            settings%jacobi_davidson = logical(settings_c%jacobi_davidson)
-            settings%prefer_jacobi_davidson = logical(settings_c%prefer_jacobi_davidson)
 
             ! convert reals
             settings%conv_tol = real(settings_c%conv_tol, kind=rp)
@@ -613,8 +559,13 @@ contains
                                                   kind=ip)
             settings%n_macro = int(settings_c%n_macro, kind=ip)
             settings%n_micro = int(settings_c%n_micro, kind=ip)
+            settings%jacobi_davidson_start = int(settings_c%jacobi_davidson_start, &
+                                                 kind=ip)
             settings%seed = int(settings_c%seed, kind=ip)
             settings%verbose = int(settings_c%verbose, kind=ip)
+
+            ! convert characters
+            settings%subsystem_solver = character_from_c(settings_c%subsystem_solver)
 
             ! set settings to initialized
             settings%initialized = .true.
@@ -648,9 +599,6 @@ contains
                 settings%logger => null()
             end if
 
-            ! convert logicals
-            settings%jacobi_davidson = logical(settings_c%jacobi_davidson)
-
             ! convert reals
             settings%conv_tol = real(settings_c%conv_tol, kind=rp)
 
@@ -658,7 +606,13 @@ contains
             settings%n_random_trial_vectors = int(settings_c%n_random_trial_vectors, &
                                                   kind=ip)
             settings%n_iter = int(settings_c%n_iter, kind=ip)
+            settings%jacobi_davidson_start = int(settings_c%jacobi_davidson_start, &
+                                                 kind=ip)
+            settings%seed = int(settings_c%seed, kind=ip)
             settings%verbose = int(settings_c%verbose, kind=ip)
+
+            ! convert characters
+            settings%diag_solver = character_from_c(settings_c%diag_solver)
 
             ! set settings to initialized
             settings%initialized = .true.
@@ -666,20 +620,125 @@ contains
 
     end subroutine assign_stability_f_c
 
-    function is_ilp64() bind(C) result(flag)
+    subroutine assign_solver_c_f(settings_c, settings)
         !
-        ! this function can be called to determine whether the library has been 
-        ! compiled with 64-bit integers
+        ! this subroutine converts solver settings from Fortran to C
         !
-#ifdef USE_ILP64
-        logical(c_bool), parameter :: ilp = .true._c_bool
-#else
-        logical(c_bool), parameter :: ilp = .false._c_bool
-#endif
-        logical(c_bool) :: flag
+        use opentrustregion, only: solver_settings_type
 
-        flag = ilp
+        type(solver_settings_type_c), intent(out) :: settings_c
+        type(solver_settings_type), intent(in) :: settings
 
-    end function is_ilp64
+        if (settings%initialized) then
+            ! callback functions cannot be converted
+            settings_c%precond = c_null_funptr
+            settings_c%conv_check = c_null_funptr
+            settings_c%logger = c_null_funptr
+
+            ! convert logicals
+            settings_c%stability = logical(settings%stability, kind=c_bool)
+            settings_c%line_search = logical(settings%line_search, kind=c_bool)
+
+            ! convert reals
+            settings_c%conv_tol = real(settings%conv_tol, kind=c_rp)
+            settings_c%start_trust_radius = real(settings%start_trust_radius, kind=c_rp)
+            settings_c%global_red_factor = real(settings%global_red_factor, kind=c_rp)
+            settings_c%local_red_factor = real(settings%local_red_factor, kind=c_rp)
+
+            ! convert integers
+            settings_c%n_random_trial_vectors = int(settings%n_random_trial_vectors, &
+                                                    kind=c_ip)
+            settings_c%n_macro = int(settings%n_macro, kind=c_ip)
+            settings_c%n_micro = int(settings%n_micro, kind=c_ip)
+            settings_c%jacobi_davidson_start = int(settings%jacobi_davidson_start, &
+                                                   kind=c_ip)
+            settings_c%seed = int(settings%seed, kind=c_ip)
+            settings_c%verbose = int(settings%verbose, kind=c_ip)
+
+            ! convert characters
+            settings_c%subsystem_solver = character_to_c(settings%subsystem_solver)
+
+            ! set settings to initialized
+            settings_c%initialized = .true._c_bool
+        end if
+
+    end subroutine assign_solver_c_f
+
+    subroutine assign_stability_c_f(settings_c, settings)
+        !
+        ! this subroutine converts stability settings from Fortran to C
+        !
+        use opentrustregion, only: stability_settings_type
+
+        type(stability_settings_type_c), intent(out) :: settings_c
+        type(stability_settings_type), intent(in) :: settings
+
+        if (settings%initialized) then
+            ! callback functions cannot be converted
+            settings_c%precond = c_null_funptr
+            settings_c%logger = c_null_funptr
+
+            ! convert reals
+            settings_c%conv_tol = real(settings%conv_tol, kind=c_rp)
+
+            ! convert integers
+            settings_c%n_random_trial_vectors = int(settings%n_random_trial_vectors, &
+                                                    kind=c_ip)
+            settings_c%n_iter = int(settings%n_iter, kind=c_ip)
+            settings_c%jacobi_davidson_start = int(settings%jacobi_davidson_start, &
+                                                   kind=c_ip)
+            settings_c%seed = int(settings%seed, kind=c_ip)
+            settings_c%verbose = int(settings%verbose, kind=c_ip)
+
+            ! convert characters
+            settings_c%diag_solver = character_to_c(settings%diag_solver)
+
+            ! set settings to initialized
+            settings_c%initialized = .true._c_bool
+        end if
+
+    end subroutine assign_stability_c_f
+
+    function character_from_c(char_c) result(char_f)
+        !
+        ! this function converts a C null-terminated character array to a Fortran 
+        ! character
+        !
+        character(c_char), intent(in) :: char_c(*)
+        character(:), allocatable :: char_f
+
+        integer(ip) :: n
+
+        ! allocate Fortran character
+        n = 1
+        do while (char_c(n) /= c_null_char)
+            n = n + 1
+        end do
+        allocate(character(n - 1) :: char_f)
+
+        ! copy and convert each character
+        char_f = transfer(char_c(1:n - 1), char_f)
+
+    end function character_from_c
+
+    function character_to_c(char_f) result(char_c)
+        !
+        ! this function converts a Fortran character string to a C null-terminated 
+        ! character array
+        !
+        character(*), intent(in) :: char_f
+        character(c_char), allocatable :: char_c(:)
+
+        integer(ip) :: n
+
+        ! allocate C null-terminated character array
+        n = len_trim(char_f)
+        allocate(char_c(n + 1))
+
+        ! copy and convert each character
+        char_c(1:n) = transfer(char_f(1:n), char_c(1:n))
+        char_c(n + 1) = c_null_char
+
+    end function character_to_c
 
 end module c_interface

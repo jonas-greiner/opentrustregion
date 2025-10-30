@@ -25,7 +25,7 @@ contains
         use, intrinsic :: iso_c_binding, only: c_ptr, c_char, c_f_pointer, c_null_char
 
         type(c_ptr), intent(in), value :: path 
-        character(kind=c_char), pointer :: c_path(:)
+        character(c_char), pointer :: c_path(:)
         integer(ip) :: len, i
 
         call c_f_pointer(path, c_path, [256])
@@ -34,7 +34,7 @@ contains
             if (c_path(i) == c_null_char) exit
             len = len + 1
         end do
-        allocate(character(len=len) :: data_dir)
+        allocate(character(len) :: data_dir)
         data_dir = transfer(c_path(1:len), data_dir)
 
     end subroutine set_test_data_path

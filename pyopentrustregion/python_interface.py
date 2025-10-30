@@ -17,12 +17,15 @@ from ctypes import (
     byref,
     string_at,
     cast,
+    addressof,
+    memmove,
     c_double,
     c_int64,
     c_int32,
     c_bool,
     c_void_p,
     c_char_p,
+    c_char,
     Structure,
 )
 from typing import TYPE_CHECKING
@@ -62,14 +65,17 @@ else:
     )
 
 # determine integer size used in library
-lib.is_ilp64.restype = c_bool
-if lib.is_ilp64():
+ilp64 = c_bool.in_dll(lib, "ilp64")
+if ilp64.value:
     c_int = c_int64
 else:
     c_int = c_int32
 
 # define real type
 c_real = c_double
+
+# fixed size strings for keywords
+kw_len = c_int.in_dll(lib, "kw_len_c").value
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
@@ -198,9 +204,6 @@ class SolverSettingsC(Structure):
         ("logger", c_void_p),
         ("stability", c_bool),
         ("line_search", c_bool),
-        ("davidson", c_bool),
-        ("jacobi_davidson", c_bool),
-        ("prefer_jacobi_davidson", c_bool),
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("start_trust_radius", c_real),
@@ -209,8 +212,10 @@ class SolverSettingsC(Structure):
         ("n_random_trial_vectors", c_int),
         ("n_macro", c_int),
         ("n_micro", c_int),
+        ("jacobi_davidson_start", c_int),
         ("seed", c_int),
         ("verbose", c_int),
+        ("subsystem_solver", c_char * (kw_len + 1)),
     ]
 
 
@@ -218,12 +223,14 @@ class StabilitySettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
         ("logger", c_void_p),
-        ("jacobi_davidson", c_bool),
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("n_random_trial_vectors", c_int),
         ("n_iter", c_int),
+        ("jacobi_davidson_start", c_int),
+        ("seed", c_int),
         ("verbose", c_int),
+        ("diag_solver", c_char * (kw_len + 1)),
     ]
 
 
@@ -245,10 +252,11 @@ class Settings:
         self.settings_c = self.c_struct()
         self.init_c_struct(byref(self.settings_c))
 
-        # initializes all fields from the C struct
+        # initializes all optional function pointers to None
         for field_info in self.settings_c._fields_:
-            field_name = field_info[0]
-            setattr(self, field_name, getattr(self.settings_c, field_name))
+            field_name, field_type = field_info[:2]
+            if field_type is c_void_p:
+                setattr(self, field_name, None)
 
     def set_optional_callback(self, attr_name, func_interface):
         """
@@ -288,28 +296,56 @@ class StabilitySettings(Settings):
 
 def auto_bind_fields(cls: type[Settings]):
     """
-    this function automatically generates Python properties for non-pointer fields in a
-    settings_c object that is an attribute of cls, ensuring synchronization between
-    Python attributes and the C struct
+    this function automatically generates properties for non-pointer fields in a
+    settings_c object that is an attribute of cls
     """
     for field_info in cls.c_struct._fields_:
         field_name, field_type = field_info[:2]
 
-        # skip if function pointer
-        if field_type == c_void_p:
+        # skip if function pointer, these will be initialized separately
+        if field_type is c_void_p:
             continue
 
-        def make_property(name):
-            # get attribute from _name
-            def getter(self):
-                return getattr(self, f"_{name}")
+        # character arrays need to be handled separately
+        elif field_type is c_char * (kw_len + 1):
 
-            # set attribute in _name and set attribute  in ctypes.Structure object
-            def setter(self, value):
-                setattr(self, f"_{name}", value)
-                setattr(self.settings_c, name, value)
+            def make_property(name):
 
-            return property(getter, setter)
+                def getter(self):
+                    # get bytes from ctypes Structure
+                    raw = getattr(self.settings_c, name)
+
+                    # only get elements before null bytes and convert to strings
+                    return raw.split(b"\0", 1)[0].decode("utf-8")
+
+                def setter(self, value):
+                    # check for type (will be a string if supplied by a user and a
+                    # bytes when extracted from a ctypes Structure)
+                    if isinstance(value, str):
+                        b = value.encode("utf-8")[:kw_len]
+                    elif isinstance(value, bytes):
+                        b = value[:kw_len]
+
+                    # pad with null bytes up to kw_len
+                    b = b.ljust(kw_len, b"\0")
+
+                    # copy to memory in ctypes Structure
+                    offset = getattr(type(self.settings_c), name).offset
+                    memmove(addressof(self.settings_c) + offset, b, kw_len)
+
+                return property(getter, setter)
+
+        else:
+
+            def make_property(name):
+
+                def getter(self):
+                    return getattr(self.settings_c, name)
+
+                def setter(self, value):
+                    setattr(self.settings_c, name, value)
+
+                return property(getter, setter)
 
         # capture field_name in current loop scope
         setattr(cls, field_name, make_property(field_name))

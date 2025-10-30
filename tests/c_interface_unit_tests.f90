@@ -10,7 +10,7 @@ module c_interface_unit_tests
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
-                                           c_char, c_associated
+                                           c_char, c_associated, c_null_char
 
     implicit none
 
@@ -104,7 +104,7 @@ contains
         !
         ! this function is a test function for the C logging function
         !
-        character(kind=c_char), intent(in) :: message_c(*)
+        character(c_char), intent(in) :: message_c(*)
         character(4) :: message
 
         message = transfer(message_c(1:4), message)
@@ -118,7 +118,7 @@ contains
         !
         use c_interface, only: solver_settings_type_c, solver, solver_c_wrapper
         use opentrustregion_mock, only: mock_solver, test_passed
-        use test_reference, only: assignment(=), ref_settings_c
+        use test_reference, only: assignment(=), ref_settings
 
         type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr
         type(solver_settings_type_c) :: settings
@@ -135,7 +135,7 @@ contains
         obj_func_c_funptr = c_funloc(mock_obj_func)
 
         ! associate optional settings with values
-        settings = ref_settings_c
+        settings = ref_settings
         settings%precond = c_funloc(mock_precond)
         settings%conv_check = c_funloc(mock_conv_check)
         settings%logger = c_funloc(mock_logger)
@@ -173,7 +173,7 @@ contains
         use c_interface, only: stability_settings_type_c, stability_check, &
                                stability_check_c_wrapper
         use opentrustregion_mock, only: mock_stability_check, test_passed
-        use test_reference, only: assignment(=), ref_settings_c, tol_c
+        use test_reference, only: assignment(=), ref_settings, tol_c
 
         type(c_funptr) :: hess_x_c_funptr
         real(c_rp), allocatable, target :: h_diag(:), kappa(:)
@@ -197,7 +197,7 @@ contains
         h_diag = 3.0_c_rp
 
         ! associate optional arguments with values
-        settings = ref_settings_c
+        settings = ref_settings
         settings%precond = c_funloc(mock_precond)
         settings%logger = c_funloc(mock_logger)
 
@@ -540,7 +540,7 @@ contains
         ! initializes all settings to their default values
         !
         use c_interface, only: solver_settings_type_c, init_solver_settings_c, &
-                               default_settings => default_solver_settings_c
+                               default_solver_settings
         use test_reference, only: operator(/=)
 
         type(solver_settings_type_c) :: settings
@@ -560,7 +560,7 @@ contains
         end if
 
         ! check settings
-        if (settings /= default_settings) then
+        if (settings /= default_solver_settings) then
             write (stderr, *) "test_init_solver_settings_c failed: Settings not "// &
                 "initialized correctly."
             test_init_solver_settings_c = .false. 
@@ -574,7 +574,7 @@ contains
         ! correctly initializes all settings to their default values
         !
         use c_interface, only: stability_settings_type_c, init_stability_settings_c, &
-                               default_settings => default_stability_settings_c
+                               default_stability_settings
         use test_reference, only: operator(/=)
 
         type(stability_settings_type_c) :: settings
@@ -593,7 +593,7 @@ contains
         end if
 
         ! check settings
-        if (settings /= default_settings) then
+        if (settings /= default_stability_settings) then
             write (stderr, *) "test_init_stability_settings_c failed: Settings not "// &
                 "initialized correctly."
             test_init_stability_settings_c = .false. 
@@ -608,8 +608,7 @@ contains
         !
         use c_interface, only: solver_settings_type_c, assignment(=)
         use opentrustregion, only: solver_settings_type
-        use test_reference, only: assignment(=), ref_settings_c, operator(/=), &
-                                  ref_settings
+        use test_reference, only: assignment(=), ref_settings, operator(/=)
 
         type(solver_settings_type_c) :: settings_c
         type(solver_settings_type) :: settings
@@ -621,7 +620,7 @@ contains
         test_assign_solver_f_c = .true.
 
         ! initialize the C settings with custom values
-        settings_c = ref_settings_c
+        settings_c = ref_settings
         settings_c%precond = c_funloc(mock_precond)
         settings_c%conv_check = c_funloc(mock_conv_check)
         settings_c%logger = c_funloc(mock_logger)
@@ -708,8 +707,7 @@ contains
         !
         use c_interface, only: stability_settings_type_c, assignment(=)
         use opentrustregion, only: stability_settings_type
-        use test_reference, only: assignment(=), ref_settings_c, operator(/=), &
-                                  ref_settings
+        use test_reference, only: assignment(=), ref_settings, operator(/=)
 
         type(stability_settings_type_c) :: settings_c
         type(stability_settings_type)   :: settings
@@ -720,7 +718,7 @@ contains
         test_assign_stability_f_c = .true.
 
         ! initialize the C settings with custom values
-        settings_c = ref_settings_c
+        settings_c = ref_settings
         settings_c%precond = c_funloc(mock_precond)
         settings_c%logger  = c_funloc(mock_logger)
 
@@ -779,5 +777,188 @@ contains
         end if
 
     end function test_assign_stability_f_c
+
+    logical(c_bool) function test_assign_solver_c_f() bind(C)
+        !
+        ! this function tests that the function that converts stability check settings 
+        ! from Fortran to C correctly performs this conversion
+        !
+        use opentrustregion,  only: solver_settings_type
+        use c_interface,      only: solver_settings_type_c, assignment(=)
+        use test_reference,   only: ref_settings, assignment(=), operator(/=)
+
+        type(solver_settings_type)   :: settings
+        type(solver_settings_type_c) :: settings_c
+
+        ! assume test passes
+        test_assign_solver_c_f = .true.
+
+        ! initialize Fortran settings with reference values
+        settings = ref_settings
+
+        ! convert to C settings
+        settings_c = settings
+
+        ! check that callback function pointers are not associated
+        if (c_associated(settings_c%precond)) then
+            test_assign_solver_c_f = .false.
+            write (stderr, *) "test_assign_solver_c_f failed: Preconditioner "// &
+                "function associated."
+        end if
+        if (c_associated(settings_c%conv_check)) then
+            test_assign_solver_c_f = .false.
+            write (stderr, *) "test_assign_solver_c_f failed: Convergence check "// &
+                "function associated."
+        end if
+        if (c_associated(settings_c%logger)) then
+            test_assign_solver_c_f = .false.
+            write (stderr, *) "test_assign_solver_c_f failed: Logger function "// &
+                "associated."
+        end if
+
+        ! check against reference values
+        if (settings /= ref_settings) then
+            write (stderr, *) "test_assign_solver_c_f failed: Settings not "// &
+                "converted correctly."
+            test_assign_solver_c_f = .false.
+        end if
+
+        ! check initialization flag
+        if (.not. settings_c%initialized) then
+            test_assign_solver_c_f = .false.
+            write (stderr, *) "test_assign_solver_c_f failed: Settings not marked "// &
+                "as initialized."
+        end if
+
+    end function test_assign_solver_c_f
+
+    logical(c_bool) function test_assign_stability_c_f() bind(C)
+        !
+        ! this function tests that the function that converts stability check settings 
+        ! from Fortran to C correctly performs this conversion
+        !
+        use opentrustregion,  only: stability_settings_type
+        use c_interface,      only: stability_settings_type_c, assignment(=)
+        use test_reference,   only: ref_settings, assignment(=), operator(/=)
+
+        type(stability_settings_type)   :: settings
+        type(stability_settings_type_c) :: settings_c
+
+        ! assume test passes
+        test_assign_stability_c_f = .true.
+
+        ! initialize Fortran settings with reference values
+        settings = ref_settings
+
+        ! convert to C settings
+        settings_c = settings
+
+        ! check that callback function pointers are not associated
+        if (c_associated(settings_c%precond)) then
+            test_assign_stability_c_f = .false.
+            write (stderr, *) "test_assign_stability_c_f failed: Preconditioner "// &
+                "function associated."
+        end if
+        if (c_associated(settings_c%logger)) then
+            test_assign_stability_c_f = .false.
+            write (stderr, *) "test_assign_stability_c_f failed: Logger function "// &
+                "associated."
+        end if
+
+        ! check against reference values
+        if (settings /= ref_settings) then
+            write (stderr, *) "test_assign_stability_c_f failed: Settings not "// &
+                "converted correctly."
+            test_assign_stability_c_f = .false.
+        end if
+
+        ! check initialization flag
+        if (.not. settings_c%initialized) then
+            test_assign_stability_c_f = .false.
+            write (stderr, *) "test_assign_stability_c_f failed: Settings not "// &
+                "marked as initialized."
+        end if
+
+    end function test_assign_stability_c_f
+
+    logical(c_bool) function test_character_to_c() bind(C)
+        !
+        ! this function tests conversion of a Fortran character string to a C 
+        ! null-terminated character array
+        !
+        use c_interface, only: character_to_c
+
+        character(*), parameter :: test_string = "test"
+        character(c_char), allocatable :: char_c(:)
+        integer :: n, i
+
+        ! assume test passes
+        test_character_to_c = .true.
+
+        ! perform conversion
+        char_c = character_to_c(test_string)
+
+        ! check length
+        n = len_trim(test_string)
+        if (size(char_c) /= n + 1) then
+            write(stderr, *) "test_character_to_c failed: Character array has "// &
+                "wrong size."
+            test_character_to_c = .false.
+        end if
+
+        ! check characters
+        do i = 1, n
+            if (char_c(i) /= test_string(i:i)) then
+                write(stderr, *) "test_character_to_c failed: Character array "// &
+                    "mismatch at character ", i
+                test_character_to_c = .false.
+            end if
+        end do
+
+        ! check null terminator
+        if (char_c(n + 1) /= c_null_char) then
+            write(stderr, *) "test_character_to_c failed: Character array is "// &
+                "missing null terminator."
+            test_character_to_c = .false.
+        end if
+
+    end function test_character_to_c
+
+    logical(c_bool) function test_character_from_c() bind(C)
+        !
+        ! this function tests conversion of a C null-terminated character array to a 
+        ! Fortran character string
+        !
+        use c_interface, only: character_from_c
+
+        character(c_char), parameter :: test_array(5) = ["t", "e", "s", "t", &
+                                                         c_null_char]
+        character(:), allocatable :: char_f
+        integer :: n, i
+
+        ! assume test passes
+        test_character_from_c = .true.
+
+        ! perform conversion
+        char_f = character_from_c(test_array)
+
+        ! check equality
+        if (len(char_f) /= size(test_array) - 1) then
+            write(stderr, *) "test_character_from_c failed: Converted string has "// &
+                "wrong length."
+            test_character_from_c = .false.
+            return
+        end if
+
+        ! check characters
+        do i = 1, n
+            if (test_array(i) /= char_f(i:i)) then
+                write(stderr, *) "test_character_from_c failed: String mismatch "// &
+                    "at character ", i
+                test_character_from_c = .false.
+            end if
+        end do
+
+    end function test_character_from_c
 
 end module c_interface_unit_tests
