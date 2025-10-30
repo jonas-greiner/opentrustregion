@@ -2437,6 +2437,9 @@ contains
             return
         end if
 
+        ! convert strings to lowercase
+        settings%subsystem_solver = string_to_lowercase(settings%subsystem_solver)
+
         ! check that number of random trial vectors is below number of parameters
         if ((settings%subsystem_solver == "davidson" .or. &
              settings%subsystem_solver == "jacobi-davidson") .and. &
@@ -2462,8 +2465,8 @@ contains
                    settings%subsystem_solver == "jacobi-davidson" .or. &
                    settings%subsystem_solver == "tcg")) then
             call settings%log("Subsystem solver option unknown. Possible values "// &
-                              "are davidson, jacobi-davidson, and tcg (truncated "// &
-                              "conjugate gradient)", 1, .true.)
+                              "are ""davidson"", ""jacobi-davidson"", and ""tcg"" "// &
+                              "(truncated conjugate gradient)", 1, .true.)
             error = 1
             return
         end if
@@ -2482,6 +2485,9 @@ contains
         ! initialize error flag
         error = 0
 
+        ! convert strings to lowercase
+        settings%diag_solver = string_to_lowercase(settings%diag_solver)
+
         ! check that number of random trial vectors is below number of parameters
         if (settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
@@ -2495,7 +2501,8 @@ contains
         if (.not. (settings%diag_solver == "davidson" .or. &
                    settings%diag_solver == "jacobi-davidson")) then
             call settings%log("Diagonalization solver option unknown. Possible "// &
-                              "values are davidson and jacobi-davidson", 1, .true.)
+                              "values are ""davidson"" and ""jacobi-davidson""", 1, &
+                              .true.)
             error = 1
             return
         end if
@@ -2519,5 +2526,25 @@ contains
         end if
 
     end subroutine add_error_origin
+
+    function string_to_lowercase(str) result(lower_str)
+        !
+        ! this function converts a string to lower case
+        !
+        character(*), intent(in) :: str
+        character(len(str)) :: lower_str
+        integer(ip) :: i, code
+        integer(ip), parameter :: ascii_upper_lower_diff = 32
+
+        do i = 1, len(str)
+            code = iachar(str(i:i))
+            if (code >= iachar('A') .and. code <= iachar('Z')) then
+                lower_str(i:i) = achar(code + ascii_upper_lower_diff)
+            else
+                lower_str(i:i) = str(i:i)
+            end if
+        end do
+    
+    end function string_to_lowercase
 
 end module opentrustregion

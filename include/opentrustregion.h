@@ -28,7 +28,7 @@ typedef bool c_bool;  /* corresponds to logical(c_bool) */
 /* ------------------------------------------------------------------
  * Maximum keyword length
  * ------------------------------------------------------------------ */
-#define KW_LEN 64
+#define OTR_KW_LEN 64
 
 /* ------------------------------------------------------------------
  * Forward declarations for function pointer types
@@ -84,7 +84,7 @@ typedef struct {
     c_int seed;
     c_int verbose;
 
-    char subsystem_solver[KW_LEN + 1];
+    char subsystem_solver[OTR_KW_LEN + 1];
 } solver_settings_type;
 
 
@@ -105,7 +105,7 @@ typedef struct {
     c_int seed;
     c_int verbose;
 
-    char diag_solver[KW_LEN + 1];
+    char diag_solver[OTR_KW_LEN + 1];
 } stability_settings_type;
 
 /* ------------------------------------------------------------------

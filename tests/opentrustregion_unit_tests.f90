@@ -2086,4 +2086,25 @@ contains
 
     end function test_add_error_origin
 
+    logical(c_bool) function test_string_to_lowercase() bind(C)
+        !
+        ! this function tests the function that transfers strings to lowercase
+        !
+        use opentrustregion, only: string_to_lowercase
+
+        character(*), parameter :: input  = 'OpenTrustRegion123!', &
+                                   expect = 'opentrustregion123!'
+
+        ! assume tests pass
+        test_string_to_lowercase = .true.
+
+        ! test transfoer to lowercase
+        if (string_to_lowercase(input) /= expect) then
+            write (stderr, *) "test_string_to_lowercase failed: String not "// &
+                "correctly transferred to lowercase."
+            test_string_to_lowercase = .false.
+        end if
+
+    end function test_string_to_lowercase
+
 end module opentrustregion_unit_tests
