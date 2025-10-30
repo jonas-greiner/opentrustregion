@@ -97,6 +97,7 @@ fortran_tests = {
         "split_string_by_space",
         "stability_check",
         "stability_sanity_check",
+        "string_to_lowercase",
         "symm_mat_min_eig",
         "truncated_conjugate_gradient",
     ],
