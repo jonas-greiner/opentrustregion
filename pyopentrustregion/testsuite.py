@@ -42,13 +42,42 @@ try:
         c_real,
     )
 except ImportError:
-    from python_interface import (
+    sys.path.insert(0, str(Path(__file__).parent.absolute()))
+    from pyopentrustregion import (
         SolverSettings,
         StabilitySettings,
         solver,
         stability_check,
         c_int,
         c_real,
+    )
+
+ext = "dylib" if sys.platform == "darwin" else "so"
+lib = None
+
+# try to load from installed package (site-packages)
+lib_path = resources.files("pyopentrustregion") / f"libtestsuite.{ext}"
+if lib_path.is_file():
+    lib = CDLL(str(lib_path))
+
+# fallback: try to load from same directory (editable install)
+if lib is None:
+    local_path = os.path.join(os.path.dirname(__file__), f"libtestsuite.{ext}")
+    if os.path.exists(local_path):
+        lib = CDLL(local_path)
+
+# fallback: try to load from ../build (development build)
+if lib is None:
+    build_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../build", f"libtestsuite.{ext}")
+    )
+    if os.path.exists(build_path):
+        lib = CDLL(build_path)
+
+# if all failed
+if lib is None:
+    raise FileNotFoundError(
+        f"Cannot find any of the expected libraries: libtestsuite.{ext}"
     )
 
 # load the testsuite library

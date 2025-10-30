@@ -16,6 +16,27 @@ jobs:
           - os: linux
             compiler: gnu
             runs-on: ubuntu-latest
+            build-type: install
+            scenario: installed
+            python-version: "3.10"
+            cmargs: ""
+          - os: linux
+            compiler: gnu
+            runs-on: ubuntu-latest
+            build-type: install
+            scenario: editable
+            python-version: "3.10"
+            cmargs: ""
+          - os: linux
+            compiler: gnu
+            runs-on: ubuntu-latest
+            build-type: install
+            scenario: dev-build
+            python-version: "3.10"
+            cmargs: ""
+          - os: linux
+            compiler: gnu
+            runs-on: ubuntu-latest
             build-type: test
             python-version: "3.10"
             cmargs: ""
@@ -111,8 +132,32 @@ jobs:
         python -m pip install --upgrade pip
 
     - name: Build & Install OpenTrustRegion
-      if: ${{ matrix.build-type == 'test' }}
+      if: ${{ matrix.build-type == 'test' || (matrix.build-type == 'install' && matrix.scenario == 'installed') }}
       run: pip install ${{github.workspace}}
+
+    - name: Build & Install OpenTrustRegion
+      if: ${{matrix.build-type == 'install' && matrix.scenario == 'editable' }}
+      run: pip install -e ${{github.workspace}}
+
+    - name: Build & Install OpenTrustRegion
+      if: ${{matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
+      run: | 
+        sudo apt install -y cmake
+        pip install numpy
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+    - name: Testing pip installation
+      if: ${{ matrix.build-type == 'install' && (matrix.scenario == 'installed' || matrix.scenario == 'editable') }}
+      run: python -c "import pyopentrustregion.testsuite"
+
+    - name: Testing dev installation
+      if: ${{ matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
+      run: | 
+        export PYTHONPATH=${GITHUB_WORKSPACE}
+        python -c "import pyopentrustregion.testsuite"
 
     - name: Testing OpenTrustRegion
       if: ${{ matrix.build-type == 'test' }}
