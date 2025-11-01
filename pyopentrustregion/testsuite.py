@@ -8,7 +8,18 @@ import os
 import sys
 import unittest
 from importlib import resources
-from ctypes import CDLL, c_bool
+from ctypes import (
+    CDLL,
+    c_bool,
+    c_double,
+    c_char,
+    c_void_p,
+    Array,
+    byref,
+    CFUNCTYPE,
+    Structure,
+    POINTER,
+)
 from unittest.mock import patch
 from pathlib import Path
 
@@ -22,33 +33,63 @@ except ImportError:
 
 # check if pyopentrustregion is installed or import module in same directory
 try:
-    from pyopentrustregion import solver, stability_check
+    from pyopentrustregion import (
+        SolverSettings,
+        StabilitySettings,
+        solver,
+        stability_check,
+        c_int,
+        c_real,
+    )
 except ImportError:
-    from python_interface import solver, stability_check
+    sys.path.insert(0, str(Path(__file__).parent.absolute()))
+    from pyopentrustregion import (
+        SolverSettings,
+        StabilitySettings,
+        solver,
+        stability_check,
+        c_int,
+        c_real,
+    )
 
-# load the testsuite library
 ext = "dylib" if sys.platform == "darwin" else "so"
-try:
-    with resources.path("pyopentrustregion", f"libtestsuite.{ext}") as lib_path:
-        libtestsuite = CDLL(str(lib_path))
-# fallback location if installation was not through setup.py
-except OSError:
-    try:
-        fallback_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../build", f"libtestsuite.{ext}")
-        )
-        libtestsuite = CDLL(fallback_path)
-    except OSError:
-        raise FileNotFoundError("Cannot find testsuite library.")
+lib = None
 
+# try to load from installed package (site-packages)
+lib_path = resources.files("pyopentrustregion") / f"libtestsuite.{ext}"
+if lib_path.is_file():
+    print(str(lib_path))
+    lib = CDLL(str(lib_path))
+
+# fallback: try to load from same directory (editable install)
+if lib is None:
+    local_path = os.path.join(os.path.dirname(__file__), f"libtestsuite.{ext}")
+    if os.path.exists(local_path):
+        print(local_path)
+        lib = CDLL(local_path)
+
+# fallback: try to load from ../build (development build)
+if lib is None:
+    build_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../build", f"libtestsuite.{ext}")
+    )
+    if os.path.exists(build_path):
+        print(build_path)
+        lib = CDLL(build_path)
+
+# if all failed
+if lib is None:
+    raise FileNotFoundError(
+        f"Cannot find any of the expected libraries: libtestsuite.{ext}"
+    )
 
 # define all tests in alphabetical order
 fortran_tests = {
     "opentrustregion_tests": [
-        "add_error_origin",
         "abs_diag_precond",
         "accept_trust_region_step",
         "add_column",
+        "add_error_origin",
         "bisection",
         "bracket",
         "extend_matrix",
@@ -66,22 +107,30 @@ fortran_tests = {
         "newton_step",
         "orthogonal_projection",
         "print_results",
-        "sanity_check",
-        "set_default",
         "solver",
+        "solver_sanity_check",
         "split_string_by_space",
         "stability_check",
+        "stability_sanity_check",
+        "string_to_lowercase",
         "symm_mat_min_eig",
         "symm_mat_min_eigval",
         "truncated_conjugate_gradient",
     ],
     "c_interface_tests": [
+        "assign_solver_c_f",
+        "assign_solver_f_c",
+        "assign_stability_c_f",
+        "assign_stability_f_c",
+        "character_from_c",
+        "character_to_c",
         "conv_check_c_wrapper",
         "hess_x_c_wrapper",
+        "init_solver_settings_c",
+        "init_stability_settings_c",
         "logger_c_wrapper",
         "obj_func_c_wrapper",
         "precond_c_wrapper",
-        "set_default_c_ptr",
         "solver_c_wrapper",
         "stability_check_c_wrapper",
         "update_orbs_c_wrapper",
@@ -92,7 +141,7 @@ fortran_tests = {
 # define return type of Fortran functions
 for tests in fortran_tests.values():
     for test in tests:
-        getattr(libtestsuite, f"test_{test}").restype = c_bool
+        getattr(lib, f"test_{test}").restype = c_bool
 
 
 # define function to add tests to test classes
@@ -100,7 +149,7 @@ def add_tests(cls):
 
     def create_test(func_name):
         def test(self):
-            result = getattr(libtestsuite, func_name)()
+            result = getattr(lib, func_name)()
             if result:
                 print(f" {func_name} PASSED")
             self.assertTrue(result, f"{func_name} failed")
@@ -156,17 +205,61 @@ class PyInterfaceTests(unittest.TestCase):
         print(50 * "-")
         print("Running unit tests for Python interface...")
         print(50 * "-")
+
+        # get combined fields
+        combined_fields = (
+            SolverSettings.c_struct._fields_ + StabilitySettings.c_struct._fields_
+        )
+
+        # get non-duplicate fields and allocate memory for reference values
+        fields = []
+        seen_names = set()
+        # loop by type order
+        for curr_type in (c_bool, c_real, c_int):
+            # solver fields of this type
+            for name, t in combined_fields:
+                if t == curr_type and name not in seen_names and name != "initialized":
+                    fields.append((name + "_ref", t))
+                    seen_names.add(name)
+
+        # handle fixed-size c_char arrays (strings)
+        for name, t in combined_fields:
+            if (
+                issubclass(t, Array)
+                and getattr(t, "_type_", None) is c_char
+                and name not in seen_names
+            ):
+                fields.append((name + "_ref", t))
+                seen_names.add(name)
+
+        # create class to read reference values
+        class RefSettingsC(Structure):
+            _fields_ = fields
+
+        # create instance
+        ref_settings = RefSettingsC()
+
+        # call Fortran to fill values
+        lib.get_reference_values.argtypes = [POINTER(RefSettingsC)]
+        lib.get_reference_values.restype = None
+        lib.get_reference_values(byref(ref_settings))
+
+        # extract Python values
+        for name, _ in fields:
+            ref_value = getattr(ref_settings, name)
+            if isinstance(ref_value, bytes):
+                ref_value = ref_value.decode("utf-8")
+            setattr(cls, name, ref_value)
+
         return super().setUpClass()
 
     # replace original library with mock library
-    @patch(
-        "pyopentrustregion.python_interface.libopentrustregion.solver",
-        libtestsuite.mock_solver,
-    )
+    @patch("pyopentrustregion.python_interface.lib.solver", lib.mock_solver)
     def test_solver_py_interface(self):
         """
         this function tests the solver python interface
         """
+        n_param = 3
 
         def mock_obj_func(kappa):
             """
@@ -208,57 +301,44 @@ class PyInterfaceTests(unittest.TestCase):
                 test_logger = True
             return
 
-        # call solver python interface without optional arguments
-        solver(mock_obj_func, mock_update_orbs, 3)
+        # initialize settings object
+        settings = SolverSettings()
+        settings.precond = mock_precond
+        settings.conv_check = mock_conv_check
+        settings.logger = mock_logger
+        for field_info in settings.c_struct._fields_:
+            field_name, field_type = field_info[:2]
+            if field_type == c_void_p or field_name == "initialized":
+                continue
+            setattr(settings, field_name, getattr(self, field_name + "_ref"))
 
         # initialize logging boolean
         test_logger = False
 
         # call solver python interface with optional arguments
-        solver(
-            mock_obj_func,
-            mock_update_orbs,
-            3,
-            precond=mock_precond,
-            conv_check=mock_conv_check,
-            conv_tol=1e-3,
-            hess_symm=False,
-            stability=False,
-            line_search=True,
-            davidson=False,
-            jacobi_davidson=False,
-            prefer_jacobi_davidson=True,
-            n_random_trial_vectors=5,
-            start_trust_radius=0.2,
-            n_macro=300,
-            n_micro=200,
-            global_red_factor=1e-2,
-            local_red_factor=1e-3,
-            seed=33,
-            verbose=3,
-            logger=mock_logger,
-        )
+        solver(mock_obj_func, mock_update_orbs, n_param, settings)
 
         # check if logger was called correctly
         if not test_logger:
-            print("test_solver_py_interface failed: Called logging function wrong.")
+            print(" test_solver_py_interface failed: Called logging function wrong.")
 
         self.assertTrue(
-            libtestsuite.test_solver_result() or not test_logger,
+            lib.test_solver_result() or not test_logger,
             "test_solver_py_interface failed",
         )
-        print("test_solver_py_interface PASSED")
+        print(" test_solver_py_interface PASSED")
 
     # replace original library with mock library
     @patch(
-        "pyopentrustregion.python_interface.libopentrustregion.stability_check",
-        libtestsuite.mock_stability_check,
+        "pyopentrustregion.python_interface.lib.stability_check",
+        lib.mock_stability_check,
     )
     def test_stability_check_py_interface(self):
         """
         this function tests the stability check python interface
         """
-        h_diag = np.full(3, 3.0, dtype=np.float64)
+        n_param = 3
+        h_diag = np.full(n_param, 3.0, dtype=np.float64)
 
         def mock_hess_x(x, hess_x):
             hess_x[:] = 4 * x
@@ -278,63 +358,164 @@ class PyInterfaceTests(unittest.TestCase):
                 test_logger = True
             return
 
-        # call stability check python interface without optional arguments
-        stable, kappa = stability_check(h_diag, mock_hess_x, 3)
+        # initialize settings object
+        settings = StabilitySettings()
+        settings.precond = mock_precond
+        settings.logger = mock_logger
+        for field_info in settings.c_struct._fields_:
+            field_name, field_type = field_info[:2]
+            if field_type == c_void_p or field_name == "initialized":
+                continue
+            setattr(settings, field_name, getattr(self, field_name + "_ref"))
 
-        msg = (
-            "test_stability_check_py_interface failed: Returned stability boolean "
-            "wrong."
-        )
-        if stable:
-            print(msg)
-        self.assertFalse(stable, msg)
-        msg = "test_stability_check_py_interface failed: Returned direction wrong."
-        if not np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)):
-            print(msg)
-        self.assertTrue(np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)), msg)
+        # allocate memory for descent direction
+        kappa = np.empty(n_param, dtype=np.float64)
 
         # initialize logging boolean
         test_logger = False
 
         # call stability check python interface with optional arguments
-        stable, kappa = stability_check(
-            h_diag,
-            mock_hess_x,
-            3,
-            precond=mock_precond,
-            conv_tol=1e-3,
-            hess_symm=False,
-            jacobi_davidson=False,
-            n_random_trial_vectors=3,
-            n_iter=50,
-            verbose=3,
-            logger=mock_logger,
-        )
+        stable = stability_check(h_diag, mock_hess_x, n_param, settings, kappa=kappa)
 
         # check if logger was called correctly
         if not test_logger:
             print(
-                "test_stability_check_py_interface failed: Called logging function "
+                " test_stability_check_py_interface failed: Called logging function "
                 "wrong."
             )
 
         # check if returned variables are correct
         if stable:
             print(
-                "test_stability_check_py_interface failed: Returned stability boolean "
+                " test_stability_check_py_interface failed: Returned stability boolean "
                 "wrong."
             )
-        if not np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)):
-            print("test_stability_check_py_interface failed: Returned direction wrong.")
+        wrong_direction = not np.allclose(
+            kappa, np.full(n_param, 1.0, dtype=np.float64)
+        )
+        if wrong_direction:
+            print(
+                " test_stability_check_py_interface failed: Returned direction wrong."
+            )
 
         self.assertTrue(
-            libtestsuite.test_stability_check_result()
+            lib.test_stability_check_result()
             or not test_logger
             or stable
-            or not np.allclose(kappa, np.full(3, 1.0, dtype=np.float64)),
+            or wrong_direction,
             "test_stability_check_py_interface failed",
         )
-        print("test_stability_check_py_interface PASSED")
+        print(" test_stability_check_py_interface PASSED")
+
+    @patch.object(SolverSettings, "init_c_struct", lib.mock_init_solver_settings)
+    def test_solver_settings(self):
+        """
+        this function ensure the SolverSettings object is properly initialized and
+        synchronized with the underlying C struct
+        """
+        settings = SolverSettings()
+        test_passed = True
+        for field_info in settings.c_struct._fields_:
+            field_name, field_type = field_info[:2]
+            if field_type == c_void_p:
+                if (
+                    getattr(settings, field_name) is not None
+                    or getattr(settings.settings_c, field_name) is not None
+                ):
+                    print(
+                        " test_solver_settings failed: Optional function pointer "
+                        f"{field_name} not initialized correctly."
+                    )
+                    test_passed = False
+            elif field_name == "initialized":
+                if not getattr(settings, field_name):
+                    print(
+                        " test_solver_settings failed: Field initialized not "
+                        "initialized correctly."
+                    )
+                    test_passed = False
+            else:
+                ref_value = getattr(self, field_name + "_ref")
+                if field_type == c_real:
+                    match = np.isclose(getattr(settings, field_name), ref_value)
+                else:
+                    match = getattr(settings, field_name) == ref_value
+                if not match:
+                    print(field_name, getattr(settings, field_name), ref_value)
+                    print(
+                        f" test_solver_settings failed: Field {field_name} not "
+                        "initialized correctly."
+                    )
+                    test_passed = False
+
+        dummy_error_code = 42
+
+        def dummy_precond():
+            return dummy_error_code
+
+        settings.set_optional_callback("precond", CFUNCTYPE(c_int)(dummy_precond))
+
+        c_ptr = getattr(settings.settings_c, "precond")
+        c_interface = getattr(settings.settings_c, "precond_interface", None)
+
+        if (
+            c_ptr is None
+            or (isinstance(c_ptr, c_void_p) and c_ptr.value is None)
+            or not callable(c_interface)
+            or c_interface() != dummy_error_code
+        ):
+            print(
+                " test_solver_settings failed: Optional callbacks are not set "
+                "correctly."
+            )
+            test_passed = False
+
+        self.assertTrue(test_passed, "test_solver_settings failed")
+        print(" test_solver_settings PASSED")
+
+    @patch.object(StabilitySettings, "init_c_struct", lib.mock_init_stability_settings)
+    def test_stability_settings(self):
+        """
+        this function ensure the StabilitySettings object is properly initialized and
+        synchronized with the underlying C struct
+        """
+        settings = StabilitySettings()
+        test_passed = True
+        for field_info in settings.c_struct._fields_:
+            field_name, field_type = field_info[:2]
+            if field_type == c_void_p:
+                if (
+                    getattr(settings, field_name) is not None
+                    or getattr(settings.settings_c, field_name) is not None
+                ):
+                    print(
+                        " test_stability_settings failed: Optional function pointer "
+                        f"{field_name} not initialized correctly."
+                    )
+                    test_passed = False
+            elif field_name == "initialized":
+                if not getattr(settings, field_name):
+                    print(
+                        " test_stability_settings failed: Field initialized not "
+                        "initialized correctly."
+                    )
+                    test_passed = False
+            else:
+                ref_value = getattr(self, field_name + "_ref")
+                if field_type == c_real:
+                    match = np.isclose(getattr(settings, field_name), ref_value)
+                else:
+                    match = getattr(settings, field_name) == ref_value
+                if not match:
+                    print(field_name, getattr(settings, field_name), ref_value)
+                    print(
+                        f" test_stability_settings failed: Field {field_name} not "
+                        "initialized correctly."
+                    )
+                    test_passed = False
+
+        self.assertTrue(test_passed, "test_stability_settings failed")
+        print(" test_stability_settings PASSED")
 
 
 @add_tests
@@ -355,7 +536,7 @@ class SystemTests(unittest.TestCase):
             raise RuntimeError(
                 "test_data directory does not exist in same directory as testsuite.py."
             )
-        libtestsuite.set_test_data_path(str(test_data).encode("utf-8"))
+        lib.set_test_data_path(str(test_data).encode("utf-8"))
         return super().setUpClass()
 
 

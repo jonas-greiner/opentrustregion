@@ -17,37 +17,16 @@ module opentrustregion
 #else
     integer, parameter :: ip = int32  ! 32-bit integers
 #endif
+    integer, parameter :: kw_len = 64
 
     ! mathematical constants
-    real(rp), parameter :: pi = 4.d0*atan(1.d0)
-
-    ! define default optional arguments
-    real(rp), parameter :: solver_conv_tol_default = 1d-5, &
-                           solver_start_trust_radius_default = 0.4d0, &
-                           solver_global_red_factor_default = 1d-3, &
-                           solver_local_red_factor_default = 1d-4, &
-                           stability_conv_tol_default = 1d-8
-    logical, parameter :: solver_stability_default = .false., &
-                          solver_hess_symm_default = .true., &
-                          solver_line_search_default = .false., &
-                          solver_davidson_default = .true., &
-                          solver_jacobi_davidson_default = .false., &
-                          solver_prefer_jacobi_davidson_default = .false., &
-                          stability_hess_symm_default = .true., &
-                          stability_jacobi_davidson_default = .true.
-    integer(ip), parameter :: solver_n_random_trial_vectors_default = 1, &
-                              solver_n_macro_default = 150, &
-                              solver_n_micro_default = 50, &
-                              solver_seed_default = 42, solver_verbose_default = 0, &
-                              stability_n_random_trial_vectors_default = 20, &
-                              stability_n_iter_default = 100, &
-                              stability_verbose_default = 0
+    real(rp), parameter :: pi = 4.0_rp * atan(1.0_rp)
 
     ! define trust region parameters
-    real(rp), parameter :: trust_radius_shrink_ratio = 0.25d0, &
-                           trust_radius_expand_ratio = 0.75d0, &
-                           trust_radius_shrink_factor = 0.7d0, &
-                           trust_radius_expand_factor = 1.2d0
+    real(rp), parameter :: trust_radius_shrink_ratio = 0.25_rp, &
+                           trust_radius_expand_ratio = 0.75_rp, &
+                           trust_radius_shrink_factor = 0.7_rp, &
+                           trust_radius_expand_factor = 1.2_rp
 
     ! define error codes
     integer(ip), parameter :: error_solver = 100, error_stability_check = 200, &
@@ -55,37 +34,9 @@ module opentrustregion
                               error_hess_x = 1300, error_precond = 1400, &
                               error_conv_check = 1500
 
-    ! derived type for solver settings
-    type :: settings_type
-        real(rp) :: conv_tol
-        logical :: hess_symm, jacobi_davidson
-        integer(ip) :: n_random_trial_vectors, verbose
-        procedure(logger_type), pointer, nopass :: logger => null()
-    contains
-        procedure :: log
-    end type
-
-    type, extends(settings_type) :: solver_settings_type
-        logical :: stability, line_search, davidson, prefer_jacobi_davidson
-        real(rp) :: start_trust_radius, global_red_factor, local_red_factor
-        integer(ip) :: n_macro, n_micro, seed
-    contains
-        procedure :: init_solver_settings, print_results
-    end type
-
-    type, extends(settings_type) :: stability_settings_type
-        integer(ip) :: n_iter
-    contains
-        procedure :: init_stability_settings
-    end type
-
-    ! interface for setting default values
-    interface set_default
-        module procedure set_default_real, set_default_integer, set_default_logical
-    end interface
-
-    ! define global variables
-    integer(ip) :: tot_orb_update = 0, tot_hess_x = 0
+    ! define useful parameters
+    real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
+                           hess_symm_thres = 1e-12_rp
 
     ! interfaces for callback functions
     abstract interface
@@ -146,55 +97,87 @@ module opentrustregion
         end subroutine logger_type
     end interface
 
+    ! derived type for solver settings
+    type, abstract :: settings_type
+        logical :: hess_symm, initialized = .false.
+        real(rp) :: conv_tol
+        integer(ip) :: n_random_trial_vectors, jacobi_davidson_start, seed, verbose
+        procedure(precond_type), pointer, nopass :: precond
+        procedure(logger_type), pointer, nopass :: logger
+    contains
+        procedure :: log
+        procedure(init_type), deferred :: init
+    end type
+
+    abstract interface
+        subroutine init_type(self, error)
+            import :: settings_type, ip
+
+            class(settings_type), intent(out) :: self
+            integer(ip), intent(out) :: error
+        end subroutine init_type
+    end interface
+
+    type, extends(settings_type) :: solver_settings_type
+        logical :: stability, line_search
+        real(rp) :: start_trust_radius, global_red_factor, local_red_factor
+        integer(ip) :: n_macro, n_micro
+        character(kw_len) :: subsystem_solver
+        procedure(conv_check_type), pointer, nopass :: conv_check
+    contains
+        procedure :: init => init_solver_settings, print_results
+    end type
+
+    type, extends(settings_type) :: stability_settings_type
+        integer(ip) :: n_iter
+        character(kw_len) :: diag_solver
+    contains
+        procedure :: init => init_stability_settings
+    end type
+
+    ! default settings
+    type(solver_settings_type), parameter :: default_solver_settings = &
+        solver_settings_type(precond = null(), conv_check = null(), logger = null(), &
+                             stability = .false., line_search = .false., &
+                             hess_symm = .true., initialized = .true., &
+                             conv_tol = 1e-5_rp, start_trust_radius = 0.4_rp, &
+                             global_red_factor = 1e-3_rp, local_red_factor = 1e-4_rp, &
+                             n_random_trial_vectors = 1, n_macro = 150, n_micro = 50, &
+                             jacobi_davidson_start = 30, seed = 42, verbose = 0, &
+                             subsystem_solver = "davidson")
+    type(stability_settings_type), parameter :: default_stability_settings = &
+        stability_settings_type(precond = null(), logger = null(), hess_symm = .true., &
+                                initialized = .true., conv_tol = 1e-8_rp, &
+                                n_random_trial_vectors = 20, n_iter = 100, &
+                                jacobi_davidson_start = 50, seed = 42, verbose = 0, &
+                                diag_solver = "davidson")
+
     ! interfaces for solver and stability_check subroutines
     interface
-        subroutine solver_type(update_orbs, obj_func, n_param, error, precond, &
-                               conv_check, conv_tol, stability, hess_symm, &
-                               line_search, davidson, jacobi_davidson, &
-                               prefer_jacobi_davidson, n_random_trial_vectors, &
-                               start_trust_radius, n_macro, n_micro, &
-                               global_red_factor, local_red_factor, seed, verbose, &
-                               logger)
+        subroutine solver_type(update_orbs, obj_func, n_param, error, settings)
 
-            import :: rp, ip, update_orbs_type, obj_func_type, precond_type, &
-                      conv_check_type, logger_type
+            import :: ip, update_orbs_type, obj_func_type, solver_settings_type
 
             procedure(update_orbs_type), intent(in), pointer :: update_orbs
             procedure(obj_func_type), intent(in), pointer :: obj_func
             integer(ip), intent(in) :: n_param
             integer(ip), intent(out) :: error
-            procedure(precond_type), intent(in), pointer, optional :: precond
-            procedure(conv_check_type), intent(in), pointer, optional :: conv_check
-            real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
-                                              global_red_factor, local_red_factor
-            logical, intent(in), optional :: stability, hess_symm, line_search, &
-                                             davidson, jacobi_davidson, &
-                                             prefer_jacobi_davidson
-            integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, &
-                                                 n_micro, seed, verbose
-            procedure(logger_type), intent(in), pointer, optional :: logger       
+            type(solver_settings_type), intent(inout) :: settings
 
         end subroutine solver_type
     end interface
 
     interface
-        subroutine stability_check_type(h_diag, hess_x, stable, error, kappa, precond, &
-                                        conv_tol, hess_symm, jacobi_davidson, &
-                                        n_random_trial_vectors, n_iter, verbose, logger)
+        subroutine stability_check_type(h_diag, hess_x, stable, error, settings, kappa)
 
-            import:: rp, ip, hess_x_type, precond_type, conv_check_type, logger_type
+            import:: rp, ip, hess_x_type, stability_settings_type
 
             real(rp), intent(in) :: h_diag(:)
             procedure(hess_x_type), intent(in), pointer :: hess_x
             logical, intent(out) :: stable
             integer(ip), intent(out) :: error
+            type(stability_settings_type), intent(inout) :: settings
             real(rp), intent(out), optional :: kappa(:)
-            procedure(precond_type), intent(in), pointer, optional :: precond
-            real(rp), intent(in), optional :: conv_tol
-            logical, intent(in), optional :: hess_symm, jacobi_davidson
-            integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, &
-                                                 verbose
-            procedure(logger_type), intent(in), pointer, optional :: logger   
 
         end subroutine stability_check_type
     end interface
@@ -203,37 +186,28 @@ module opentrustregion
     procedure(solver_type), pointer :: solver_ptr => solver
     procedure(stability_check_type), pointer :: stability_check_ptr => stability_check
 
+    ! define global variables
+    integer(ip) :: tot_orb_update = 0, tot_hess_x = 0
+
 contains
 
-    subroutine solver(update_orbs, obj_func, n_param, error, precond, conv_check, &
-                      conv_tol, stability, hess_symm, line_search, davidson, &
-                      jacobi_davidson, prefer_jacobi_davidson, n_random_trial_vectors, &
-                      start_trust_radius, n_macro, n_micro, global_red_factor, &
-                      local_red_factor, seed, verbose, logger)
+    subroutine solver(update_orbs, obj_func, n_param, error, settings)
         !
         ! this subroutine is the main solver for orbital optimization
         !
         procedure(update_orbs_type), intent(in), pointer :: update_orbs
         procedure(obj_func_type), intent(in), pointer :: obj_func
         integer(ip), intent(in) :: n_param
-        procedure(precond_type), intent(in), pointer, optional :: precond
-        procedure(conv_check_type), intent(in), pointer, optional :: conv_check
         integer(ip), intent(out) :: error
-        real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
-                                          global_red_factor, local_red_factor
-        logical, intent(in), optional :: stability, hess_symm, line_search, davidson, &
-                                         jacobi_davidson, prefer_jacobi_davidson
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
-                                             seed, verbose
-        procedure(logger_type), intent(in), pointer, optional :: logger
+        type(solver_settings_type), intent(inout) :: settings
 
-        type(solver_settings_type) :: settings
+        type(stability_settings_type) :: stability_settings
         real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, new_func, n_kappa, &
                     kappa_norm
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:), solution(:), &
                                  precond_kappa(:)
         logical :: max_precision_reached, macro_converged, stable, &
-                   jacobi_davidson_started, use_precond, conv_check_passed
+                   jacobi_davidson_started, conv_check_passed
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson, i
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
@@ -242,6 +216,15 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! initialize settings
+        if (.not. settings%initialized) then
+            call settings%init(error)
+            call add_error_origin(error, error_solver, settings)
+            if (error /= 0) return
+            call settings%log("Settings were not initialized. All settings are set "// &
+                              "to default values", 2)
+        end if
 
         ! initialize maximum precision convergence
         max_precision_reached = .false.
@@ -252,26 +235,11 @@ contains
         ! initialize stabilty boolean
         stable = .true.
 
-        ! initialize settings
-        call settings%init_solver_settings(conv_tol, stability, hess_symm, &
-                                           line_search, davidson, jacobi_davidson, &
-                                           prefer_jacobi_davidson, &
-                                           n_random_trial_vectors, start_trust_radius, &
-                                           n_macro, n_micro, global_red_factor, &
-                                           local_red_factor, seed, verbose, logger)
-
         ! initialize random number generator
         call init_rng(settings%seed)
 
         ! initialize starting trust radius
         trust_radius = settings%start_trust_radius
-
-        ! check if preconditioner is passed
-        if (present(precond)) then
-            use_precond = associated(precond)
-        else
-            use_precond = .false.
-        end if
 
         ! print header
         call settings%log(repeat("-", 109), 3)
@@ -286,7 +254,7 @@ contains
                  precond_kappa(n_param))
 
         ! initialize orbital rotation matrix
-        kappa = 0.d0
+        kappa = 0.0_rp
 
         do imacro = 1, settings%n_macro
             if (.not. max_precision_reached) then
@@ -297,7 +265,7 @@ contains
 
                 ! perform sanity check
                 if (imacro == 1) then
-                    call sanity_check(settings, n_param, grad, error)
+                    call solver_sanity_check(settings, n_param, grad, error)
                     call add_error_origin(error, error_solver, settings)
                     if (error /= 0) return
                 end if
@@ -312,18 +280,19 @@ contains
                 if (imacro == 1) then
                     call settings%print_results(imacro - 1, func, grad_rms)
                 else
-                    if (settings%davidson) then
+                    if (settings%subsystem_solver == "davidson" .or. &
+                        settings%subsystem_solver == "jacobi-davidson") then
                         kappa_norm = dnrm2(n_param, kappa, 1)
                     else
-                        if (use_precond) then
-                            call precond(kappa, 0.d0, precond_kappa, error)
+                        if (associated(settings%precond)) then
+                            call settings%precond(kappa, 0.0_rp, precond_kappa, error)
                             call add_error_origin(error, error_precond, settings)
                             if (error /= 0) return
                         else
                             call abs_diag_precond(kappa, h_diag, precond_kappa)
                         end if
                         kappa_norm = sqrt(ddot(n_param, kappa, 1, precond_kappa, 1))
-                        mu = 0.d0
+                        mu = 0.0_rp
                         jacobi_davidson_started = .false.
                     end if
                     if (.not. stable) then
@@ -347,14 +316,10 @@ contains
             end if
 
             ! check for convergence and stability
-            if (present(conv_check)) then
-                if (associated(conv_check)) then
-                    conv_check_passed = conv_check(error)
-                    call add_error_origin(error, error_conv_check, settings)
-                    if (error /= 0) return
-                else
-                    conv_check_passed = .false.
-                end if
+            if (associated(settings%conv_check)) then
+                conv_check_passed = settings%conv_check(error)
+                call add_error_origin(error, error_conv_check, settings)
+                if (error /= 0) return
             else
                 conv_check_passed = .false.
             end if
@@ -362,16 +327,22 @@ contains
                 conv_check_passed) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
+                    call stability_settings%init(error)
+                    call add_error_origin(error, error_solver, settings)
+                    if (error /= 0) return
+                    stability_settings%precond => settings%precond
+                    stability_settings%verbose = settings%verbose
+                    stability_settings%logger => settings%logger
                     call stability_check(h_diag, hess_x_funptr, stable, error, &
-                                         kappa=kappa, precond=precond, &
-                                         verbose=settings%verbose, logger=logger)
+                                         stability_settings, kappa=kappa)
                     call add_error_origin(error, error_stability_check, settings)
                     if (error /= 0) return
                     if (.not. stable) then
                         ! logarithmic line search
                         do i = 1, stability_n_points
-                            n_kappa = 10.d0**(-(i - 1)/ &
-                                              real(stability_n_points - 1, rp)*10.d0)
+                            n_kappa = 10.0_rp**(-(i - 1) / &
+                                                real(stability_n_points - 1, rp) * &
+                                                10.0_rp)
                             new_func = obj_func(n_kappa*kappa, error)
                             call add_error_origin(error, error_obj_func, settings)
                             if (error /= 0) return
@@ -413,38 +384,36 @@ contains
                 end if
             end if
 
-            if (settings%davidson) then
+            if (settings%subsystem_solver == "davidson" .or. &
+                settings%subsystem_solver == "jacobi-davidson") then
                 ! solve trust region subproblem with (Jacobi-)Davidson
                 call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
                                             obj_func, hess_x_funptr, settings, &
-                                            use_precond, precond, trust_radius, &
-                                            solution, mu, imicro, &
+                                            trust_radius, solution, mu, imicro, &
                                             imicro_jacobi_davidson, &
                                             jacobi_davidson_started, &
-                                            max_precision_reached, &
-                                            error)
+                                            max_precision_reached, error)
                 call add_error_origin(error, error_solver, settings)
                 if (error /= 0) return
             else
                 ! solve trust region subproblem with truncated conjugate gradient
                 call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                                   obj_func, hess_x_funptr, &
-                                                  use_precond, precond, settings, &
-                                                  trust_radius, solution, imicro, &
-                                                  max_precision_reached, error)
+                                                  settings, trust_radius, solution, &
+                                                  imicro, max_precision_reached, error)
                 call add_error_origin(error, error_solver, settings)
                 if (error /= 0) return
             end if
 
             ! perform line search
             if (max_precision_reached) then
-                n_kappa = 0.d0
+                n_kappa = 0.0_rp
             else if (settings%line_search) then
-                n_kappa = bracket(obj_func, solution, 0.d0, 1.d0, settings, error)
+                n_kappa = bracket(obj_func, solution, 0.0_rp, 1.0_rp, settings, error)
                 call add_error_origin(error, error_solver, settings)
                 if (error /= 0) return
             else
-                n_kappa = 1.d0
+                n_kappa = 1.0_rp
             end if
 
             ! set orbital rotation
@@ -487,9 +456,7 @@ contains
 
     end subroutine solver
 
-    subroutine stability_check(h_diag, hess_x_funptr, stable, error, kappa, precond, &
-                               conv_tol, hess_symm, jacobi_davidson, &
-                               n_random_trial_vectors, n_iter, verbose, logger)
+    subroutine stability_check(h_diag, hess_x_funptr, stable, error, settings, kappa)
         !
         ! this subroutine performs a stability check
         !
@@ -497,22 +464,17 @@ contains
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable
         integer(ip), intent(out) :: error
+        type(stability_settings_type), intent(inout) :: settings
         real(rp), intent(out), optional :: kappa(:)
-        procedure(precond_type), intent(in), pointer, optional :: precond
-        real(rp), intent(in), optional :: conv_tol
-        logical, intent(in), optional :: hess_symm, jacobi_davidson
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
-        procedure(logger_type), intent(in), pointer, optional :: logger
 
-        type(stability_settings_type) :: settings
         integer(ip) :: n_param, n_trial, i, iter
         real(rp), allocatable :: solution(:), h_solution(:), residual(:), &
                                  basis_vec(:), h_basis_vec(:), red_space_basis(:, :), &
                                  h_basis(:, :), red_space_hess(:, :), &
                                  red_space_solution(:), row_vec(:), col_vec(:)
         real(rp) :: eigval, minres_tol, stability_rms
-        logical :: use_precond
         character(300) :: msg
+        real(rp), parameter :: stability_thresh = -1e-2_rp
         real(rp), external :: dnrm2, ddot
         external :: dgemm, dgemv
 
@@ -520,33 +482,29 @@ contains
         error = 0
 
         ! initialize settings
-        call settings%init_stability_settings(conv_tol, hess_symm, jacobi_davidson, &
-                                              n_random_trial_vectors, n_iter, verbose, &
-                                              logger)
+        if (.not. settings%initialized) then
+            call settings%init(error)
+            call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
+            call settings%log("Settings were not initialized. All settings are set "// &
+                              "to default values", 2)
+        end if
+
+        ! initialize random number generator
+        call init_rng(settings%seed)
 
         ! get number of parameters
         n_param = size(h_diag)
 
-        ! check that number of random trial vectors is below number of parameters
-        if (settings%n_random_trial_vectors > n_param/2) then
-            settings%n_random_trial_vectors = n_param/2
-            write (msg, '(A, I0, A)') "Number of random trial vectors should be "// &
-                "smaller than half the number of parameters. Setting to ", &
-                settings%n_random_trial_vectors, "."
-            call settings%log(msg, 2)
-        end if
-
-        ! check if preconditioner is passed
-        if (present(precond)) then
-            use_precond = associated(precond)
-        else
-            use_precond = .false.
-        end if
+        ! perform sanity check
+        call stability_sanity_check(settings, n_param, error)
+        call add_error_origin(error, error_solver, settings)
+        if (error /= 0) return
 
         ! generate trial vectors
         allocate(red_space_basis(n_param, 1 + settings%n_random_trial_vectors))
-        red_space_basis(:, 1) = 0.d0
-        red_space_basis(minloc(h_diag), 1) = 1.d0
+        red_space_basis(:, 1) = 0.0_rp
+        red_space_basis(minloc(h_diag), 1) = 1.0_rp
         call generate_random_trial_vectors(red_space_basis, settings, error)
         call add_error_origin(error, error_stability_check, settings)
         if (error /= 0) return
@@ -564,8 +522,8 @@ contains
 
         ! construct augmented Hessian in reduced space
         allocate(red_space_hess(n_trial, n_trial))
-        call dgemm("T", "N", n_trial, n_trial, n_param, 1.d0, red_space_basis, &
-                   n_param, h_basis, n_param, 0.d0, red_space_hess, n_trial)
+        call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, red_space_basis, &
+                   n_param, h_basis, n_param, 0.0_rp, red_space_hess, n_trial)
 
         ! allocate arrays used throughout Davidson procedure
         allocate(red_space_solution(n_trial), solution(n_param), h_solution(n_param), &
@@ -580,13 +538,13 @@ contains
             if (error /= 0) return
 
             ! get full space solution
-            call dgemv("N", size(red_space_basis, 1), size(red_space_basis, 2), 1.d0, &
-                       red_space_basis, size(red_space_basis, 1), red_space_solution, &
-                       1, 0.d0, solution, 1)
+            call dgemv("N", size(red_space_basis, 1), size(red_space_basis, 2), &
+                       1.0_rp, red_space_basis, size(red_space_basis, 1), &
+                       red_space_solution, 1, 0.0_rp, solution, 1)
 
             ! calculate Hessian linear transformation of solution
-            call dgemv("N", n_param, size(h_basis, 2), 1.d0, h_basis, n_param, &
-                       red_space_solution, 1, 0.d0, h_solution, 1)
+            call dgemv("N", n_param, size(h_basis, 2), 1.0_rp, h_basis, n_param, &
+                       red_space_solution, 1, 0.0_rp, h_solution, 1)
 
             ! calculate residual
             residual = h_solution - eigval*solution
@@ -595,14 +553,15 @@ contains
             stability_rms = dnrm2(n_param, residual, 1) / sqrt(real(n_param, kind=rp))
             if (stability_rms < settings%conv_tol) exit
 
-            if (.not. settings%jacobi_davidson .or. iter <= 30) then
+            if (settings%diag_solver == "davidson" .or. iter <= &
+                settings%jacobi_davidson_start) then
                 ! precondition residual
-                if (use_precond) then
-                    call precond(residual, 0.d0, basis_vec, error)
+                if (associated(settings%precond)) then
+                    call settings%precond(residual, 0.0_rp, basis_vec, error)
                     call add_error_origin(error, error_precond, settings)
                     if (error /= 0) return
                 else
-                    call level_shifted_diag_precond(residual, 0.d0, h_diag, basis_vec)
+                    call level_shifted_diag_precond(residual, 0.0_rp, h_diag, basis_vec)
                 end if
 
                 ! orthonormalize to current orbital space to get new basis vector
@@ -620,7 +579,7 @@ contains
 
             else
                 ! solve Jacobi-Davidson correction equations
-                minres_tol = 3.d0 ** (-(iter - 31))
+                minres_tol = 3.0_rp ** (-(iter - settings%jacobi_davidson_start - 1))
                 call minres(-residual, hess_x_funptr, solution, eigval, minres_tol, &
                             basis_vec, h_basis_vec, settings, error)
                 call add_error_origin(error, error_stability_check, settings)
@@ -638,7 +597,8 @@ contains
                 if (abs(ddot(n_param, red_space_basis(:, size(red_space_basis, 2)), 1, &
                              h_basis_vec, 1) - &
                         ddot(n_param, basis_vec, 1, &
-                             h_basis(:, size(red_space_basis, 2)), 1)) > 1d-12) then
+                             h_basis(:, size(red_space_basis, 2)), 1)) > &
+                    hess_symm_thres) then
                     call hess_x_funptr(basis_vec, h_basis_vec, error)
                     call add_error_origin(error, error_hess_x, settings)
                     if (error /= 0) return
@@ -655,15 +615,15 @@ contains
             ! construct new reduced space Hessian
             allocate(row_vec(size(red_space_basis, 2)))
             allocate(col_vec(size(red_space_basis, 2)))
-            call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, red_space_basis, &
-                       n_param, h_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
-                       row_vec, 1)
+            call dgemv("T", n_param, size(red_space_basis, 2), 1.0_rp, &
+                       red_space_basis, n_param, h_basis(:, size(red_space_basis, 2)), &
+                       1, 0.0_rp, row_vec, 1)
             if (settings%hess_symm) then
                 col_vec = row_vec
             else
-                call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, h_basis, &
+                call dgemv("T", n_param, size(red_space_basis, 2), 1.0_rp, h_basis, &
                            n_param, red_space_basis(:, size(red_space_basis, 2)), 1, &
-                           0.d0, col_vec, 1)
+                           0.0_rp, col_vec, 1)
             end if
             call extend_matrix(red_space_hess, row_vec, col_vec)
             deallocate(row_vec)
@@ -684,10 +644,10 @@ contains
         tot_hess_x = tot_hess_x + size(red_space_basis, 2)
 
         ! determine if saddle point
-        stable = eigval > -1.d-2
+        stable = eigval > stability_thresh
         
         if (stable) then
-            if (present(kappa)) kappa = 0.d0
+            if (present(kappa)) kappa = 0.0_rp
         else
             if (present(kappa)) kappa = solution
             write (msg, '(A, F0.4)') "Solution not stable. Lowest eigenvalue: ", eigval
@@ -735,7 +695,7 @@ contains
         red_hess = aug_hess(2:, 2:)
 
         ! set gradient
-        red_space_solution = 0.d0
+        red_space_solution = 0.0_rp
         red_space_solution(1) = -grad_norm
 
         ! solve linear system
@@ -745,7 +705,7 @@ contains
             allocate(ipiv(n_red), work(1))
             call dsysv("U", n_red, 1, red_hess, n_red, ipiv, red_space_solution, &
                        n_red, work, lwork, info)
-            lwork = int(work(1))
+            lwork = int(work(1), kind=ip)
             deallocate(work)
             allocate(work(lwork))
 
@@ -785,8 +745,8 @@ contains
         deallocate(red_hess, ipiv)
 
         ! get solution in full space
-        call dgemv("N", n_param, n_red, 1.d0, red_space_basis, n_param, &
-                   red_space_solution, 1, 0.d0, solution, 1)
+        call dgemv("N", n_param, n_red, 1.0_rp, red_space_basis, n_param, &
+                   red_space_solution, 1, 0.0_rp, solution, 1)
 
     end subroutine newton_step
 
@@ -806,6 +766,9 @@ contains
         real(rp) :: lower_alpha, middle_alpha, upper_alpha, lower_trust_dist, &
                     middle_trust_dist, upper_trust_dist
         integer(ip) :: n_param, n_red, iter
+        real(rp), parameter :: lower_alpha_bound = 1e-4_rp, &
+                               upper_alpha_bound = 1e6_rp, &
+                               alpha_conv_factor = 1e-12_rp
         real(rp), external :: dnrm2
 
         ! initialize error flag
@@ -821,8 +784,8 @@ contains
         n_red = size(red_space_basis, 2)
 
         ! lower and upper bracket for alpha
-        lower_alpha = 1.d-4
-        upper_alpha = 1.d6
+        lower_alpha = lower_alpha_bound
+        upper_alpha = upper_alpha_bound
 
         ! solve reduced space problem with scaled gradient
         call get_ah_lowest_eigenvec(lower_alpha)
@@ -833,10 +796,10 @@ contains
         upper_trust_dist = dnrm2(n_param, solution, 1) - trust_radius
 
         ! check if trust region is within bracketing range
-        if ((lower_trust_dist*upper_trust_dist) > 0.d0) then
-            solution = 0.d0
-            red_space_solution = 0.d0
-            mu = 0.d0
+        if ((lower_trust_dist*upper_trust_dist) > 0.0_rp) then
+            solution = 0.0_rp
+            red_space_solution = 0.0_rp
+            mu = 0.0_rp
             return
         end if
 
@@ -849,9 +812,9 @@ contains
         ! perform bisection to find root, converge to relative threshold to avoid 
         ! precision issues
         iter = 0
-        do while (upper_alpha - lower_alpha > 1.d-12 * upper_alpha)
+        do while (upper_alpha - lower_alpha > alpha_conv_factor * upper_alpha)
             ! targeted trust radius is in upper bracket
-            if (lower_trust_dist*middle_trust_dist > 0.d0) then
+            if (lower_trust_dist*middle_trust_dist > 0.0_rp) then
                 lower_alpha = middle_alpha
                 lower_trust_dist = middle_trust_dist
                 ! targeted trust radius is in lower bracket
@@ -900,7 +863,7 @@ contains
             if (error /= 0) return
 
             ! check if eigenvector has level-shift component
-            if (abs(eigvec(1)) == 0.d0) then
+            if (abs(eigvec(1)) <= numerical_zero) then
                 call settings%log("Trial subspace too small. Increase "// &
                     "n_random_trial_vectors.", 1, .true.)
                 error = 1
@@ -913,8 +876,8 @@ contains
             deallocate(eigvec)
 
             ! get solution in full space
-            call dgemv("N", n_param, n_red, 1.d0, red_space_basis, n_param, &
-                       red_space_solution, 1, 0.d0, solution, 1)
+            call dgemv("N", n_param, n_red, 1.0_rp, red_space_basis, n_param, &
+                       red_space_solution, 1, 0.0_rp, solution, 1)
 
         end subroutine get_ah_lowest_eigenvec
 
@@ -932,14 +895,14 @@ contains
         real(rp) :: n_kappa, f_upper, f_lower, n_a, n_b, n_c, n_u, f_a, f_b, f_c, f_u, &
                     n_u_lim, tmp1, tmp2, val, denom
         integer(ip) :: iter
-        real(rp), parameter :: golden_ratio = (1.d0 + sqrt(5.d0))/2.d0, &
-                               grow_limit = 110.d0
+        real(rp), parameter :: golden_ratio = (1.0_rp + sqrt(5.0_rp)) / 2.0_rp, &
+                               grow_limit = 110.0_rp, denom_floor = 1e-21_rp
 
         ! initialize error flag
         error = 0
 
         ! initialize step length
-        n_kappa = 0.d0
+        n_kappa = 0.0_rp
 
         ! evaluate function at upper and lower bounds
         f_lower = obj_func(lower*kappa, error)
@@ -975,7 +938,7 @@ contains
             tmp1 = (n_b - n_a)*(f_b - f_c)
             tmp2 = (n_b - n_c)*(f_b - f_a)
             val = tmp2 - tmp1
-            denom = 2.d0*sign(max(abs(val), 1.d-21), val)
+            denom = 2.0_rp*sign(max(abs(val), denom_floor), val)
             n_u = n_b - ((n_b - n_c)*tmp2 - (n_b - n_a)*tmp1)/denom
 
             ! maximum growth in parabolic fit
@@ -1008,13 +971,13 @@ contains
                 call add_error_origin(error, error_obj_func, settings)
                 if (error /= 0) return
             ! limit parabolic fit to its maximum allowed value
-            else if ((n_u - n_u_lim)*(n_u_lim - n_c) >= 0.d0) then
+            else if ((n_u - n_u_lim)*(n_u_lim - n_c) >= 0.0_rp) then
                 n_u = n_u_lim
                 f_u = obj_func(n_u*kappa, error)
                 call add_error_origin(error, error_obj_func, settings)
                 if (error /= 0) return
             ! parabolic fit is between n_c and its allowed limit
-            else if ((n_u - n_u_lim)*(n_c - n_u) > 0.d0) then
+            else if ((n_u - n_u_lim)*(n_c - n_u) > 0.0_rp) then
                 ! evaluate function at n_u
                 f_u = obj_func(n_u*kappa, error)
                 call add_error_origin(error, error_obj_func, settings)
@@ -1173,7 +1136,7 @@ contains
         lwork = -1
         allocate(eigvals(n), work(1))
         call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
-        lwork = int(work(1))
+        lwork = int(work(1), kind=ip)
         deallocate(work)
         allocate(work(lwork))
 
@@ -1306,7 +1269,7 @@ contains
         lwork = -1
         allocate(eigvals(n), work(1))
         call dsyev("N", "U", n, temp, n, eigvals, work, lwork, info)
-        lwork = int(work(1))
+        lwork = int(work(1), kind=ip)
         deallocate(work)
         allocate(work(lwork))
 
@@ -1429,13 +1392,13 @@ contains
         min_idx = minloc(h_diag, dim=1)
 
         ! add direction if minimum Hessian diagonal element is negative
-        if (h_diag(min_idx) < 0.d0) then
+        if (h_diag(min_idx) < 0.0_rp) then
             n_vectors = 2
             allocate(red_space_basis(size(grad), n_vectors + &
                      settings%n_random_trial_vectors))
             red_space_basis(:, 1) = grad/grad_norm
-            red_space_basis(:, 2) = 0.d0
-            red_space_basis(min_idx, 2) = 1.d0
+            red_space_basis(:, 2) = 0.0_rp
+            red_space_basis(min_idx, 2) = 1.0_rp
             call gram_schmidt(red_space_basis(:, 2), &
                               reshape(red_space_basis(:, 1), &
                                       [size(red_space_basis, 1), 1]), &
@@ -1461,6 +1424,7 @@ contains
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_trial, i
+        real(rp), parameter :: rnd_vector_min_norm = 1e-3_rp
         real(rp), external :: dnrm2
 
         ! initialize error flag
@@ -1473,7 +1437,7 @@ contains
             call random_number(red_space_basis(:, i))
             red_space_basis(:, i) = 2*red_space_basis(:, i) - 1
             do while (dnrm2(size(red_space_basis(:, i)), red_space_basis(:, i), 1) &
-                      < 1.d-3)
+                      < rnd_vector_min_norm)
                 call random_number(red_space_basis(:, i))
                 red_space_basis(:, i) = 2*red_space_basis(:, i) - 1
             end do
@@ -1502,12 +1466,13 @@ contains
         real(rp), allocatable :: orth(:)
         real(rp) :: dot, norm
         integer(ip) :: iter, i
+        real(rp), parameter :: zero_thres = 1e-16_rp, orth_thres = 1e-14_rp
         real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
         error = 0
 
-        if (dnrm2(size(vector), vector, 1) < 1.d-16) then
+        if (dnrm2(size(vector), vector, 1) < zero_thres) then
             call settings%log("Vector passed to Gram-Schmidt procedure is "// &
                 "numerically zero.", 1, .true.)
             error = 1
@@ -1530,9 +1495,9 @@ contains
                 end do
                 vector = vector / dnrm2(size(vector), vector, 1)
 
-                call dgemv("T", size(vector), size(space, 2), 1.d0, space, &
-                           size(vector), vector, 1, 0.d0, orth, 1)
-                if (maxval(abs(orth)) < 1.d-14) exit
+                call dgemv("T", size(vector), size(space, 2), 1.0_rp, space, &
+                           size(vector), vector, 1, 0.0_rp, orth, 1)
+                if (maxval(abs(orth)) < orth_thres) exit
                 iter = iter + 1
                 if (iter > 100) then
                     call settings%log("Maximum number of Gram-Schmidt iterations "// &
@@ -1552,9 +1517,9 @@ contains
                 vector = vector / norm
                 lin_trans_vector = lin_trans_vector / norm
 
-                call dgemv("T", size(vector), size(space, 2), 1.d0, space, &
-                           size(vector), vector, 1, 0.d0, orth, 1)
-                if (maxval(abs(orth)) < 1.d-14) exit
+                call dgemv("T", size(vector), size(space, 2), 1.0_rp, space, &
+                           size(vector), vector, 1, 0.0_rp, orth, 1)
+                if (maxval(abs(orth)) < orth_thres) exit
                 iter = iter + 1
                 if (iter > 100) then
                     call settings%log("Maximum number of Gram-Schmidt iterations "// &
@@ -1570,122 +1535,53 @@ contains
 
     end subroutine gram_schmidt
 
-    subroutine init_solver_settings(self, conv_tol, stability, hess_symm, line_search, &
-                                    davidson, jacobi_davidson, prefer_jacobi_davidson, &
-                                    n_random_trial_vectors, start_trust_radius, &
-                                    n_macro, n_micro, global_red_factor, &
-                                    local_red_factor, seed, verbose, logger)
+    subroutine init_solver_settings(self, error)
         !
         ! this subroutine sets the optional settings to their default values
         !
-        class(solver_settings_type), intent(inout) :: self
-        real(rp), intent(in), optional :: conv_tol, start_trust_radius, &
-                                          global_red_factor, local_red_factor
-        logical, intent(in), optional :: stability, hess_symm, line_search, davidson, &
-                                         jacobi_davidson, prefer_jacobi_davidson
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_macro, n_micro, &
-                                             seed, verbose
-        procedure(logger_type), intent(in), pointer, optional :: logger
+        class(solver_settings_type), intent(out) :: self
+        integer(ip), intent(out) :: error
 
-        self%conv_tol = set_default(conv_tol, solver_conv_tol_default)
-        self%stability = set_default(stability, solver_stability_default)
-        self%hess_symm = set_default(hess_symm, solver_hess_symm_default)
-        self%line_search = set_default(line_search, solver_line_search_default)
-        self%davidson = set_default(davidson, solver_davidson_default)
-        self%jacobi_davidson = set_default(jacobi_davidson, &
-                                           solver_jacobi_davidson_default)
-        self%prefer_jacobi_davidson = set_default(prefer_jacobi_davidson, &
-                                                  solver_prefer_jacobi_davidson_default)
-        self%n_random_trial_vectors = set_default(n_random_trial_vectors, &
-                                                  solver_n_random_trial_vectors_default)
-        self%start_trust_radius = set_default(start_trust_radius, &
-                                              solver_start_trust_radius_default)
-        self%n_macro = set_default(n_macro, solver_n_macro_default)
-        self%n_micro = set_default(n_micro, solver_n_micro_default)
-        self%global_red_factor = set_default(global_red_factor, &
-                                             solver_global_red_factor_default)
-        self%local_red_factor = set_default(local_red_factor, &
-                                            solver_local_red_factor_default)
-        self%seed = set_default(seed, solver_seed_default)
-        self%verbose = set_default(verbose, solver_verbose_default)
-        if (present(logger)) self%logger => logger
+        ! initialize error flag
+        error = 0
+
+        ! ensure that class is actually solver_settings_type and not a subclass
+        select type(settings => self)
+        type is (solver_settings_type)
+            settings = default_solver_settings
+        class default
+            call settings%log("Solver settings could not be initialized because "// &
+                              "initialization routine received the wrong type. The "// &
+                              "type solver_settings_type was likely subclassed "// &
+                              "without providing an initialization routine.", 1, .true.)
+            error = 1
+        end select
 
     end subroutine init_solver_settings
 
-    subroutine init_stability_settings(self, conv_tol, hess_symm, jacobi_davidson, &
-                                       n_random_trial_vectors, n_iter, verbose, &
-                                       logger)
+    subroutine init_stability_settings(self, error)
         !
         ! this subroutine sets the optional settings to their default values
         !
-        class(stability_settings_type), intent(inout) :: self
-        real(rp), intent(in), optional :: conv_tol
-        logical, intent(in), optional :: hess_symm, jacobi_davidson
-        integer(ip), intent(in), optional :: n_random_trial_vectors, n_iter, verbose
-        procedure(logger_type), intent(in), pointer, optional :: logger
+        class(stability_settings_type), intent(out) :: self
+        integer(ip), intent(out) :: error
 
-        self%conv_tol = set_default(conv_tol, stability_conv_tol_default)
-        self%hess_symm = set_default(hess_symm, stability_hess_symm_default)
-        self%jacobi_davidson = set_default(jacobi_davidson, &
-                                           stability_jacobi_davidson_default)
-        self%n_random_trial_vectors = set_default(n_random_trial_vectors, &
-                                               stability_n_random_trial_vectors_default)
-        self%n_iter = set_default(n_iter, stability_n_iter_default)
-        self%verbose = set_default(verbose, stability_verbose_default)
-        if (present(logger)) self%logger => logger
+        ! initialize error flag
+        error = 0
+
+        ! ensure that class is actually stability_settings_type and not a subclass
+        select type(settings => self)
+        type is (stability_settings_type)
+            settings = default_stability_settings
+        class default
+            call settings%log("Stability settings could not be initialized because "// &
+                              "initialization routine received the wrong type. The "// &
+                              "type stability_settings_type was likely subclassed "// &
+                              "without providing an initialization routine.", 1, .true.)
+            error = 1
+        end select
 
     end subroutine init_stability_settings
-
-    function set_default_real(optional_value, default_value) result(variable)
-        !
-        ! this function sets a default value for reals
-        !
-        real(rp), intent(in)  :: default_value
-        real(rp), intent(in), optional :: optional_value
-
-        real(rp) :: variable
-
-        if (present(optional_value)) then
-            variable = optional_value
-        else
-            variable = default_value
-        end if
-
-    end function set_default_real
-
-    function set_default_integer(optional_value, default_value) result(variable)
-        !
-        ! this function sets a default value for integers
-        !
-        integer(ip), intent(in)  :: default_value
-        integer(ip), intent(in), optional :: optional_value
-
-        integer(ip) :: variable
-
-        if (present(optional_value)) then
-            variable = optional_value
-        else
-            variable = default_value
-        end if
-
-    end function set_default_integer
-
-    function set_default_logical(optional_value, default_value) result(variable)
-        !
-        ! this function sets a default value for logicals
-        !
-        logical, intent(in)  :: default_value
-        logical, intent(in), optional :: optional_value
-
-        logical :: variable
-
-        if (present(optional_value)) then
-            variable = optional_value
-        else
-            variable = default_value
-        end if
-
-    end function set_default_logical
 
     subroutine level_shifted_diag_precond(vector, mu, h_diag, precond_vector)
         !
@@ -1696,8 +1592,8 @@ contains
         
         ! construct level-shifted preconditioner
         precond_vector = h_diag - mu
-        where (abs(precond_vector) < 1d-10)
-            precond_vector = 1d-10
+        where (abs(precond_vector) < precond_floor)
+            precond_vector = precond_floor
         end where
 
         ! precondition vector
@@ -1713,7 +1609,7 @@ contains
         real(rp), intent(out) :: precond_vector(:)
 
         ! construct positive-definite preconditioner
-        precond_vector = max(abs(h_diag), 1.d-10)
+        precond_vector = max(abs(h_diag), precond_floor)
         
         ! precondition vector
         precond_vector = vector / precond_vector
@@ -1743,7 +1639,7 @@ contains
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(in) :: vector(:), solution(:), eigval
         real(rp), intent(out) :: corr_vector(:), hess_vector(:)
-        type(settings_type), intent(in) :: settings
+        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         ! initialize error flag
@@ -1779,7 +1675,7 @@ contains
         integer(ip), intent(in), optional :: max_iter
 
         integer(ip) :: n, max_iterations, iteration
-        real(rp), parameter :: eps = epsilon(1.d0)
+        real(rp), parameter :: eps = epsilon(1.0_rp)
         real(rp) :: beta_start, beta, phi_bar, rhs1, old_beta, alfa, t_norm2, eps_ln, &
                     old_eps, cs, d_bar, sn, delta, g_bar, root, gamma, phi, g_max, &
                     g_min, tmp, rhs2, a_norm, vec_norm, qr_norm
@@ -1809,9 +1705,9 @@ contains
             if (error /= 0) return
             tot_hess_x = tot_hess_x + 1
         else
-            vec = 0.d0
-            hvec = 0.d0
-            matvec = 0.d0
+            vec = 0.0_rp
+            hvec = 0.0_rp
+            matvec = 0.0_rp
         end if
 
         ! maximum number of iterations
@@ -1827,12 +1723,12 @@ contains
         beta_start = dnrm2(n, r1, 1)
 
         ! check if starting guess already describes solution
-        if (beta_start < 1d-14) return
+        if (beta_start < numerical_zero) return
 
         ! solution must be zero vector if rhs vanishes
-        if (dnrm2(n, rhs, 1) < 1d-14) then
-            vec = 0.d0
-            hvec = 0.d0
+        if (dnrm2(n, rhs, 1) < numerical_zero) then
+            vec = 0.0_rp
+            hvec = 0.0_rp
             return
         end if
 
@@ -1841,18 +1737,18 @@ contains
         r2 = r1
         phi_bar = beta_start
         rhs1 = beta_start
-        t_norm2 = 0.d0
-        eps_ln = 0.d0
-        cs = -1.d0
-        d_bar = 0.d0
-        sn = 0.d0
-        w = 0.d0
-        hw = 0.d0
-        w2 = 0.d0
-        hw2 = 0.d0
-        g_max = 0.d0
-        g_min = huge(1.d0)
-        rhs2 = 0.d0
+        t_norm2 = 0.0_rp
+        eps_ln = 0.0_rp
+        cs = -1.0_rp
+        d_bar = 0.0_rp
+        sn = 0.0_rp
+        w = 0.0_rp
+        hw = 0.0_rp
+        w2 = 0.0_rp
+        hw2 = 0.0_rp
+        g_max = 0.0_rp
+        g_min = huge(1.0_rp)
+        rhs2 = 0.0_rp
 
         iteration = 1
         do while (iteration <= max_iterations)
@@ -1923,13 +1819,13 @@ contains
                                   "eigenvectors.", 4)
                 exit
             ! ||r||  / (||A|| ||x||)
-            else if (vec_norm > 0.d0 .and. a_norm > 0.d0 .and. &
+            else if (vec_norm > 0.0_rp .and. a_norm > 0.0_rp .and. &
                 qr_norm / (a_norm * vec_norm) <= r_tol) then
                     call settings%log("MINRES: A solution to Ax = b was found, "// &
                                       "given provided tolerance.", 4)
                 exit
             ! ||Ar|| / (||A|| ||r||)
-            else if (a_norm < 1d-14 .and. root / a_norm <= r_tol) then
+            else if (a_norm < numerical_zero .and. root / a_norm <= r_tol) then
                 call settings%log("MINRES: A least-squares solution was found, "// &
                                   "given provided tolerance.", 4)
                 exit
@@ -1949,12 +1845,13 @@ contains
                 return
             ! these tests ensure convergence is still achieved when r_tol 
             ! approaches machine precision
-            else if (vec_norm > 0.d0 .and. a_norm > 0.d0 .and. &
-                1.d0 + qr_norm / (a_norm * vec_norm) <= 1.d0) then
+            else if (vec_norm > 0.0_rp .and. a_norm > 0.0_rp .and. &
+                     1.0_rp + qr_norm / (a_norm * vec_norm) <= 1.0_rp) then
                 call settings%log("MINRES: A solution to Ax = b was found, given "// &
                                   "provided tolerance.", 4)
                 exit
-            else if (a_norm < 1d-14 .and. 1.d0 + root / a_norm <= 1.d0) then
+            else if (a_norm < numerical_zero .and. 1.0_rp + root / a_norm <= 1.0_rp) &
+                then
                 call settings%log("MINRES: A least-squares solution was found, "// &
                                   "given provided tolerance.", 4)
                 exit
@@ -2068,7 +1965,7 @@ contains
         ! length
         !
         character(*), intent(in) :: input
-        integer(ip),intent(in) :: max_length
+        integer(ip), intent(in) :: max_length
         character(:), intent(out), allocatable :: substrings(:)
     
         integer(ip) :: i, len_input, start_pos, end_pos, space_pos
@@ -2116,10 +2013,10 @@ contains
     end subroutine split_string_by_space
 
     subroutine level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
-                                      obj_func, hess_x_funptr, settings, use_precond, &
-                                      precond, trust_radius, solution, mu, imicro, &
-                                      imicro_jacobi_davidson, jacobi_davidson_started, &
-                                      max_precision_reached, error)
+                                      obj_func, hess_x_funptr, settings, trust_radius, &
+                                      solution, mu, imicro, imicro_jacobi_davidson, &
+                                      jacobi_davidson_started, max_precision_reached, &
+                                      error)
         !
         ! this subroutine performs level-shifted (Jacobi-)Davidson to solve the trust 
         ! region subproblem
@@ -2128,9 +2025,7 @@ contains
         integer(ip), intent(in) :: n_param
         procedure(obj_func_type), pointer, intent(in) :: obj_func
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
-        class(solver_settings_type), intent(in) :: settings
-        logical, intent(in) :: use_precond
-        procedure(precond_type), intent(in), pointer, optional :: precond
+        type(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: trust_radius
         real(rp), intent(out) :: solution(:), mu
         integer(ip), intent(out) :: imicro, imicro_jacobi_davidson, error
@@ -2141,9 +2036,14 @@ contains
                                  h_solution(:), residual(:), solution_normalized(:), &
                                  last_solution_normalized(:), row_vec(:), col_vec(:)
         integer(ip) :: n_trial, i, initial_imicro                          
-        logical :: accept_step, micro_converged, func_evaluated, newton, bracketed
+        logical :: accept_step, micro_converged, newton, bracketed
         real(rp) :: aug_hess_min_eigval, residual_norm, red_factor, &
                     initial_residual_norm, new_func, ratio, minres_tol
+        real(rp), parameter :: newton_eigval_thresh = -1e-5_rp, &
+                               level_shift_local_thres = 1e-12_rp, &
+                               solution_overlap_thresh = 0.5_rp, &
+                               residual_norm_floor = 1e-12_rp, &
+                               residual_norm_max_red_factor = 0.8_rp
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
@@ -2170,9 +2070,9 @@ contains
 
         ! construct augmented Hessian in reduced space
         allocate(aug_hess(n_trial + 1, n_trial + 1))
-        aug_hess = 0.d0
-        call dgemm("T", "N", n_trial, n_trial, n_param, 1.d0, red_space_basis, &
-                   n_param, h_basis, n_param, 0.d0, aug_hess(2, 2), n_trial + 1)
+        aug_hess = 0.0_rp
+        call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, red_space_basis, &
+                   n_param, h_basis, n_param, 0.0_rp, aug_hess(2, 2), n_trial + 1)
 
         ! allocate space for reduced space solution and Hessian linear transformation
         ! of basis vector
@@ -2180,11 +2080,10 @@ contains
                  h_basis_vec(n_param), last_solution_normalized(n_param))
 
         ! decrease trust radius until micro iterations converge and step is accepted
-        last_solution_normalized = 0.d0
+        last_solution_normalized = 0.0_rp
         accept_step = .false.
         do while (.not. accept_step)
             micro_converged = .false.
-            func_evaluated = .false.
 
             jacobi_davidson_started = .false.
             do imicro = 1, settings%n_micro
@@ -2195,11 +2094,11 @@ contains
                                                      settings%hess_symm, settings, &
                                                      error)
                 if (error /= 0) return
-                if (aug_hess_min_eigval > -1.d-5) then
+                if (aug_hess_min_eigval > newton_eigval_thresh) then
                     call newton_step(aug_hess, grad_norm, red_space_basis, &
                                      solution, red_space_solution, settings, error)
                     if (error /= 0) return
-                    mu = 0.d0
+                    mu = 0.0_rp
                     if (dnrm2(n_param, solution, 1) < trust_radius) newton = .true.
                 end if
 
@@ -2213,8 +2112,8 @@ contains
                 end if
 
                 ! calculate Hessian linear transformation of solution
-                call dgemv("N", n_param, size(h_basis, 2), 1.d0, h_basis, n_param, &
-                           red_space_solution, 1, 0.d0, h_solution, 1)
+                call dgemv("N", n_param, size(h_basis, 2), 1.0_rp, h_basis, n_param, &
+                           red_space_solution, 1, 0.0_rp, h_solution, 1)
 
                 ! calculate residual
                 residual = grad + h_solution - mu*solution
@@ -2224,7 +2123,7 @@ contains
 
                 ! determine reduction factor depending on whether local region is
                 ! reached
-                if (abs(mu) < 1.d-12) then
+                if (abs(mu) < level_shift_local_thres) then
                     red_factor = settings%local_red_factor
                 else
                     red_factor = settings%global_red_factor
@@ -2235,47 +2134,32 @@ contains
 
                 ! reset initial residual norm if solution changes
                 if (ddot(n_param, last_solution_normalized, 1, solution_normalized, &
-                         1)**2 < 0.5d0) then
+                         1)**2 < solution_overlap_thresh) then
                     initial_imicro = imicro
                     initial_residual_norm = residual_norm
                 end if
 
                 ! check if micro iterations have converged
-                if (residual_norm < max(red_factor*grad_norm, 1d-12)) then
+                if (residual_norm < max(red_factor * grad_norm, residual_norm_floor)) &
+                    then
                     micro_converged = .true.
                     exit
                 ! check if Jacobi-Davidson is used and has not been started
-                else if (settings%jacobi_davidson .and. .not. jacobi_davidson_started) then
+                else if (settings%subsystem_solver == "jacobi-davidson" .and. .not. &
+                         jacobi_davidson_started) then
                     ! check residual has not decreased sufficiently or if maximum of 
                     ! Davidson iterations has been reached
-                    if ((imicro - initial_imicro >= 10 .and. &
-                         residual_norm > 0.8*initial_residual_norm) .or. &
-                        imicro > 0.8 * settings%n_micro) then
-                        ! evaluate function at approximate point
-                        new_func = obj_func(solution, error)
-                        call add_error_origin(error, error_obj_func, settings)
-                        if (error /= 0) return
+                    if ((imicro - initial_imicro >= 10 .and. residual_norm > &
+                         residual_norm_max_red_factor * initial_residual_norm) .or. &
+                        imicro > settings%jacobi_davidson_start) then
 
-                        ! calculate ratio of evaluated function and predicted function
-                        ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                                        grad + 0.5*h_solution, 1)
-
-                        ! switch to Jacobi-Davidson only if current solution would lead 
-                        ! to trust radius increase when the solution is already at the 
-                        ! trust region boundary
-                        if (settings%prefer_jacobi_davidson .or. &
-                            (ratio > 0.75d0 .and. dnrm2(n_param, solution, 1) &
-                             > 0.99d0 * trust_radius)) then
-                            jacobi_davidson_started = .true.
-                            imicro_jacobi_davidson = imicro
-                        ! decrease trust radius
-                        else
-                            func_evaluated = .true.
-                            exit
-                        end if
+                        ! switch to Jacobi-Davidson
+                        jacobi_davidson_started = .true.
+                        imicro_jacobi_davidson = imicro
                     end if
-                else if (imicro - initial_imicro >= 10 .and. &
-                         residual_norm > 0.8*initial_residual_norm) then
+                ! check if residual has not decreased sufficiently
+                else if (imicro - initial_imicro >= 10 .and. residual_norm > &
+                         residual_norm_max_red_factor * initial_residual_norm) then
                     exit
                 end if
 
@@ -2284,8 +2168,8 @@ contains
 
                 if (.not. jacobi_davidson_started) then
                     ! precondition residual
-                    if (use_precond) then
-                        call precond(residual, mu, basis_vec, error)
+                    if (associated(settings%precond)) then
+                        call settings%precond(residual, mu, basis_vec, error)
                         call add_error_origin(error, error_precond, settings)
                         if (error /= 0) return
                     else
@@ -2306,7 +2190,7 @@ contains
 
                 else
                     ! solve Jacobi-Davidson correction equations
-                    minres_tol = 3.d0 ** (-(imicro - imicro_jacobi_davidson))
+                    minres_tol = 3.0_rp ** (-(imicro - imicro_jacobi_davidson))
                     call minres(-residual, hess_x_funptr, solution_normalized, mu, &
                                 minres_tol, basis_vec, h_basis_vec, settings, error)
                     if (error /= 0) return
@@ -2323,7 +2207,8 @@ contains
                                  red_space_basis(:, size(red_space_basis, 2)), 1, &
                                  h_basis_vec, 1) - &
                             ddot(n_param, basis_vec, 1, &
-                                 h_basis(:, size(red_space_basis, 2)), 1)) > 1d-12) then
+                                 h_basis(:, size(red_space_basis, 2)), 1)) > &
+                                 hess_symm_thres) then
                         call hess_x_funptr(basis_vec, h_basis_vec, error)
                         call add_error_origin(error, error_hess_x, settings)
                         if (error /= 0) return
@@ -2339,16 +2224,17 @@ contains
 
                 ! construct new augmented Hessian
                 allocate(row_vec(size(red_space_basis, 2) + 1))
-                row_vec(1) = 0.d0
-                call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, &
+                row_vec(1) = 0.0_rp
+                call dgemv("T", n_param, size(red_space_basis, 2), 1.0_rp, &
                            red_space_basis, n_param, &
-                           h_basis(:, size(red_space_basis, 2)), 1, 0.d0, &
+                           h_basis(:, size(red_space_basis, 2)), 1, 0.0_rp, &
                            row_vec(2:), 1)
                 col_vec = row_vec
                 if (.not. settings%hess_symm) then
-                    call dgemv("T", n_param, size(red_space_basis, 2), 1.d0, h_basis, &
-                               n_param, red_space_basis(:, size(red_space_basis, 2)), &
-                               1, 0.d0, col_vec(2:), 1)
+                    call dgemv("T", n_param, size(red_space_basis, 2), 1.0_rp, &
+                               h_basis, n_param, &
+                               red_space_basis(:, size(red_space_basis, 2)), 1, &
+                               0.0_rp, col_vec(2:), 1)
                 end if
                 call extend_matrix(aug_hess, row_vec, col_vec)
                 deallocate(row_vec)
@@ -2359,16 +2245,14 @@ contains
                 allocate(red_space_solution(size(red_space_basis, 2)))
             end do
 
-            if (.not. func_evaluated) then
-                ! evaluate function at predicted point
-                new_func = obj_func(solution, error)
-                call add_error_origin(error, error_obj_func, settings)
-                if (error /= 0) return
+            ! evaluate function at predicted point
+            new_func = obj_func(solution, error)
+            call add_error_origin(error, error_obj_func, settings)
+            if (error /= 0) return
 
-                ! calculate ratio of evaluated function and predicted function
-                ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                                 grad + 0.5d0*h_solution, 1)
-            end if
+            ! calculate ratio of evaluated function and predicted function
+            ratio = (new_func - func) / ddot(n_param, solution, 1, &
+                                             grad + 0.5_rp * h_solution, 1)
 
             ! decide whether to accept step and modify trust radius
             accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
@@ -2385,9 +2269,9 @@ contains
     end subroutine level_shifted_davidson
 
     subroutine truncated_conjugate_gradient(func, grad, h_diag, n_param, obj_func, &
-                                            hess_x_funptr, use_precond, precond, &
-                                            settings, trust_radius, solution, imicro, &
-                                            max_precision_reached, error)
+                                            hess_x_funptr, settings, trust_radius, &
+                                            solution, imicro, max_precision_reached, &
+                                            error)
         !
         ! this subroutine performs truncated conjugate gradient to solve the trust 
         ! region subproblem
@@ -2396,9 +2280,7 @@ contains
         integer(ip), intent(in) :: n_param
         procedure(obj_func_type), pointer, intent(in) :: obj_func
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
-        class(solver_settings_type), intent(in) :: settings
-        logical, intent(in) :: use_precond
-        procedure(precond_type), intent(in), pointer, optional :: precond
+        type(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: trust_radius
         real(rp), intent(out) :: solution(:)
         integer(ip), intent(out) :: imicro, error
@@ -2415,6 +2297,8 @@ contains
                                  precond_residual_new(:), random_vector(:), &
                                  solutions(:, :), h_solutions(:, :)
         integer(ip) :: i
+        real(rp), parameter :: random_noise_scale = 1e-4_rp, &
+                               residual_norm_conv_red_factor = 1e-3_rp
         real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
@@ -2425,31 +2309,31 @@ contains
                  precond_residual(n_param))
 
         ! initialize solution
-        solution = 0.d0
-        h_solution = 0.d0
+        solution = 0.0_rp
+        h_solution = 0.0_rp
         solutions(:, 1) = solution
         h_solutions(:, 1) = h_solution
-        model_func = 0.d0
+        model_func = 0.0_rp
         
         ! initialize residual and add random noise, residual should include h_solution 
         ! if not starting at zero
         residual = grad
         allocate(random_vector(n_param))
-        random_vector = 0.d0
-        do while (dnrm2(n_param, random_vector, 1) == 0.d0)
+        random_vector = 0.0_rp
+        do while (dnrm2(n_param, random_vector, 1) < numerical_zero)
             call random_number(random_vector)
             random_vector = 2 * random_vector - 1
         end do
-        residual = residual + 1.d-4 * dnrm2(n_param, residual, 1) * random_vector / &
-                   dnrm2(n_param, random_vector, 1)
+        residual = residual + random_noise_scale * dnrm2(n_param, residual, 1) * &
+                   random_vector / dnrm2(n_param, random_vector, 1)
         deallocate(random_vector)
 
         ! get initial residual norm
         initial_residual_norm = dnrm2(n_param, residual, 1)
 
         ! initialize preconditioned residual and direction,
-        if (use_precond) then
-            call precond(residual, 0.d0, precond_residual, error)
+        if (associated(settings%precond)) then
+            call settings%precond(residual, 0.0_rp, precond_residual, error)
             call add_error_origin(error, error_precond, settings)
             if (error /= 0) return
         else
@@ -2481,11 +2365,11 @@ contains
             step_size = ddot(n_param, residual, 1, precond_residual, 1) / curvature
 
             ! precondition current solution and direction
-            if (use_precond) then
-                call precond(solution, 0.d0, precond_solution, error)
+            if (associated(settings%precond)) then
+                call settings%precond(solution, 0.0_rp, precond_solution, error)
                 call add_error_origin(error, error_precond, settings)
                 if (error /= 0) return
-                call precond(direction, 0.d0, precond_direction, error)
+                call settings%precond(direction, 0.0_rp, precond_direction, error)
                 call add_error_origin(error, error_precond, settings)
                 if (error /= 0) return
             else
@@ -2502,7 +2386,7 @@ contains
             step_length = solution_dot + 2 * step_size * solution_direction_dot + &
                           step_size ** 2 * direction_dot
 
-            if (curvature < 0.d0 .or. step_length >= trust_radius ** 2) then
+            if (curvature < 0.0_rp .or. step_length >= trust_radius ** 2) then
                 ! solve quadratic equation
                 step_size = (-solution_direction_dot + &
                                 sqrt(solution_direction_dot ** 2 + direction_dot * &
@@ -2524,7 +2408,7 @@ contains
 
             ! get new model function value
             model_func_new = ddot(n_param, solution_new, 1, &
-                                  grad + 0.5d0 * h_solution_new, 1)
+                                  grad + 0.5_rp * h_solution_new, 1)
 
             ! check if model was improved
             if (model_func_new >= model_func) then
@@ -2540,8 +2424,8 @@ contains
             
             ! get residual for model
             residual_new = residual + step_size * hess_direction
-            if (use_precond) then
-                call precond(residual_new, 0.d0, precond_residual_new, error)
+            if (associated(settings%precond)) then
+                call settings%precond(residual_new, 0.0_rp, precond_residual_new, error)
                 call add_error_origin(error, error_precond, settings)
                 if (error /= 0) return
             else
@@ -2550,7 +2434,7 @@ contains
 
             ! check for linear or superlinear (in this case quadratic) convergence
             if (dnrm2(n_param, residual_new, 1) <= initial_residual_norm * &
-                min(1.d-3, initial_residual_norm)) then
+                min(residual_norm_conv_red_factor, initial_residual_norm)) then
                 micro_converged = .true.
                 exit
             end if
@@ -2575,10 +2459,10 @@ contains
         call add_error_origin(error, error_obj_func, settings)
         if (error /= 0) return
 
-        if (abs(new_func - func) / max(abs(new_func), abs(func)) > 1.d-14) then
+        if (abs(new_func - func) / max(abs(new_func), abs(func)) > numerical_zero) then
             ! calculate ratio of evaluated function and predicted function
             ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                             grad + 0.5d0*h_solution, 1)
+                                             grad + 0.5_rp * h_solution, 1)
 
             ! reduce trust region until step is accepted
             do while (.true.)
@@ -2590,8 +2474,8 @@ contains
                 if (accept_step .or. max_precision_reached) exit
 
                 ! check if step exceeds new trust region boundary
-                if (use_precond) then
-                    call precond(solution, 0.d0, precond_solution, error)
+                if (associated(settings%precond)) then
+                    call settings%precond(solution, 0.0_rp, precond_solution, error)
                     if (error /= 0) return
                 else
                     call abs_diag_precond(solution, h_diag, precond_solution)
@@ -2600,8 +2484,9 @@ contains
                     trust_radius ** 2) then
                     ! find step that exceeds trust region boundary
                     do i = 1, size(solutions, 2)
-                        if (use_precond) then
-                            call precond(solutions(:, i), 0.d0, precond_solution, error)
+                        if (associated(settings%precond)) then
+                            call settings%precond(solutions(:, i), 0.0_rp, &
+                                                  precond_solution, error)
                             if (error /= 0) return
                         else
                             call abs_diag_precond(solutions(:, i), h_diag, &
@@ -2618,11 +2503,13 @@ contains
                             hess_direction = h_solutions(:, i) - h_solutions(:, i - 1)
 
                             ! precondition current solution and direction
-                            if (use_precond) then
-                                call precond(solution, 0.d0, precond_solution, error)
+                            if (associated(settings%precond)) then
+                                call settings%precond(solution, 0.0_rp, &
+                                                      precond_solution, error)
                                 call add_error_origin(error, error_precond, settings)
                                 if (error /= 0) return
-                                call precond(direction, 0.d0, precond_direction, error)
+                                call settings%precond(direction, 0.0_rp, &
+                                                      precond_direction, error)
                                 call add_error_origin(error, error_precond, settings)
                                 if (error /= 0) return
                             else
@@ -2659,7 +2546,8 @@ contains
                             ! calculate ratio of evaluated function and predicted 
                             ! function
                             ratio = (new_func - func) / ddot(n_param, solution, 1, &
-                                                             grad + 0.5d0*h_solution, 1)
+                                                             grad + 0.5_rp * &
+                                                             h_solution, 1)
 
                             ! exit to retry whether step is accepted
                             micro_converged = .true.
@@ -2690,7 +2578,7 @@ contains
         !
         real(rp), intent(in) :: solution(:), ratio
         logical, intent(in) :: micro_converged
-        class(solver_settings_type), intent(in) :: settings
+        type(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: trust_radius
         logical, intent(out) :: max_precision_reached
 
@@ -2699,11 +2587,11 @@ contains
 
         ! decrease trust radius if micro iterations are unable to converge, if function 
         ! value has not decreased or if individual orbitals change too much
-        if (.not. micro_converged .or. ratio < 0.d0 .or. &
-            any(abs(solution) > pi/4)) then
-            trust_radius = 0.7d0*trust_radius
+        if (.not. micro_converged .or. ratio < 0.0_rp .or. any(abs(solution) > pi/4)) &
+            then
+            trust_radius = trust_radius_shrink_factor * trust_radius
             accept_trust_region_step = .false.
-            if (trust_radius < 1.d-14) then
+            if (trust_radius < numerical_zero) then
                 call settings%log("Trust radius too small. Convergence criterion "// &
                                   "is not fulfilled but calculation should be "// &
                                   "converged up to floating point precision.", 1, &
@@ -2726,11 +2614,11 @@ contains
 
     end function accept_trust_region_step
 
-    subroutine sanity_check(settings, n_param, grad, error)
+    subroutine solver_sanity_check(settings, n_param, grad, error)
         !
-        ! this subroutine performs a sanity check for input parameters
+        ! this subroutine performs a sanity check for solver input parameters
         !
-        class(solver_settings_type), intent(inout) :: settings
+        type(solver_settings_type), intent(inout) :: settings
         integer(ip), intent(in) :: n_param
         real(rp), intent(in) :: grad(:)
         integer(ip), intent(out) :: error
@@ -2748,8 +2636,13 @@ contains
             return
         end if
 
+        ! convert strings to lowercase
+        settings%subsystem_solver = string_to_lowercase(settings%subsystem_solver)
+
         ! check that number of random trial vectors is below number of parameters
-        if (settings%davidson .and. settings%n_random_trial_vectors > n_param/2) then
+        if ((settings%subsystem_solver == "davidson" .or. &
+             settings%subsystem_solver == "jacobi-davidson") .and. &
+            settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
             write (msg, '(A, I0, A)') "Number of random trial vectors should be "// &
                 "smaller than half the number of parameters. Setting to ", &
@@ -2766,7 +2659,54 @@ contains
             return
         end if
 
-    end subroutine sanity_check
+        ! check for character options
+        if (.not. (settings%subsystem_solver == "davidson" .or. &
+                   settings%subsystem_solver == "jacobi-davidson" .or. &
+                   settings%subsystem_solver == "tcg")) then
+            call settings%log("Subsystem solver option unknown. Possible values "// &
+                              "are ""davidson"", ""jacobi-davidson"", and ""tcg"" "// &
+                              "(truncated conjugate gradient)", 1, .true.)
+            error = 1
+            return
+        end if
+
+    end subroutine solver_sanity_check
+
+    subroutine stability_sanity_check(settings, n_param, error)
+        !
+        ! this subroutine performs a sanity check for stability input parameters
+        !
+        type(stability_settings_type), intent(inout) :: settings
+        integer(ip), intent(in) :: n_param
+        integer(ip), intent(out) :: error
+        character(300) :: msg
+
+        ! initialize error flag
+        error = 0
+
+        ! convert strings to lowercase
+        settings%diag_solver = string_to_lowercase(settings%diag_solver)
+
+        ! check that number of random trial vectors is below number of parameters
+        if (settings%n_random_trial_vectors > n_param/2) then
+            settings%n_random_trial_vectors = n_param/2
+            write (msg, '(A, I0, A)') "Number of random trial vectors should be "// &
+                "smaller than half the number of parameters. Setting to ", &
+                settings%n_random_trial_vectors, "."
+            call settings%log(msg, 2)
+        end if
+
+        ! check for character options
+        if (.not. (settings%diag_solver == "davidson" .or. &
+                   settings%diag_solver == "jacobi-davidson")) then
+            call settings%log("Diagonalization solver option unknown. Possible "// &
+                              "values are ""davidson"" and ""jacobi-davidson""", 1, &
+                              .true.)
+            error = 1
+            return
+        end if
+
+    end subroutine stability_sanity_check
 
     subroutine add_error_origin(error_code, error_origin, settings)
         !
@@ -2785,5 +2725,25 @@ contains
         end if
 
     end subroutine add_error_origin
+
+    function string_to_lowercase(str) result(lower_str)
+        !
+        ! this function converts a string to lower case
+        !
+        character(*), intent(in) :: str
+        character(len(str)) :: lower_str
+        integer(ip) :: i, code
+        integer(ip), parameter :: ascii_upper_lower_diff = 32
+
+        do i = 1, len(str)
+            code = iachar(str(i:i))
+            if (code >= iachar('A') .and. code <= iachar('Z')) then
+                lower_str(i:i) = achar(code + ascii_upper_lower_diff)
+            else
+                lower_str(i:i) = str(i:i)
+            end if
+        end do
+    
+    end function string_to_lowercase
 
 end module opentrustregion

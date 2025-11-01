@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(OpenTrustRegion LANGUAGES Fortran C)
+project(OpenTrustRegion VERSION 2.0.0 LANGUAGES Fortran C)
+
+# get commands
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
 # default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -16,88 +19,162 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
     set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -xHost")
 endif()
 
-# try finding 32-bit BLAS/LAPACK first
-set(BLA_SIZEOF_INTEGER 4 CACHE STRING "Size of BLAS/LAPACK integer type (4 for LP64, 8 for ILP64)")
-find_package(BLAS)
-find_package(LAPACK)
+# user-supplied integer size
+set(INTEGER_SIZE "" CACHE STRING "Size of integers for library (4=32-bit, 8=64-bit)")
 
-# check if 32-bit BLAS/LAPACK found
-if (NOT BLAS_FOUND OR NOT LAPACK_FOUND)
-    message(STATUS "BLAS/LAPACK with 32-bit integers not found, trying version with 64-bit integers...")
+# user-supplied BLAS and LAPACK libraries
+set(BLAS_LIBRARIES "" CACHE STRING "User-specified BLAS library path(s)")
+set(LAPACK_LIBRARIES "" CACHE STRING "User-specified LAPACK library path(s)")
 
-    # now try finding 64-bit BLAS/LAPACK
-    set(BLA_SIZEOF_INTEGER 8 CACHE STRING "Size of BLAS/LAPACK integer type (4 for LP64, 8 for ILP64)" FORCE)
-    find_package(BLAS REQUIRED)
-    find_package(LAPACK REQUIRED)
-
-    if (BLAS_FOUND AND LAPACK_FOUND)
-        message(STATUS "Using BLAS/LAPACK with 64-bit integers (ILP64) ")
-        add_definitions(-DUSE_ILP64)
+# check if integer size is provided
+if(INTEGER_SIZE)
+    set(BLA_SIZEOF_INTEGER ${INTEGER_SIZE} CACHE INTERNAL "BLAS/LAPACK integer size")
+    if(BLAS_LIBARIES)
+        message(STATUS "Using user-specified BLAS")
     else()
-        message(FATAL_ERROR "Could not find a suitable BLAS/LAPACK library (neither with 32-bit or 64-bit integers).")
+        find_package(BLAS REQUIRED)
+    endif()
+    if(LAPACK_LIBARIES)
+        message(STATUS "Using user-specified LAPACK")
+    else()
+        find_package(LAPACK REQUIRED)
     endif()
 else()
-    message(STATUS "Using BLAS/LAPACK with 32-bit integers (LP64)")
+    if(BLAS_LIBRARIES OR LAPACK_LIBRARIES)
+        message(FATAL_ERROR
+            "You provided explicit BLAS or LAPACK libraries but did not specify INTEGER_SIZE. "
+            "Please set INTEGER_SIZE to 4 (LP64) or 8 (ILP64) to ensure compatibility."
+        )
+    else()
+        # autodetect BLAS and LAPACK, try 32-bit first, then 64-bit
+        set(BLA_SIZEOF_INTEGER 4 CACHE INTERNAL "BLAS/LAPACK integer size")
+        find_package(BLAS)
+        find_package(LAPACK)
+        if(NOT BLAS_FOUND OR NOT LAPACK_FOUND)
+            set(BLA_SIZEOF_INTEGER 8 CACHE INTERNAL "BLAS/LAPACK integer size")
+            find_package(BLAS REQUIRED)
+            find_package(LAPACK REQUIRED)
+        endif()
+    endif()
 endif()
 
-# add source files
-add_library(opentrustregion SHARED src/opentrustregion.f90 src/c_interface.f90)
+# set integer size and define library suffix
+message(STATUS "Using integer size ${BLA_SIZEOF_INTEGER}")
+if(BLA_SIZEOF_INTEGER EQUAL 8)
+    add_definitions(-DUSE_ILP64)
+    set(LIB_SUFFIX "_64")
+else()
+    set(LIB_SUFFIX "_32")
+endif()
+
+# default to static libraries
+option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+if(BUILD_SHARED_LIBS)
+    message(STATUS "Building OpenTrustRegion as a SHARED library")
+else()
+    message(STATUS "Building OpenTrustRegion as a STATIC library (default)")
+endif()
+
+# define source files
+set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
+
+# add library
+add_library(opentrustregion ${OPENTRUSTREGION_SOURCES})
+
+# set properties
+set_target_properties(
+    opentrustregion PROPERTIES 
+    # output name
+    OUTPUT_NAME "opentrustregion${LIB_SUFFIX}" 
+    # library version
+    VERSION ${PROJECT_VERSION} 
+    # interface version
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+    # position-independent code - not automatically enabled for static libraries, but 
+    # required when linking a static library into a shared library
+    POSITION_INDEPENDENT_CODE ON 
+)
 
 # enable preprocessing
-set_source_files_properties(src/opentrustregion.f90 src/c_interface.f90 PROPERTIES Fortran_PREPROCESS ON)
+set_source_files_properties(${OPENTRUSTREGION_SOURCES} 
+                            PROPERTIES Fortran_PREPROCESS ON
+)
 
 # link against BLAS and LAPACK
-target_link_libraries(opentrustregion PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-
-# create test executable
-add_library(
-    testsuite SHARED
-    tests/opentrustregion_unit_tests.f90
-    tests/c_interface_unit_tests.f90
-    tests/opentrustregion_mock.f90
-    tests/c_interface_mock.f90
-    tests/opentrustregion_system_tests.f90
-)
-target_link_libraries(
-    testsuite
-    PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
+target_link_libraries(opentrustregion 
+                      PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES}
 )
 
-# enable preprocessing
-set_source_files_properties(tests/opentrustregion_system_tests.f90 PROPERTIES Fortran_PREPROCESS ON)
-
-# set paths to find module files, header files and library in build directory
-set(OpenTrustRegion_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include/ ${CMAKE_BINARY_DIR})
-set(OpenTrustRegion_LIBRARY ${CMAKE_BINARY_DIR}/libopentrustregion${CMAKE_SHARED_LIBRARY_SUFFIX})
-
-# create the OpenTrustRegionConfig.cmake from the template
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTrustRegionConfig.cmake.in
-  ${CMAKE_BINARY_DIR}/cmake/OpenTrustRegionConfig.cmake
-  @ONLY
+# set include directories
+target_include_directories(opentrustregion PUBLIC
+                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                           $<INSTALL_INTERFACE:include>
 )
 
-# export the target to make OpenTrustRegion::OpenTrustRegion usable
-install(TARGETS opentrustregion
-        EXPORT OpenTrustRegionTargets
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        INCLUDES DESTINATION include)
-install(FILES include/opentrustregion.h DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/)
+# option to build testsuite
+option(BUILD_TESTS "Build the testsuite" ON)
 
-# export the target with namespace OpenTrustRegion::
-install(EXPORT OpenTrustRegionTargets
-        NAMESPACE OpenTrustRegion::
-        DESTINATION lib/cmake/OpenTrustRegion)
+if (BUILD_TESTS)
+    # create shared test library which is then called from Python for testing
+    add_library(testsuite SHARED
+                tests/test_reference.f90
+                tests/opentrustregion_unit_tests.f90
+                tests/c_interface_unit_tests.f90
+                tests/opentrustregion_mock.f90
+                tests/c_interface_mock.f90
+                tests/opentrustregion_system_tests.f90
+    )
 
-# generate and install the config file
-include(CMakePackageConfigHelpers)
+    # link against BLAS and LAPACK and against OpenTrustRegion
+    target_link_libraries(testsuite
+                          PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES} opentrustregion
+    )
+endif()
 
+# create targets file in the build tree for build-tree usage
+export(TARGETS opentrustregion
+       FILE "${CMAKE_CURRENT_BINARY_DIR}/cmake/OpenTrustRegionTargets.cmake"
+       NAMESPACE OpenTrustRegion::
+)
+
+# generate OpenTrustRegionConfig.cmake
 configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTrustRegionConfig.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/OpenTrustRegionConfig.cmake
-    INSTALL_DESTINATION lib/cmake/OpenTrustRegion
+    ${CMAKE_CURRENT_BINARY_DIR}/cmake/OpenTrustRegionConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/OpenTrustRegion
+    NO_CHECK_REQUIRED_COMPONENTS_MACRO
 )
 
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/OpenTrustRegionConfig.cmake
-        DESTINATION lib/cmake/OpenTrustRegion)
+# generate version file
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/cmake/OpenTrustRegionConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY AnyNewerVersion
+)
+
+# install library
+install(TARGETS opentrustregion
+        EXPORT OpenTrustRegionTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # shared libraries (.so, .dylib)
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # static libraries (.a)
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+# install headers
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ 
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+# install targets
+install(EXPORT OpenTrustRegionTargets
+        FILE OpenTrustRegionTargets.cmake
+        NAMESPACE OpenTrustRegion::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/OpenTrustRegion
+)
+
+# install config files
+install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/cmake/OpenTrustRegionConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/cmake/OpenTrustRegionConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/OpenTrustRegion
+)
