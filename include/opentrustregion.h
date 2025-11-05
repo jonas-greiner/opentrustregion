@@ -31,7 +31,7 @@ typedef bool c_bool;  /* corresponds to logical(c_bool) */
 #define OTR_KW_LEN 64
 
 /* ------------------------------------------------------------------
- * Forward declarations for functions and function pointer types
+ * Declarations for functions and function pointer types
  * ------------------------------------------------------------------ */
 
 /* Hessian-vector product callback */
