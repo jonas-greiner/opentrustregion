@@ -232,7 +232,7 @@ contains
         if (error /= 0) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
-                "error boolean wrong."
+                "error code wrong."
         end if
 
         ! associate returned direction with value
@@ -269,7 +269,7 @@ contains
         if (error /= 0) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
-                "error boolean wrong."
+                "error code wrong."
         end if
         deallocate(h_diag, kappa)
 
@@ -660,12 +660,12 @@ contains
 
     logical(c_bool) function test_assign_solver_c_f() bind(C)
         !
-        ! this function tests that the function that converts stability check settings 
-        ! from Fortran to C correctly performs this conversion
+        ! this function tests that the function that converts solver settings from 
+        ! Fortran to C correctly performs this conversion
         !
-        use opentrustregion,  only: solver_settings_type
-        use c_interface,      only: solver_settings_type_c, assignment(=)
-        use test_reference,   only: ref_settings, assignment(=), operator(/=)
+        use opentrustregion, only: solver_settings_type
+        use c_interface, only: solver_settings_type_c, assignment(=)
+        use test_reference, only: ref_settings, assignment(=), operator(/=)
 
         type(solver_settings_type)   :: settings
         type(solver_settings_type_c) :: settings_c
@@ -717,9 +717,9 @@ contains
         ! this function tests that the function that converts stability check settings 
         ! from Fortran to C correctly performs this conversion
         !
-        use opentrustregion,  only: stability_settings_type
-        use c_interface,      only: stability_settings_type_c, assignment(=)
-        use test_reference,   only: ref_settings, assignment(=), operator(/=)
+        use opentrustregion, only: stability_settings_type
+        use c_interface, only: stability_settings_type_c, assignment(=)
+        use test_reference, only: ref_settings, assignment(=), operator(/=)
 
         type(stability_settings_type)   :: settings
         type(stability_settings_type_c) :: settings_c
