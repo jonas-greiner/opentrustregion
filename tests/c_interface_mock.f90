@@ -187,24 +187,21 @@ contains
                                precond_c_type, logger_c_type
         use test_reference, only: tol_c, operator(/=)
 
-        type(c_ptr), intent(in), value :: h_diag_c_ptr, kappa_c_ptr
+        real(c_rp), intent(in), target :: h_diag_c(*)
         type(c_funptr), intent(in), value :: hess_x_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
         logical(c_bool), intent(out) :: stable_c
         type(stability_settings_type_c), intent(in), value :: settings_c
+        type(c_ptr), intent(in), value :: kappa_c_ptr
         integer(c_ip) :: error_c
 
-        real(c_rp), pointer :: h_diag_ptr(:), kappa_ptr(:)
-        procedure(hess_x_c_type), pointer :: hess_x_funptr
-        procedure(precond_c_type), pointer :: precond_funptr
-        real(c_rp), allocatable :: x(:), hess_x(:), residual(:), precond_residual(:)
+        real(c_rp), pointer :: kappa_ptr(:)
         procedure(logger_c_type), pointer :: logger_funptr
         character(:), allocatable, target :: message
         integer(c_ip) :: error
 
         ! check if Hessian diagonal is passed correctly
-        call c_f_pointer(h_diag_c_ptr, h_diag_ptr, [n_param_c])
-        if (any(abs(h_diag_ptr - 3.0_c_rp) > tol_c)) then
+        if (any(abs(h_diag_c(:n_param_c) - 3.0_c_rp) > tol_c)) then
             write (stderr, *) "test_stability_check_py_interface failed: Passed "// &
                 "Hessian diagonal wrong."
             test_stability_check_interface = .false.

@@ -176,10 +176,11 @@ contains
         use test_reference, only: assignment(=), ref_settings, tol_c
 
         type(c_funptr) :: hess_x_c_funptr
-        real(c_rp), allocatable, target :: h_diag(:), kappa(:)
+        real(c_rp), allocatable :: h_diag(:)
+        real(c_rp), allocatable, target :: kappa(:)
         type(stability_settings_type_c) :: settings
         logical(c_bool) :: stable
-        type(c_ptr) :: h_diag_c_ptr, kappa_c_ptr
+        type(c_ptr) :: kappa_c_ptr
         integer(c_ip) :: error
 
         ! assume tests pass
@@ -193,7 +194,6 @@ contains
 
         ! initialize Hessian diagonal and get C pointers
         allocate(h_diag(n_param))
-        h_diag_c_ptr = c_loc(h_diag)
         h_diag = 3.0_c_rp
 
         ! associate optional arguments with values
@@ -202,8 +202,8 @@ contains
         settings%logger = c_funloc(mock_logger)
 
         ! call stability check first without initialized returned direction
-        error = stability_check_c_wrapper(h_diag_c_ptr, hess_x_c_funptr, n_param, &
-                                          stable, settings, kappa_c_ptr)
+        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param, stable, &
+                                          settings, kappa_c_ptr)
 
         ! check if test has passed
         test_stability_check_c_wrapper = test_passed
@@ -236,8 +236,8 @@ contains
         test_logger = .true.
 
         ! call stability check with initilized returned direction
-        error = stability_check_c_wrapper(h_diag_c_ptr, hess_x_c_funptr, n_param, &
-                                          stable, settings, kappa_c_ptr)
+        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param, stable, &
+                                          settings, kappa_c_ptr)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
