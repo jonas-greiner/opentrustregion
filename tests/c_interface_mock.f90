@@ -26,7 +26,7 @@ module c_interface_mock
 
 contains
 
-    function mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, 
+    function mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
                                    n_param_c, settings_c) result(error_c) &
         bind(C, name="mock_solver")
         !
