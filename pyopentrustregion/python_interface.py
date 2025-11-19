@@ -131,6 +131,11 @@ def hess_x_interface_factory(
 
         return 0
 
+    # attach the Hessian-vector product function to the returned interface so that it
+    # persists in Python to ensure that it is not garbage collected when the factory
+    # completes
+    hess_x_interface.hess_x = hess_x
+
     return hess_x_interface
 
 
