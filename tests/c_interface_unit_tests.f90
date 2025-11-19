@@ -419,8 +419,8 @@ contains
         ! this function tests that the solver settings initialization routine correctly 
         ! initializes all settings to their default values
         !
-        use c_interface, only: solver_settings_type_c, init_solver_settings_c, &
-                               default_solver_settings
+        use c_interface, only: solver_settings_type_c, init_solver_settings_c
+        use opentrustregion, only: default_solver_settings
         use test_reference, only: operator(/=)
 
         type(solver_settings_type_c) :: settings
@@ -453,8 +453,8 @@ contains
         ! this function tests that the stability check settings initialization routine 
         ! correctly initializes all settings to their default values
         !
-        use c_interface, only: stability_settings_type_c, init_stability_settings_c, &
-                               default_stability_settings
+        use c_interface, only: stability_settings_type_c, init_stability_settings_c
+        use opentrustregion, only: default_stability_settings
         use test_reference, only: operator(/=)
 
         type(stability_settings_type_c) :: settings
