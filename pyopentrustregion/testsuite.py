@@ -336,7 +336,7 @@ class PyInterfaceTests(unittest.TestCase):
             print(" test_solver_py_interface failed: Called logging function wrong.")
 
         self.assertTrue(
-            libtestsuite.test_solver_result() or not test_logger,
+            c_bool.in_dll(lib, "test_solver_interface").value and test_logger,
             "test_solver_py_interface failed",
         )
         print(" test_solver_py_interface PASSED")
@@ -412,10 +412,10 @@ class PyInterfaceTests(unittest.TestCase):
             )
 
         self.assertTrue(
-            libtestsuite.test_stability_check_result()
-            or not test_logger
-            or stable
-            or wrong_direction,
+            c_bool.in_dll(lib, "test_stability_check_interface").value
+            and test_logger
+            and not stable
+            and not wrong_direction,
             "test_stability_check_py_interface failed",
         )
         print(" test_stability_check_py_interface PASSED")

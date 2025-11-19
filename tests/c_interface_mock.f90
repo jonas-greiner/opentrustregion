@@ -15,8 +15,8 @@ module c_interface_mock
 
     implicit none
 
-    logical(c_bool) :: test_solver_interface = .true., &
-                       test_stability_check_interface = .true.
+    logical(c_bool), bind(C) :: test_solver_interface = .true., &
+                                test_stability_check_interface = .true.
 
     ! create function pointers to ensure that routines comply with interface
     procedure(solver_c_wrapper_type), pointer :: mock_solver_c_wrapper_ptr => &
@@ -26,24 +26,7 @@ module c_interface_mock
 
 contains
 
-    logical(c_bool) function test_solver_result() bind(C)
-        !
-        ! this function extracts whether the solver python interface test has passed
-        !
-        test_solver_result = test_solver_interface
-
-    end function test_solver_result
-
-    logical(c_bool) function test_stability_check_result() bind(C)
-        !
-        ! this function extracts whether the stability check python interface test has
-        ! passed
-        !
-        test_stability_check_result = test_stability_check_interface
-
-    end function test_stability_check_result
-
-    function mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
+    function mock_solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, 
                                    n_param_c, settings_c) result(error_c) &
         bind(C, name="mock_solver")
         !
