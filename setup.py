@@ -33,7 +33,7 @@ class CMakeBuild(build_py):
         extra_flags = os.getenv("CMAKE_FLAGS", "")
         cmake_cmd = ["cmake", ".."]
         if extra_flags:
-            cmake_cmd.append(extra_flags)
+            cmake_cmd += extra_flags.split()
 
         # run CMake configure & build
         subprocess.check_call(cmake_cmd, cwd=build_dir)
