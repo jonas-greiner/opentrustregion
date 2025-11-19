@@ -662,7 +662,7 @@ contains
         ! reduced space without a level shift
         !
         real(rp), intent(in) :: aug_hess(:, :), grad_norm, red_space_basis(:, :)
-        class(settings_type), intent(in) :: settings
+        type(solver_settings_type), intent(in) :: settings
         real(rp), intent(out) :: solution(:), red_space_solution(:)
         integer(ip), intent(out) :: error
 
@@ -727,7 +727,7 @@ contains
         !
         real(rp), intent(inout) :: aug_hess(:, :)
         real(rp), intent(in) :: grad_norm, red_space_basis(:, :), trust_radius
-        class(settings_type), intent(in) :: settings
+        type(solver_settings_type), intent(in) :: settings
         real(rp), intent(out) :: solution(:), red_space_solution(:), mu
         logical, intent(out) :: bracketed
         integer(ip), intent(out) :: error
@@ -1188,7 +1188,7 @@ contains
         ! this function generates trial vectors
         !
         real(rp), intent(in) :: grad(:), grad_norm, h_diag(:)
-        class(settings_type), intent(in) :: settings
+        type(solver_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         real(rp), allocatable :: red_space_basis(:, :)
