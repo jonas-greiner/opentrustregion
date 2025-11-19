@@ -185,8 +185,8 @@ contains
         type(solver_settings_type_c), intent(in), value :: settings_c
         integer(c_ip) :: error_c
 
-        procedure(update_orbs_c_wrapper), pointer :: update_orbs
-        procedure(obj_func_c_wrapper), pointer :: obj_func
+        procedure(update_orbs_f_wrapper), pointer :: update_orbs
+        procedure(obj_func_f_wrapper), pointer :: obj_func
         integer(ip) :: n_param, error
         type(solver_settings_type) :: settings
 
@@ -197,8 +197,8 @@ contains
         call c_f_procpointer(cptr=obj_func_c_funptr, fptr=obj_func_before_wrapping)
 
         ! associate procedure pointer to wrapper function
-        update_orbs => update_orbs_c_wrapper
-        obj_func => obj_func_c_wrapper
+        update_orbs => update_orbs_f_wrapper
+        obj_func => obj_func_f_wrapper
 
         ! convert dummy argument to Fortran kind
         n_param = int(n_param_c, kind=ip)
@@ -235,7 +235,7 @@ contains
         real(c_rp), pointer :: kappa_ptr_c(:)
         logical :: stable
         integer(ip) :: error
-        procedure(hess_x_c_wrapper), pointer :: hess_x
+        procedure(hess_x_f_wrapper), pointer :: hess_x
         type(stability_settings_type) :: settings
 
         ! associate the input C pointer to update_orbs subroutine to a Fortran
@@ -243,7 +243,7 @@ contains
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_before_wrapping)
 
         ! associate procedure pointer to wrapper function
-        hess_x => hess_x_c_wrapper
+        hess_x => hess_x_f_wrapper
 
         ! convert C pointers
         if (rp == c_rp) then
@@ -283,10 +283,10 @@ contains
 
     end function stability_check_c_wrapper
 
-    subroutine update_orbs_c_wrapper(kappa, func, grad, h_diag, hess_x, error)
+    subroutine update_orbs_f_wrapper(kappa, func, grad, h_diag, hess_x, error)
         !
-        ! this subroutine wraps the orbital update subroutine to convert C variables to
-        ! Fortran variables
+        ! this subroutine wraps the orbital update subroutine to convert Fortran 
+        ! variables to C variables
         !
         use opentrustregion, only: hess_x_type
 
@@ -333,14 +333,14 @@ contains
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_before_wrapping)
 
         ! associate procedure pointer to wrapper function
-        hess_x => hess_x_c_wrapper
+        hess_x => hess_x_f_wrapper
 
-    end subroutine update_orbs_c_wrapper
+    end subroutine update_orbs_f_wrapper
 
-    subroutine hess_x_c_wrapper(x, hess_x, error)
+    subroutine hess_x_f_wrapper(x, hess_x, error)
         !
-        ! this subroutine wraps the Hessian linear transformation to convert C variables
-        ! to Fortran variables
+        ! this subroutine wraps the Hessian linear transformation to convert Fortran 
+        ! variables to C variables
         !
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
@@ -370,11 +370,11 @@ contains
             deallocate(hess_x_c)
         end if
 
-    end subroutine hess_x_c_wrapper
+    end subroutine hess_x_f_wrapper
 
-    function obj_func_c_wrapper(kappa, error) result(obj_func)
+    function obj_func_f_wrapper(kappa, error) result(obj_func)
         !
-        ! this function wraps the objective function to convert C variables to Fortran
+        ! this function wraps the objective function to convert Fortran variables to C
         ! variables
         !
         real(rp), intent(in), target :: kappa(:)
@@ -403,12 +403,12 @@ contains
             deallocate(kappa_c)
         end if
 
-    end function obj_func_c_wrapper
+    end function obj_func_f_wrapper
 
-    subroutine precond_c_wrapper(residual, mu, precond_residual, error)
+    subroutine precond_f_wrapper(residual, mu, precond_residual, error)
         !
-        ! this subroutine wraps the preconditioner function to convert C variables to 
-        ! Fortran variables
+        ! this subroutine wraps the preconditioner function to convert Fortran 
+        ! variables to C variables
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -441,12 +441,12 @@ contains
             deallocate(precond_residual_c)
         end if
 
-    end subroutine precond_c_wrapper
+    end subroutine precond_f_wrapper
 
-    function conv_check_c_wrapper(error) result(converged)
+    function conv_check_f_wrapper(error) result(converged)
         !
-        ! this function wraps the convergence check function to convert C variables to 
-        ! Fortran variables
+        ! this function wraps the convergence check function to convert Fortran 
+        ! variables to C variables
         !
         integer(ip), intent(out) :: error
         logical :: converged
@@ -461,11 +461,11 @@ contains
         converged = logical(converged_c)
         error = int(error_c, kind=ip)
 
-    end function conv_check_c_wrapper
+    end function conv_check_f_wrapper
 
-    subroutine logger_c_wrapper(message)
+    subroutine logger_f_wrapper(message)
         !
-        ! this function wraps the logging subroutine to convert C variables to Fortran 
+        ! this function wraps the logging subroutine to convert Fortran variables to C
         ! variables
         !
         character(*), intent(in) :: message
@@ -487,7 +487,7 @@ contains
         call logger_before_wrapping(message_c)
         deallocate(message_c)
 
-    end subroutine logger_c_wrapper
+    end subroutine logger_f_wrapper
 
     subroutine init_solver_settings_c(settings) bind(C, name="init_solver_settings")
         !
@@ -524,21 +524,21 @@ contains
             if (c_associated(settings_c%precond)) then
                 call c_f_procpointer(cptr=settings_c%precond, &
                                      fptr=precond_before_wrapping)
-                settings%precond => precond_c_wrapper
+                settings%precond => precond_f_wrapper
             else
                 settings%precond => null()
             end if
             if (c_associated(settings_c%conv_check)) then
                 call c_f_procpointer(cptr=settings_c%conv_check, &
                                      fptr=conv_check_before_wrapping)
-                settings%conv_check => conv_check_c_wrapper
+                settings%conv_check => conv_check_f_wrapper
             else
                 settings%conv_check => null()
             end if
             if (c_associated(settings_c%logger)) then
                 call c_f_procpointer(cptr=settings_c%logger, &
                                      fptr=logger_before_wrapping)
-                settings%logger => logger_c_wrapper
+                settings%logger => logger_f_wrapper
             else
                 settings%logger => null()
             end if
@@ -586,14 +586,14 @@ contains
             if (c_associated(settings_c%precond)) then
                 call c_f_procpointer(cptr=settings_c%precond, &
                                      fptr=precond_before_wrapping)
-                settings%precond => precond_c_wrapper
+                settings%precond => precond_f_wrapper
             else
                 settings%precond => null()
             end if
             if (c_associated(settings_c%logger)) then
                 call c_f_procpointer(cptr=settings_c%logger, &
                                      fptr=logger_before_wrapping)
-                settings%logger => logger_c_wrapper
+                settings%logger => logger_f_wrapper
             else
                 settings%logger => null()
             end if

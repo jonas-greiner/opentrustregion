@@ -6,9 +6,9 @@
 
 module test_reference
 
-    use opentrustregion, only: rp, ip, kw_len
+    use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer
 
     implicit none
 
@@ -74,6 +74,502 @@ module test_reference
     end interface
 
 contains
+
+    function test_update_orbs_funptr(update_orbs_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided orbital updating function pointer
+        !
+        use opentrustregion, only: update_orbs_type, hess_x_type
+
+        procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
+        real(rp) :: func
+        integer(ip) :: error
+        procedure(hess_x_type), pointer :: hess_x_funptr
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! allocate arrays
+        allocate(kappa(n_param), grad(n_param), h_diag(n_param))
+
+        ! initialize orbital update
+        kappa = 1.0_rp
+
+        ! call orbital update
+        call update_orbs_funptr(kappa, func, grad, h_diag, hess_x_funptr, error)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+        end if
+
+        ! check objective function value
+        if (abs(func - 3.0_rp) > tol) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Objective function "// &
+                "value returned"//message//" wrong."
+        end if
+
+        ! check gradient
+        if (any(abs(grad - 2.0_rp) > tol)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Gradient returned"// &
+                message//" wrong."
+        end if
+
+        ! check Hessian diagonal
+        if (any(abs(h_diag - 3.0_rp) > tol)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Hessian diagonal "// &
+                "returned"//message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(kappa, grad, h_diag)
+
+        ! test returned Hessian linear transformation
+        test_passed = test_passed .and. &
+            test_hess_x_funptr(hess_x_funptr, test_name, " by Hessian linear "// &
+                               "transformation function returned"//message)
+
+    end function test_update_orbs_funptr
+
+    function test_update_orbs_c_funptr(update_orbs_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided orbital updating C function pointer
+        !
+        use c_interface, only: update_orbs_c_type
+
+        type(c_funptr), intent(in) :: update_orbs_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(update_orbs_c_type), pointer :: update_orbs_funptr
+        real(c_rp), allocatable :: kappa(:), grad(:), h_diag(:)
+        real(c_rp) :: func
+        integer(c_ip) :: error
+        type(c_funptr) :: hess_x_c_funptr
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=update_orbs_c_funptr, fptr=update_orbs_funptr)
+
+        ! allocate arrays
+        allocate(kappa(n_param), grad(n_param), h_diag(n_param))
+
+        ! initialize orbital update
+        kappa = 1.0_c_rp
+
+        ! call orbital update
+        error = update_orbs_funptr(kappa, func, grad, h_diag, hess_x_c_funptr)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+        end if
+
+        ! check objective function value
+        if (abs(func - 3.0_c_rp) > tol_c) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Objective function "// &
+                "value returned"//message//" wrong."
+        end if
+
+        ! check gradient
+        if (any(abs(grad - 2.0_c_rp) > tol_c)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Gradient returned"// &
+                message//" wrong."
+        end if
+
+        ! check Hessian diagonal
+        if (any(abs(h_diag - 3.0_c_rp) > tol_c)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Hessian diagonal "// &
+                "returned"//message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(kappa, grad, h_diag)
+
+        ! test returned Hessian linear transformation
+        test_passed = test_passed .and. &
+            test_hess_x_c_funptr(hess_x_c_funptr, test_name, " by Hessian linear "// &
+                                 "transformation function returned"//message)
+
+    end function test_update_orbs_c_funptr
+
+    function test_hess_x_funptr(hess_x_funptr, test_name, message) result(test_passed)
+        !
+        ! this function tests a provided Hessian linear transformation function pointer
+        !
+        use opentrustregion, only: hess_x_type
+
+        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        real(rp), allocatable :: x(:), hess_x(:)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! allocate arrays
+        allocate(x(n_param), hess_x(n_param))
+
+        ! initialize trial vector
+        x = 1.0_rp
+
+        ! call Hessian linear transformation
+        call hess_x_funptr(x, hess_x, error)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+        end if
+
+        ! check Hessian linear transformation
+        if (any(abs(hess_x - 4.0_rp) > tol)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Hessian linear "// &
+                "transformation returned"//message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(x, hess_x)
+
+    end function test_hess_x_funptr
+
+    function test_hess_x_c_funptr(hess_x_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided Hessian linear transformation C function 
+        ! pointer
+        !
+        use c_interface, only: hess_x_c_type
+
+        type(c_funptr), intent(in) :: hess_x_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(hess_x_c_type), pointer :: hess_x_funptr
+        real(c_rp), allocatable :: x(:), hess_x(:)
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_funptr)
+
+        ! allocate arrays
+        allocate(x(n_param), hess_x(n_param))
+
+        ! initialize trial vector
+        x = 1.0_c_rp
+
+        ! call Hessian linear transformation
+        error = hess_x_funptr(x, hess_x)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+               "."
+        end if
+
+        ! check Hessian linear transformation
+        if (any(abs(hess_x - 4.0_c_rp) > tol_c)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Hessian linear "// &
+                "transformation returned"//message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(x, hess_x)
+
+    end function test_hess_x_c_funptr
+
+    function test_obj_func_funptr(obj_func_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided objective function function pointer
+        !
+        use opentrustregion, only: obj_func_type
+
+        procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        real(rp), allocatable :: kappa(:)
+        real(rp) :: func
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! allocate arrays
+        allocate(kappa(n_param))
+
+        ! initialize orbital update
+        kappa = 1.0_rp
+
+        ! call objective function
+        func = obj_func_funptr(kappa, error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check objective function
+        if (abs(func - 3.0_rp) > tol) then
+            write (stderr, *) "test_"//test_name//" failed: Function value returned"// &
+                message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(kappa)
+
+    end function test_obj_func_funptr
+
+    function test_obj_func_c_funptr(obj_func_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided objective function C function pointer
+        !
+        use c_interface, only: obj_func_c_type
+
+        type(c_funptr), intent(in) :: obj_func_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(obj_func_c_type), pointer :: obj_func_funptr
+        real(c_rp), allocatable :: kappa(:)
+        real(c_rp) :: func
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=obj_func_c_funptr, fptr=obj_func_funptr)
+
+        ! allocate arrays
+        allocate(kappa(n_param))
+
+        ! initialize orbital update
+        kappa = 1.0_c_rp
+
+        ! call objective function
+        error = obj_func_funptr(kappa, func)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check objective function
+        if (abs(func - 3.0_c_rp) > tol_c) then
+            write (stderr, *) "test_"//test_name//" failed: Function value returned"// &
+                message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(kappa)
+
+    end function test_obj_func_c_funptr
+
+    function test_precond_funptr(precond_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided preconditioner function pointer
+        !
+        use opentrustregion, only: precond_type
+
+        procedure(precond_type), intent(in), pointer :: precond_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        real(rp), allocatable :: residual(:), precond_residual(:)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! allocate arrays
+        allocate(residual(n_param), precond_residual(n_param))
+
+        ! initialize residual
+        residual = 1.0_rp
+
+        ! call preconditioning subroutine
+        call precond_funptr(residual, 5.0_rp, precond_residual, error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check preconditioned residual
+        if (any(abs(precond_residual - 5.0_rp) > tol)) then
+            write (stderr, *) "test_"//test_name//" failed: Preconditioned "// &
+                "residual returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(residual, precond_residual)
+
+    end function test_precond_funptr
+
+    function test_precond_c_funptr(precond_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided preconditioner C function pointer
+        !
+        use c_interface, only: precond_c_type
+
+        type(c_funptr), intent(in) :: precond_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(precond_c_type), pointer :: precond_funptr
+        real(c_rp), allocatable :: residual(:), precond_residual(:)
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_funptr)
+
+        ! allocate arrays
+        allocate(residual(n_param), precond_residual(n_param))
+
+        ! initialize residual
+        residual = 1.0_c_rp
+
+        ! call preconditioning function
+        error = precond_funptr(residual, 5.0_c_rp, precond_residual)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check preconditioned residual
+        if (any(abs(precond_residual - 5.0_c_rp) > tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Preconditioned "// &
+                "residual returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(residual, precond_residual)
+
+    end function test_precond_c_funptr
+
+    function test_conv_check_funptr(conv_check_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided convergence check function pointer
+        !
+        use opentrustregion, only: conv_check_type
+
+        procedure(conv_check_type), intent(in), pointer :: conv_check_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        logical :: converged
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! call convergence check function
+        converged = conv_check_funptr(error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check convergence logical
+        if (.not. converged) then
+            write (stderr, *) "test_"//test_name//" failed: Convergence logical "// &
+                "returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+    end function test_conv_check_funptr
+
+    function test_conv_check_c_funptr(conv_check_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided convergence check C function pointer
+        !
+        use c_interface, only: conv_check_c_type
+
+        type(c_funptr), intent(in) :: conv_check_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        procedure(conv_check_c_type), pointer :: conv_check_funptr
+        logical(c_bool) :: converged
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=conv_check_c_funptr, fptr=conv_check_funptr)
+
+        ! call convergence check function
+        error = conv_check_funptr(converged)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check convergence logical
+        if (.not. converged) then
+            write (stderr, *) "test_"//test_name//" failed: Convergence logical "// &
+                "returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+    end function test_conv_check_c_funptr
 
     subroutine get_reference_values(ref_settings_out) bind(C)
         !
