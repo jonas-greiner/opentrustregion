@@ -934,7 +934,7 @@ contains
         character(c_char), parameter :: test_array(5) = ["t", "e", "s", "t", &
                                                          c_null_char]
         character(:), allocatable :: char_f
-        integer :: n, i
+        integer :: i
 
         ! assume test passes
         test_character_from_c = .true.
@@ -951,7 +951,7 @@ contains
         end if
 
         ! check characters
-        do i = 1, n
+        do i = 1, len(char_f)
             if (test_array(i) /= char_f(i:i)) then
                 write(stderr, *) "test_character_from_c failed: String mismatch "// &
                     "at character ", i
