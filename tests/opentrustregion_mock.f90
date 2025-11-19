@@ -6,7 +6,7 @@
 
 module opentrustregion_mock
 
-    use opentrustregion, only: rp, ip, stderr, solver_type, stability_check_type, &
+    use opentrustregion, only: rp, ip, stderr, solver, stability_check, &
                                update_orbs_type, hess_x_type, obj_func_type
     use test_reference, only: tol, ref_settings, operator(/=)
 
@@ -15,8 +15,8 @@ module opentrustregion_mock
     logical :: test_passed
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(solver_type), pointer :: mock_solver_ptr => mock_solver
-    procedure(stability_check_type), pointer :: mock_stability_check_ptr => &
+    procedure(solver), pointer :: mock_solver_ptr => mock_solver
+    procedure(stability_check), pointer :: mock_stability_check_ptr => &
         mock_stability_check
 
 contains

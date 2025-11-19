@@ -7,17 +7,25 @@
 module c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
+    use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
+                           obj_func_c_type, precond_c_type, conv_check_c_type, &
+                           logger_c_type
     use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
                                            c_char, c_associated, c_null_char
 
     implicit none
 
-    ! number of parameters
-    integer(c_ip), parameter :: n_param = 3_c_ip
-
     ! logical to test logging function
     logical :: test_logger
+
+    ! create function pointers to ensure that routines comply with interface
+    procedure(update_orbs_c_type), pointer :: mock_update_orbs_ptr => mock_update_orbs
+    procedure(hess_x_c_type), pointer :: mock_hess_x_ptr => mock_hess_x
+    procedure(obj_func_c_type), pointer ::  mock_obj_func_ptr => mock_obj_func
+    procedure(precond_c_type), pointer ::  mock_precond_ptr => mock_precond
+    procedure(conv_check_c_type), pointer ::  mock_conv_check_ptr => mock_conv_check
+    procedure(logger_c_type), pointer ::  mock_logger_ptr => mock_logger
 
 contains
 

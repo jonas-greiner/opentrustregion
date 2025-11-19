@@ -151,40 +151,6 @@ module opentrustregion
                                 jacobi_davidson_start = 50, seed = 42, verbose = 0, &
                                 diag_solver = "davidson")
 
-    ! interfaces for solver and stability_check subroutines
-    interface
-        subroutine solver_type(update_orbs, obj_func, n_param, error, settings)
-
-            import :: ip, update_orbs_type, obj_func_type, solver_settings_type
-
-            procedure(update_orbs_type), intent(in), pointer :: update_orbs
-            procedure(obj_func_type), intent(in), pointer :: obj_func
-            integer(ip), intent(in) :: n_param
-            integer(ip), intent(out) :: error
-            type(solver_settings_type), intent(inout) :: settings
-
-        end subroutine solver_type
-    end interface
-
-    interface
-        subroutine stability_check_type(h_diag, hess_x, stable, error, settings, kappa)
-
-            import:: rp, ip, hess_x_type, stability_settings_type
-
-            real(rp), intent(in) :: h_diag(:)
-            procedure(hess_x_type), intent(in), pointer :: hess_x
-            logical, intent(out) :: stable
-            integer(ip), intent(out) :: error
-            type(stability_settings_type), intent(inout) :: settings
-            real(rp), intent(out), optional :: kappa(:)
-
-        end subroutine stability_check_type
-    end interface
-
-    ! create function pointers to ensure that routines comply with interface
-    procedure(solver_type), pointer :: solver_ptr => solver
-    procedure(stability_check_type), pointer :: stability_check_ptr => stability_check
-
     ! define global variables
     integer(ip) :: tot_orb_update = 0, tot_hess_x = 0
 

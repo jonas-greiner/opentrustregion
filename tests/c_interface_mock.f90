@@ -7,8 +7,8 @@
 module c_interface_mock
 
     use opentrustregion, only: stderr
-    use c_interface, only: c_rp, c_ip, solver_c_wrapper_type, &
-                           stability_check_c_wrapper_type
+    use c_interface, only: c_rp, c_ip, solver_c_wrapper, stability_check_c_wrapper, &
+                           init_solver_settings_c, init_stability_settings_c
     use test_reference, only: ref_settings, n_param
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_null_char
@@ -19,10 +19,14 @@ module c_interface_mock
                                 test_stability_check_interface = .true.
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(solver_c_wrapper_type), pointer :: mock_solver_c_wrapper_ptr => &
+    procedure(solver_c_wrapper), pointer :: mock_solver_c_wrapper_ptr => &
         mock_solver_c_wrapper
-    procedure(stability_check_c_wrapper_type), pointer :: &
+    procedure(stability_check_c_wrapper), pointer :: &
         mock_stability_check_c_wrapper_ptr => mock_stability_check_c_wrapper
+    procedure(init_solver_settings_c), pointer :: mock_init_solver_settings_c_ptr &
+        => mock_init_solver_settings_c
+    procedure(init_stability_settings_c), pointer :: &
+        mock_init_stability_settings_c_ptr => mock_init_stability_settings_c
 
 contains
 

@@ -6,10 +6,11 @@
 
 module c_interface
 
-    use opentrustregion, only: rp, ip, kw_len, solver_type, stability_check_type, &
-                               standard_solver => solver, &
+    use opentrustregion, only: rp, ip, kw_len, standard_solver => solver, &
                                standard_stability_check => stability_check, &
-                               default_solver_settings, default_stability_settings
+                               default_solver_settings, default_stability_settings, &
+                               update_orbs_type, hess_x_type, obj_func_type, &
+                               precond_type, conv_check_type, logger_type
     use, intrinsic :: iso_c_binding, only: c_double, c_int64_t, c_int32_t, c_bool, &
                                            c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_char, &
@@ -118,49 +119,19 @@ module c_interface
         character(c_char) :: diag_solver(kw_len + 1)
     end type
 
-    ! interfaces for solver and stability C wrapper subroutines
-    interface
-        function solver_c_wrapper_type(update_orbs_c_funptr, obj_func_c_funptr, &
-                                       n_param_c, settings_c) result(error_c) &
-            bind(C, name="solver")
-
-        import :: c_funptr, c_ip, solver_settings_type_c
-
-        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
-        integer(c_ip), intent(in), value :: n_param_c
-        type(solver_settings_type_c), intent(in), value :: settings_c
-        integer(c_ip) :: error_c
-
-        end function solver_c_wrapper_type
-    end interface
-
-    interface
-        function stability_check_c_wrapper_type(h_diag_c_ptr, hess_x_c_funptr, &
-                                                n_param_c, stable_c, settings_c, &
-                                                kappa_c_ptr) result(error_c) &
-            bind(C, name="stability_check")
-
-            import :: c_ptr, c_ip, c_funptr, c_bool, stability_settings_type_c
-
-            type(c_ptr), intent(in), value :: h_diag_c_ptr, kappa_c_ptr
-            integer(c_ip), intent(in), value :: n_param_c
-            type(c_funptr), intent(in), value :: hess_x_c_funptr
-            logical(c_bool), intent(out) :: stable_c
-            type(stability_settings_type_c), intent(in), value :: settings_c
-            integer(c_ip) :: error_c
-
-        end function stability_check_c_wrapper_type
-    end interface
-
-    procedure(solver_type), pointer :: solver => standard_solver
-    procedure(stability_check_type), pointer :: stability_check => &
+    procedure(standard_solver), pointer :: solver => standard_solver
+    procedure(standard_stability_check), pointer :: stability_check => &
         standard_stability_check
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(solver_c_wrapper_type), pointer :: solver_c_wrapper_ptr => &
-        solver_c_wrapper
-    procedure(stability_check_c_wrapper_type), pointer :: &
-        stability_check_c_wrapper_ptr => stability_check_c_wrapper
+    procedure(update_orbs_type), pointer :: update_orbs_f_wrapper_ptr => &
+        update_orbs_f_wrapper
+    procedure(hess_x_type), pointer :: hess_x_f_wrapper_ptr => hess_x_f_wrapper
+    procedure(obj_func_type), pointer :: obj_func_f_wrapper_ptr => obj_func_f_wrapper
+    procedure(precond_type), pointer :: precond_f_wrapper_ptr => precond_f_wrapper
+    procedure(conv_check_type), pointer :: conv_check_f_wrapper_ptr => &
+        conv_check_f_wrapper
+    procedure(logger_type), pointer :: logger_f_wrapper_ptr => logger_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
