@@ -16,6 +16,10 @@ module test_reference
     real(rp), parameter :: tol = 1e-10_rp
     real(c_rp), parameter :: tol_c = real(tol, kind=c_rp)
 
+    ! number of parameters
+    integer(ip), parameter :: n_param = 3_ip
+    integer(c_ip), parameter :: n_param_c = int(n_param, kind=c_ip)
+
     ! derived types for solver settings
     type ref_settings_type
         logical :: stability, line_search

@@ -9,7 +9,7 @@ module c_interface_mock
     use opentrustregion, only: stderr
     use c_interface, only: c_rp, c_ip, solver_c_wrapper_type, &
                            stability_check_c_wrapper_type
-    use test_reference, only: ref_settings
+    use test_reference, only: ref_settings, n_param
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_null_char
 
@@ -156,7 +156,7 @@ contains
         ! set return arguments
         stable_c = .false.
         if (c_associated(kappa_c_ptr)) then
-            call c_f_pointer(kappa_c_ptr, kappa_ptr, [n_param_c])
+            call c_f_pointer(kappa_c_ptr, kappa_ptr, [n_param])
             kappa_ptr = 1.0_c_rp
         end if
         error_c = 0

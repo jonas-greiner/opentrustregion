@@ -7,8 +7,7 @@
 module c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
-    use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol
+    use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
                                            c_char, c_associated, c_null_char
 
@@ -144,7 +143,7 @@ contains
         test_logger = .true.
 
         ! call solver
-        error = solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, &
+        error = solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
                                  settings)
 
         ! check if logging subroutine was correctly called
@@ -173,7 +172,7 @@ contains
         use c_interface, only: stability_settings_type_c, stability_check, &
                                stability_check_c_wrapper
         use opentrustregion_mock, only: mock_stability_check, test_passed
-        use test_reference, only: assignment(=), ref_settings, tol_c
+        use test_reference, only: assignment(=), ref_settings
 
         type(c_funptr) :: hess_x_c_funptr
         real(c_rp), allocatable :: h_diag(:)
@@ -202,7 +201,7 @@ contains
         settings%logger = c_funloc(mock_logger)
 
         ! call stability check first without initialized returned direction
-        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param, stable, &
+        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
                                           settings, kappa_c_ptr)
 
         ! check if test has passed
@@ -236,7 +235,7 @@ contains
         test_logger = .true.
 
         ! call stability check with initilized returned direction
-        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param, stable, &
+        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
                                           settings, kappa_c_ptr)
 
         ! check if logging subroutine was correctly called
