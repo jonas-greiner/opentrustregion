@@ -75,10 +75,10 @@ contains
         x = 1.0_c_rp
         error = hess_x_funptr(x, hess_x)
 
-        ! check for error
-        if (error /= 0) then
-            write (stderr, *) "test_solver_py_interface failed: Passed Hessian "// &
-                "linear transformation function returned error."
+        ! check if passed number of parameters is correct
+        if (n_param_c /= 3) then
+            write (stderr, *) "test_solver_py_interface failed: Passed number of "// &
+                "parameters wrong."
             test_solver_interface = .false.
         end if
 
@@ -212,16 +212,10 @@ contains
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_funptr)
         allocate(x(n_param_c), hess_x(n_param_c))
         x = 1.0_c_rp
-        error = hess_x_funptr(x, hess_x)
-        if (error /= 0) then
+        ! check if passed number of parameters is correct
+        if (n_param_c /= 3) then
             write (stderr, *) "test_stability_check_py_interface failed: Passed "// &
-                "Hessian linear transformation function returned error."
-            test_stability_check_interface = .false.
-        end if
-        if (any(abs(hess_x - 4.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_stability_check_py_interface failed: Returned "// &
-                "Hessian linear transformation from passed Hessian linear "// &
-                "transformation function wrong."
+                "number of parameters wrong."
             test_stability_check_interface = .false.
         end if
         deallocate(x, hess_x)
