@@ -271,7 +271,7 @@ contains
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
-        procedure(hess_x_c_type), pointer :: hess_x_funptr
+        procedure(hess_x_c_type), pointer :: hess_x_funptr_c
         real(c_rp), allocatable :: x(:), hess_x(:)
         integer(c_ip) :: error
 
@@ -279,7 +279,7 @@ contains
         test_passed = .true.
 
         ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_funptr)
+        call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_funptr_c)
 
         ! allocate arrays
         allocate(x(n_param), hess_x(n_param))
@@ -288,7 +288,7 @@ contains
         x = 1.0_c_rp
 
         ! call Hessian linear transformation
-        error = hess_x_funptr(x, hess_x)
+        error = hess_x_funptr_c(x, hess_x)
 
         ! check for error
         if (error /= 0) then
