@@ -664,11 +664,14 @@ contains
         red_space_solution = 0.0_rp
         red_space_solution(1) = -grad_norm
 
+        ! allocate arrays
+        allocate(ipiv(n_red))
+
         ! solve linear system
         if (settings%hess_symm) then
             ! query optimal workspace size
             lwork = -1
-            allocate(ipiv(n_red), work(1))
+            allocate(work(1))
             call dsysv("U", n_red, 1, red_hess, n_red, ipiv, red_space_solution, &
                        n_red, work, lwork, info)
             lwork = int(work(1), kind=ip)
