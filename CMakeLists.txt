@@ -75,8 +75,43 @@ else()
     message(STATUS "Building OpenTrustRegion as a STATIC library (default)")
 endif()
 
-# define source files
+# define base source files
 set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
+
+# base include directories
+set(OPENTRUSTREGION_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# option to include quasi-Newton extension in the main library
+option(ENABLE_QUASI_NEWTON "Include quasi-Newton extension in OpenTrustRegion" OFF)
+
+# conditionally add extension files
+if(ENABLE_QUASI_NEWTON)
+    message(STATUS "Including quasi-Newton in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common_c_interface.f90
+        extensions/quasi_newton/src/quasi_newton.f90
+        extensions/quasi_newton/src/quasi_newton_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include
+    )
+endif()
+
+# option to include augmented Roothaan-Hall extension in the main library
+option(ENABLE_ARH "Include augmented Roothaan-Hall extension in OpenTrustRegion" OFF)
+
+# conditionally add extension files
+if(ENABLE_ARH)
+    message(STATUS "Including augmented Roothaan-Hall in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common_c_interface.f90
+        extensions/arh/src/arh.f90
+        extensions/arh/src/arh_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include
+    )
+endif()
 
 # add library
 add_library(opentrustregion ${OPENTRUSTREGION_SOURCES})
@@ -115,7 +150,7 @@ target_include_directories(opentrustregion PUBLIC
 option(BUILD_TESTS "Build the testsuite" ON)
 
 if (BUILD_TESTS)
-    # define test files
+    # define base test files
     set(OPENTRUSTREGION_TESTS
         tests/test_reference.f90
         tests/opentrustregion_unit_tests.f90
@@ -123,6 +158,26 @@ if (BUILD_TESTS)
         tests/opentrustregion_mock.f90
         tests/c_interface_mock.f90
         tests/opentrustregion_system_tests.f90)
+
+    # conditionally add extension tests
+    if(ENABLE_QUASI_NEWTON)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/quasi_newton/tests/quasi_newton_test_reference.f90
+            extensions/quasi_newton/tests/quasi_newton_c_interface_unit_tests.f90
+            extensions/quasi_newton/tests/quasi_newton_mock.f90
+            extensions/quasi_newton/tests/quasi_newton_c_interface_mock.f90
+        )
+    endif()
+    if(ENABLE_ARH)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/arh/tests/arh_test_reference.f90
+            extensions/arh/tests/arh_c_interface_unit_tests.f90
+            extensions/arh/tests/arh_mock.f90
+            extensions/arh/tests/arh_c_interface_mock.f90
+        )
+    endif()
 
     # create shared test library which is then called from Python for testing
     add_library(testsuite SHARED ${OPENTRUSTREGION_TESTS})
@@ -166,6 +221,16 @@ install(TARGETS opentrustregion
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ 
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+if(ENABLE_QUASI_NEWTON)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endif()
+if(ENABLE_ARH)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endif()
 
 # install targets
 install(EXPORT OpenTrustRegionTargets

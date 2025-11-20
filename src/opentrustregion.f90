@@ -99,10 +99,8 @@ module opentrustregion
 
     ! derived type for solver settings
     type, abstract :: settings_type
-        logical :: hess_symm, initialized = .false.
-        real(rp) :: conv_tol
-        integer(ip) :: n_random_trial_vectors, jacobi_davidson_start, seed, verbose
-        procedure(precond_type), pointer, nopass :: precond
+        logical :: initialized = .false.
+        integer(ip) :: verbose
         procedure(logger_type), pointer, nopass :: logger
     contains
         procedure :: log
@@ -118,7 +116,14 @@ module opentrustregion
         end subroutine init_type
     end interface
 
-    type, extends(settings_type) :: solver_settings_type
+    type, abstract, extends(settings_type) :: optimizer_settings_type
+        logical :: hess_symm
+        real(rp) :: conv_tol
+        integer(ip) :: n_random_trial_vectors, jacobi_davidson_start, seed
+        procedure(precond_type), pointer, nopass :: precond
+    end type
+
+    type, extends(optimizer_settings_type) :: solver_settings_type
         logical :: stability, line_search
         real(rp) :: start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_macro, n_micro
@@ -128,7 +133,7 @@ module opentrustregion
         procedure :: init => init_solver_settings, print_results
     end type
 
-    type, extends(settings_type) :: stability_settings_type
+    type, extends(optimizer_settings_type) :: stability_settings_type
         integer(ip) :: n_iter
         character(kw_len) :: diag_solver
     contains

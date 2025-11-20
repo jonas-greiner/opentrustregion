@@ -34,8 +34,9 @@ contains
         !
         ! this subroutine is a test subroutine for the orbital update C function
         !
-        real(c_rp), intent(in) :: kappa(*)
-        real(c_rp), intent(out) :: func, grad(*), h_diag(*)
+        real(c_rp), intent(in), target :: kappa(*)
+        real(c_rp), intent(out) :: func
+        real(c_rp), intent(out), target :: grad(*), h_diag(*)
         type(c_funptr), intent(out) :: hess_x_c_funptr
         integer(c_ip) :: error
 
@@ -56,8 +57,8 @@ contains
         ! this subroutine is a test subroutine for the Hessian linear transformation
         ! C function
         !
-        real(c_rp), intent(in) :: x(*)
-        real(c_rp), intent(out) :: hess_x(*)
+        real(c_rp), intent(in), target :: x(*)
+        real(c_rp), intent(out), target :: hess_x(*)
         integer(c_ip) :: error
 
         hess_x(:n_param) = 4*x(:n_param)
@@ -70,7 +71,7 @@ contains
         !
         ! this function is a test function for the C objective function
         !
-        real(c_rp), intent(in) :: kappa(*)
+        real(c_rp), intent(in), target :: kappa(*)
         real(c_rp), intent(out) :: func
         integer(c_ip) :: error
 
@@ -84,8 +85,9 @@ contains
         !
         ! this function is a test function for the C preconditioner function
         !
-        real(c_rp), intent(in) :: residual(*), mu
-        real(c_rp), intent(out) :: precond_residual(*)
+        real(c_rp), intent(in), target :: residual(*)
+        real(c_rp), intent(in) :: mu
+        real(c_rp), intent(out), target :: precond_residual(*)
         integer(c_ip) :: error
 
         precond_residual(:n_param) = mu * residual(:n_param)

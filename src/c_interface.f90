@@ -44,9 +44,9 @@ module c_interface
                                     hess_x_c_funptr) result(error) bind(C)
             import :: c_rp, c_funptr, c_ip
 
-            real(c_rp), intent(in) :: kappa_c(*)
+            real(c_rp), intent(in), target :: kappa_c(*)
             real(c_rp), intent(out) :: func_c
-            real(c_rp), intent(out) :: grad_c(*), h_diag_c(*)
+            real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
             type(c_funptr), intent(out) :: hess_x_c_funptr
             integer(c_ip) :: error
         end function update_orbs_c_type
@@ -56,8 +56,8 @@ module c_interface
         function hess_x_c_type(x_c, hess_x_c) result(error) bind(C)
             import :: c_rp, c_ip
 
-            real(c_rp), intent(in) :: x_c(*)
-            real(c_rp), intent(out) :: hess_x_c(*)
+            real(c_rp), intent(in), target :: x_c(*)
+            real(c_rp), intent(out), target :: hess_x_c(*)
             integer(c_ip) :: error
         end function hess_x_c_type
     end interface
@@ -66,7 +66,7 @@ module c_interface
         function obj_func_c_type(kappa_c, func) result(error) bind(C)
             import :: c_rp, c_ip
 
-            real(c_rp), intent(in) :: kappa_c(*)
+            real(c_rp), intent(in), target :: kappa_c(*)
             real(c_rp), intent(out) :: func
             integer(c_ip) :: error
         end function obj_func_c_type
@@ -77,8 +77,9 @@ module c_interface
             bind(C)
             import :: c_rp, c_ip
 
-            real(c_rp), intent(in) :: residual_c(*), mu_c
-            real(c_rp), intent(out) :: precond_residual_c(*)
+            real(c_rp), intent(in), target :: residual_c(*)
+            real(c_rp), intent(in) :: mu_c
+            real(c_rp), intent(out), target :: precond_residual_c(*)
             integer(c_ip) :: error
         end function precond_c_type
     end interface
@@ -267,6 +268,27 @@ contains
         procedure(hess_x_type), intent(out), pointer :: hess_x
         integer(ip), intent(out) :: error
 
+        call update_orbs_f_wrapper_impl(update_orbs_before_wrapping, kappa, func, &
+                                        grad, h_diag, hess_x, error)
+
+    end subroutine update_orbs_f_wrapper
+
+    recursive subroutine update_orbs_f_wrapper_impl(update_orbs_funptr, kappa, func, grad, &
+                                                    h_diag, hess_x, error)
+        !
+        ! this subroutine wraps the orbital update subroutine to convert Fortran 
+        ! variables to C variables for a given function pointer, can be recursive in 
+        ! case the passed function pointer also calls this function
+        !
+        use opentrustregion, only: hess_x_type
+
+        procedure(update_orbs_c_type), intent(in), pointer :: update_orbs_funptr
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(out), pointer :: hess_x
+        integer(ip), intent(out) :: error
+
         real(c_rp) :: func_c
         real(c_rp), pointer :: kappa_c(:), grad_c(:), h_diag_c(:)
         type(c_funptr) :: hess_x_c_funptr
@@ -285,8 +307,7 @@ contains
         end if
 
         ! call update_orbs C function
-        error_c = update_orbs_before_wrapping(kappa_c, func_c, grad_c, h_diag_c, &
-                                              hess_x_c_funptr)
+        error_c = update_orbs_funptr(kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr)
 
         ! convert arguments to Fortran kind
         func = real(func_c, kind=rp)
@@ -306,7 +327,7 @@ contains
         ! associate procedure pointer to wrapper function
         hess_x => hess_x_f_wrapper
 
-    end subroutine update_orbs_f_wrapper
+    end subroutine update_orbs_f_wrapper_impl
 
     subroutine hess_x_f_wrapper(x, hess_x, error)
         !

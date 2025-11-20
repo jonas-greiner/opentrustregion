@@ -107,6 +107,58 @@ logger_interface_type = CFUNCTYPE(None, c_char_p)
 
 
 # define interface factories
+def update_orbs_interface_factory(
+    update_orbs: Callable[
+        [np.ndarray, np.ndarray, np.ndarray],
+        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+    ],
+    n_param: int,
+) -> Any:
+    """
+    this function is a factory for the orbital updating interface
+    """
+
+    @update_orbs_interface_type
+    def update_orbs_interface(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_funptr):
+        """
+        this function provides the interface to update the orbitals and to write the
+        function value, gradient, Hessian diagonal to the memory provided through
+        pointers and returns a function pointer to the Hessian linear transformation
+        """
+        # convert orbital rotation matrix pointer to numpy array
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
+        grad = np.ctypeslib.as_array(grad_ptr, shape=(n_param,))
+        h_diag = np.ctypeslib.as_array(h_diag_ptr, shape=(n_param,))
+
+        # update orbitals and retrieve objective function, gradient, Hessian diagonal
+        # and Hessian linear transformation function
+        try:
+            func_ptr[0], hess_x = update_orbs(kappa, grad, h_diag)
+        except RuntimeError:
+            return 1
+
+        # attach the Hessian-vector product interface to the returned interface so that
+        # it persists in Python to ensure that it is not garbage collected when the
+        # factory completes
+        update_orbs_interface.hess_x_interface = hess_x_interface_factory(
+            hess_x, n_param
+        )
+
+        # store the function pointer in hess_x_funptr so that it can be accessed by
+        # Fortran
+        hess_x_funptr[0] = update_orbs_interface.hess_x_interface
+
+        return 0
+
+    # attach the orbital updating function to the returned interface so that it
+    # persists in Python to ensure that it is not garbage collected when the factory
+    # completes
+    update_orbs_interface.update_orbs = update_orbs
+
+    return update_orbs_interface
+
+
+# define interface factories
 def hess_x_interface_factory(
     hess_x: Callable[[np.ndarray, np.ndarray], None], n_param: int
 ) -> Any:
@@ -382,34 +434,7 @@ def solver(
     settings: SolverSettings,
 ):
     # define interfaces for callback functions
-    @update_orbs_interface_type
-    def update_orbs_interface(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_funptr):
-        """
-        this function provides the interface to update the orbitals and to write the function value,
-        gradient, Hessian diagonal to the memory provided through pointers and returns
-        a function pointer to the Hessian linear transformation
-        """
-        # convert orbital rotation matrix pointer to numpy array
-        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
-        grad = np.ctypeslib.as_array(grad_ptr, shape=(n_param,))
-        h_diag = np.ctypeslib.as_array(h_diag_ptr, shape=(n_param,))
-
-        # update orbitals and retrieve objective function, gradient, Hessian diagonal
-        # and Hessian linear transformation function
-        try:
-            func_ptr[0], hess_x = update_orbs(kappa, grad, h_diag)
-        except RuntimeError:
-            return 1
-
-        # attach the Hessian-vector product function to the solver function so that it
-        # persists in Python to ensure that it is not garbage collected when the
-        # current orbital updating function completes
-        solver._hess_x_interface = hess_x_interface_factory(hess_x, n_param)
-
-        # store the function pointer in hess_x_ptr so that it can be accessed by Fortran
-        hess_x_funptr[0] = solver._hess_x_interface
-
-        return 0
+    update_orbs_interface = update_orbs_interface_factory(update_orbs, n_param)
 
     @obj_func_interface_type
     def obj_func_interface(kappa_ptr, func_ptr):
