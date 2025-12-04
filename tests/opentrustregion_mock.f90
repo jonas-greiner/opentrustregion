@@ -42,12 +42,12 @@ contains
         ! test passed orbital update subroutine
         test_passed = test_passed .and. &
             test_update_orbs_funptr(update_orbs_funptr, "solver_c_wrapper", &
-                                    " by passed orbital updating subroutine")
+                                    " by given orbital updating subroutine")
 
         ! test passed objective function
         test_passed = test_passed .and. &
             test_obj_func_funptr(obj_func_funptr, "solver_c_wrapper", &
-                                 " by passed objective function")
+                                 " by given objective function")
 
         ! check number of parameters
         if (n_param /= 3) then
@@ -67,7 +67,7 @@ contains
         else
             test_passed = test_passed .and. &
             test_precond_funptr(settings%precond, "solver_c_wrapper", &
-                                " by passed preconditioner subroutine")
+                                " by given preconditioner subroutine")
         end if
 
         ! check if optional convergence check function is correctly passed
@@ -78,7 +78,7 @@ contains
         else
             test_passed = test_passed .and. &
             test_conv_check_funptr(settings%conv_check, "solver_c_wrapper", &
-                                   " by passed convergence check function")
+                                   " by given convergence check function")
         end if
 
         ! check if optional logging function is correctly passed
@@ -128,7 +128,7 @@ contains
         ! test passed Hessian linear transformation subroutine
         test_passed = test_passed .and. &
             test_hess_x_funptr(hess_x_funptr, "stability_check_c_wrapper", &
-                               " by passed Hessian linear transformation subroutine")
+                               " by given Hessian linear transformation subroutine")
 
         ! set output quantities
         stable = .false.
@@ -143,7 +143,7 @@ contains
         else
             test_passed = test_passed .and. &
             test_precond_funptr(settings%precond, "stability_check_c_wrapper", &
-                                " by passed preconditioner subroutine")
+                                " by given preconditioner subroutine")
         end if
 
         ! check if optional logging function is correctly passed
