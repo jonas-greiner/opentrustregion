@@ -115,15 +115,17 @@ target_include_directories(opentrustregion PUBLIC
 option(BUILD_TESTS "Build the testsuite" ON)
 
 if (BUILD_TESTS)
+    # define test files
+    set(OPENTRUSTREGION_TESTS
+        tests/test_reference.f90
+        tests/opentrustregion_unit_tests.f90
+        tests/c_interface_unit_tests.f90
+        tests/opentrustregion_mock.f90
+        tests/c_interface_mock.f90
+        tests/opentrustregion_system_tests.f90)
+
     # create shared test library which is then called from Python for testing
-    add_library(testsuite SHARED
-                tests/test_reference.f90
-                tests/opentrustregion_unit_tests.f90
-                tests/c_interface_unit_tests.f90
-                tests/opentrustregion_mock.f90
-                tests/c_interface_mock.f90
-                tests/opentrustregion_system_tests.f90
-    )
+    add_library(testsuite SHARED ${OPENTRUSTREGION_TESTS})
 
     # link against BLAS and LAPACK and against OpenTrustRegion
     target_link_libraries(testsuite
