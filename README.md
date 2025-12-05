@@ -74,6 +74,7 @@ The optimization process is initiated by calling a `solver` subroutine. This rou
   - An integer error code (0 for success, positive integers < 100 for errors)
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
+- **`settings`** (settings_type): Settings object which controls optional arguments as described below.
 
 ---
 
@@ -113,15 +114,14 @@ call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
 The following C snippet demonstrates the equivalent usage through the C interface:
 
 ```c
-#include <stdint.h>
 #include <string.h>
 #include "opentrustregion.h"
 
 c_int n_param;
 
 // set callback function pointers to existing implementations
-update_orbs_type update_orbs_funptr = (void*)update_orbs;
-obj_func_type obj_func_funptr = (void*)obj_func;
+update_orbs_fp update_orbs_funptr = (void*)update_orbs;
+obj_func_fp obj_func_funptr = (void*)obj_func;
 
 // initialize settings
 solver_settings_type settings = solver_settings_init();
@@ -199,6 +199,7 @@ A separate `stability_check` subroutine is available to verify whether the curre
 - **`stable`** (boolean): Returns whether the current point is stable.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 - **`kappa`** (real array): If the memory is provided and the current point is not stable (as can be checked from return code of `stable`), the descent direction is written in-place in this array.
+- **`settings`** (settings_type): Settings object which controls optional arguments as described below.
 
 ---
 
@@ -239,7 +240,6 @@ call stability_check(h_diag, hess_x_funptr, n_param, stable, error, settings, ka
 The following C snippet demonstrates the equivalent usage through the C interface:
 
 ```c
-#include <stdint.h>
 #include <string.h>
 #include "opentrustregion.h"
 
@@ -247,7 +247,7 @@ c_int n_param;
 c_bool stable;
 
 // set callback function pointer to existing implementation
-hess_x_type hess_x_funptr = hess_x;
+hess_x_fp hess_x_funptr = hess_x;
 
 // initialize settings
 stability_settings_type settings = stability_settings_init();
