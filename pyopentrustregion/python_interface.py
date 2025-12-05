@@ -131,6 +131,11 @@ def hess_x_interface_factory(
 
         return 0
 
+    # attach the Hessian-vector product function to the returned interface so that it
+    # persists in Python to ensure that it is not garbage collected when the factory
+    # completes
+    hess_x_interface.hess_x = hess_x
+
     return hess_x_interface
 
 
@@ -420,7 +425,7 @@ def solver(
         return 0
 
     # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not know when the attribute to
+    # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
     settings.set_optional_callback(
         "precond", precond_interface_factory(settings.precond, n_param)
@@ -459,7 +464,7 @@ def stability_check(
     hess_x_interface = hess_x_interface_factory(hess_x, n_param)
 
     # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not know when the attribute to
+    # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
     settings.set_optional_callback(
         "precond", precond_interface_factory(settings.precond, n_param)
