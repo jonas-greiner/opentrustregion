@@ -137,16 +137,16 @@ fortran_tests = {
         "assign_stability_f_c",
         "character_from_c",
         "character_to_c",
-        "conv_check_c_wrapper",
-        "hess_x_c_wrapper",
+        "conv_check_f_wrapper",
+        "hess_x_f_wrapper",
         "init_solver_settings_c",
         "init_stability_settings_c",
-        "logger_c_wrapper",
-        "obj_func_c_wrapper",
-        "precond_c_wrapper",
+        "logger_f_wrapper",
+        "obj_func_f_wrapper",
+        "precond_f_wrapper",
         "solver_c_wrapper",
         "stability_check_c_wrapper",
-        "update_orbs_c_wrapper",
+        "update_orbs_f_wrapper",
     ],
     "system_tests": ["h2o_atomic_fb", "h2o_saddle_fb"],
 }
@@ -336,7 +336,7 @@ class PyInterfaceTests(unittest.TestCase):
             print(" test_solver_py_interface failed: Called logging function wrong.")
 
         self.assertTrue(
-            libtestsuite.test_solver_result() or not test_logger,
+            c_bool.in_dll(lib, "test_solver_interface").value and test_logger,
             "test_solver_py_interface failed",
         )
         print(" test_solver_py_interface PASSED")
@@ -412,10 +412,10 @@ class PyInterfaceTests(unittest.TestCase):
             )
 
         self.assertTrue(
-            libtestsuite.test_stability_check_result()
-            or not test_logger
-            or stable
-            or wrong_direction,
+            c_bool.in_dll(lib, "test_stability_check_interface").value
+            and test_logger
+            and not stable
+            and not wrong_direction,
             "test_stability_check_py_interface failed",
         )
         print(" test_stability_check_py_interface PASSED")

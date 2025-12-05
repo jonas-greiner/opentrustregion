@@ -3,6 +3,7 @@ import sys
 import subprocess
 import pathlib
 import shutil
+import shlex
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py
 from typing import TYPE_CHECKING
@@ -33,7 +34,7 @@ class CMakeBuild(build_py):
         extra_flags = os.getenv("CMAKE_FLAGS", "")
         cmake_cmd = ["cmake", ".."]
         if extra_flags:
-            cmake_cmd.append(extra_flags)
+            cmake_cmd += shlex.split(extra_flags)
 
         # run CMake configure & build
         subprocess.check_call(cmake_cmd, cwd=build_dir)

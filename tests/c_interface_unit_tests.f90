@@ -7,18 +7,25 @@
 module c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
-    use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol
+    use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
+                           obj_func_c_type, precond_c_type, conv_check_c_type, &
+                           logger_c_type
+    use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
                                            c_char, c_associated, c_null_char
 
     implicit none
 
-    ! number of parameters
-    integer(c_ip), parameter :: n_param = 3_c_ip
-
     ! logical to test logging function
     logical :: test_logger
+
+    ! create function pointers to ensure that routines comply with interface
+    procedure(update_orbs_c_type), pointer :: mock_update_orbs_ptr => mock_update_orbs
+    procedure(hess_x_c_type), pointer :: mock_hess_x_ptr => mock_hess_x
+    procedure(obj_func_c_type), pointer ::  mock_obj_func_ptr => mock_obj_func
+    procedure(precond_c_type), pointer ::  mock_precond_ptr => mock_precond
+    procedure(conv_check_c_type), pointer ::  mock_conv_check_ptr => mock_conv_check
+    procedure(logger_c_type), pointer ::  mock_logger_ptr => mock_logger
 
 contains
 
@@ -144,7 +151,7 @@ contains
         test_logger = .true.
 
         ! call solver
-        error = solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param, &
+        error = solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
                                  settings)
 
         ! check if logging subroutine was correctly called
@@ -173,13 +180,14 @@ contains
         use c_interface, only: stability_settings_type_c, stability_check, &
                                stability_check_c_wrapper
         use opentrustregion_mock, only: mock_stability_check, test_passed
-        use test_reference, only: assignment(=), ref_settings, tol_c
+        use test_reference, only: assignment(=), ref_settings
 
         type(c_funptr) :: hess_x_c_funptr
-        real(c_rp), allocatable, target :: h_diag(:), kappa(:)
+        real(c_rp), allocatable :: h_diag(:)
+        real(c_rp), allocatable, target :: kappa(:)
         type(stability_settings_type_c) :: settings
         logical(c_bool) :: stable
-        type(c_ptr) :: h_diag_c_ptr, kappa_c_ptr
+        type(c_ptr) :: kappa_c_ptr
         integer(c_ip) :: error
 
         ! assume tests pass
@@ -193,7 +201,6 @@ contains
 
         ! initialize Hessian diagonal and get C pointers
         allocate(h_diag(n_param))
-        h_diag_c_ptr = c_loc(h_diag)
         h_diag = 3.0_c_rp
 
         ! associate optional arguments with values
@@ -202,8 +209,8 @@ contains
         settings%logger = c_funloc(mock_logger)
 
         ! call stability check first without initialized returned direction
-        error = stability_check_c_wrapper(h_diag_c_ptr, hess_x_c_funptr, n_param, &
-                                          stable, settings, kappa_c_ptr)
+        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
+                                          settings, kappa_c_ptr)
 
         ! check if test has passed
         test_stability_check_c_wrapper = test_passed
@@ -225,7 +232,7 @@ contains
         if (error /= 0) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
-                "error boolean wrong."
+                "error code wrong."
         end if
 
         ! associate returned direction with value
@@ -236,8 +243,8 @@ contains
         test_logger = .true.
 
         ! call stability check with initilized returned direction
-        error = stability_check_c_wrapper(h_diag_c_ptr, hess_x_c_funptr, n_param, &
-                                          stable, settings, kappa_c_ptr)
+        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
+                                          settings, kappa_c_ptr)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -262,7 +269,7 @@ contains
         if (error /= 0) then
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
-                "error boolean wrong."
+                "error code wrong."
         end if
         deallocate(h_diag, kappa)
 
@@ -272,275 +279,148 @@ contains
 
     end function test_stability_check_c_wrapper
 
-    logical(c_bool) function test_update_orbs_c_wrapper() bind(C)
+    logical(c_bool) function test_update_orbs_f_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the orbital update
+        ! this function tests the Fortran wrapper for the orbital update
         !
-        use opentrustregion, only: hess_x_type
-        use c_interface, only: update_orbs_before_wrapping, update_orbs_c_wrapper
+        use opentrustregion, only: update_orbs_type
+        use c_interface, only: update_orbs_before_wrapping, update_orbs_f_wrapper
+        use test_reference, only: test_update_orbs_funptr
 
-        real(rp), allocatable :: kappa(:), grad(:), h_diag(:), x(:), hess_x(:)
-        real(rp) :: func
-        procedure(hess_x_type), pointer :: hess_x_funptr
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_update_orbs_c_wrapper = .true.
-
-        ! allocate arrays
-        allocate(kappa(n_param), grad(n_param), h_diag(n_param))
+        procedure(update_orbs_type), pointer :: update_orbs_funptr
 
         ! inject mock subroutine
         update_orbs_before_wrapping => mock_update_orbs
 
-        ! call orbital updating subroutine
-        kappa = 1.0_rp
-        call update_orbs_c_wrapper(kappa, func, grad, h_diag, hess_x_funptr, error)
+        ! get pointer to subroutine
+        update_orbs_funptr => update_orbs_f_wrapper
 
-        ! check if error is as expected
-        if (error /= 0) then
-            test_update_orbs_c_wrapper = .false.
-            write (stderr, *) "test_update_orbs_c_wrapper failed: Returned error."
-        end if
+        ! test orbital update wrapper
+        test_update_orbs_f_wrapper = &
+            test_update_orbs_funptr(update_orbs_funptr, "update_orbs_f_wrapper", "")
 
-        ! check if function value is as expected
-        if (abs(func - 3.0_rp) > tol) then
-            test_update_orbs_c_wrapper = .false.
-            write (stderr, *) "test_update_orbs_c_wrapper failed: Returned "// &
-                "objective function wrong."
-        end if
+    end function test_update_orbs_f_wrapper
 
-        ! check if gradient is as expected
-        if (any(abs(grad - 2.0_rp) > tol)) then
-            test_update_orbs_c_wrapper = .false.
-            write (stderr, *) "test_update_orbs_c_wrapper failed: Returned "// &
-                "gradient wrong."
-        end if
-
-        ! check if Hessian diagonal is as expected
-        if (any(abs(h_diag - 3.0_rp) > tol)) then
-            test_update_orbs_c_wrapper = .false.
-            write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
-                "diagonal wrong."
-        end if
-
-        ! deallocate arrays
-        deallocate(kappa, grad, h_diag)
-
-        ! allocate arrays
-        allocate(x(n_param), hess_x(n_param))
-
-        ! call Hessian linear transformation function
-        x = 1.0_rp
-        call hess_x_funptr(x, hess_x, error)
-
-        ! check if error is as expected
-        if (error /= 0) then
-            test_update_orbs_c_wrapper = .false.
-            write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
-                "linear transformation function produced error."
-        end if
-
-        ! check if Hessian linear transformation is as expected
-        if (any(abs(hess_x - 4.0_rp) > tol)) then
-            test_update_orbs_c_wrapper = .false.
-            write (stderr, *) "test_update_orbs_c_wrapper failed: Returned Hessian "// &
-                "linear transformation of returned Hessian linear transformation "// &
-                "function wrong."
-        end if
-
-        ! deallocate arrays
-        deallocate(x, hess_x)
-
-    end function test_update_orbs_c_wrapper
-
-    logical(c_bool) function test_hess_x_c_wrapper() bind(C)
+    logical(c_bool) function test_hess_x_f_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the Hessian linear transformation
+        ! this function tests the Fortran wrapper for the Hessian linear transformation
         !
-        use c_interface, only: hess_x_before_wrapping, hess_x_c_wrapper
+        use opentrustregion, only: hess_x_type
+        use c_interface, only: hess_x_before_wrapping, hess_x_f_wrapper
+        use test_reference, only: test_hess_x_funptr
 
-        real(rp), allocatable :: x(:), hess_x(:)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_hess_x_c_wrapper = .true.
-
-        ! allocate arrays
-        allocate(x(n_param), hess_x(n_param))
+        procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! inject mock subroutine
         hess_x_before_wrapping => mock_hess_x
 
-        ! call function
-        x = 1.0_rp
-        call hess_x_c_wrapper(x, hess_x, error)
+        ! get pointer to subroutine
+        hess_x_funptr => hess_x_f_wrapper
 
-        ! check if error is as expected
-        if (error /= 0) then
-            test_hess_x_c_wrapper = .false.
-            write (stderr, *) "test_hess_x_c_wrapper failed: Returned error."
-        end if
+        ! test Hessian linear transformation wrapper
+        test_hess_x_f_wrapper = &
+            test_hess_x_funptr(hess_x_funptr, "hess_x_f_wrapper", "")
 
-        ! check if Hessian linear transformation is as expected
-        if (any(abs(hess_x - 4.0_rp) > tol)) then
-            test_hess_x_c_wrapper = .false.
-            write (stderr, *) "test_hess_x_c_wrapper failed: Returned Hessian "// &
-                "linear transformation of returned Hessian linear transformation "// &
-                "function wrong."
-        end if
+    end function test_hess_x_f_wrapper
 
-        ! deallocate arrays
-        deallocate(x, hess_x)
-
-    end function test_hess_x_c_wrapper
-
-    logical(c_bool) function test_obj_func_c_wrapper() bind(C)
+    logical(c_bool) function test_obj_func_f_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the objective function
+        ! this function tests the Fortran wrapper for the objective function
         !
-        use c_interface, only: obj_func_before_wrapping, obj_func_c_wrapper
+        use opentrustregion, only: obj_func_type
+        use c_interface, only: obj_func_before_wrapping, obj_func_f_wrapper
+        use test_reference, only: test_obj_func_funptr
 
-        real(rp), allocatable :: kappa(:)
-        real(rp) :: obj_func
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_obj_func_c_wrapper = .true.
-
-        ! allocate kappa
-        allocate(kappa(n_param))
+        procedure(obj_func_type), pointer :: obj_func_funptr
 
         ! inject mock function
         obj_func_before_wrapping => mock_obj_func
 
-        ! call function
-        kappa = 1.0_rp
-        obj_func = obj_func_c_wrapper(kappa, error)
+        ! get pointer to subroutine
+        obj_func_funptr => obj_func_f_wrapper
 
-        ! deallocate kappa
-        deallocate(kappa)
+        ! test objective function wrapper
+        test_obj_func_f_wrapper = test_obj_func_funptr(obj_func_funptr, &
+                                                       "obj_func_f_wrapper", "")
 
-        ! check if error is as expected
-        if (error /= 0) then
-            test_obj_func_c_wrapper = .false.
-            write (stderr, *) "test_obj_func_c_wrapper failed: Returned error."
-        end if
+    end function test_obj_func_f_wrapper
 
-        ! check if function value is as expected
-        if (abs(obj_func - 3.0_rp) > tol) then
-            test_obj_func_c_wrapper = .false.
-            write (stderr, *) "test_obj_func_c_wrapper failed: Returned objective "// &
-                "function wrong."
-        end if
-
-    end function test_obj_func_c_wrapper
-
-    logical(c_bool) function test_precond_c_wrapper() bind(C)
+    logical(c_bool) function test_precond_f_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the preconditioner function
+        ! this function tests the Fortran wrapper for the preconditioner function
         !
-        use c_interface, only: precond_before_wrapping, precond_c_wrapper
+        use opentrustregion, only: precond_type
+        use c_interface, only: precond_before_wrapping, precond_f_wrapper
+        use test_reference, only: test_precond_funptr
 
-        real(rp), allocatable :: residual(:), precond_residual(:)
-        integer(ip) :: error
+        procedure(precond_type), pointer :: precond_funptr
 
-        ! assume tests pass
-        test_precond_c_wrapper = .true.
-
-        ! allocate arrays
-        allocate(residual(n_param), precond_residual(n_param))
-
-        ! inject mock subroutine
+        ! inject mock function
         precond_before_wrapping => mock_precond
 
-        ! call function
-        residual = 1.0_rp
-        call precond_c_wrapper(residual, 5.0_rp, precond_residual, error)
+        ! get pointer to subroutine
+        precond_funptr => precond_f_wrapper
 
-        ! check if error is as expected
-        if (error /= 0) then
-            test_precond_c_wrapper = .false.
-            write (stderr, *) "test_precond_c_wrapper failed: Returned error."
-        end if
+        ! test preconditioner wrapper
+        test_precond_f_wrapper = test_precond_funptr(precond_funptr, &
+                                                     "precond_f_wrapper", "")
 
-        ! check if preconditioned residual is as expected
-        if (any(abs(precond_residual - 5.0_rp) > tol)) then
-            test_precond_c_wrapper = .false.
-            write (stderr, *) "test_precond_c_wrapper failed: Returned "// &
-                "preconditioner wrong."
-        end if
+    end function test_precond_f_wrapper
 
-        ! deallocate arrays
-        deallocate(residual, precond_residual)
-
-    end function test_precond_c_wrapper
-
-    logical(c_bool) function test_conv_check_c_wrapper() bind(C)
+    logical(c_bool) function test_conv_check_f_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the convergence check function
+        ! this function tests the Fortran wrapper for the convergence check function
         !
-        use c_interface, only: conv_check_before_wrapping, conv_check_c_wrapper
+        use opentrustregion, only: conv_check_type
+        use c_interface, only: conv_check_before_wrapping, conv_check_f_wrapper
+        use test_reference, only: test_conv_check_funptr
 
-        logical :: converged
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_conv_check_c_wrapper = .true.
+        procedure(conv_check_type), pointer :: conv_check_funptr
 
         ! inject mock function
         conv_check_before_wrapping => mock_conv_check
 
-        ! call function
-        converged = conv_check_c_wrapper(error)
+        ! get pointer to subroutine
+        conv_check_funptr => conv_check_f_wrapper
 
-        ! check if error is as expected
-        if (error /= 0) then
-            test_conv_check_c_wrapper = .false.
-            write (stderr, *) "test_conv_check_c_wrapper failed: Returned error."
-        end if
+        ! test convergence check wrapper
+        test_conv_check_f_wrapper = test_conv_check_funptr(conv_check_funptr, &
+                                                           "conv_check_f_wrapper", "")
 
-        ! check if convergence boolean is as expected
-        if (.not. converged) then
-            test_conv_check_c_wrapper = .false.
-            write (stderr, *) "test_conv_check_c_wrapper failed: Returned "// &
-                "convergence logical wrong."
-        end if
+    end function test_conv_check_f_wrapper
 
-    end function test_conv_check_c_wrapper
-
-    logical(c_bool) function test_logger_c_wrapper() bind(C)
+    logical(c_bool) function test_logger_f_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the logging function
+        ! this function tests the Fortran wrapper for the logging function
         !
-        use c_interface, only: logger_before_wrapping, logger_c_wrapper
+        use c_interface, only: logger_before_wrapping, logger_f_wrapper
 
         ! assume tests pass
-        test_logger_c_wrapper = .true.
+        test_logger_f_wrapper = .true.
 
         ! inject mock subroutine
         logger_before_wrapping => mock_logger
 
         ! call subroutine
         test_logger = .false.
-        call logger_c_wrapper("test")
+        call logger_f_wrapper("test")
 
         ! check if logging test boolean is as expected
         if (.not. test_logger) then
-            test_logger_c_wrapper = .false.
-            write (stderr, *) "test_logger_c_wrapper failed: Returned logging "// &
+            test_logger_f_wrapper = .false.
+            write (stderr, *) "test_logger_f_wrapper failed: Returned logging "// &
                 "subroutine wrong."
         end if
 
-    end function test_logger_c_wrapper
+    end function test_logger_f_wrapper
 
     logical(c_bool) function test_init_solver_settings_c() bind(C)
         !
         ! this function tests that the solver settings initialization routine correctly 
         ! initializes all settings to their default values
         !
-        use c_interface, only: solver_settings_type_c, init_solver_settings_c, &
-                               default_solver_settings
+        use c_interface, only: solver_settings_type_c, init_solver_settings_c
+        use opentrustregion, only: default_solver_settings
         use test_reference, only: operator(/=)
 
         type(solver_settings_type_c) :: settings
@@ -573,8 +453,8 @@ contains
         ! this function tests that the stability check settings initialization routine 
         ! correctly initializes all settings to their default values
         !
-        use c_interface, only: stability_settings_type_c, init_stability_settings_c, &
-                               default_stability_settings
+        use c_interface, only: stability_settings_type_c, init_stability_settings_c
+        use opentrustregion, only: default_stability_settings
         use test_reference, only: operator(/=)
 
         type(stability_settings_type_c) :: settings
@@ -780,12 +660,12 @@ contains
 
     logical(c_bool) function test_assign_solver_c_f() bind(C)
         !
-        ! this function tests that the function that converts stability check settings 
-        ! from Fortran to C correctly performs this conversion
+        ! this function tests that the function that converts solver settings from 
+        ! Fortran to C correctly performs this conversion
         !
-        use opentrustregion,  only: solver_settings_type
-        use c_interface,      only: solver_settings_type_c, assignment(=)
-        use test_reference,   only: ref_settings, assignment(=), operator(/=)
+        use opentrustregion, only: solver_settings_type
+        use c_interface, only: solver_settings_type_c, assignment(=)
+        use test_reference, only: ref_settings, assignment(=), operator(/=)
 
         type(solver_settings_type)   :: settings
         type(solver_settings_type_c) :: settings_c
@@ -837,9 +717,9 @@ contains
         ! this function tests that the function that converts stability check settings 
         ! from Fortran to C correctly performs this conversion
         !
-        use opentrustregion,  only: stability_settings_type
-        use c_interface,      only: stability_settings_type_c, assignment(=)
-        use test_reference,   only: ref_settings, assignment(=), operator(/=)
+        use opentrustregion, only: stability_settings_type
+        use c_interface, only: stability_settings_type_c, assignment(=)
+        use test_reference, only: ref_settings, assignment(=), operator(/=)
 
         type(stability_settings_type)   :: settings
         type(stability_settings_type_c) :: settings_c
@@ -934,7 +814,7 @@ contains
         character(c_char), parameter :: test_array(5) = ["t", "e", "s", "t", &
                                                          c_null_char]
         character(:), allocatable :: char_f
-        integer :: n, i
+        integer :: i
 
         ! assume test passes
         test_character_from_c = .true.
@@ -951,7 +831,7 @@ contains
         end if
 
         ! check characters
-        do i = 1, n
+        do i = 1, len(char_f)
             if (test_array(i) /= char_f(i:i)) then
                 write(stderr, *) "test_character_from_c failed: String mismatch "// &
                     "at character ", i
