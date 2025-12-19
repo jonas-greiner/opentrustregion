@@ -1398,7 +1398,7 @@ contains
 
         ! print row of results table without optional arguments and check if row is 
         ! correct
-        call settings%print_results(1, 2.0_rp, 3.0_rp)
+        call settings%print_results(1_ip, 2.0_rp, 3.0_rp)
         if (log_message /= "        1   |     2.00000000000000E+00   "// &
             "|   3.00E+00   |      -      |        -   |        -     |      -   ") then
             write (stderr, *) "test_print_results failed: Printed row without "// &
@@ -1407,7 +1407,8 @@ contains
         end if
 
         ! print row of results table with optional arguments
-        call settings%print_results(1, 2.0_rp, 3.0_rp, 4.0_rp, 5, 6, 7.0_rp, 8.0_rp)
+        call settings%print_results(1_ip, 2.0_rp, 3.0_rp, 4.0_rp, 5_ip, 6_ip, 7.0_rp, &
+                                    8.0_rp)
         if (log_message /= "        1   |     2.00000000000000E+00   "// &
             "|   3.00E+00   |   4.00E+00  |   0 |   5  |    7.00E+00  |  8.00E+00") then
             write (stderr, *) "test_print_results failed: Printed row with "// &
@@ -1421,7 +1422,8 @@ contains
         !
         ! this function tests the logging subroutine
         !
-        use opentrustregion, only: solver_settings_type, log
+        use opentrustregion, only: solver_settings_type, log, verbosity_warning, &
+                                   verbosity_debug
 
         type(solver_settings_type) :: settings
 
@@ -1433,13 +1435,13 @@ contains
 
         ! check if logging is correctly performed according to verbosity level when 
         ! logger is provided
-        call log(settings, "This is a test message.", 1)
+        call log(settings, "This is a test message.", verbosity_warning)
         if (trim(log_message) /= " This is a test message.") then
             write (stderr, *) "test_log failed: Log message is not printed "// &
                 "correctly even though it should be according to verbosity level."
             test_log = .false.
         end if
-        call log(settings, "This is another test message.", 4)
+        call log(settings, "This is another test message.", verbosity_debug)
         if (log_message == " This is another test message.") then
             write (stderr, *) "test_log failed: Log message is printed even "// &
                 "though it should not be according to verbosity level."
@@ -1462,7 +1464,7 @@ contains
         test_split_string_by_space = .true.
 
         ! check if strings are split correctly on spaces
-        call split_string_by_space(message, 8, substrings)
+        call split_string_by_space(message, 8_ip, substrings)
         if (size(substrings) == 3) then
             if (trim(substrings(1)) /= "This is" .or. trim(substrings(2)) /= "a test" &
                 .or. trim(substrings(3)) /= "message.") then
@@ -1477,7 +1479,7 @@ contains
         end if
 
         ! check if strings are split correctly if splitting on spaces is not possible
-        call split_string_by_space(message, 5, substrings)
+        call split_string_by_space(message, 5_ip, substrings)
         if (size(substrings) == 5) then
             if (trim(substrings(1)) /= "This" .or. trim(substrings(2)) /= "is a" .or. &
                 trim(substrings(3)) /= "test" .or. trim(substrings(4)) /= "messa" .or. &
@@ -1620,7 +1622,7 @@ contains
         ! check if error is incorrectly thrown for finite and non-negative number of 
         ! parameters
         settings%n_random_trial_vectors = 0
-        call solver_sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3_ip, grad, error)
         if (error /= 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
                 "non-negative and non-vanishing number of parameters."
@@ -1628,7 +1630,7 @@ contains
         end if
 
         ! check if error is correctly thrown for vanishing number of parameters
-        call solver_sanity_check(settings, 0, grad, error)
+        call solver_sanity_check(settings, 0_ip, grad, error)
         if (error == 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
                 "for vanishing number of parameters."
@@ -1636,7 +1638,7 @@ contains
         end if
 
         ! check if error is correctly thrown for negative number of parameters
-        call solver_sanity_check(settings, -1, grad, error)
+        call solver_sanity_check(settings, -1_ip, grad, error)
         if (error == 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
                 "for negative number of parameters."
@@ -1645,7 +1647,7 @@ contains
 
         ! check if number of random trial vectors is reduced correctly
         settings%n_random_trial_vectors = 3
-        call solver_sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3_ip, grad, error)
         if (settings%n_random_trial_vectors /= 1) then
             write(stderr, *) "test_solver_sanity_check failed: Number of random "// &
                 "trial not correctly set."
@@ -1653,13 +1655,13 @@ contains
         end if
 
         ! check if gradient size is treated correctly
-        call solver_sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3_ip, grad, error)
         if (error /= 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
                 "gradient size."
             test_solver_sanity_check = .false.
         end if
-        call solver_sanity_check(settings, 4, grad, error)
+        call solver_sanity_check(settings, 4_ip, grad, error)
         if (error == 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
                 "for correct incorrect gradient size."
@@ -1668,28 +1670,28 @@ contains
 
         ! check if subsystem solver is correctly checked
         settings%subsystem_solver = "davidson"
-        call solver_sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3_ip, grad, error)
         if (error /= 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
                 "davidson subsystem solver."
             test_solver_sanity_check = .false.
         end if
         settings%subsystem_solver = "jacobi-davidson"
-        call solver_sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3_ip, grad, error)
         if (error /= 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
                 "jacobi-davidson subsystem solver."
             test_solver_sanity_check = .false.
         end if
         settings%subsystem_solver = "tcg"
-        call solver_sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3_ip, grad, error)
         if (error /= 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
                 "tcg subsystem solver."
             test_solver_sanity_check = .false.
         end if
         settings%subsystem_solver = "unknown"
-        call solver_sanity_check(settings, 3, grad, error)
+        call solver_sanity_check(settings, 3_ip, grad, error)
         if (error == 0) then
             write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
                 "for unknown subsystem solver."
@@ -1716,7 +1718,7 @@ contains
 
         ! check if number of random trial vectors is reduced correctly
         settings%n_random_trial_vectors = 3
-        call stability_sanity_check(settings, 3, error)
+        call stability_sanity_check(settings, 3_ip, error)
         if (settings%n_random_trial_vectors /= 1) then
             write(stderr, *) "test_stability_sanity_check failed: Number of random "// &
                 "trial not correctly set."
@@ -1725,21 +1727,21 @@ contains
 
         ! check if subsystem solver is correctly checked
         settings%diag_solver = "davidson"
-        call stability_sanity_check(settings, 3, error)
+        call stability_sanity_check(settings, 3_ip, error)
         if (error /= 0) then
             write(stderr, *) "test_stability_sanity_check failed: Error thrown for "// &
                 "davidson diagonalization solver."
             test_stability_sanity_check = .false.
         end if
         settings%diag_solver = "jacobi-davidson"
-        call stability_sanity_check(settings, 3, error)
+        call stability_sanity_check(settings, 3_ip, error)
         if (error /= 0) then
             write(stderr, *) "test_stability_sanity_check failed: Error thrown for "// &
                 "jacobi-davidson diagonalization solver."
             test_stability_sanity_check = .false.
         end if
         settings%diag_solver = "unknown"
-        call stability_sanity_check(settings, 3, error)
+        call stability_sanity_check(settings, 3_ip, error)
         if (error == 0) then
             write(stderr, *) "test_stability_sanity_check failed: Error not thrown "// &
                 "for unknown diagonalization solver."
@@ -2051,7 +2053,7 @@ contains
 
         ! check if subroutine adds error origin correctly if no origin is present
         error = 1
-        call add_error_origin(error, 100, settings)
+        call add_error_origin(error, 100_ip, settings)
         if (error /= 101) then
             write (stderr, *) "test_add_error_origin failed: Error origin not "// &
                 "correctly added."
@@ -2059,7 +2061,7 @@ contains
         end if
 
         ! check if subroutine skips adding error origin if origin is already present
-        call add_error_origin(error, 100, settings)
+        call add_error_origin(error, 100_ip, settings)
         if (error /= 101) then
             write (stderr, *) "test_add_error_origin failed: Error code modified "// &
                 "even though error origin is already present."
@@ -2068,7 +2070,7 @@ contains
 
         ! check if subroutine does not modify error code when no error is encountered
         error = 0
-        call add_error_origin(error, 100, settings)
+        call add_error_origin(error, 100_ip, settings)
         if (error /= 0) then
             write (stderr, *) "test_add_error_origin failed: Error code modified "// &
                 "even though error code of zero was passed."
@@ -2077,7 +2079,7 @@ contains
 
         ! check if subroutine raises error for invalid error code
         error = -1
-        call add_error_origin(error, 100, settings)
+        call add_error_origin(error, 100_ip, settings)
         if (error /= 101) then
             write (stderr, *) "test_add_error_origin failed: Error code not "// &
                 "correctly returned for invalid (negative) error code."
