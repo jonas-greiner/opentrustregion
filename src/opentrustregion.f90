@@ -110,7 +110,7 @@ module opentrustregion
         procedure(precond_type), pointer, nopass :: precond
         procedure(logger_type), pointer, nopass :: logger
     contains
-        procedure :: log
+        procedure :: log => print_message
         procedure(init_type), deferred :: init
     end type
 
@@ -1180,7 +1180,7 @@ contains
         min_idx = minloc(h_diag, dim=1)
 
         ! add direction if minimum Hessian diagonal element is negative
-        if (h_diag(min_idx) < 0.0_rp) then
+        if (h_diag(min_idx) < 0.0_rp .and. size(grad) > 2) then
             n_vectors = 2
             allocate(red_space_basis(size(grad), n_vectors + &
                      settings%n_random_trial_vectors))
@@ -1725,7 +1725,7 @@ contains
 
     end subroutine print_results
 
-    subroutine log(self, message, level, error)
+    subroutine print_message(self, message, level, error)
         !
         ! this function performs logging
         !
@@ -1759,7 +1759,7 @@ contains
             deallocate(substrings)
         end if
 
-    end subroutine log
+    end subroutine print_message
 
     subroutine split_string_by_space(input, max_length, substrings)
         !

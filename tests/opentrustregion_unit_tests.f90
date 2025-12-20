@@ -1418,37 +1418,38 @@ contains
 
     end function test_print_results
 
-    logical(c_bool) function test_log() bind(C)
+    logical(c_bool) function test_print_message() bind(C)
         !
         ! this function tests the logging subroutine
         !
-        use opentrustregion, only: solver_settings_type, log, verbosity_warning, &
-                                   verbosity_debug
+        use opentrustregion, only: solver_settings_type, print_message, &
+                                   verbosity_debug, verbosity_warning
 
         type(solver_settings_type) :: settings
 
         ! assume tests pass
-        test_log = .true.
+        test_print_message = .true.
 
         ! setup settings object
         call setup_settings(settings)
 
         ! check if logging is correctly performed according to verbosity level when 
         ! logger is provided
-        call log(settings, "This is a test message.", verbosity_warning)
+        call print_message(settings, "This is a test message.", verbosity_warning)
         if (trim(log_message) /= " This is a test message.") then
-            write (stderr, *) "test_log failed: Log message is not printed "// &
-                "correctly even though it should be according to verbosity level."
-            test_log = .false.
+            write (stderr, *) "test_print_message failed: Log message is not "// &
+                "printed correctly even though it should be according to verbosity "// &
+                "level."
+            test_print_message = .false.
         end if
-        call log(settings, "This is another test message.", verbosity_debug)
+        call print_message(settings, "This is another test message.", verbosity_debug)
         if (log_message == " This is another test message.") then
-            write (stderr, *) "test_log failed: Log message is printed even "// &
-                "though it should not be according to verbosity level."
-            test_log = .false.
+            write (stderr, *) "test_print_message failed: Log message is printed "// &
+                "even though it should not be according to verbosity level."
+            test_print_message = .false.
         end if
 
-    end function test_log
+    end function test_print_message
 
     logical(c_bool) function test_split_string_by_space() bind(C)
         !
