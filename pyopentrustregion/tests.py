@@ -52,8 +52,6 @@ except ImportError:
         c_int,
         c_real,
     )
-from pyopentrustregion.python_interface import c_real, c_int
-
 
 ext = "dylib" if sys.platform == "darwin" else "so"
 

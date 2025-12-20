@@ -47,7 +47,7 @@ contains
         test_passed = test_passed .and. &
             test_update_orbs_funptr(update_orbs_orig_funptr, &
                                     "update_orbs_qn_factory_c_wrapper", &
-                                    " by passed orbital updating function")
+                                    " by given orbital updating function")
 
         ! check number of parameters
         if (n_param /= 3) then

@@ -72,12 +72,12 @@ contains
         ! test passed energy function
         test_passed = test_passed .and. &
             test_get_energy_funptr(get_energy_funptr, "arh_factory_c_wrapper", &
-                                   " by passed energy function")
+                                   " by given energy function")
 
         ! test passed Fock matrix function
         test_passed = test_passed .and. &
             test_get_fock_funptr(get_fock_funptr, "arh_factory_c_wrapper", &
-                                 " by passed Fock matrix function")
+                                 " by given Fock matrix function")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then

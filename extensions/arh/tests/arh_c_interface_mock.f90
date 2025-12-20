@@ -77,12 +77,12 @@ contains
         ! test passed energy function
         test_arh_factory_interface = test_arh_factory_interface .and. &
             test_get_energy_c_funptr(get_energy_c_funptr, "solver_py_interface", &
-                                     " by passed energy function")
+                                     " by given energy function")
 
         ! test passed Fock matrix function
         test_arh_factory_interface = test_arh_factory_interface .and. &
             test_get_fock_c_funptr(get_fock_c_funptr, "solver_py_interface", &
-                                   " by passed Fock matrix function")
+                                   " by given Fock matrix function")
 
         ! check if passed number of AOs is correct
         if (n_ao_c /= 3) then

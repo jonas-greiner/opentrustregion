@@ -133,6 +133,9 @@ module otr_arh
         ! initialize error flag
         error = 0
 
+        ! initialize energy in case of error
+        energy = 0.0_rp
+
         ! get rotation matrix
         u = matrix_exponential(unpack_rhf(kappa), error)
         if (error /= 0) return

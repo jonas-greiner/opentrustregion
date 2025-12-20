@@ -60,7 +60,7 @@ contains
             test_update_orbs_qn_factory_interface .and. &
             test_update_orbs_c_funptr(update_orbs_orig_c_funptr, &
                                       "update_orbs_qn_factory_py_interface", &
-                                      " by passed orbital updating function")
+                                      " by given orbital updating function")
 
         ! check if passed number of parameters is correct
         if (n_param_c /= 3) then
