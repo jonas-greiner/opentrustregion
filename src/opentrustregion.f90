@@ -1394,7 +1394,7 @@ contains
         ! this subroutine generates random trial vectors
         !
         real(rp), intent(inout) :: red_space_basis(:, :)
-        class(settings_type), intent(in) :: settings
+        class(optimizer_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_trial, i
