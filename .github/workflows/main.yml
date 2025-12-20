@@ -74,7 +74,7 @@ jobs:
             cmargs: ""
           - os: macos-intel
             compiler: clang
-            runs-on: macos-13
+            runs-on: macos-15-intel
             build-type: test
             python-version: "3.10"
             integer-size: "32"
