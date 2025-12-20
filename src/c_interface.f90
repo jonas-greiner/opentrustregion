@@ -147,8 +147,7 @@ contains
     function solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
                               settings_c) result(error_c) bind(C, name="solver")
         !
-        ! this subroutine wraps the solver subroutine to convert C variables to Fortran
-        ! variables
+        ! this function exposes a Fortran-implemented solver subroutine to C
         !
         use opentrustregion, only: solver_settings_type
 
@@ -190,8 +189,7 @@ contains
                                        stable_c, settings_c, kappa_c_ptr) &                    
         result(error_c) bind(C, name="stability_check")
         !
-        ! this subroutine wraps the stability check subroutine to convert C variables
-        ! to Fortran variables
+        ! this function exposes a Fortran-implemented stability check subroutine to C
         !
         use opentrustregion, only: stability_settings_type
 
@@ -257,8 +255,7 @@ contains
 
     subroutine update_orbs_f_wrapper(kappa, func, grad, h_diag, hess_x, error)
         !
-        ! this subroutine wraps the orbital update subroutine to convert Fortran 
-        ! variables to C variables
+        ! this subroutine exposes a C-implemented orbital update function to Fortran
         !
         use opentrustregion, only: hess_x_type
 
@@ -331,8 +328,8 @@ contains
 
     subroutine hess_x_f_wrapper(x, hess_x, error)
         !
-        ! this subroutine wraps the Hessian linear transformation to convert Fortran 
-        ! variables to C variables
+        ! this subroutine exposes a C-implemented Hessian linear transformation to 
+        ! Fortran
         !
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
@@ -366,8 +363,7 @@ contains
 
     function obj_func_f_wrapper(kappa, error) result(obj_func)
         !
-        ! this function wraps the objective function to convert Fortran variables to C
-        ! variables
+        ! this function exposes a C-implemented objective function to Fortran
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -399,8 +395,7 @@ contains
 
     subroutine precond_f_wrapper(residual, mu, precond_residual, error)
         !
-        ! this subroutine wraps the preconditioner function to convert Fortran 
-        ! variables to C variables
+        ! this subroutine exposes a C-implemented preconditioner function to Fortran
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -437,8 +432,7 @@ contains
 
     function conv_check_f_wrapper(error) result(converged)
         !
-        ! this function wraps the convergence check function to convert Fortran 
-        ! variables to C variables
+        ! this function exposes a C-implemented convergence check function to Fortran
         !
         integer(ip), intent(out) :: error
         logical :: converged
@@ -457,8 +451,7 @@ contains
 
     subroutine logger_f_wrapper(message)
         !
-        ! this function wraps the logging subroutine to convert Fortran variables to C
-        ! variables
+        ! this subroutine exposes a C-implemented logger function to Fortran
         !
         character(*), intent(in) :: message
 
