@@ -704,7 +704,7 @@ contains
             if (info /= 0) then
                 write (msg, '(A, I0)') "Linear solver failed: Error in DSYSV, "// &
                                        "info = ", info
-                call settings%log(msg, 1, .true.)
+                call settings%log(msg, verbosity_error, .true.)
                 error = 1
                 return
             end if
@@ -719,7 +719,7 @@ contains
             if (info /= 0) then
                 write (msg, '(A, I0)') "Linear solver failed: Error in DGESV, "// &
                                        "info = ", info
-                call settings%log(msg, 1, .true.)
+                call settings%log(msg, verbosity_error, .true.)
                 error = 1
                 return
             end if
@@ -1197,7 +1197,7 @@ contains
         if (info /= 0) then
             write (msg, '(A, I0)') "Eigendecomposition failed: Error in DGEEV, "// &
                 "info = ", info
-            call settings%log(msg, 1, .true.)
+            call settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
@@ -1327,7 +1327,7 @@ contains
         if (info /= 0) then
             write (msg, '(A, I0)') "Eigendecomposition failed: Error in DGEEV, "// &
                 "info = ", info
-            call settings%log(msg, 1, .true.)
+            call settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
