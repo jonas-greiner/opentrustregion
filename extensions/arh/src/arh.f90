@@ -174,6 +174,7 @@ module otr_arh
                                  dm_per_spin_oao_fock_oao(:, :), &
                                  fock_oao_dm_per_spin_oao(:, :), fock_ov(:, :), &
                                  fock_vo(:, :), grad_full(:, :)
+        external :: dgemm
 
         ! number of AOs
         n_ao = arh_object%n_ao
@@ -275,6 +276,8 @@ module otr_arh
         ! this function defines the Hessian linear transformation on the basis of 
         ! augmented Roothaan-Hall
         !
+        use opentrustregion, only: verbosity_error
+
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -285,6 +288,7 @@ module otr_arh
 
         integer(ip), allocatable :: ipiv(:)
         character(300) :: msg
+        external :: dgemm, dsysv
 
         ! initialize error flag
         error = 0
@@ -324,15 +328,15 @@ module otr_arh
             temp = arh_object%metric
             lwork = -1
             allocate(ipiv(n_diff), work(1))
-            call dsysv("U", n_diff, 1, temp, n_diff, ipiv, vec, n_diff, work, lwork, &
-                       info)
+            call dsysv("U", n_diff, 1_ip, temp, n_diff, ipiv, vec, n_diff, work, &
+                       lwork, info)
             lwork = int(work(1))
             deallocate(work)
             allocate(work(lwork))
 
             ! solve linear system
-            call dsysv("U", n_diff, 1, temp, n_diff, ipiv, vec, n_diff, work, lwork, &
-                       info)
+            call dsysv("U", n_diff, 1_ip, temp, n_diff, ipiv, vec, n_diff, work, &
+                       lwork, info)
 
             ! deallocatework array
             deallocate(temp, ipiv, work)
@@ -341,7 +345,7 @@ module otr_arh
             if (info /= 0) then
                 write (msg, '(A, I0)') "Linear solver failed: Error in DSYSV, "// &
                                         "info = ", info
-                call arh_object%settings%log(msg, 1, .true.)
+                call arh_object%settings%log(msg, verbosity_error, .true.)
                 error = 0
                 return
             end if
@@ -405,6 +409,8 @@ module otr_arh
         !
         ! this subroutine initializes the ARH settings
         !
+        use opentrustregion, only: verbosity_error
+
         class(arh_settings_type), intent(out) :: self
         integer(ip), intent(out) :: error
 
@@ -419,7 +425,7 @@ module otr_arh
                               "initialized because initialization routine received "// &
                               "the wrong type. The type arh_settings_type was "// &
                               "likely subclassed without providing an "// &
-                              "initialization routine.", 1, .true.)
+                              "initialization routine.", verbosity_error, .true.)
             error = 1
         end select
 
@@ -429,6 +435,8 @@ module otr_arh
         !
         ! this subroutine deallocates the ARH objects
         !
+        use opentrustregion, only: verbosity_error
+
         real(rp), intent(out) :: dm_ao(:, :)
         integer(ip), intent(out) :: error
 
@@ -436,7 +444,8 @@ module otr_arh
             call arh_object%settings%log("AO density matrix is not allocated. The "// &
                                          "ARH deconstructor should only be run "// &
                                          "after both the ARH factory and the OTR "// &
-                                         "solver have been called.", 1, .true.)
+                                         "solver have been called.", verbosity_error, &
+                                         .true.)
             error = 1
             return
         end if
@@ -458,7 +467,7 @@ module otr_arh
         ! last term of the expansion which works because the sum of the Frobenius norms
         ! of two matrices is larger than the Frobenius norm of the sum of both matrices
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion, only: solver_settings_type, verbosity_error
 
         real(rp), intent(in) :: A(:, :)
         integer(ip), intent(out) :: error
@@ -467,6 +476,7 @@ module otr_arh
         integer(ip) :: n, i, power
         real(rp) :: scale, fac, A_norm
         real(rp), allocatable :: An(:, :), tmp(:, :)
+        external :: dgemm
 
         ! initialize error flag
         error = 0
@@ -518,7 +528,8 @@ module otr_arh
             if (i > 100) then
                 call arh_object%settings%log("Maximum number of iterations for "// &
                                              "Taylor expansion of matrix "// &
-                                             "exponential reached.", 1, .true.)
+                                             "exponential reached.", verbosity_error, &
+                                             .true.)
                 error = 1
                 return
             end if
@@ -598,6 +609,7 @@ module otr_arh
 
         real(rp), allocatable :: temp(:, :)
         integer(ip) :: n
+        external :: dgemm
 
         ! size
         n = size(dm, 1)
@@ -622,6 +634,7 @@ module otr_arh
 
         real(rp), allocatable :: dm_squared(:, :)
         integer(ip) :: n
+        external :: dgemm
 
         ! size
         n = size(dm, 1)
@@ -650,6 +663,7 @@ module otr_arh
 
         real(rp), allocatable :: temp(:, :)
         integer(ip) :: n
+        external :: dgemm
 
         n = size(matrix, 1)
         allocate(temp(n, n), matrix_transformed(n, n))
@@ -717,7 +731,7 @@ module otr_arh
         ! this subroutine calculates the square root and inverse square root of a 
         ! matrix
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion, only: solver_settings_type, verbosity_error
 
         real(rp), intent(in)  :: A(:, :)
         real(rp), allocatable, intent(out) :: sqrtA(:, :), inv_sqrtA(:, :)
@@ -726,6 +740,7 @@ module otr_arh
         integer(ip) :: n_ao, lwork, info, i
         real(rp), allocatable :: eigvecs(:, :), eigvals(:), work(:)
         character(300) :: msg
+        external :: dsyev, dgemm
 
         ! initialize error flag
         error = 0
@@ -757,7 +772,7 @@ module otr_arh
         if (info /= 0) then
             write (msg, '(A, I0)') "Eigendecomposition failed: Error in DSYEV, "// &
                 "info = ", info
-            call arh_object%settings%log(msg, 1, .true.)
+            call arh_object%settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
@@ -772,9 +787,9 @@ module otr_arh
 
         ! construct the square root and inverse square root of A
         do i = 1, n_ao
-            call dgemm("N","T", n_ao, n_ao, 1, eigvals(i), eigvecs(:, i), n_ao, &
+            call dgemm("N","T", n_ao, n_ao, 1_ip, eigvals(i), eigvecs(:, i), n_ao, &
                        eigvecs(:, i), n_ao, 1.0_rp, sqrtA, n_ao)
-            call dgemm("N","T", n_ao, n_ao, 1, 1.0_rp / eigvals(i), eigvecs(:, i), &
+            call dgemm("N","T", n_ao, n_ao, 1_ip, 1.0_rp / eigvals(i), eigvecs(:, i), &
                        n_ao, eigvecs(:, i), n_ao, 1.0_rp, inv_sqrtA, n_ao)
         end do
 
@@ -823,6 +838,7 @@ module otr_arh
 
         integer(ip) :: n_ao, i
         real(rp), allocatable :: proj_v(:, :), temp(:, :)
+        external :: dgemm
 
         n_ao = size(matrix, 1)
 
