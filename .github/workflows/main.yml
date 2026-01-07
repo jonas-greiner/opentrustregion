@@ -158,15 +158,13 @@ jobs:
         source venv/bin/activate
         python -m pip install --upgrade pip
 
-    - name: Build & Install OpenTrustRegion
-      if: ${{ matrix.build-type == 'test' || (matrix.build-type == 'install' && matrix.scenario == 'installed') }}
-      run: | 
-        if [ "${{ matrix.integer-size }}" = "32" ]; then
-          CMAKE_FLAGS="-DINTEGER_SIZE=4" pip install ${{github.workspace}}
-        else
-          CMAKE_FLAGS="-DINTEGER_SIZE=8" pip install ${{github.workspace}}
-        fi
-        
+    - name: Build & Install OpenTrustRegion (32-bit integers)
+      if: ${{ matrix.integer-size == '32' && (matrix.build-type == 'test' || (matrix.build-type == 'install' && matrix.scenario == 'installed'))}}
+      run: CMAKE_FLAGS="-DINTEGER_SIZE=4" pip install ${{github.workspace}}
+
+    - name: Build & Install OpenTrustRegion (64-bit integers)
+      if: ${{ matrix.integer-size == '64' && (matrix.build-type == 'test' || (matrix.build-type == 'install' && matrix.scenario == 'installed'))}}
+      run: CMAKE_FLAGS="-DINTEGER_SIZE=8" pip install ${{github.workspace}}
 
     - name: Build & Install OpenTrustRegion
       if: ${{matrix.build-type == 'install' && matrix.scenario == 'editable' }}
