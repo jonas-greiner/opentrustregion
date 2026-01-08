@@ -8,7 +8,8 @@ module otr_qn_c_interface
 
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
-    use otr_common_c_interface, only: n_param
+    use otr_common, only: change_reference_type
+    use otr_common_c_interface, only: change_reference_c_type, n_param
     use otr_qn, only: standard_update_orbs_qn_factory => update_orbs_qn_factory, &
                       standard_update_orbs_qn_deconstructor => &
                       update_orbs_qn_deconstructor
@@ -18,7 +19,10 @@ module otr_qn_c_interface
     implicit none
 
     ! define procedure pointer which will point to the Fortran procedures
-    procedure(update_orbs_c_type), pointer :: update_orbs_orig_before_wrapping => null()
+    procedure(update_orbs_c_type), pointer :: update_orbs_orig_qn_before_wrapping => &
+        null()
+    procedure(change_reference_c_type), pointer :: change_reference_qn_before_wrapping &
+        => null()
     procedure(update_orbs_type), pointer :: update_orbs_qn_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_qn_before_wrapping => null()
 
@@ -36,8 +40,10 @@ module otr_qn_c_interface
         update_orbs_qn_deconstructor => standard_update_orbs_qn_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_type), pointer :: update_orbs_orig_f_wrapper_ptr => &
-        update_orbs_orig_f_wrapper
+    procedure(update_orbs_type), pointer :: update_orbs_orig_qn_f_wrapper_ptr => &
+        update_orbs_orig_qn_f_wrapper
+    procedure(change_reference_type), pointer :: change_reference_f_wrapper_ptr => &
+        change_reference_f_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_qn_c_wrapper_ptr => &
         update_orbs_qn_c_wrapper
     procedure(hess_x_c_type), pointer :: hess_x_qn_c_wrapper_ptr => &
@@ -51,7 +57,8 @@ module otr_qn_c_interface
 
 contains
 
-    function update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, n_param_c, &
+    function update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, &
+                                              change_reference_c_funptr, n_param_c, &
                                               settings_c, update_orbs_qn_c_funptr) &
         result(error_c) bind(C, name="update_orbs_qn_factory")
         !
@@ -60,7 +67,8 @@ contains
         !
         use otr_qn, only: qn_settings_type
 
-        type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr
+        type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
+                                             change_reference_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
         type(qn_settings_type_c), intent(in), value :: settings_c
         type(c_funptr), intent(out) :: update_orbs_qn_c_funptr
@@ -68,16 +76,20 @@ contains
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
                                                 update_orbs_qn_funptr
+        procedure(change_reference_type), pointer :: change_reference_funptr
         type(qn_settings_type) :: settings
         integer(ip) :: error
 
         ! associate the input C pointer to update_orbs subroutine to a Fortran
         ! procedure pointer
         call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
-                             fptr=update_orbs_orig_before_wrapping)
+                             fptr=update_orbs_orig_qn_before_wrapping)
+        call c_f_procpointer(cptr=change_reference_c_funptr, &
+                             fptr=change_reference_qn_before_wrapping)
 
         ! associate procedure pointer to wrapper function
-        update_orbs_funptr => update_orbs_orig_f_wrapper
+        update_orbs_funptr => update_orbs_orig_qn_f_wrapper
+        change_reference_funptr => change_reference_f_wrapper
 
         ! convert number of parameters to Fortran kind and store globally to access 
         ! assumed size arrays passed from C to Fortran
@@ -87,8 +99,8 @@ contains
         settings = settings_c
 
         ! associate the global procedure pointer to the update_orbs function
-        call update_orbs_qn_factory(update_orbs_funptr, n_param, settings, error, &
-                                    update_orbs_qn_funptr)
+        call update_orbs_qn_factory(update_orbs_funptr, change_reference_funptr, &
+                                    n_param, settings, error, update_orbs_qn_funptr)
         update_orbs_qn_before_wrapping => update_orbs_qn_funptr
 
         ! get a C function pointer to the update_orbs wrapper function
@@ -99,7 +111,7 @@ contains
 
     end function update_orbs_qn_factory_c_wrapper
 
-    subroutine update_orbs_orig_f_wrapper(kappa, func, grad, h_diag, hess_x, error)
+    subroutine update_orbs_orig_qn_f_wrapper(kappa, func, grad, h_diag, hess_x, error)
         !
         ! this subroutine wraps the orbital update subroutine to convert Fortran 
         ! variables to C variables
@@ -113,10 +125,31 @@ contains
         procedure(hess_x_type), intent(out), pointer :: hess_x
         integer(ip), intent(out) :: error
 
-        call update_orbs_f_wrapper_impl(update_orbs_orig_before_wrapping, kappa, func, &
-                                        grad, h_diag, hess_x, error)
+        call update_orbs_f_wrapper_impl(update_orbs_orig_qn_before_wrapping, kappa, &
+                                        func, grad, h_diag, hess_x, error)
 
-    end subroutine update_orbs_orig_f_wrapper
+    end subroutine update_orbs_orig_qn_f_wrapper
+
+    subroutine change_reference_f_wrapper(new_ref, n_points, kappa_list, &
+                                          local_grad_list, grad_list, error)
+        !
+        ! this subroutine wraps the change reference subroutine to convert Fortran 
+        ! variables to C variables
+        !
+        use otr_common_c_interface, only: change_reference_f_wrapper_impl
+        
+        real(rp), intent(in), target :: new_ref(:)
+        integer(ip), intent(in) :: n_points
+        real(rp), intent(inout), target :: kappa_list(:, :), local_grad_list(:, :), &
+                                           grad_list(:, :)
+        integer(ip), intent(out) :: error
+
+        ! call change reference C function
+        call change_reference_f_wrapper_impl(change_reference_qn_before_wrapping, &
+                                             new_ref, n_points, kappa_list, &
+                                             local_grad_list, grad_list, error)
+
+    end subroutine change_reference_f_wrapper
 
     function update_orbs_qn_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                          hess_x_c_funptr) result(error_c) bind(C)

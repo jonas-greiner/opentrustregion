@@ -21,24 +21,32 @@ contains
         !
         use otr_qn_c_interface, only: qn_settings_type_c, update_orbs_qn_factory, &
                                       update_orbs_qn_factory_c_wrapper
-        use otr_qn_mock, only: mock_update_orbs_qn_factory, test_passed
+        use otr_qn_mock, only: mock_update_orbs_qn_factory, &
+                               test_passed_mock_update_orbs_qn_factory => test_passed
         use otr_qn_test_reference, only: assignment(=), ref_qn_settings
         use c_interface_unit_tests, only: mock_update_orbs, mock_logger, test_logger
+        use otr_common_c_interface_mock, only: mock_change_reference, test_name, &
+                                               test_passed_mock_change_reference => &
+                                               test_passed
         use test_reference, only: test_update_orbs_c_funptr
 
-        type(c_funptr) :: update_orbs_orig_c_funptr, update_orbs_qn_c_funptr, &
-                          hess_x_qn_c_funptr
+        type(c_funptr) :: update_orbs_orig_c_funptr, change_reference_c_funptr, &
+                          update_orbs_qn_c_funptr
         type(qn_settings_type_c) :: settings
         integer(c_ip) :: error_c
 
         ! assume tests pass
         test_update_orbs_qn_factory_c_wrapper = .true.
 
+        ! set test name
+        test_name = "test_update_orbs_qn_factory_c_wrapper"
+
         ! inject mock function
         update_orbs_qn_factory => mock_update_orbs_qn_factory
 
         ! get C function pointers to Fortran functions
         update_orbs_orig_c_funptr = c_funloc(mock_update_orbs)
+        change_reference_c_funptr = c_funloc(mock_change_reference)
 
         ! associate optional settings with values
         settings = ref_qn_settings
@@ -49,6 +57,7 @@ contains
 
         ! call quasi-Newton orbital updating factory C wrapper
         error_c = update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, &
+                                                   change_reference_c_funptr, &
                                                    n_param_c, settings, &
                                                    update_orbs_qn_c_funptr)
 
@@ -72,34 +81,65 @@ contains
             test_update_orbs_c_funptr(update_orbs_qn_c_funptr, &
                                       "update_orbs_qn_factory_c_wrapper", &
                                       " by returned orbital updating function") .and. &
-            test_passed
+            test_passed_mock_update_orbs_qn_factory .and. &
+            test_passed_mock_change_reference
 
     end function test_update_orbs_qn_factory_c_wrapper
 
-    logical(c_bool) function test_update_orbs_orig_f_wrapper() bind(C)
+    logical(c_bool) function test_update_orbs_orig_qn_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the orbital update
         !
         use opentrustregion, only: update_orbs_type
-        use otr_qn_c_interface, only: update_orbs_orig_before_wrapping, &
-                                      update_orbs_orig_f_wrapper
+        use otr_qn_c_interface, only: update_orbs_orig_qn_before_wrapping, &
+                                      update_orbs_orig_qn_f_wrapper
         use c_interface_unit_tests, only: mock_update_orbs
         use test_reference, only: test_update_orbs_funptr
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr
 
         ! inject mock subroutine
-        update_orbs_orig_before_wrapping => mock_update_orbs
+        update_orbs_orig_qn_before_wrapping => mock_update_orbs
 
         ! get pointer to subroutine
-        update_orbs_funptr => update_orbs_orig_f_wrapper
+        update_orbs_funptr => update_orbs_orig_qn_f_wrapper
 
         ! test orbital update Fortran wrapper
-        test_update_orbs_orig_f_wrapper = &
-            test_update_orbs_funptr(update_orbs_funptr, "update_orbs_orig_f_wrapper", &
-                                    "")
+        test_update_orbs_orig_qn_f_wrapper = &
+            test_update_orbs_funptr(update_orbs_funptr, &
+                                    "update_orbs_orig_qn_f_wrapper", "")
 
-    end function test_update_orbs_orig_f_wrapper
+    end function test_update_orbs_orig_qn_f_wrapper
+
+    logical(c_bool) function test_change_reference_qn_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the reference change
+        !
+        use otr_common, only: change_reference_type
+        use otr_qn_c_interface, only: change_reference_qn_before_wrapping, &
+                                      change_reference_f_wrapper
+        use otr_common_c_interface_mock, only: mock_change_reference, test_name, &
+                                               test_passed
+        use otr_common_test_reference, only: test_change_reference_funptr
+
+        procedure(change_reference_type), pointer :: change_reference_funptr
+
+        ! set test name
+        test_name = "test_change_reference_qn_f_wrapper"
+
+        ! inject mock subroutine
+        change_reference_qn_before_wrapping => mock_change_reference
+
+        ! get pointer to subroutine
+        change_reference_funptr => change_reference_f_wrapper
+
+        ! test change reference Fortran wrapper
+        test_change_reference_qn_f_wrapper = &
+            test_change_reference_funptr(change_reference_funptr, &
+                                         "change_reference_qn_f_wrapper", "") .and. &
+            test_passed
+
+    end function test_change_reference_qn_f_wrapper
 
     logical(c_bool) function test_update_orbs_qn_c_wrapper() bind(C)
         !
@@ -110,8 +150,6 @@ contains
                                       update_orbs_qn_c_wrapper
         use otr_common_mock, only: mock_update_orbs
         use test_reference, only: test_update_orbs_c_funptr
-
-        type(c_funptr) :: update_orbs_c_funptr
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -135,8 +173,6 @@ contains
         use otr_qn_c_interface, only: hess_x_qn_before_wrapping, hess_x_qn_c_wrapper
         use otr_common_mock, only: mock_hess_x
         use test_reference, only: test_hess_x_c_funptr
-
-        type(c_funptr) :: hess_x_c_funptr
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -272,7 +308,7 @@ contains
         use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
         use otr_qn_test_reference, only: ref_qn_settings, assignment(=), operator(/=)
 
-        type(qn_settings_type)   :: settings
+        type(qn_settings_type) :: settings
         type(qn_settings_type_c) :: settings_c
 
         ! assume test passes

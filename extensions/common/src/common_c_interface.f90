@@ -12,6 +12,21 @@ module otr_common_c_interface
 
     implicit none
 
+    ! C-interoperable interfaces for the callback functions
+    abstract interface
+        function change_reference_c_type(new_ref_c, n_points_c, kappa_list_c, &
+                                         local_grad_list_c, grad_list_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(in), target :: new_ref_c(*)
+            integer(c_ip), intent(in), value :: n_points_c
+            real(c_rp), intent(inout), target :: kappa_list_c(*), &
+                                                 local_grad_list_c(*), grad_list_c(*)
+            integer(c_ip) :: error_c
+        end function change_reference_c_type
+    end interface
+
     ! global variables
     integer(ip) :: n_param
 
@@ -112,5 +127,62 @@ contains
         end if
 
     end function hess_x_c_wrapper_impl
+
+    subroutine change_reference_f_wrapper_impl(change_reference_funptr, new_ref, &
+                                               n_points, kappa_list, local_grad_list, &
+                                               grad_list, error)
+        !
+        ! this subroutine wraps the change reference subroutine to convert Fortran 
+        ! variables to C variables for a given function pointer
+        !
+        procedure(change_reference_c_type), intent(in), pointer :: &
+            change_reference_funptr
+        real(rp), intent(in), target :: new_ref(:)
+        integer(ip), intent(in) :: n_points
+        real(rp), intent(inout), target :: kappa_list(:, :), local_grad_list(:, :), &
+                                           grad_list(:, :)
+        integer(ip), intent(out) :: error
+
+        real(c_rp), pointer :: new_ref_c(:), kappa_list_c(:, :), &
+                               local_grad_list_c(:, :), grad_list_c(:, :)
+        integer(c_ip) :: n_points_c, error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            new_ref_c => new_ref
+            n_points_c = n_points
+            kappa_list_c => kappa_list
+            local_grad_list_c => local_grad_list
+            grad_list_c => grad_list
+        else
+            allocate(new_ref_c(size(new_ref, 1)))
+            allocate(kappa_list_c(size(kappa_list, 1), size(kappa_list, 2)))
+            allocate(local_grad_list_c(size(local_grad_list, 1), &
+                                       size(local_grad_list, 2)))
+            allocate(grad_list_c(size(grad_list, 1), size(grad_list, 2)))
+            new_ref_c = real(new_ref, kind=c_rp)
+            n_points_c = int(n_points, kind=c_ip)
+            kappa_list_c = real(kappa_list, kind=c_rp)
+            local_grad_list_c = real(local_grad_list, kind=c_rp)
+            grad_list_c = real(grad_list, kind=c_rp)
+        end if
+
+        ! call change reference C function
+        error_c = change_reference_funptr(new_ref_c, n_points_c, kappa_list_c, &
+                                          local_grad_list_c, grad_list_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            kappa_list = real(kappa_list_c, kind=rp)
+            local_grad_list = real(local_grad_list_c, kind=rp)
+            grad_list = real(grad_list_c, kind=rp)
+            deallocate(new_ref_c)
+            deallocate(kappa_list_c)
+            deallocate(local_grad_list_c)
+            deallocate(grad_list_c)
+        end if
+
+    end subroutine change_reference_f_wrapper_impl
 
 end module otr_common_c_interface

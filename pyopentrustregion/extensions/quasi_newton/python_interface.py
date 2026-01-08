@@ -21,6 +21,10 @@ from pyopentrustregion.python_interface import (
     Settings,
     auto_bind_fields,
 )
+from pyopentrustregion.extensions.common.python_interface import (
+    change_reference_interface_type,
+    change_reference_interface_factory,
+)
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any
@@ -60,6 +64,7 @@ def update_orbs_qn_factory(
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    change_reference: Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], None],
     n_param: int,
     settings: QNSettings,
 ) -> Callable[
@@ -68,6 +73,9 @@ def update_orbs_qn_factory(
 ]:
     # define interfaces for callback functions
     update_orbs_interface = update_orbs_interface_factory(update_orbs, n_param)
+    change_reference_interface = change_reference_interface_factory(
+        change_reference, n_param
+    )
 
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
@@ -84,6 +92,7 @@ def update_orbs_qn_factory(
     lib.update_orbs_qn_factory.restype = c_int
     lib.update_orbs_qn_factory.argtypes = [
         update_orbs_interface_type,
+        change_reference_interface_type,
         c_int,
         QNSettingsC,
         POINTER(update_orbs_interface_type),
@@ -92,7 +101,11 @@ def update_orbs_qn_factory(
     # call Fortran function
     update_orbs_qn_funptr = update_orbs_interface_type()
     error = lib.update_orbs_qn_factory(
-        update_orbs_interface, n_param, settings.settings_c, update_orbs_qn_funptr
+        update_orbs_interface,
+        change_reference_interface,
+        n_param,
+        settings.settings_c,
+        update_orbs_qn_funptr,
     )
 
     if error:
@@ -138,6 +151,7 @@ def update_orbs_qn_factory(
 
     # keep all functions alive that are involved in the quasi-Newton orbital update
     update_orbs_qn_interface.update_orbs_interface = update_orbs_interface
+    update_orbs_qn_interface.change_reference_interface = change_reference_interface
     update_orbs_qn_interface.update_orbs_qn_funptr = update_orbs_qn_funptr
 
     return update_orbs_qn_interface
