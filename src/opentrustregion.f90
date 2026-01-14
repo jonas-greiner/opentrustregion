@@ -612,9 +612,12 @@ contains
 
         ! determine if saddle point
         stable = eigval > stability_thresh
-        
+
         if (stable) then
             if (present(kappa)) kappa = 0.0_rp
+            if (abs(eigval) < numerical_zero) &
+                call settings%log("Solution exhibits continuous degeneracy.", &
+                                  verbosity_warning, .false.)
         else
             if (present(kappa)) kappa = solution
             write (msg, '(A, F0.4)') "Solution not stable. Lowest eigenvalue: ", eigval
@@ -762,7 +765,7 @@ contains
             if (lower_trust_dist*middle_trust_dist > 0.0_rp) then
                 lower_alpha = middle_alpha
                 lower_trust_dist = middle_trust_dist
-                ! targeted trust radius is in lower bracket
+            ! targeted trust radius is in lower bracket
             else
                 upper_alpha = middle_alpha
                 upper_trust_dist = middle_trust_dist
@@ -878,7 +881,7 @@ contains
 
         ! continue looping until function at middle point is lower than at brackets
         iter = 0
-        do while (f_c < f_b)
+        do while (f_b > f_c + numerical_zero)
             ! compute value u by parabolic extrapolation
             tmp1 = (n_b - n_a)*(f_b - f_c)
             tmp2 = (n_b - n_c)*(f_b - f_a)
@@ -897,14 +900,14 @@ contains
                 if (error /= 0) return
 
                 ! check if minimum between n_b and n_c
-                if (f_u < f_c) then
+                if (f_c > f_u + numerical_zero) then
                     n_a = n_b
                     n_b = n_u
                     f_a = f_b
                     f_b = f_u
                     exit
                 ! check if minium between n_a and n_u
-                else if (f_u > f_b) then
+                else if (f_u > f_b + numerical_zero) then
                     n_c = n_u
                     f_c = f_u
                     exit
@@ -928,7 +931,7 @@ contains
                 call add_error_origin(error, error_obj_func, settings)
                 if (error /= 0) return
 
-                if (f_u < f_c) then
+                if (f_c > f_u + numerical_zero) then
                     n_b = n_c
                     n_c = n_u
                     n_u = n_c + golden_ratio*(n_c - n_b)
@@ -963,9 +966,10 @@ contains
         end do
 
         ! check if miniumum is bracketed
-        if (.not. (((f_b < f_c .and. f_b <= f_a) .or. (f_b < f_a .and. f_b <= f_c)) &
-                   .and. ((n_a < n_b .and. n_b < n_c) .or. &
-                          (n_c < n_b .and. n_b < n_a)))) then
+        if (.not. (((f_b < f_c + numerical_zero .and. f_b <= f_a + numerical_zero) &
+                    .or. (f_b < f_a + numerical_zero .and. &
+                          f_b <= f_c + numerical_zero)) .and. &
+                   ((n_a < n_b .and. n_b < n_c) .or. (n_c < n_b .and. n_b < n_a)))) then
             call settings%log("Line search did not find minimum", verbosity_error, &
                               .true.)
             error = 1
@@ -2090,7 +2094,9 @@ contains
                                  solutions(:, :), h_solutions(:, :)
         integer(ip) :: i
         real(rp), parameter :: random_noise_scale = 1e-4_rp, &
-                               residual_norm_conv_red_factor = 1e-3_rp
+                               residual_norm_conv_red_factor = 1e-3_rp, &
+                               grad_noise_thresh = 1e-12_rp, &
+                               low_curvature_thresh = 1e-8_rp
         real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
@@ -2107,23 +2113,35 @@ contains
         h_solutions(:, 1) = h_solution
         model_func = 0.0_rp
         
-        ! initialize residual and add random noise, residual should include h_solution 
-        ! if not starting at zero
+        ! initialize residual, residual should include h_solution if not starting at 
+        ! zero
         residual = grad
+
+        ! generate normalized random vector
         allocate(random_vector(n_param))
         random_vector = 0.0_rp
         do while (dnrm2(n_param, random_vector, 1_ip) < numerical_zero)
             call random_number(random_vector)
             random_vector = 2 * random_vector - 1
         end do
-        residual = residual + random_noise_scale * dnrm2(n_param, residual, 1_ip) * &
-                   random_vector / dnrm2(n_param, random_vector, 1_ip)
+        random_vector = random_vector / dnrm2(n_param, random_vector, 1_ip)
+
+        ! add random noise by individually scaling the components
+        residual = residual + max(random_noise_scale * abs(residual), numerical_zero) &
+                   * random_vector
         deallocate(random_vector)
+
+        ! if the gradient direction is small, do not trust it unless the curvature is 
+        ! high since it might just be noise which would be amplified through 
+        ! preconditioning which large Hessian diagonal elements
+        where (abs(grad) < grad_noise_thresh .and. abs(h_diag) < low_curvature_thresh)
+            residual = 0.0_rp
+        end where
 
         ! get initial residual norm
         initial_residual_norm = dnrm2(n_param, residual, 1_ip)
 
-        ! initialize preconditioned residual and direction,
+        ! initialize preconditioned residual and direction
         if (associated(settings%precond)) then
             call settings%precond(residual, 0.0_rp, precond_residual, error)
             call add_error_origin(error, error_precond, settings)
