@@ -79,7 +79,7 @@ module otr_qn
                                       change_reference_funptr_in, n_param, settings, &
                                       error, update_orbs_qn_funptr)
         !
-        ! this function returns a modified quasi-Newton orbital updating function
+        ! this subroutine returns a modified quasi-Newton orbital updating function
         !
         use opentrustregion, only: verbosity_error
 
@@ -130,11 +130,12 @@ module otr_qn
         ! get pointer to modified orbital updating function
         update_orbs_qn_funptr => update_orbs_qn
 
-
     end subroutine update_orbs_qn_factory
 
     subroutine update_orbs_qn(kappa, func, grad, h_diag, hess_x_funptr, error)
-
+        !
+        ! this subroutine is a modified quasi-Newton orbital updating function
+        !
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -239,7 +240,9 @@ module otr_qn
     end subroutine add
 
     subroutine sr1_init(self, n_param)
-
+        ! 
+        ! this subroutine initializes the SR1 object
+        !
         class(sr1_updating_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
 
@@ -251,7 +254,9 @@ module otr_qn
     end subroutine sr1_init
 
     subroutine sr1_clear(self)
-
+        ! 
+        ! this subroutine deallocates the SR1 object
+        !
         class(sr1_updating_type), intent(inout) :: self
 
         deallocate(self%kappa_list)
@@ -373,7 +378,9 @@ module otr_qn
     end subroutine sr1_hess_x_fun
 
     subroutine bfgs_init(self, n_param)
-
+        !
+        ! this subroutine initializes the BFGS object
+        !
         class(bfgs_updating_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
 
@@ -386,7 +393,9 @@ module otr_qn
     end subroutine bfgs_init
 
     subroutine bfgs_clear(self)
-
+        !
+        ! this subroutine deallocates the BFGS object
+        !
         class(bfgs_updating_type), intent(inout) :: self
 
         deallocate(self%kappa_list)
@@ -409,7 +418,7 @@ module otr_qn
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_param, i, it
+        integer(ip) :: n_param, it
         real(rp) :: S(6), T(4)
         logical :: update_y
         real(rp), allocatable :: list(:, :), kappa_diff(:), grad_diff(:), &
