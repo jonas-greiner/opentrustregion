@@ -82,6 +82,7 @@ if(BLA_SIZEOF_INTEGER EQUAL 8)
         add_compile_definitions("dgesv=dgesv_64")
         add_compile_definitions("dgetrf=dgetrf_64")
         add_compile_definitions("dgetri=dgetri_64")
+        add_compile_definitions("dposv=dposv_64")
         add_compile_definitions("zheev=zheev_64")
     endif()
 else()
@@ -133,6 +134,24 @@ if(ENABLE_ARH)
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include
+    )
+endif()
+
+# option to include subspace gradient-enhanced kriging extension in the main library
+option(ENABLE_S_GEK 
+       "Include subspace gradient-enhanced kriging extension in OpenTrustRegion" OFF)
+
+# conditionally add extension files
+if(ENABLE_S_GEK)
+    message(STATUS "Including subspace gradient-enhanced kriging in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common.f90
+        extensions/common/src/common_c_interface.f90
+        extensions/s_gek/src/s_gek.f90
+        extensions/s_gek/src/s_gek_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/s_gek/include
     )
 endif()
 
@@ -205,6 +224,17 @@ if (BUILD_TESTS)
             extensions/arh/tests/arh_c_interface_mock.f90
         )
     endif()
+    if(ENABLE_S_GEK)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_test_reference.f90
+            extensions/common/tests/common_mock.f90
+            extensions/common/tests/common_c_interface_mock.f90
+            extensions/s_gek/tests/s_gek_test_reference.f90
+            extensions/s_gek/tests/s_gek_c_interface_unit_tests.f90
+            extensions/s_gek/tests/s_gek_mock.f90
+            extensions/s_gek/tests/s_gek_c_interface_mock.f90
+        )
+    endif()
 
     # create shared test library which is then called from Python for testing
     add_library(testsuite SHARED ${OPENTRUSTREGION_TESTS})
@@ -260,6 +290,11 @@ if(ENABLE_QUASI_NEWTON)
 endif()
 if(ENABLE_ARH)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endif()
+if(ENABLE_S_GEK)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/s_gek/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
 endif()

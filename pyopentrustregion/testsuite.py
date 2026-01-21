@@ -31,6 +31,14 @@ try:
 except AttributeError:
     pass
 
+try:
+    from pyopentrustregion.extensions.s_gek.tests import (
+        SGEKCInterfaceTests,
+        SGEKPyInterfaceTests,
+    )
+except AttributeError:
+    pass
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=0)

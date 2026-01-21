@@ -1104,8 +1104,42 @@ contains
         real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
         integer(ip), intent(out) :: error
 
+        integer(ip) :: n
+        real(rp), allocatable :: eigvals(:), eigvecs(:, :)
+
+        ! initialize error flag
+        error = 0
+
+        ! size of matrix
+        n = size(symm_matrix, 1)
+
+        ! allocate arrays
+        allocate(eigvals(n), eigvecs(n, n))
+
+        ! diagonalize matrix
+        call symm_diag(symm_matrix, eigvals, eigvecs, settings, error)
+        if (error /= 0) return
+
+        ! get lowest eigenvalue and corresponding eigenvector
+        lowest_eigval = eigvals(1)
+        lowest_eigvec = eigvecs(:, 1)
+
+        ! deallocate eigenvalues and eigenvectors
+        deallocate(eigvals, eigvecs)
+
+    end subroutine symm_mat_min_eig
+
+    subroutine symm_diag(symm_matrix, eigvals, eigvecs, settings, error)
+        !
+        ! this subroutine returns eigenvalues and eigenvectors of a symmetric matrix
+        !
+        real(rp), intent(in) :: symm_matrix(:, :)
+        class(settings_type), intent(in) :: settings
+        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
+        integer(ip), intent(out) :: error
+
         integer(ip) :: n, lwork, info
-        real(rp), allocatable :: work(:), eigvals(:), eigvecs(:, :)
+        real(rp), allocatable :: work(:)
         character(300) :: msg
         external :: dsyev
 
@@ -1120,7 +1154,7 @@ contains
 
         ! query optimal workspace size
         lwork = -1
-        allocate(eigvals(n), work(1))
+        allocate(work(1))
         call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
         lwork = int(work(1), kind=ip)
         deallocate(work)
@@ -1141,14 +1175,7 @@ contains
             return
         end if
 
-        ! get lowest eigenvalue and corresponding eigenvector
-        lowest_eigval = eigvals(1)
-        lowest_eigvec = eigvecs(:, 1)
-
-        ! deallocate eigenvalues and eigenvectors
-        deallocate(eigvals, eigvecs)
-
-    end subroutine symm_mat_min_eig
+    end subroutine symm_diag
 
     subroutine general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
                                    error)
