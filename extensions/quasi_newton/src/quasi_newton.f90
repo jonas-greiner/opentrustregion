@@ -409,7 +409,7 @@ module otr_qn
     subroutine bfgs_hess_x_fun(x, hess_x, error)
         !
         ! this implements the two-loop recursion for the BFGS update of the Hessian 
-        ! applied to a vector x according to T.H. Fischer and J. Almloef, JPC 96, 9768 
+        ! applied to a vector x according to T. H. Fischer and J. Almloef, JPC 96, 9768 
         ! (1992), doi:10.1021/j100203a036
         !
         use opentrustregion, only: numerical_zero
@@ -419,7 +419,7 @@ module otr_qn
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_param, it
-        real(rp) :: S(6), T(4)
+        real(rp) :: s_mat(6), t_mat(4)
         logical :: update_y
         real(rp), allocatable :: list(:, :), kappa_diff(:), grad_diff(:), &
                                  curr_kappa_diff(:), curr_grad_diff(:)
@@ -439,8 +439,8 @@ module otr_qn
         end if
 
         ! initialize dot products
-        S = 0.0_rp
-        T = 0.0_rp
+        s_mat = 0.0_rp
+        t_mat = 0.0_rp
 
         ! initialize with Hessian diagonal
         hess_x = bfgs_object%h_diag * x
@@ -472,46 +472,47 @@ module otr_qn
                          bfgs_object%kappa_list(:, it)
             grad_diff = bfgs_object%grad_list(:, it + 1) - bfgs_object%grad_list(:, it)
 
-            ! calculate dot products (S(2) is the inverse of the paper)
-            S(1) = ddot(n_param, kappa_diff, 1_ip, grad_diff, 1_ip)
-            if (abs(S(1)) < vanish_denom_thr) then
-                S(1) = 0.0_rp
+            ! calculate dot products (s_mat(2) is the inverse of the paper)
+            s_mat(1) = ddot(n_param, kappa_diff, 1_ip, grad_diff, 1_ip)
+            if (abs(s_mat(1)) < vanish_denom_thr) then
+                s_mat(1) = 0.0_rp
             else
-                S(1) = 1.0_rp / S(1)
+                s_mat(1) = 1.0_rp / s_mat(1)
             end if
-            S(2) = ddot(n_param, kappa_diff, 1_ip, bfgs_object%y_list(:, it), 1_ip)
-            if (abs(S(2)) < vanish_denom_thr) then
-                S(2) = 1.0_rp / vanish_denom_thr
+            s_mat(2) = ddot(n_param, kappa_diff, 1_ip, bfgs_object%y_list(:, it), 1_ip)
+            if (abs(s_mat(2)) < vanish_denom_thr) then
+                s_mat(2) = 1.0_rp / vanish_denom_thr
             else
-                S(2) = 1.0_rp / S(2)
+                s_mat(2) = 1.0_rp / s_mat(2)
             end if
-            S(3) = ddot(n_param, grad_diff, 1_ip, x, 1_ip)
-            S(4) = ddot(n_param, bfgs_object%y_list(:, it), 1_ip, x, 1_ip)
+            s_mat(3) = ddot(n_param, grad_diff, 1_ip, x, 1_ip)
+            s_mat(4) = ddot(n_param, bfgs_object%y_list(:, it), 1_ip, x, 1_ip)
 
             ! get dot products for current Hessian approximation multiplied with 
             ! displacement
             if (update_y) then
-                S(5) = ddot(n_param, grad_diff, 1_ip, curr_kappa_diff, 1_ip)
-                S(6) = ddot(n_param, bfgs_object%y_list(:, it), 1_ip, curr_kappa_diff, &
-                            1_ip)
+                s_mat(5) = ddot(n_param, grad_diff, 1_ip, curr_kappa_diff, 1_ip)
+                s_mat(6) = ddot(n_param, bfgs_object%y_list(:, it), 1_ip, &
+                                curr_kappa_diff, 1_ip)
             end if
 
             ! calculate more dot products
-            T(1) = S(1) * S(3)
-            T(2) = S(2) * S(4)
+            t_mat(1) = s_mat(1) * s_mat(3)
+            t_mat(2) = s_mat(2) * s_mat(4)
             if (update_y) then
-                T(3) = S(1) * S(5)
-                T(4) = S(2) * S(6)
+                t_mat(3) = s_mat(1) * s_mat(5)
+                t_mat(4) = s_mat(2) * s_mat(6)
             end if
 
             ! calculate current Hessian approximation multiplied with trial vector
-            hess_x = hess_x + T(1) * grad_diff - T(2) * bfgs_object%y_list(:, it)
+            hess_x = hess_x + t_mat(1) * grad_diff - t_mat(2) * &
+                     bfgs_object%y_list(:, it)
 
             ! get current Hessian approximation multiplied with displacement
             if (update_y) then
                 bfgs_object%y_list(:, bfgs_object%n_points - 1) = &
-                    bfgs_object%y_list(:, bfgs_object%n_points - 1) + T(3) * &
-                    grad_diff(:) - T(4) * bfgs_object%y_list(:, it)
+                    bfgs_object%y_list(:, bfgs_object%n_points - 1) + t_mat(3) * &
+                    grad_diff(:) - t_mat(4) * bfgs_object%y_list(:, it)
             end if
         end do
 
@@ -520,27 +521,27 @@ module otr_qn
         if (allocated(grad_diff)) deallocate(grad_diff)
 
         ! calculate dot products
-        S(1) = ddot(n_param, curr_kappa_diff, 1_ip, curr_grad_diff, 1_ip)
-        if (abs(S(1)) < vanish_denom_thr) then
-            S(1) = 0.0_rp
+        s_mat(1) = ddot(n_param, curr_kappa_diff, 1_ip, curr_grad_diff, 1_ip)
+        if (abs(s_mat(1)) < vanish_denom_thr) then
+            s_mat(1) = 0.0_rp
         else
-            S(1) = 1.0_rp / S(1)
+            s_mat(1) = 1.0_rp / s_mat(1)
         end if
-        S(2) = ddot(n_param, curr_kappa_diff, 1_ip, &
-                    bfgs_object%y_list(:, bfgs_object%n_points - 1), 1_ip)
-        if (abs(S(2)) < vanish_denom_thr) then
-            S(2) = 1.0_rp / vanish_denom_thr
+        s_mat(2) = ddot(n_param, curr_kappa_diff, 1_ip, &
+                        bfgs_object%y_list(:, bfgs_object%n_points - 1), 1_ip)
+        if (abs(s_mat(2)) < vanish_denom_thr) then
+            s_mat(2) = 1.0_rp / vanish_denom_thr
         else
-            S(2) = 1.0_rp / S(2)
+            s_mat(2) = 1.0_rp / s_mat(2)
         end if
-        S(3) = ddot(n_param, curr_grad_diff, 1_ip, x, 1_ip)
-        S(4) = ddot(n_param, bfgs_object%y_list(:, bfgs_object%n_points - 1), 1_ip, x, &
-                    1_ip)
-        T(1) = S(1) * S(3)
-        T(2) = S(2) * S(4)
+        s_mat(3) = ddot(n_param, curr_grad_diff, 1_ip, x, 1_ip)
+        s_mat(4) = ddot(n_param, bfgs_object%y_list(:, bfgs_object%n_points - 1), &
+                        1_ip, x, 1_ip)
+        t_mat(1) = s_mat(1) * s_mat(3)
+        t_mat(2) = s_mat(2) * s_mat(4)
 
         ! calculate final Hessian approximation multiplied with trial vector
-        hess_x = hess_x + T(1) * curr_grad_diff - T(2) * &
+        hess_x = hess_x + t_mat(1) * curr_grad_diff - t_mat(2) * &
             bfgs_object%y_list(:, bfgs_object%n_points - 1)
 
         ! deallocate arrays
