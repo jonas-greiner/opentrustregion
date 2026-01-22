@@ -11,7 +11,6 @@ from importlib import resources
 from ctypes import (
     CDLL,
     c_bool,
-    c_double,
     c_char,
     c_void_p,
     Array,
@@ -33,43 +32,56 @@ except ImportError:
 
 # check if pyopentrustregion is installed or import module in same directory
 try:
-    from pyopentrustregion import (
+    from pyopentrustregion.python_interface import (
         SolverSettings,
         StabilitySettings,
         solver,
         stability_check,
         c_int,
         c_real,
+        ext,
+        conda_prefix,
     )
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.absolute()))
-    from pyopentrustregion import (
+    from pyopentrustregion.python_interface import (
         SolverSettings,
         StabilitySettings,
         solver,
         stability_check,
         c_int,
         c_real,
+        ext,
+        conda_prefix,
     )
 
-ext = "dylib" if sys.platform == "darwin" else "so"
 lib = None
 
-# try to load from installed package (site-packages)
-lib_path = resources.files("pyopentrustregion") / f"libtestsuite.{ext}"
-if lib_path.is_file():
-    lib = CDLL(str(lib_path))
+# try to load from installed package (conda)
+lib_name = f"libotrtestsuite.{ext}"
+conda_path_unix = conda_prefix / "lib" / lib_name
+conda_path_wind = conda_prefix / "Library" / "bin" / lib_name
+if conda_path_unix.exists():
+    lib = CDLL(str(conda_path_unix))
+elif conda_path_wind.exists():
+    lib = CDLL(str(conda_path_wind))
+
+# fallback: try to load from installed package (site-packages)
+if lib is None:
+    lib_path = resources.files("pyopentrustregion") / f"libotrtestsuite.{ext}"
+    if lib_path.is_file():
+        lib = CDLL(str(lib_path))
 
 # fallback: try to load from same directory (editable install)
 if lib is None:
-    local_path = os.path.join(os.path.dirname(__file__), f"libtestsuite.{ext}")
+    local_path = os.path.join(os.path.dirname(__file__), f"libotrtestsuite.{ext}")
     if os.path.exists(local_path):
         lib = CDLL(local_path)
 
 # fallback: try to load from ../build (development build)
 if lib is None:
     build_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../build", f"libtestsuite.{ext}")
+        os.path.join(os.path.dirname(__file__), "../build", f"libotrtestsuite.{ext}")
     )
     if os.path.exists(build_path):
         lib = CDLL(build_path)
@@ -77,23 +89,8 @@ if lib is None:
 # if all failed
 if lib is None:
     raise FileNotFoundError(
-        f"Cannot find any of the expected libraries: libtestsuite.{ext}"
+        f"Cannot find any of the expected libraries: libotrtestsuite.{ext}"
     )
-
-# load the testsuite library
-ext = "dylib" if sys.platform == "darwin" else "so"
-try:
-    with resources.path("pyopentrustregion", f"libtestsuite.{ext}") as lib_path:
-        libtestsuite = CDLL(str(lib_path))
-# fallback for non-installed or dev build
-except OSError:
-    try:
-        fallback_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../build", f"libtestsuite.{ext}")
-        )
-        libtestsuite = CDLL(fallback_path)
-    except OSError:
-        raise FileNotFoundError("Cannot find testsuite library.")
 
 
 # define all tests in alphabetical order
@@ -154,7 +151,7 @@ fortran_tests = {
 # define return type of Fortran functions
 for tests in fortran_tests.values():
     for test in tests:
-        getattr(libtestsuite, f"test_{test}").restype = c_bool
+        getattr(lib, f"test_{test}").restype = c_bool
 
 
 # define function to add tests to test classes
@@ -162,7 +159,7 @@ def add_tests(cls):
 
     def create_test(func_name):
         def test(self):
-            result = getattr(libtestsuite, func_name)()
+            result = getattr(lib, func_name)()
             if result:
                 print(f" {func_name} PASSED")
             self.assertTrue(result, f"{func_name} failed")
@@ -253,9 +250,9 @@ class PyInterfaceTests(unittest.TestCase):
         ref_settings = RefSettingsC()
 
         # call Fortran to fill values
-        libtestsuite.get_reference_values.argtypes = [POINTER(RefSettingsC)]
-        libtestsuite.get_reference_values.restype = None
-        libtestsuite.get_reference_values(byref(ref_settings))
+        lib.get_reference_values.argtypes = [POINTER(RefSettingsC)]
+        lib.get_reference_values.restype = None
+        lib.get_reference_values(byref(ref_settings))
 
         # extract Python values
         for name, _ in fields:
@@ -267,7 +264,7 @@ class PyInterfaceTests(unittest.TestCase):
         return super().setUpClass()
 
     # replace original library with mock library
-    @patch("pyopentrustregion.python_interface.lib.solver", libtestsuite.mock_solver)
+    @patch("pyopentrustregion.python_interface.lib.solver", lib.mock_solver)
     def test_solver_py_interface(self):
         """
         this function tests the solver python interface
@@ -344,7 +341,7 @@ class PyInterfaceTests(unittest.TestCase):
     # replace original library with mock library
     @patch(
         "pyopentrustregion.python_interface.lib.stability_check",
-        libtestsuite.mock_stability_check,
+        lib.mock_stability_check,
     )
     def test_stability_check_py_interface(self):
         """
@@ -420,9 +417,7 @@ class PyInterfaceTests(unittest.TestCase):
         )
         print(" test_stability_check_py_interface PASSED")
 
-    @patch.object(
-        SolverSettings, "init_c_struct", libtestsuite.mock_init_solver_settings
-    )
+    @patch.object(SolverSettings, "init_c_struct", lib.mock_init_solver_settings)
     def test_solver_settings(self):
         """
         this function ensure the SolverSettings object is properly initialized and
@@ -488,9 +483,7 @@ class PyInterfaceTests(unittest.TestCase):
         self.assertTrue(test_passed, "test_solver_settings failed")
         print(" test_solver_settings PASSED")
 
-    @patch.object(
-        StabilitySettings, "init_c_struct", libtestsuite.mock_init_stability_settings
-    )
+    @patch.object(StabilitySettings, "init_c_struct", lib.mock_init_stability_settings)
     def test_stability_settings(self):
         """
         this function ensure the StabilitySettings object is properly initialized and
@@ -553,7 +546,7 @@ class SystemTests(unittest.TestCase):
             raise RuntimeError(
                 "test_data directory does not exist in same directory as testsuite.py."
             )
-        libtestsuite.set_test_data_path(str(test_data).encode("utf-8"))
+        lib.set_test_data_path(str(test_data).encode("utf-8"))
         return super().setUpClass()
 
 

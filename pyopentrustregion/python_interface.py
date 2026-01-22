@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 import numpy as np
 from importlib import resources
 from ctypes import (
@@ -36,20 +37,38 @@ if TYPE_CHECKING:
 
 # load the opentrustregion library, fallback to testsuite in case opentrustregion was
 # statically compiled
-ext = "dylib" if sys.platform == "darwin" else "so"
+if sys.platform == "darwin":
+    ext = "dylib"
+elif sys.platform == "win32":
+    ext = "dll"
+else:
+    ext = "so"
 lib_candidates = [
     f"libopentrustregion.{ext}",
     f"libopentrustregion_32.{ext}",
     f"libopentrustregion_64.{ext}",
-    f"libtestsuite.{ext}",
 ]
+if sys.platform != "win32":
+    # libopentrustregion symbols not exported through libotrtestsuite on windows
+    lib_candidates.append(f"libotrtestsuite.{ext}")
 lib = None
 
-# try to load from installed package (site-packages)
+# try to load from installed package (conda)
+conda_prefix = Path("/opt/anaconda1anaconda2anaconda3")
 for lib_name in lib_candidates:
-    lib_path = resources.files("pyopentrustregion") / lib_name
-    if lib_path.is_file():
-        lib = CDLL(str(lib_path))
+    conda_path_unix = conda_prefix / "lib" / lib_name
+    conda_path_wind = conda_prefix / "Library" / "bin" / lib_name
+    if conda_path_unix.exists():
+        lib = CDLL(str(conda_path_unix))
+    elif conda_path_wind.exists():
+        lib = CDLL(str(conda_path_wind))
+
+# fallback: try to load from installed package (site-packages)
+if lib is None:
+    for lib_name in lib_candidates:
+        lib_path = resources.files("pyopentrustregion") / lib_name
+        if lib_path.is_file():
+            lib = CDLL(str(lib_path))
 
 # fallback: try to load from same directory (editable install)
 if lib is None:
