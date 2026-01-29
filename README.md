@@ -481,18 +481,18 @@ The following Python snippet demonstrates the equivalent usage through the Pytho
 ```python
 from pyopentrustregion import SolverSettings, solver
 from pyopentrustregion.extensions.quasi_newton import (
-    QNSettings, update_orbs_quasi_factory, update_orbs_quasi_deconstructor
+    QNSettings, update_orbs_qn_factory, update_orbs_qn_deconstructor
 )
 
 # initialize quasi-Newton settings
-quasi_settings = QNSettings()
+qn_settings = QNSettings()
 
 # override default settings
-quasi_settings.verbose = 1
-quasi_settings.hess_update_scheme = "sr1"
+qn_settings.verbose = 1
+qn_settings.hess_update_scheme = "sr1"
 
 # get a quasi-Newton orbital updating function
-update_orbs_qn = update_orbs_quasi_factory(update_orbs, n_param, quasi_settings)
+update_orbs_qn = update_orbs_qn_factory(update_orbs, n_param, qn_settings)
 
 # initialize settings
 settings = SolverSettings()
@@ -501,7 +501,7 @@ settings = SolverSettings()
 solver(update_orbs_qn, obj_func, n_param, settings)
 
 # clean up quasi-Newton objects
-update_orbs_quasi_deconstructor()
+update_orbs_qn_deconstructor()
 ```
 
 ---
@@ -514,7 +514,7 @@ update_orbs_quasi_deconstructor()
 - Clean up quasi-Newton resources by calling `update_orbs_qn_deconstructor`.
 
 #### Optional Settings
-The quasi-Newtn factory function can be fine-tuned using the following settings:
+The quasi-Newton factory function can be fine-tuned using the following settings:
 
 - **`hess_update_scheme`** (string): Specifies which quasi-Newton updating scheme to use. Options include:
   - `"sr1"`: symmetric rank-1 update,
@@ -729,4 +729,154 @@ The ARH factory function can be fine-tuned using the following settings:
 
 - **`restricted`** (boolean): Controls whether a spin-restricted formalism is used.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
+
+### Subspace Gradient-Enhanced Kriging Extension
+
+This extension currently provides the subspace gradient-enhanced kriging method to approximate the Hessian.
+
+#### Installation
+
+Enable the extension at build time using CMake:
+
+```sh
+cmake -DENABLE_S_GEK=ON ..
+```
+
+or, when installing the Python package:
+
+```sh
+CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install .
+```
+
+#### Usage
+
+This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the `hess_x` function is never called. The routine `update_orbs_s_gek_factory` constructs and returns an S-GEK version of the orbital-updating subroutine. This routine requires the following input arguments:
+
+#### Required Arguments
+
+- **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine is not used.
+- **`n_param`** (integer): Specifies the number of parameters to be optimized.
+- **`s_gek_settings`** (s_gek_settings_type): Settings object which controls optional arguments as described below.
+- **`update_orbs`** (subroutine):  
+  Returned S-GEK orbital updating subroutine as defined for the `solver` subroutine.
+
+---
+
+The following Fortran snippet demonstrates how to use the S-GEK interface:
+
+```fortran
+use opentrustregion, only: settings_type, update_orbs_type, solver
+use otr_s_gek, only: update_orbs_s_gek_factory, s_gek_settings_type, &
+                     update_orbs_s_gek_deconstructor
+
+type(settings_type) :: settings
+type(s_gek_settings_type) :: s_gek_settings
+procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_s_gek_funptr
+procedure(obj_func), pointer :: obj_func_funptr
+integer(ip) :: n_param, error
+
+! set callback function pointers to existing implementations
+update_orbs_funptr => update_orbs
+obj_func_funptr => obj_func
+
+! initialize S-GEK settings
+call s_gek_settings%init(error)
+
+! override default settings
+s_gek_settings%verbose = 1
+s_gek_settings%max_points = 30
+
+! get a S-GEK orbital updating subroutine
+call update_orbs_s_gek_factory(update_orbs_funptr, n_param, s_gek_settings, update_orbs_s_gek_funptr)
+
+! initialize settings
+call settings%init(error)
+
+! call solver
+call solver(update_orbs_s_gek_funptr, obj_func_funptr, n_param, error, settings)
+
+! clean up S-GEK objects
+call update_orbs_s_gek_deconstructor()
+```
+
+---
+
+The following C snippet demonstrates the equivalent usage through the C interface:
+
+```c
+#include <string.h>
+#include "opentrustregion.h"
+#include "opentrustregion_s_gek.h"
+
+c_int n_param;
+
+// set callback function pointers to existing implementations
+update_orbs_fp update_orbs_funptr = (void*)update_orbs;
+obj_func_fp obj_func_funptr = (void*)obj_func;
+
+// initialize S-GEK settings
+s_gek_settings_type s_gek_settings = s_gek_settings_init();
+
+// override default settings
+s_gek_settings.verbose = 1;
+s_gek_settings.max_points = 30;
+
+// get a S_GEK orbital updating function
+update_orbs_fp update_orbs_s_gek_funptr;
+update_orbs_s_gek_factory(update_orbs, n_param, s_gek_settings, &update_orbs_s_gek_funptr);
+
+// initialize settings
+solver_settings_type settings = solver_settings_init();
+
+// call solver
+c_int error = solver(update_orbs_s_gek_funptr, obj_func_funptr, n_param, settings);
+
+// clean up S-GEK objects
+update_orbs_s_gek_deconstructor();
+```
+
+---
+
+The following Python snippet demonstrates the equivalent usage through the Python interface:
+
+```python
+from pyopentrustregion import SolverSettings, solver
+from pyopentrustregion.extensions.s_gek import (
+    SGEKSettings, update_orbs_s_gek_factory, update_orbs_s_gek_deconstructor
+)
+
+# initialize S-GEK settings
+s_gek_settings = SGEKSettings()
+
+# override default settings
+s_gek_settings.verbose = 1
+s_gek_settings.max_points = 30
+
+# get a S-GEK orbital updating function
+update_orbs_s_gek = update_orbs_s_gek_factory(update_orbs, n_param, s_gek_settings)
+
+# initialize settings
+settings = SolverSettings()
+
+# call solver
+solver(update_orbs_s_gek, obj_func, n_param, settings)
+
+# clean up S-GEK objects
+update_orbs_s_gek_deconstructor()
+```
+
+---
+
+- Callback functions (`update_orbs`, `obj_func`) point to existing implementations elsewhere in the program.
+- `n_param` is assumed to be defined elsewhere.
+- S-GEK settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `max_points`) can then be overridden.
+- A S-GEK orbital updating function is obtained by calling `update_orbs_s_gek_factory` with the original `update_orbs` pointer, `n_param`, and `s_gek_settings`.
+- The `solver` is then called with the S-GEK-wrapped `update_orbs` function.
+- Clean up S-GEK resources by calling `update_orbs_s_gek_deconstructor`.
+
+#### Optional Settings
+The S-GEK factory function can be fine-tuned using the following settings:
+
+- **`use_subspace`** (boolean): Specifies whether the surrogate model is constructed in a subspace.
+- **`max_points`** (integer): Controls the number of points for the surrogate model and subspace construction.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
