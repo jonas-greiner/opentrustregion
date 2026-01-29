@@ -19,8 +19,9 @@ extern "C" {
 typedef struct {
     logger_fp logger;
     c_bool initialized;
-    c_int verbose;
     c_bool use_subspace;
+    c_int verbose;
+    c_int max_points;
 } s_gek_settings_type;
 
 // Fortran-callable init routine for S-GEK settings
