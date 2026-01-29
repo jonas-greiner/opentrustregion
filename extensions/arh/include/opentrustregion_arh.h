@@ -31,6 +31,7 @@ typedef get_fock_fn* get_fock_fp;
 typedef struct {
     logger_fp logger;
     c_bool initialized;
+    c_bool restricted;
     c_int verbose;
 } arh_settings_type;
 
@@ -46,6 +47,7 @@ void init_arh_settings(arh_settings_type* settings);
  *
  * @param dm_ao_c                    Flattened AO density matrix (size n_ao^2)
  * @param ao_overlap_c               Flattened AO overlap matrix (size n_ao^2)
+ * @param n_particle_c               Number of particles
  * @param n_ao_c                     Number of AO basis functions
  * @param get_energy_c_funptr        C pointer to get_energy callback
  * @param get_fock_c_funptr          C pointer to get_fock callback
@@ -59,6 +61,7 @@ void init_arh_settings(arh_settings_type* settings);
 c_int arh_factory(
     const c_real* dm_ao_c,
     const c_real* ao_overlap_c,
+    c_int n_particle_c,
     c_int n_ao_c,
     get_energy_fp get_energy_c_funptr,
     get_fock_fp get_fock_c_funptr,

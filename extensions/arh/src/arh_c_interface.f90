@@ -11,8 +11,14 @@ module otr_arh_c_interface
     use c_interface, only: c_ip, c_rp, obj_func_c_type, update_orbs_c_type, &
                            hess_x_c_type, precond_c_type
     use otr_common_c_interface, only: n_param
-    use otr_arh, only: standard_arh_factory => arh_factory, standard_arh_deconstructor &
-                       => arh_deconstructor, get_energy_type, get_fock_type
+    use otr_arh, only: standard_arh_factory_closed_shell => arh_factory_closed_shell, &
+                       standard_arh_factory_open_shell => arh_factory_open_shell, &
+                       standard_arh_deconstructor_closed_shell => &
+                       arh_deconstructor_closed_shell, &
+                       standard_arh_deconstructor_open_shell => &
+                       arh_deconstructor_open_shell, get_energy_closed_shell_type, &
+                       get_energy_open_shell_type, get_fock_type, &
+                       get_fock_jk_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
                                            c_funloc, c_f_procpointer, c_associated, &
                                            c_null_funptr
@@ -22,6 +28,7 @@ module otr_arh_c_interface
     ! define procedure pointer which will point to the Fortran procedures
     procedure(get_energy_c_type), pointer :: get_energy_before_wrapping => null()
     procedure(get_fock_c_type), pointer :: get_fock_before_wrapping => null()
+    procedure(get_fock_jk_c_type), pointer :: get_fock_jk_before_wrapping => null()
     procedure(obj_func_type), pointer :: obj_func_arh_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
@@ -49,25 +56,46 @@ module otr_arh_c_interface
         end function get_fock_c_type
     end interface
 
+    abstract interface
+        function get_fock_jk_c_type(dm_ao_c, energy_c, fock_c, coulomb_c, exchange_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip
+    
+            real(c_rp), intent(in), target :: dm_ao_c(*)
+            real(c_rp), intent(out) :: energy_c
+            real(c_rp), intent(out), target :: fock_c(*), coulomb_c(*), exchange_c(*)
+            integer(c_ip) :: error_c
+        end function get_fock_jk_c_type
+    end interface
+
     ! derived type for ARH settings
     type, bind(C) :: arh_settings_type_c
         type(c_funptr) :: logger
-        logical(c_bool) :: initialized
+        logical(c_bool) :: initialized, restricted
         integer(c_ip) :: verbose
     end type
 
     ! global variables
-    integer(ip) :: n_ao
+    integer(ip) :: n_particle, n_ao
 
-    procedure(standard_arh_factory), pointer :: arh_factory => standard_arh_factory
-    procedure(standard_arh_deconstructor), pointer :: arh_deconstructor => &
-        standard_arh_deconstructor
+    procedure(standard_arh_factory_closed_shell), pointer :: arh_factory_closed_shell &
+        => standard_arh_factory_closed_shell
+    procedure(standard_arh_factory_open_shell), pointer :: arh_factory_open_shell &
+        => standard_arh_factory_open_shell
+    procedure(standard_arh_deconstructor_closed_shell), pointer :: &
+        arh_deconstructor_closed_shell => standard_arh_deconstructor_closed_shell
+    procedure(standard_arh_deconstructor_open_shell), pointer :: &
+        arh_deconstructor_open_shell => standard_arh_deconstructor_open_shell
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(get_energy_type), pointer :: get_energy_f_wrapper_ptr => &
-        get_energy_f_wrapper
+    procedure(get_energy_closed_shell_type), pointer :: &
+        get_energy_closed_shell_f_wrapper_ptr => get_energy_closed_shell_f_wrapper
+    procedure(get_energy_open_shell_type), pointer :: &
+        get_energy_open_shell_f_wrapper_ptr => get_energy_open_shell_f_wrapper
     procedure(get_fock_type), pointer :: get_fock_f_wrapper_ptr => &
         get_fock_f_wrapper
+    procedure(get_fock_jk_type), pointer :: get_fock_jk_f_wrapper_ptr => &
+        get_fock_jk_f_wrapper
     procedure(obj_func_c_type), pointer :: obj_func_arh_c_wrapper_ptr => &
         obj_func_arh_c_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_arh_c_wrapper_ptr => &
@@ -85,10 +113,10 @@ module otr_arh_c_interface
 
 contains
 
-    function arh_factory_c_wrapper(dm_ao_c, ao_overlap_c, n_ao_c, get_energy_c_funptr, &
-                                   get_fock_c_funptr, obj_func_arh_c_funptr, &
-                                   update_orbs_arh_c_funptr, precond_arh_c_funptr, &
-                                   settings_c) result(error_c) &
+    function arh_factory_c_wrapper(dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, &
+                                   get_energy_c_funptr, get_fock_c_funptr, &
+                                   obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
+                                   precond_arh_c_funptr, settings_c) result(error_c) &
         bind(C, name="arh_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C 
@@ -97,16 +125,19 @@ contains
         use otr_arh, only: arh_settings_type
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
-        integer(c_ip), intent(in), value :: n_ao_c
+        integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: get_energy_c_funptr, get_fock_c_funptr
         type(arh_settings_type_c), intent(in), value :: settings_c
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, &
                                        update_orbs_arh_c_funptr, precond_arh_c_funptr
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: dm_ao(:, :), ao_overlap(:, :)
-        procedure(get_energy_type), pointer :: get_energy_funptr
+        real(rp), pointer :: dm_ao_2d(:, :), dm_ao_3d(:, :, :), ao_overlap(:, :)
+        procedure(get_energy_closed_shell_type), pointer :: &
+            get_energy_closed_shell_funptr
+        procedure(get_energy_open_shell_type), pointer :: get_energy_open_shell_funptr
         procedure(get_fock_type), pointer :: get_fock_funptr
+        procedure(get_fock_jk_type), pointer :: get_fock_jk_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(precond_type), pointer :: precond_arh_funptr
@@ -115,35 +146,67 @@ contains
 
         ! convert number of AOs to Fortran kind, calculate number of parameters and 
         ! store globally to access assumed size arrays passed from C to Fortran
+        n_particle = int(n_particle_c, kind=ip)
         n_ao = int(n_ao_c, kind=ip)
         n_param = n_ao * (n_ao - 1) / 2
+        if (.not. settings_c%restricted) n_param = n_particle * n_param
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
-            call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao, [n_ao, n_ao])
+            if (n_particle == 1) then
+                call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_2d, [n_ao, n_ao])
+            else
+                call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d, [n_ao, n_ao, n_particle])
+            end if
             call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
         else
-            allocate(dm_ao(n_ao, n_ao))
+            if (n_particle == 1) then
+                allocate(dm_ao_2d(n_ao, n_ao))
+                dm_ao_2d = reshape(real(dm_ao_c(:n_ao_c ** 2), kind=rp), [n_ao, n_ao])
+            else
+                allocate(dm_ao_3d(n_ao, n_ao, n_particle))
+                dm_ao_3d = reshape(real(dm_ao_c(:(n_ao_c ** 2 * n_particle_c)), &
+                                        kind=rp), [n_ao, n_ao, n_particle])
+            end if
             allocate(ao_overlap(n_ao, n_ao))
-            dm_ao = reshape(real(dm_ao_c(:n_ao_c ** 2), kind=rp), [n_ao, n_ao])
             ao_overlap = reshape(real(ao_overlap_c(:n_ao ** 2), kind=rp), [n_ao, n_ao])
         end if
 
         ! associate the input C pointers to Fortran procedure pointers
         call c_f_procpointer(cptr=get_energy_c_funptr, fptr=get_energy_before_wrapping)
-        call c_f_procpointer(cptr=get_fock_c_funptr, fptr=get_fock_before_wrapping)
+        if (n_particle == 1) then
+            call c_f_procpointer(cptr=get_fock_c_funptr, fptr=get_fock_before_wrapping)
+        else
+            call c_f_procpointer(cptr=get_fock_c_funptr, &
+                                 fptr=get_fock_jk_before_wrapping)
+        end if
 
         ! associate procedure pointer to wrapper function
-        get_energy_funptr => get_energy_f_wrapper
-        get_fock_funptr => get_fock_f_wrapper
+        if (n_particle == 1) then
+            get_energy_closed_shell_funptr => get_energy_closed_shell_f_wrapper
+            get_fock_funptr => get_fock_f_wrapper
+        else
+            get_energy_open_shell_funptr => get_energy_open_shell_f_wrapper
+            get_fock_jk_funptr => get_fock_jk_f_wrapper
+        end if
 
         ! convert settings
         settings = settings_c
 
-        ! call factory function 
-        call arh_factory(dm_ao, ao_overlap, n_ao, get_energy_funptr, get_fock_funptr, &
-                         obj_func_arh_funptr, update_orbs_arh_funptr, &
-                         precond_arh_funptr, error, settings)
+        ! call factory function
+        if (n_particle == 1) then
+            call arh_factory_closed_shell(dm_ao_2d, ao_overlap, n_particle, n_ao, &
+                                          get_energy_closed_shell_funptr, &
+                                          get_fock_funptr, obj_func_arh_funptr, &
+                                          update_orbs_arh_funptr, precond_arh_funptr, &
+                                          error, settings)
+        else
+            call arh_factory_open_shell(dm_ao_3d, ao_overlap, n_particle, n_ao, &
+                                        get_energy_open_shell_funptr, &
+                                        get_fock_jk_funptr, obj_func_arh_funptr, &
+                                        update_orbs_arh_funptr, precond_arh_funptr, &
+                                        error, settings)
+        end if
 
         ! associate the global procedure pointers to the Fortran function pointers
         obj_func_arh_before_wrapping => obj_func_arh_funptr
@@ -160,10 +223,10 @@ contains
 
     end function arh_factory_c_wrapper
 
-    function get_energy_f_wrapper(dm, error) result(energy)
+    function get_energy_closed_shell_f_wrapper(dm, error) result(energy)
         !
         ! this subroutine wraps the energy subroutine to convert Fortran variables to C 
-        ! variables
+        ! variables for the closed-shell case
         !
         real(rp), intent(in), target :: dm(:, :)
         integer(ip), intent(out) :: error
@@ -191,7 +254,40 @@ contains
             deallocate(dm_c)
         end if
 
-    end function get_energy_f_wrapper
+    end function get_energy_closed_shell_f_wrapper
+
+    function get_energy_open_shell_f_wrapper(dm, error) result(energy)
+        !
+        ! this subroutine wraps the energy subroutine to convert Fortran variables to C 
+        ! variables for the open-shell case
+        !
+        real(rp), intent(in), target :: dm(:, :, :)
+        integer(ip), intent(out) :: error
+        real(rp) :: energy
+
+        real(c_rp) :: energy_c
+        real(c_rp), pointer :: dm_c(:, :, :)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            dm_c => dm
+        else
+            allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)))
+            dm_c = real(dm, kind=c_rp)
+        end if
+
+        ! call energy C function
+        error_c = get_energy_before_wrapping(dm_c, energy_c)
+
+        ! convert arguments to Fortran kind
+        energy = real(energy_c, kind=rp)
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            deallocate(dm_c)
+        end if
+
+    end function get_energy_open_shell_f_wrapper
 
     subroutine get_fock_f_wrapper(dm, energy, fock, error)
         !
@@ -230,6 +326,55 @@ contains
         end if
 
     end subroutine get_fock_f_wrapper
+
+    subroutine get_fock_jk_f_wrapper(dm, energy, fock, coulomb, exchange, error)
+        !
+        ! this subroutine wraps the energy, Fock, Coulomb and exchange matrix 
+        ! subroutine to convert Fortran variables to C variables
+        !
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), target :: fock(:, :, :), coulomb(:, :, :), &
+                                         exchange(:, :, :)
+        integer(ip), intent(out) :: error
+
+        real(c_rp) :: energy_c
+        real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :), coulomb_c(:, :, :), &
+                               exchange_c(:, :, :)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            dm_c => dm
+            fock_c => fock
+            coulomb_c => coulomb
+            exchange_c => exchange
+        else
+            allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)))
+            allocate(fock_c(size(dm, 1), size(dm, 2), size(dm, 3)))
+            allocate(coulomb_c(size(dm, 1), size(dm, 2), size(dm, 3)))
+            allocate(exchange_c(size(dm, 1), size(dm, 2), size(dm, 3)))
+            dm_c = real(dm, kind=c_rp)
+        end if
+
+        ! call Fock matrix C function
+        error_c = get_fock_jk_before_wrapping(dm_c, energy_c, fock_c, coulomb_c, &
+                                              exchange_c)
+
+        ! convert arguments to Fortran kind
+        energy = real(energy_c, kind=rp)
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            fock = real(fock_c, kind=rp)
+            coulomb = real(coulomb_c, kind=rp)
+            exchange = real(exchange_c, kind=rp)
+            deallocate(dm_c)
+            deallocate(fock_c)
+            deallocate(coulomb_c)
+            deallocate(exchange_c)
+        end if
+
+    end subroutine get_fock_jk_f_wrapper
 
     function obj_func_arh_c_wrapper(kappa_c, func_c) result(error_c) bind(C)
         !
@@ -359,24 +504,42 @@ contains
         real(c_rp), intent(out), target :: dm_ao_c(*)
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: dm_ao(:, :)
+        real(rp), pointer :: dm_ao_2d(:, :), dm_ao_3d(:, :, :)
         integer(ip) :: error
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
-            call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao, [n_ao, n_ao])
+            if (n_particle == 1) then
+                call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_2d, [n_ao, n_ao])
+            else
+                call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d, [n_ao, n_ao, n_particle])
+            end if
         else
-            allocate(dm_ao(n_ao, n_ao))
+            if (n_particle == 1) then
+                allocate(dm_ao_2d(n_ao, n_ao))
+            else
+                allocate(dm_ao_3d(n_ao, n_ao, n_particle))
+            end if
         end if
 
         ! call deconstructor Fortran function
-        call arh_deconstructor(dm_ao, error)
+        if (n_particle == 1) then
+            call arh_deconstructor_closed_shell(dm_ao_2d, error)
+        else
+            call arh_deconstructor_open_shell(dm_ao_3d, error)
+        end if
 
         ! convert arguments to C kind
         error_c = int(error, kind=c_ip)
         if (rp /= c_rp) then
-            dm_ao_c(:n_ao ** 2) = reshape(real(dm_ao, kind=c_rp), [n_ao ** 2])
-            deallocate(dm_ao)
+            if (n_particle == 1) then
+                dm_ao_c(:n_ao ** 2) = reshape(real(dm_ao_2d, kind=c_rp), [n_ao ** 2])
+                deallocate(dm_ao_2d)
+            else
+                dm_ao_c(:(n_ao ** 2 * n_particle)) = &
+                    reshape(real(dm_ao_3d, kind=c_rp), [n_ao ** 2 * n_particle])
+                deallocate(dm_ao_3d)
+            end if
         end if
 
     end function arh_deconstructor_c_wrapper
@@ -401,6 +564,9 @@ contains
                 settings%logger => null()
             end if
 
+            ! convert logicals
+            settings%restricted = logical(settings_c%restricted)
+
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
 
@@ -422,6 +588,9 @@ contains
         if (settings%initialized) then
             ! callback functions cannot be converted
             settings_c%logger = c_null_funptr
+
+            ! convert logicals
+            settings_c%restricted = logical(settings%restricted, kind=c_bool)
 
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)

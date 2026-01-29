@@ -523,7 +523,7 @@ The quasi-Newtn factory function can be fine-tuned using the following settings:
 
 ### Augmented Roothaan–Hall (ARH)
 
-This extension provides access to the augmented Roothaan-Hall method for RHF in the orthogonalized atomic orbital (AO) basis.
+This extension provides access to the augmented Roothaan-Hall method for RHF, ROHF, and UHF in the orthogonalized atomic orbital (AO) basis.
 
 #### Installation
 
@@ -547,8 +547,9 @@ The routine `arh_factory` constructs and returns ARH versions of energy, orbital
 
 #### Required Arguments
 
-- **`dm_ao`** (real array): Represents the starting AO density matrix with dimension (`n_ao`, `n_ao`).
+- **`dm_ao`** (real array): Represents the starting AO density matrix with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations.
 - **`ao_overlap`** (real array): Represents the AO overlap matrix with dimension (`n_ao`, `n_ao`).
+- **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell)
 - **`n_ao`** (integer): Specifies the number of AOs.
 - **`get_energy`** (function):  
   Accepts an AO density matrix and returns:
@@ -558,6 +559,8 @@ The routine `arh_factory` constructs and returns ARH versions of energy, orbital
   Accepts an AO density matrix and returns:
   - Energy value (real)
   - Fock matrix (real array, written in-place)
+  - Coulomb matrix (real array, written in-place, only for open-shell calculations)
+  - Exchange matrix (real array, written in-place, only for open-shell calculations)
   - An integer error code (0 for success, positive integers < 100 for errors)
 - **`obj_func_arh`** (subroutine): Returned ARH objective function as defined for the `solver` subroutine.
 - **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.
@@ -581,7 +584,7 @@ type(arh_settings_type) :: arh_settings
 procedure(obj_func_type), pointer :: obj_func_arh_funptr
 procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
 procedure(precond_type), pointer :: precond_arh_funptr
-integer(ip) :: n_ao, n_param, error
+integer(ip) :: n_particle, n_ao, n_param, error
 real(rp), allocatable :: dm_ao(:, :), ao_overlap(:, :)
 
 ! set callback function pointers to existing implementations
@@ -593,10 +596,12 @@ call init_arh_settings(arh_settings)
 
 ! override default settings
 arh_settings%verbose = 1
+arh_settings%restricted = .true.
 
 ! get ARH routines
-call arh_factory(dm_ao, ao_overlap, n_ao, get_energy, get_fock, obj_func_arh_funptr, &
-                 update_orbs_arh_funptr, precond_arh_funptr, error, arh_settings)
+call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy, get_fock, &
+                 obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
+                 error, arh_settings)
 
 ! initialize settings
 call settings%init(error)
@@ -623,7 +628,7 @@ The following C snippet demonstrates equivalent usage through the C interface:
 #include "opentrustregion.h"
 #include "opentrustregion_arh.h"
 
-c_int n_ao, n_param;
+c_int n_particle, n_ao, n_param;
 c_real dm_ao[n_ao][n_ao], ao_overlap[n_ao][n_ao]
 
 // set callback function pointers to existing implementations
@@ -635,6 +640,7 @@ arh_settings_type arh_settings = arh_settings_init();
 
 // override default settings
 arh_settings.verbose = 1;
+arh_settings.restricted = true;
 
 // get callback functions
 obj_func_fp obj_func_arh_funptr;
@@ -642,6 +648,7 @@ update_orbs_fp update_orbs_arh_funptr;
 precond_fp precond_arh_funptr;
 c_int error = arh_factory(dm_ao, 
                           ao_overlap, 
+                          n_particle, 
                           n_ao,
                           get_energy, 
                           get_fock,
@@ -684,10 +691,11 @@ arh_settings = ARHSettings()
 
 # override default settings
 arh_settings.verbose = 1
+arh_settings.restricted = True
 
 # get callback functions
 obj_func_arh, update_orbs_arh, precond_arh = arh_factory(
-    dm_ao, ao_overlap, n_ao, get_energy, get_fock, arh_settings
+    dm_ao, ao_overlap, n_particle, n_ao, get_energy, get_fock, arh_settings
 )
 
 # initialize settings
@@ -719,4 +727,6 @@ arh_deconstructor(dm_ao)
 #### Optional Settings
 The ARH factory function can be fine-tuned using the following settings:
 
+- **`restricted`** (boolean): Controls whether a spin-restricted formalism is used.
+- **`verbose`** (integer): Controls the verbosity of output during the stability check.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.

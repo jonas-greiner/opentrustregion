@@ -23,7 +23,7 @@ from pyopentrustregion.python_interface import (
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any
+    from typing import Tuple, Callable, Optional, Any, Union
 
 
 # callback function ctypes specifications, ctypes can only deal with simple return
@@ -33,11 +33,24 @@ get_energy_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 get_fock_interface_type = CFUNCTYPE(
     c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
+get_fock_jk_interface_type = CFUNCTYPE(
+    c_int,
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+)
 
 
 # define classes corresponding to C structs for settings
 class ARHSettingsC(Structure):
-    _fields_ = [("logger", c_void_p), ("initialized", c_bool), ("verbose", c_int)]
+    _fields_ = [
+        ("logger", c_void_p),
+        ("initialized", c_bool),
+        ("restricted", c_bool),
+        ("verbose", c_int),
+    ]
 
 
 class ARHSettings(Settings):
@@ -62,10 +75,14 @@ auto_bind_fields(ARHSettings)
 def arh_factory(
     dm_ao: np.ndarray,
     ao_overlap: np.ndarray,
+    n_particle: int,
     n_ao: int,
     get_energy: Callable[[np.ndarray], float],
-    get_fock: Callable[[np.ndarray, np.ndarray], float],
-    settings: Settings,
+    get_fock: Union[
+        Callable[[np.ndarray, np.ndarray], float],
+        Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], float],
+    ],
+    settings: ARHSettings,
 ) -> Tuple[
     Callable[[np.ndarray], float],
     Callable[
@@ -78,6 +95,9 @@ def arh_factory(
     dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
     ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
 
+    # determine if closed-shell or open-shell formalism is used
+    closed_shell = dm_ao.ndim == 2
+
     # define interfaces for callback functions
     @get_energy_interface_type
     def get_energy_interface(dm_ao_ptr, energy_ptr):
@@ -86,7 +106,10 @@ def arh_factory(
         matrix
         """
         # convert matrix pointers to numpy arrays
-        dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=2 * (n_ao,))
+        dm_ao = np.ctypeslib.as_array(
+            dm_ao_ptr,
+            shape=2 * (n_ao,) if closed_shell else (n_particle, n_ao, n_ao),
+        )
 
         # get energy
         try:
@@ -114,11 +137,38 @@ def arh_factory(
 
         return 0
 
+    @get_fock_jk_interface_type
+    def get_fock_jk_interface(
+        dm_ao_ptr, energy_ptr, fock_ptr, coulomb_ptr, exchange_ptr
+    ):
+        """
+        this function provides the interface to get the energy and write the Fock,
+        Coulomb, and Exchange matrices to the memory provided for a given density matrix
+        """
+        # convert matrix pointers to numpy arrays
+        dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=(n_particle, n_ao, n_ao))
+        fock = np.ctypeslib.as_array(fock_ptr, shape=(n_particle, n_ao, n_ao))
+        coulomb = np.ctypeslib.as_array(coulomb_ptr, shape=(n_particle, n_ao, n_ao))
+        exchange = np.ctypeslib.as_array(exchange_ptr, shape=(n_particle, n_ao, n_ao))
+
+        # get energy and Fock matrix
+        try:
+            energy_ptr[0] = get_fock_jk_interface.get_fock(
+                dm_ao, fock, coulomb, exchange
+            )
+        except RuntimeError:
+            return 1
+
+        return 0
+
     # attach the energy and Fock matrix functions to the returned interface so that it
     # persists in Python to ensure that it is not garbage collected when the factory
     # completes
     get_energy_interface.get_energy = get_energy
-    get_fock_interface.get_fock = get_fock
+    if closed_shell:
+        get_fock_interface.get_fock = get_fock
+    else:
+        get_fock_jk_interface.get_fock = get_fock
 
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
@@ -137,8 +187,9 @@ def arh_factory(
         POINTER(c_real),
         POINTER(c_real),
         c_int,
+        c_int,
         get_energy_interface_type,
-        get_fock_interface_type,
+        get_fock_interface_type if closed_shell else get_fock_jk_interface_type,
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
         POINTER(precond_interface_type),
@@ -152,9 +203,10 @@ def arh_factory(
     error = lib.arh_factory(
         dm_ao_ptr,
         ao_overlap_ptr,
+        n_particle,
         n_ao,
         get_energy_interface,
-        get_fock_interface,
+        get_fock_interface if closed_shell else get_fock_jk_interface,
         obj_func_arh_funptr,
         update_orbs_arh_funptr,
         precond_arh_funptr,
@@ -234,7 +286,9 @@ def arh_factory(
     obj_func_arh_interface.get_energy_interface = get_energy_interface
     obj_func_arh_interface.obj_func_arh_funptr = obj_func_arh_funptr
     update_orbs_arh_interface.get_energy_interface = get_energy_interface
-    update_orbs_arh_interface.get_fock_interface = get_fock_interface
+    update_orbs_arh_interface.get_fock_interface = (
+        get_fock_interface if closed_shell else get_fock_jk_interface
+    )
     update_orbs_arh_interface.update_orbs_arh_funptr = update_orbs_arh_funptr
     precond_arh_interface.precond_arh_funptr = precond_arh_funptr
 

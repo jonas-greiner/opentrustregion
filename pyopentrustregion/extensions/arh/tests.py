@@ -35,6 +35,7 @@ fortran_tests = {
         "assign_arh_f_c",
         "get_energy_f_wrapper",
         "get_fock_f_wrapper",
+        "get_fock_jk_f_wrapper",
         "hess_x_arh_c_wrapper",
         "init_arh_settings_c",
         "update_orbs_arh_c_wrapper",
@@ -111,10 +112,11 @@ class ARHPyInterfaceTests(unittest.TestCase):
     @patch("pyopentrustregion.python_interface.lib.arh_factory", lib.mock_arh_factory)
     def test_arh_factory_py_interface(self):
         """
-        this function tests the ARH factory python interface
+        this function tests the ARH factory python interface (only tests if dm_ao,
+        mock_get_energy and mock_get_fock_jk are passed correctly for the open-shell
+        case since everything else is the same in the closed-shell case)
         """
         n_param = n_ao * (n_ao - 1) // 2
-        dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
 
         def mock_get_energy(dm_ao):
@@ -128,6 +130,16 @@ class ARHPyInterfaceTests(unittest.TestCase):
             this function is a mock function for the Fock matrix function
             """
             fock[:] = 2 * dm_ao
+
+            return np.sum(dm_ao)
+
+        def mock_get_fock_jk(dm_ao, fock, coulomb, exchange):
+            """
+            this function is a mock function for the Fock matrix function
+            """
+            fock[:] = 2 * dm_ao
+            coulomb[:] = 3 * dm_ao
+            exchange[:] = 4 * dm_ao
 
             return np.sum(dm_ao)
 
@@ -155,9 +167,21 @@ class ARHPyInterfaceTests(unittest.TestCase):
         # initialize logging boolean
         test_logger = False
 
+        # number of particles
+        n_particle = 1
+
+        # initialize density matrix
+        dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
+
         # call ARH factory python interface
         obj_func_arh, update_orbs_arh, precond_arh = arh_factory(
-            dm_ao, ao_overlap, n_ao, mock_get_energy, mock_get_fock, settings
+            dm_ao,
+            ao_overlap,
+            n_particle,
+            n_ao,
+            mock_get_energy,
+            mock_get_fock,
+            settings,
         )
 
         # check if logger was called correctly
@@ -194,7 +218,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
         except RuntimeError:
             print(
                 " test_arh_factory_py_interface failed: Returned ARH orbital updating "
-                "raises error."
+                "function raises error."
             )
             test_passed = False
 
@@ -260,38 +284,99 @@ class ARHPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        # number of particles
+        n_particle = 2
+
+        # initialize density matrix
+        dm_ao = np.full((n_particle, n_ao, n_ao), 1.0, dtype=np.float64)
+
+        # call ARH factory python interface
+        arh_factory(
+            dm_ao,
+            ao_overlap,
+            n_particle,
+            n_ao,
+            mock_get_energy,
+            mock_get_fock_jk,
+            settings,
+        )
+
         self.assertTrue(
             c_bool.in_dll(lib, "test_arh_factory_interface").value and test_passed,
             "test_arh_factory_py_interface failed",
         )
         print(" test_arh_factory_py_interface PASSED")
 
-    @patch(
-        "pyopentrustregion.python_interface.lib.arh_deconstructor",
-        lib.mock_arh_deconstructor,
-    )
     def test_arh_deconstructor_py_interface(self):
         """
-        this function tests the ARH orbital updating deconstructor python interface
+        this function tests the ARH deconstructor python interface
         """
-        # initialize test flag
-        test_passed = True
 
-        # initialize density matrix
-        dm_ao = np.empty(2 * (n_ao,), dtype=np.float64)
+        @patch(
+            "pyopentrustregion.python_interface.lib.arh_deconstructor",
+            lib.mock_arh_deconstructor_2d,
+        )
+        def test_arh_deconstructor_py_interface_2d():
+            """
+            this function tests the ARH deconstructor python interface for 2D density
+            matrices
+            """
+            # initialize density matrix
+            dm_ao = np.empty(2 * (n_ao,), dtype=np.float64)
 
-        # call ARH deconstructor python interface
-        arh_deconstructor(dm_ao)
+            # call ARH deconstructor python interface
+            arh_deconstructor(dm_ao)
 
-        # check results
-        if not np.allclose(dm_ao, np.full(2 * (n_ao,), 1.0, dtype=np.float64)):
-            print(
-                " test_arh_deconstructor_py_interface failed: Returned AO density "
-                "matrix wrong."
-            )
-            test_passed = False
+            # check results
+            if not np.allclose(dm_ao, np.full(2 * (n_ao,), 1.0, dtype=np.float64)):
+                print(
+                    " test_arh_deconstructor_py_interface failed: Returned AO density "
+                    "matrix wrong for 2D density matrices."
+                )
+                return False
 
-        self.assertTrue(test_passed, "test_arh_deconstructor_py_interface failed")
+            return True
+
+        @patch(
+            "pyopentrustregion.python_interface.lib.arh_deconstructor",
+            lib.mock_arh_deconstructor_3d,
+        )
+        def test_arh_deconstructor_py_interface_3d():
+            """
+            this function tests the ARH deconstructor python interface for 3D density
+            matrices
+            """
+            # number of particles
+            n_particle = 2
+
+            # initialize density matrix
+            dm_ao = np.empty((n_particle, n_ao, n_ao), dtype=np.float64)
+
+            # call ARH deconstructor python interface
+            arh_deconstructor(dm_ao)
+
+            # check results
+            if not np.allclose(
+                dm_ao, np.full((n_particle, n_ao, n_ao), 1.0, dtype=np.float64)
+            ):
+                print(
+                    " test_arh_deconstructor_py_interface failed: Returned AO density "
+                    "matrix wrong for 3D density matrices."
+                )
+                return False
+
+            return True
+
+        # run test for 2D density matrices
+        test_passed_2d = test_arh_deconstructor_py_interface_2d()
+
+        # run test for 3D density matrices
+        test_passed_3d = test_arh_deconstructor_py_interface_3d()
+
+        self.assertTrue(
+            test_passed_2d and test_passed_3d,
+            "test_arh_deconstructor_py_interface failed",
+        )
         print(" test_arh_deconstructor_py_interface PASSED")
 
     @patch.object(ARHSettings, "init_c_struct", lib.mock_init_arh_settings)
