@@ -7,9 +7,9 @@
 module otr_arh_c_interface
 
     use opentrustregion, only: ip, rp, obj_func_type, update_orbs_type, hess_x_type, &
-                               precond_type
+                               project_type
     use c_interface, only: c_ip, c_rp, obj_func_c_type, update_orbs_c_type, &
-                           hess_x_c_type, precond_c_type
+                           hess_x_c_type, project_c_type
     use otr_common_c_interface, only: n_param
     use otr_arh, only: standard_arh_factory_closed_shell => arh_factory_closed_shell, &
                        standard_arh_factory_open_shell => arh_factory_open_shell, &
@@ -32,7 +32,7 @@ module otr_arh_c_interface
     procedure(obj_func_type), pointer :: obj_func_arh_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
-    procedure(precond_type), pointer :: precond_arh_before_wrapping => null()
+    procedure(project_type), pointer :: project_arh_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
@@ -102,8 +102,8 @@ module otr_arh_c_interface
         update_orbs_arh_c_wrapper
     procedure(hess_x_c_type), pointer :: hess_x_arh_c_wrapper_ptr => &
         hess_x_arh_c_wrapper
-    procedure(precond_c_type), pointer :: precond_arh_c_wrapper_ptr => &
-        precond_arh_c_wrapper
+    procedure(project_c_type), pointer :: project_arh_c_wrapper_ptr => &
+        project_arh_c_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -116,7 +116,7 @@ contains
     function arh_factory_c_wrapper(dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, &
                                    get_energy_c_funptr, get_fock_c_funptr, &
                                    obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
-                                   precond_arh_c_funptr, settings_c) result(error_c) &
+                                   project_arh_c_funptr, settings_c) result(error_c) &
         bind(C, name="arh_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C 
@@ -129,7 +129,7 @@ contains
         type(c_funptr), intent(in), value :: get_energy_c_funptr, get_fock_c_funptr
         type(arh_settings_type_c), intent(in), value :: settings_c
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, &
-                                       update_orbs_arh_c_funptr, precond_arh_c_funptr
+                                       update_orbs_arh_c_funptr, project_arh_c_funptr
         integer(c_ip) :: error_c
 
         real(rp), pointer :: dm_ao_2d(:, :), dm_ao_3d(:, :, :), ao_overlap(:, :)
@@ -140,7 +140,7 @@ contains
         procedure(get_fock_jk_type), pointer :: get_fock_jk_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), pointer :: precond_arh_funptr
+        procedure(project_type), pointer :: project_arh_funptr
         type(arh_settings_type) :: settings
         integer(ip) :: error
 
@@ -198,25 +198,25 @@ contains
             call arh_factory_closed_shell(dm_ao_2d, ao_overlap, n_particle, n_ao, &
                                           get_energy_closed_shell_funptr, &
                                           get_fock_funptr, obj_func_arh_funptr, &
-                                          update_orbs_arh_funptr, precond_arh_funptr, &
+                                          update_orbs_arh_funptr, project_arh_funptr, &
                                           error, settings)
         else
             call arh_factory_open_shell(dm_ao_3d, ao_overlap, n_particle, n_ao, &
                                         get_energy_open_shell_funptr, &
                                         get_fock_jk_funptr, obj_func_arh_funptr, &
-                                        update_orbs_arh_funptr, precond_arh_funptr, &
+                                        update_orbs_arh_funptr, project_arh_funptr, &
                                         error, settings)
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
         obj_func_arh_before_wrapping => obj_func_arh_funptr
         update_orbs_arh_before_wrapping => update_orbs_arh_funptr
-        precond_arh_before_wrapping => precond_arh_funptr
+        project_arh_before_wrapping => project_arh_funptr
 
         ! get a C function pointer to the C wrapper functions
         obj_func_arh_c_funptr = c_funloc(obj_func_arh_c_wrapper)
         update_orbs_arh_c_funptr = c_funloc(update_orbs_arh_c_wrapper)
-        precond_arh_c_funptr = c_funloc(precond_arh_c_wrapper)
+        project_arh_c_funptr = c_funloc(project_arh_c_wrapper)
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
@@ -445,44 +445,36 @@ contains
 
     end function hess_x_arh_c_wrapper
 
-    function precond_arh_c_wrapper(vector_c, mu_c, precond_vector_c) result(error_c) &
-        bind(C)
+    function project_arh_c_wrapper(vector_c) result(error_c) bind(C)
         !
-        ! this function wraps the preconditioning subroutine to convert Fortran 
-        ! variables to C variables
+        ! this function wraps the projection subroutine to convert Fortran variables to 
+        ! C variables
         !
-        real(c_rp), intent(in), target :: vector_c(*)
-        real(c_rp), intent(in) :: mu_c
-        real(c_rp), intent(out), target :: precond_vector_c(*)
+        real(c_rp), intent(inout), target :: vector_c(*)
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: vector(:), precond_vector(:)
-        real(rp) :: mu
+        real(rp), pointer :: vector(:)
         integer(ip) :: error
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
             vector => vector_c(:n_param)
-            precond_vector => precond_vector_c(:n_param)
         else
             allocate(vector(n_param))
-            allocate(precond_vector(n_param))
             vector = real(vector_c(:n_param), kind=rp)
         end if
-        mu = real(mu_c, kind=rp)
 
-        ! call update_orbs Fortran subroutine
-        call precond_arh_before_wrapping(vector, mu, precond_vector, error)
+        ! call project Fortran subroutine
+        call project_arh_before_wrapping(vector, error)
 
         ! convert arguments to Fortran kind
         error_c = int(error, kind=c_ip)
         if (rp /= c_rp) then
-            precond_vector_c(:n_param) = real(precond_vector, kind=c_rp)
+            vector_c(:n_param) = real(vector, kind=c_rp)
             deallocate(vector)
-            deallocate(precond_vector)
         end if
 
-    end function precond_arh_c_wrapper
+    end function project_arh_c_wrapper
 
     subroutine init_arh_settings_c(settings_c) bind(C, name="init_arh_settings")
         !

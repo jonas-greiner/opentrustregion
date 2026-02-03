@@ -35,27 +35,27 @@ contains
                                         get_energy_c_funptr, get_fock_c_funptr, &
                                         obj_func_arh_c_funptr, &
                                         update_orbs_arh_c_funptr, &
-                                        precond_arh_c_funptr, settings_c) &
+                                        project_arh_c_funptr, settings_c) &
         result(error_c) bind(C, name="mock_arh_factory")
         !
         ! this subroutine is a mock routine for the ARH orbital updating factory C
         ! wrapper subroutine
         !
         use otr_arh_c_interface, only: arh_settings_type_c
-        use c_interface, only: obj_func_c_type, update_orbs_c_type, precond_c_type, &
+        use c_interface, only: obj_func_c_type, update_orbs_c_type, project_c_type, &
                                logger_c_type
         use test_reference, only: tol_c
         use otr_arh_test_reference, only: test_get_energy_closed_shell_c_funptr, &
                                           test_get_energy_open_shell_c_funptr, &
                                           test_get_fock_c_funptr, &
                                           test_get_fock_jk_c_funptr, operator(/=)
-        use c_interface_unit_tests, only: mock_obj_func, mock_update_orbs, mock_precond
+        use c_interface_unit_tests, only: mock_obj_func, mock_update_orbs, mock_project
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: get_energy_c_funptr, get_fock_c_funptr
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, &
-                                       update_orbs_arh_c_funptr, precond_arh_c_funptr
+                                       update_orbs_arh_c_funptr, project_arh_c_funptr
         type(arh_settings_type_c), intent(in), value :: settings_c
         integer(c_ip) :: error_c
 
@@ -63,8 +63,7 @@ contains
         character(:), allocatable, target :: message
         procedure(obj_func_c_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_c_type), pointer :: update_orbs_arh_funptr
-        procedure(precond_c_type), pointer :: precond_arh_funptr
-        real(c_rp), allocatable :: test(:,:,:)
+        procedure(project_c_type), pointer :: project_arh_funptr
 
         ! closed-shell case
         if (n_particle_c == 1) then
@@ -114,7 +113,7 @@ contains
             ! set function pointers to mock to ARH mock functions
             obj_func_arh_c_funptr = c_funloc(mock_obj_func)
             update_orbs_arh_c_funptr = c_funloc(mock_update_orbs)
-            precond_arh_c_funptr = c_funloc(mock_precond)
+            project_arh_c_funptr = c_funloc(mock_project)
 
         ! open-shell case
         else if (n_particle_c == 2) then

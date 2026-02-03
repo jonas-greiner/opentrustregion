@@ -6,7 +6,7 @@
 
 module otr_arh_mock
 
-    use opentrustregion, only: rp, ip, stderr, obj_func_type, precond_type
+    use opentrustregion, only: rp, ip, stderr, obj_func_type, project_type
     use otr_arh, only: arh_factory_closed_shell, arh_factory_open_shell, &
                        arh_deconstructor_closed_shell, arh_deconstructor_open_shell
     use test_reference, only: tol
@@ -26,7 +26,7 @@ module otr_arh_mock
     procedure(arh_deconstructor_open_shell), pointer :: &
         mock_arh_deconstructor_open_shell_ptr => mock_arh_deconstructor_open_shell
     procedure(obj_func_type), pointer :: mock_obj_func_arh_ptr => mock_obj_func_arh
-    procedure(precond_type), pointer ::  mock_precond_arh_ptr => mock_precond_arh
+    procedure(project_type), pointer ::  mock_project_arh_ptr => mock_project_arh
 
 contains
 
@@ -34,7 +34,7 @@ contains
                                              get_energy_funptr, get_fock_funptr, &
                                              obj_func_arh_funptr, &
                                              update_orbs_arh_funptr, &
-                                             precond_arh_funptr, error, settings)
+                                             project_arh_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
@@ -53,7 +53,7 @@ contains
         procedure(get_fock_type), intent(in), pointer :: get_fock_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
@@ -117,14 +117,14 @@ contains
         error = 0
         obj_func_arh_funptr => mock_obj_func_arh
         update_orbs_arh_funptr => mock_update_orbs
-        precond_arh_funptr => mock_precond_arh
+        project_arh_funptr => mock_project_arh
 
     end subroutine mock_arh_factory_closed_shell
 
     subroutine mock_arh_factory_open_shell(dm_ao, ao_overlap, n_particle, n_ao, &
                                            get_energy_funptr, get_fock_jk_funptr, &
                                            obj_func_arh_funptr, &
-                                           update_orbs_arh_funptr, precond_arh_funptr, &
+                                           update_orbs_arh_funptr, project_arh_funptr, &
                                            error, settings)          
         !
         ! this function is a test function for the function which returns a modified
@@ -143,7 +143,7 @@ contains
         procedure(get_fock_jk_type), intent(in), pointer :: get_fock_jk_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
@@ -208,7 +208,7 @@ contains
         error = 0
         obj_func_arh_funptr => mock_obj_func_arh
         update_orbs_arh_funptr => mock_update_orbs
-        precond_arh_funptr => mock_precond_arh
+        project_arh_funptr => mock_project_arh
 
     end subroutine mock_arh_factory_open_shell
 
@@ -254,19 +254,17 @@ contains
 
     end function mock_obj_func_arh
 
-    subroutine mock_precond_arh(residual, mu, precond_residual, error)
+    subroutine mock_project_arh(vector, error)
         !
-        ! this function is a test function for the ARH C preconditioner function
+        ! this function is a test function for the ARH C projection function
         !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
+        real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
 
-        precond_residual = mu * residual
+        vector = 2.0_rp * vector
 
         error = 0
 
-    end subroutine mock_precond_arh
+    end subroutine mock_project_arh
 
 end module otr_arh_mock

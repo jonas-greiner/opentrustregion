@@ -6,13 +6,8 @@
 
 module otr_arh
 
-    ! Things to do:
-    ! Add project function to OTR
-    ! Replace preconditioner with project function
-    ! Enable guess vectors (h_diag and random) with project function
-
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, precond_type
+                               hess_x_type, project_type
 
     implicit none
 
@@ -81,8 +76,7 @@ module otr_arh
                                  dm_list(:, :, :, :), fock_list(:, :, :, :), &
                                  same_v_list(:, :, :, :), opposite_v_list(:, :, :, :), &
                                  dm_diff(:, :, :, :), fock_diff(:, :, :, :), &
-                                 same_v_diff(:, :, :, :), opposite_v_diff(:, :, :, :), &
-                                 h_diag_test(:)
+                                 same_v_diff(:, :, :, :), opposite_v_diff(:, :, :, :)
         procedure(get_energy_closed_shell_type), pointer, nopass :: &
             get_energy_closed_shell
         procedure(get_energy_open_shell_type), pointer, nopass :: get_energy_open_shell
@@ -100,8 +94,7 @@ module otr_arh
     procedure(update_orbs_type), pointer :: update_orbs_arh_open_shell_ptr => &
         update_orbs_arh_open_shell
     procedure(hess_x_type), pointer :: hess_x_arh_ptr => hess_x_arh
-    procedure(precond_type), pointer :: precond_arh_ptr => &
-        level_shifted_diag_precond_arh
+    procedure(project_type), pointer :: project_arh_ptr => project_arh
 
     ! define module procedures for different spin cases
     interface arh_factory
@@ -116,7 +109,7 @@ module otr_arh
 
     subroutine arh_factory_closed_shell(dm_ao, ao_overlap, n_particle, n_ao, &
                                         get_energy, get_fock, obj_func_arh_funptr, &
-                                        update_orbs_arh_funptr, precond_arh_funptr, &
+                                        update_orbs_arh_funptr, project_arh_funptr, &
                                         error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the 
@@ -128,7 +121,7 @@ module otr_arh
         procedure(get_fock_type), intent(in), pointer :: get_fock
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
@@ -143,13 +136,13 @@ module otr_arh
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_arh
         update_orbs_arh_funptr => update_orbs_arh_closed_shell
-        precond_arh_funptr => level_shifted_diag_precond_arh
+        project_arh_funptr => project_arh
 
     end subroutine arh_factory_closed_shell
 
     subroutine arh_factory_open_shell(dm_ao, ao_overlap, n_particle, n_ao, get_energy, &
                                       get_fock_jk, obj_func_arh_funptr, &
-                                      update_orbs_arh_funptr, precond_arh_funptr, &
+                                      update_orbs_arh_funptr, project_arh_funptr, &
                                       error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the 
@@ -161,7 +154,7 @@ module otr_arh
         procedure(get_fock_jk_type), intent(in), pointer :: get_fock_jk
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
@@ -175,7 +168,7 @@ module otr_arh
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_arh
         update_orbs_arh_funptr => update_orbs_arh_open_shell
-        precond_arh_funptr => level_shifted_diag_precond_arh
+        project_arh_funptr => project_arh
 
     end subroutine arh_factory_open_shell
 
@@ -215,8 +208,7 @@ module otr_arh
 
         ! allocate matrices
         allocate(arh_object%fock_oo(n_ao, n_ao, arh_object%n_particle), &
-                 arh_object%fock_vv(n_ao, n_ao, arh_object%n_particle), &
-                 arh_object%h_diag_test(arh_object%n_param))
+                 arh_object%fock_vv(n_ao, n_ao, arh_object%n_particle))
 
     end subroutine arh_factory_common
 
@@ -307,7 +299,6 @@ module otr_arh
         call calculate_grad_h_diag(arh_object%dm_oao, arh_object%fock_oao, n_particle, &
                                    n_ao, arh_object%settings%restricted, grad, h_diag, &
                                    arh_object%fock_oo, arh_object%fock_vv)
-        arh_object%h_diag_test = h_diag
 
         ! construct ARH metric
         arh_object%metric = get_arh_metric(arh_object%dm_list, arh_object%dm_oao)
@@ -406,7 +397,6 @@ module otr_arh
         call calculate_grad_h_diag(arh_object%dm_oao, fock_oao, n_particle, n_ao, &
                                    arh_object%settings%restricted, grad, h_diag, &
                                    arh_object%fock_oo, arh_object%fock_vv)
-        arh_object%h_diag_test = h_diag
         deallocate(fock_oao)
 
         ! construct ARH metric
@@ -511,83 +501,31 @@ module otr_arh
 
     end subroutine hess_x_arh
 
-    subroutine level_shifted_diag_precond_arh(vector, mu, precond_vector, error)
+    subroutine project_arh(vector, error)
         !
-        ! this function defines the default level-shifted diagonal preconditioner
-        ! but only extracting v-o and o-v contributions
+        ! this subroutine projects out the occupied-occupied and virtual-virtual 
+        ! contributions from a vector in-place
         !
-        real(rp), intent(in), target :: vector(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_vector(:)
+        real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: precond_arr(:),  precond_vector_full(:, :, :)
+        real(rp), allocatable :: vector_full(:, :, :), projected_vector_full(:, :, :)
 
         ! initialize error flag
         error = 0
-        
-        ! construct level-shifted preconditioner
-        precond_arr = arh_object%h_diag_test - mu
-        where (abs(precond_arr) < 1d-10)
-            precond_arr = 1d-10
-        end where
-
-        ! precondition vector
-        precond_vector = vector / precond_arr
-        deallocate(precond_arr)
 
         ! unpack vector
-        precond_vector_full = unpack_asymm(precond_vector, arh_object%n_particle, &
-                                           arh_object%n_ao, &
-                                           arh_object%settings%restricted)
+        vector_full = unpack_asymm(vector, arh_object%n_particle, arh_object%n_ao, &
+                                   arh_object%settings%restricted)
 
-        ! extract only v-o and o-v contributions
-        precond_vector_full = project(precond_vector_full, arh_object%dm_oao)
+        ! project out o-o and v-v contributions
+        projected_vector_full = project(vector_full, arh_object%dm_oao)
 
         ! pack vector
-        call pack_asymm(precond_vector_full, precond_vector, &
-                        arh_object%settings%restricted)
-        
-    end subroutine level_shifted_diag_precond_arh
+        call pack_asymm(projected_vector_full, vector, arh_object%settings%restricted)
+        deallocate(vector_full)
 
-    function project(matrix, dm_oao) result(projected_matrix)
-        !
-        ! this function only retains occupied-virtual and virtual-occupied 
-        ! contributions to a matrix
-        !
-        real(rp), intent(in) :: matrix(:, :, :), dm_oao(:, :, :)
-        real(rp), allocatable :: projected_matrix(:, :, :)
-
-        integer(ip) :: n_ao, i, j
-        real(rp), allocatable :: proj_v(:, :), temp(:, :)
-        external :: dgemm
-
-        ! number of AOs
-        n_ao = size(matrix, 1)
-
-        allocate(projected_matrix(n_ao, n_ao, size(matrix, 3)), proj_v(n_ao, n_ao), &
-                 temp(n_ao, n_ao))
-        do i = 1, size(matrix, 3)
-            ! construct projection matrix on virtual space (I-D)
-            proj_v = 0.0_rp
-            do j = 1, n_ao
-                proj_v(j, j) = 1.0_rp
-            end do
-            proj_v = proj_v - dm_oao(:, :, i)
-
-            ! construct virtual-occupied contributions DM(I-D)
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, matrix(:, :, i), n_ao, &
-                       proj_v, n_ao, 0.0_rp, temp, n_ao)
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, i), n_ao, &
-                       temp, n_ao, 0.0_rp, projected_matrix(:, :, i), n_ao)
-
-            ! add occupied-virtual contributions (I-D)MD
-            projected_matrix(:, :, i) = projected_matrix(:, :, i) - &
-                                        transpose(projected_matrix(:, :, i))
-        end do
-        deallocate(proj_v, temp)
-
-    end function project
+    end subroutine project_arh
 
     subroutine init_arh_settings(self, error)
         !
@@ -792,7 +730,7 @@ module otr_arh
             do j = 1, n_ao
                 do i = 1, j - 1
                     h_diag(idx) = sum(fock_vv(i, i, :) + fock_vv(j, j, :) - &
-                                      fock_oo(i, i, :) - fock_oo(j, j, :))
+                                      fock_oo(i, i, :) - fock_oo(j, j, :)) / n_particle
                     idx = idx + 1
                 end do
             end do
@@ -960,6 +898,45 @@ module otr_arh
 
     end function get_arh_metric
 
+    function project(matrix, dm_oao) result(projected_matrix)
+        !
+        ! this function only retains occupied-virtual and virtual-occupied 
+        ! contributions to a matrix
+        !
+        real(rp), intent(in) :: matrix(:, :, :), dm_oao(:, :, :)
+        real(rp), allocatable :: projected_matrix(:, :, :)
+
+        integer(ip) :: n_ao, i, j
+        real(rp), allocatable :: proj_v(:, :), temp(:, :)
+        external :: dgemm
+
+        ! number of AOs
+        n_ao = size(matrix, 1)
+
+        allocate(projected_matrix(n_ao, n_ao, size(matrix, 3)), proj_v(n_ao, n_ao), &
+                 temp(n_ao, n_ao))
+        do i = 1, size(matrix, 3)
+            ! construct projection matrix on virtual space (I-D)
+            proj_v = 0.0_rp
+            do j = 1, n_ao
+                proj_v(j, j) = 1.0_rp
+            end do
+            proj_v = proj_v - dm_oao(:, :, i)
+
+            ! construct virtual-occupied contributions DM(I-D)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, matrix(:, :, i), n_ao, &
+                       proj_v, n_ao, 0.0_rp, temp, n_ao)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, i), n_ao, &
+                       temp, n_ao, 0.0_rp, projected_matrix(:, :, i), n_ao)
+
+            ! add occupied-virtual contributions (I-D)MD
+            projected_matrix(:, :, i) = projected_matrix(:, :, i) - &
+                                        transpose(projected_matrix(:, :, i))
+        end do
+        deallocate(proj_v, temp)
+
+    end function project
+
     subroutine purify(dm)
         !
         ! this function purifies a density matrix (dm_purified = 3*dm^2 - 2*dm^3)
@@ -1079,18 +1056,18 @@ module otr_arh
 
         ! spin-restricted case: sum over both spins
         if (spin_sum) then
-            do i = 1, size(matrix, 2)
-                do j = 1, i - 1
-                    matrix_nonred(idx) = sum(matrix(j, i, :))
+            do j = 1, size(matrix, 2)
+                do i = 1, j - 1
+                    matrix_nonred(idx) = sum(matrix(i, j, :)) / size(matrix, 3)
                     idx = idx + 1
                 end do
             end do
         ! spin-unrestricted case: pack each spin separately
         else
-            do i = 1, size(matrix, 3)
+            do k = 1, size(matrix, 3)
                 do j = 1, size(matrix, 2)
-                    do k = 1, j - 1
-                        matrix_nonred(idx) = matrix(k, j, i)
+                    do i = 1, j - 1
+                        matrix_nonred(idx) = matrix(i, j, k)
                         idx = idx + 1
                     end do
                 end do

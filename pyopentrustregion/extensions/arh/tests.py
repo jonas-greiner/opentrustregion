@@ -38,6 +38,7 @@ fortran_tests = {
         "get_fock_jk_f_wrapper",
         "hess_x_arh_c_wrapper",
         "init_arh_settings_c",
+        "project_arh_c_wrapper",
         "update_orbs_arh_c_wrapper",
     ],
 }
@@ -174,7 +175,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
         # call ARH factory python interface
-        obj_func_arh, update_orbs_arh, precond_arh = arh_factory(
+        obj_func_arh, update_orbs_arh, project_arh = arh_factory(
             dm_ao,
             ao_overlap,
             n_particle,
@@ -264,23 +265,22 @@ class ARHPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
-        # call returned ARH preconditioning function
-        residual = np.full(n_param, 1.0, dtype=np.float64)
-        precond_residual = np.empty(n_param, dtype=np.float64)
+        # call returned ARH projection function
+        vector = np.full(n_param, 1.0, dtype=np.float64)
         try:
-            precond_arh(residual, 2.0, precond_residual)
+            project_arh(vector)
         except RuntimeError:
             print(
-                " test_arh_factory_py_interface failed: Returned ARH preconditioning "
+                " test_arh_factory_py_interface failed: Returned ARH projection "
                 "function raises error."
             )
             test_passed = False
 
         # check results
-        if not np.allclose(precond_residual, np.full(n_param, 2.0, dtype=np.float64)):
+        if not np.allclose(vector, np.full(n_param, 2.0, dtype=np.float64)):
             print(
-                " test_arh_factory_py_interface failed: Returned preconditioned "
-                "residual of returned ARH preconditioning function wrong."
+                " test_arh_factory_py_interface failed: Returned projected vector "
+                "of returned ARH projection function wrong."
             )
             test_passed = False
 

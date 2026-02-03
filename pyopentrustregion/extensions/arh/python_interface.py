@@ -16,7 +16,7 @@ from pyopentrustregion.python_interface import (
     obj_func_interface_type,
     update_orbs_interface_type,
     hess_x_interface_type,
-    precond_interface_type,
+    project_interface_type,
     logger_interface_factory,
     Settings,
     auto_bind_fields,
@@ -192,14 +192,14 @@ def arh_factory(
         get_fock_interface_type if closed_shell else get_fock_jk_interface_type,
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
-        POINTER(precond_interface_type),
+        POINTER(project_interface_type),
         ARHSettingsC,
     ]
 
     # call Fortran function
     obj_func_arh_funptr = obj_func_interface_type()
     update_orbs_arh_funptr = update_orbs_interface_type()
-    precond_arh_funptr = precond_interface_type()
+    project_arh_funptr = project_interface_type()
     error = lib.arh_factory(
         dm_ao_ptr,
         ao_overlap_ptr,
@@ -209,7 +209,7 @@ def arh_factory(
         get_fock_interface if closed_shell else get_fock_jk_interface,
         obj_func_arh_funptr,
         update_orbs_arh_funptr,
-        precond_arh_funptr,
+        project_arh_funptr,
         settings.settings_c,
     )
 
@@ -268,17 +268,14 @@ def arh_factory(
 
         return func.value, hess_x_arh_interface
 
-    def precond_arh_interface(
-        residual: np.ndarray, mu: float, precond_residual: np.ndarray
-    ):
+    def project_arh_interface(vector: np.ndarray):
         # get pointers to arrays
-        residual_ptr = residual.ctypes.data_as(POINTER(c_real))
-        precond_residual_ptr = precond_residual.ctypes.data_as(POINTER(c_real))
+        vector_ptr = vector.ctypes.data_as(POINTER(c_real))
 
         # update orbital function
-        error = precond_arh_funptr(residual_ptr, c_real(mu), precond_residual_ptr)
+        error = project_arh_funptr(vector_ptr)
         if error != 0:
-            raise RuntimeError("ARH preconditioning function raised error.")
+            raise RuntimeError("ARH projection function raised error.")
 
         return
 
@@ -290,9 +287,9 @@ def arh_factory(
         get_fock_interface if closed_shell else get_fock_jk_interface
     )
     update_orbs_arh_interface.update_orbs_arh_funptr = update_orbs_arh_funptr
-    precond_arh_interface.precond_arh_funptr = precond_arh_funptr
+    project_arh_interface.project_arh_funptr = project_arh_funptr
 
-    return obj_func_arh_interface, update_orbs_arh_interface, precond_arh_interface
+    return (obj_func_arh_interface, update_orbs_arh_interface, project_arh_interface)
 
 
 def arh_deconstructor(dm_ao: np.ndarray):

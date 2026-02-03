@@ -106,13 +106,13 @@ contains
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
-                                  test_precond_c_funptr
+                                  test_project_c_funptr
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
         type(c_funptr) :: get_energy_c_funptr, get_fock_c_funptr, &
                           obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
-                          precond_arh_c_funptr
+                          project_arh_c_funptr
         type(arh_settings_type_c) :: settings_c
         integer(c_ip) :: n_particle_c, error_c
 
@@ -147,7 +147,7 @@ contains
                                         n_ao_c, get_energy_c_funptr, &
                                         get_fock_c_funptr, obj_func_arh_c_funptr, &
                                         update_orbs_arh_c_funptr, &
-                                        precond_arh_c_funptr, settings_c)
+                                        project_arh_c_funptr, settings_c)
 
         ! deallocate 2D density matrix
         deallocate(dm_ao_2d_c)
@@ -177,10 +177,10 @@ contains
                                       "arh_factory_c_wrapper", &
                                       " by returned orbital updating function")
 
-        ! test returned preconditioning function
+        ! test returned projection function
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
-            test_precond_c_funptr(precond_arh_c_funptr, "arh_factory_c_wrapper", &
-                                  " by returned preconditioning function")
+            test_project_c_funptr(project_arh_c_funptr, "arh_factory_c_wrapper", &
+                                  " by returned projection function")
 
         ! check if test has passed
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. test_passed
@@ -201,7 +201,7 @@ contains
                                         n_ao_c, get_energy_c_funptr, &
                                         get_fock_c_funptr, obj_func_arh_c_funptr, &
                                         update_orbs_arh_c_funptr, &
-                                        precond_arh_c_funptr, settings_c)
+                                        project_arh_c_funptr, settings_c)
 
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
@@ -343,6 +343,29 @@ contains
                                  "hess_x_arh_c_wrapper", "")
 
     end function test_hess_x_arh_c_wrapper
+
+    logical(c_bool) function test_project_arh_c_wrapper() bind(C)
+        !
+        ! this function tests the C wrapper for the ARH projection subroutine
+        !
+        use otr_common_c_interface, only: n_param_global => n_param
+        use otr_arh_c_interface, only: project_arh_before_wrapping, &
+                                       project_arh_c_wrapper
+        use otr_arh_mock, only: mock_project_arh
+        use test_reference, only: test_project_c_funptr
+
+        ! set global number of parameters for assumed size arrays
+        n_param_global = n_param
+
+        ! inject mock subroutine
+        project_arh_before_wrapping => mock_project_arh
+
+        ! test orbital updating function
+        test_project_arh_c_wrapper = &
+            test_project_c_funptr(c_funloc(project_arh_c_wrapper), &
+                                  "project_arh_c_wrapper", "")
+
+    end function test_project_arh_c_wrapper
 
     logical(c_bool) function test_init_arh_settings_c() bind(C)
         !
