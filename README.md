@@ -168,6 +168,7 @@ solver(update_orbs, obj_func, n_param, settings)
 The optimization process can be fine-tuned using the following settings:
 
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
+- **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for optimization using non-redundant parameters. When this is used, all other passed routines (`update_orbs`, `hess_x`, and `precond`) must be self-projecting.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
@@ -305,6 +306,7 @@ stable = stability_check(h_diag, hess_x, n_param, settings, kappa=kappa)
 The stability check can be fine-tuned using the following settings:
 
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
+- **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for stability check using non-redundant parameters. When this is used, all other passed routines (`hess_x` and `precond`) must be self-projecting.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`diag_solver`** (string): Specifies which diagonalization solver to use. Options include:
   - `"davidson"`: standard Davidson method,
@@ -341,6 +343,7 @@ The library uses structured integer return codes to indicate whether a function 
 | `13`               | `hess_x`            |
 | `14`               | `precond`           |
 | `15`               | `conv_check`        |
+| `16`               | `project`           |
 
 ### Error Codes (`EE`)
 

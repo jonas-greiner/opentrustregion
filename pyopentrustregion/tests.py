@@ -139,6 +139,7 @@ fortran_tests = {
         "logger_f_wrapper",
         "obj_func_f_wrapper",
         "precond_f_wrapper",
+        "project_f_wrapper",
         "solver_c_wrapper",
         "stability_check_c_wrapper",
         "update_orbs_f_wrapper",
@@ -288,6 +289,12 @@ class PyInterfaceTests(unittest.TestCase):
             """
             precond_residual[:] = mu * residual
 
+        def mock_project(vector):
+            """
+            this function is a mock function for the projection function
+            """
+            vector[:] = 2 * vector
+
         def mock_conv_check():
             """
             this function is a mock function for the convergence check function
@@ -306,6 +313,7 @@ class PyInterfaceTests(unittest.TestCase):
         # initialize settings object
         settings = SolverSettings()
         settings.precond = mock_precond
+        settings.project = mock_project
         settings.conv_check = mock_conv_check
         settings.logger = mock_logger
         for field_info in settings.c_struct._fields_:
@@ -351,6 +359,12 @@ class PyInterfaceTests(unittest.TestCase):
             """
             precond_residual[:] = mu * residual
 
+        def mock_project(vector):
+            """
+            this function is a mock function for the projection function
+            """
+            vector[:] = 2 * vector
+
         def mock_logger(message):
             """
             this function is a mock function for the logging function
@@ -363,6 +377,7 @@ class PyInterfaceTests(unittest.TestCase):
         # initialize settings object
         settings = StabilitySettings()
         settings.precond = mock_precond
+        settings.project = mock_project
         settings.logger = mock_logger
         for field_info in settings.c_struct._fields_:
             field_name, field_type = field_info[:2]
