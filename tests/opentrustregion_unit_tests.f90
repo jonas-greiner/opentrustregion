@@ -1949,7 +1949,7 @@ contains
         ! describes the Newton step
         call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
                                     obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, mu, imicro, &
+                                    trust_radius, solution, solution_norm, mu, imicro, &
                                     imicro_jacobi_davidson, jacobi_davidson_started, &
                                     max_precision_reached, error)
         if (error /= 0) then
@@ -1970,7 +1970,6 @@ contains
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
                 dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        solution_norm = norm2(solution)
         if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
              / trust_radius_shrink_factor) .or. &
             (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
@@ -1996,7 +1995,7 @@ contains
         ! and describes a level-shifted Newton step
         call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
                                     obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, mu, imicro, &
+                                    trust_radius, solution, solution_norm, mu, imicro, &
                                     imicro_jacobi_davidson, jacobi_davidson_started, &
                                     max_precision_reached, error)
         if (error /= 0) then
@@ -2017,15 +2016,13 @@ contains
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
                 dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        solution_norm = norm2(solution)
         if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
-             tol) .or. &
+             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
+             .or. &
             (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius ** 2) < tol) .or. &
+             .and. abs(solution_norm - trust_radius) < tol) .or. &
             (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - (trust_radius / trust_radius_expand_factor) ** 2) < &
-             tol)) then
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
             write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
                 "not lie at trust region boundary near saddle point."
             test_level_shifted_davidson = .false.
@@ -2040,7 +2037,7 @@ contains
         ! boundary and describes a level-shifted Newton step
         call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
                                     obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, mu, imicro, &
+                                    trust_radius, solution, solution_norm, mu, imicro, &
                                     imicro_jacobi_davidson, jacobi_davidson_started, &
                                     max_precision_reached, error)
         if (error /= 0) then
@@ -2062,15 +2059,13 @@ contains
         end if
         ratio = (hartmann6d_func(curr_vars + solution) - func) / &
                 dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        solution_norm = norm2(solution)
         if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
-             tol) .or. &
+             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
+             .or. &
             (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius ** 2) < tol) .or. &
+             .and. abs(solution_norm - trust_radius) < tol) .or. &
             (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - (trust_radius / trust_radius_expand_factor) ** 2) < &
-             tol)) then
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
             write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
                 "not lie at trust region boundary near saddle point with "// &
                 "Jacobi-Davidson solver."
@@ -2091,14 +2086,13 @@ contains
                                    trust_radius_expand_factor
 
         integer(ip), parameter :: n_param = 6
-        real(rp) :: func, trust_radius, ratio, solution_norm
+        real(rp) :: func, grad_norm, trust_radius, ratio, solution_norm
         real(rp), dimension(n_param) :: grad, h_diag, solution
         integer(ip) :: i, imicro, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
         type(solver_settings_type) :: settings
         logical :: max_precision_reached
-        real(rp), parameter :: h_diag_floor = 1e-10_rp
 
         ! assume tests pass
         test_truncated_conjugate_gradient = .true.
@@ -2116,15 +2110,16 @@ contains
         curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
+        grad_norm = norm2(grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
 
         ! run truncated conjugate gradient, check whether the solution lies at the 
         ! trust region boundary and reduces the function value
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          trust_radius, solution, imicro, &
-                                          max_precision_reached, error)
+        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+                                          obj_func, hess_x_funptr, settings, &
+                                          trust_radius, solution, solution_norm, &
+                                          imicro, max_precision_reached, error)
         if (error /= 0) then
             write (stderr, *) "test_truncated_jacobi_davidson failed: Produced "// &
                 "error near minimum."
@@ -2137,13 +2132,12 @@ contains
                 "does not reduce function value near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
-        solution_norm = dot_product(solution, solution / max(abs(h_diag), h_diag_floor))
-        if ((ratio < trust_radius_shrink_ratio .and. solution_norm > (trust_radius / &
-             trust_radius_shrink_factor) ** 2) .or. &
+        if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius / &
+             trust_radius_shrink_factor) .or. &
             (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. solution_norm > trust_radius ** 2) .or. &
-            (ratio > trust_radius_expand_ratio .and. solution_norm > (trust_radius / &
-             trust_radius_expand_factor) ** 2)) then
+             .and. solution_norm > trust_radius) .or. &
+            (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius / &
+             trust_radius_expand_factor)) then
             write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not stay within trust region near minimum."
             test_truncated_conjugate_gradient = .false.
@@ -2153,16 +2147,17 @@ contains
         curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
+        grad_norm = norm2(grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         trust_radius = 0.4_rp
 
         ! run truncated conjugate gradient, check whether the solution lies at the 
         ! trust region boundary and reduces the function value
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          trust_radius, solution, imicro, &
-                                          max_precision_reached, error)
+        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+                                          obj_func, hess_x_funptr, settings, &
+                                          trust_radius, solution, solution_norm, &
+                                          imicro, max_precision_reached, error)
         if (error /= 0) then
             write (stderr, *) "test_truncated_jacobi_davidson failed: Produced "// &
                 "error near saddle point."
@@ -2175,15 +2170,13 @@ contains
                 "does not reduce function value near saddle point."
             test_truncated_conjugate_gradient = .false.
         end if
-        solution_norm = dot_product(solution, solution / max(abs(h_diag), h_diag_floor))
         if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - (trust_radius / trust_radius_shrink_factor) ** 2) > &
-             tol) .or. &
+             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
+             .or. &
             (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius ** 2) < tol) .or. &
+             .and. abs(solution_norm - trust_radius) < tol) .or. &
             (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - (trust_radius / trust_radius_expand_factor) ** 2) < &
-             tol)) then
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
             write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not lie at trust region boundary near saddle point."
             test_truncated_conjugate_gradient = .false.
