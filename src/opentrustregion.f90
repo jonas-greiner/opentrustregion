@@ -1999,11 +1999,8 @@ contains
         real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
                                  red_space_solution(:), basis_vec(:), h_basis_vec(:), &
                                  h_solution(:), residual(:), solution_normalized(:), &
-                                 last_solution_normalized(:), row_vec(:), col_vec(:)
-        integer(ip) :: n_trial, i, initial_imicro                          
-        logical :: accept_step, micro_converged, newton, bracketed
-        real(rp) :: aug_hess_min_eigval, residual_norm, red_factor, &
-                    initial_residual_norm, new_func, ratio, minres_tol
+        real(rp) :: aug_hess_min_eigval, residual_norm, red_factor, initial_residual_norm, new_func, &
+                    minres_tol
         real(rp), parameter :: newton_eigval_thresh = -1e-5_rp, &
                                solution_overlap_thresh = 0.5_rp, &
                                residual_norm_max_red_factor = 0.8_rp
@@ -2212,14 +2209,12 @@ contains
             call add_error_origin(error, error_obj_func, settings)
             if (error /= 0) return
 
-            ! calculate ratio of evaluated function and predicted function
-            ratio = (new_func - func) / ddot(n_param, solution, 1_ip, &
-                                             grad + 0.5_rp * h_solution, 1_ip)
-
             ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
-                                                   settings, trust_radius, &
-                                                   max_precision_reached)
+            accept_step = accept_trust_region_step(solution, new_func - func, &
+                                                   ddot(n_param, solution, 1_ip, &
+                                                   grad + 0.5_rp * h_solution, 1_ip), &
+                                                   micro_converged, settings, &
+                                                   trust_radius, max_precision_reached)
             if (max_precision_reached) exit
         end do
 
@@ -2257,11 +2252,10 @@ contains
         logical, intent(out) :: max_precision_reached
         
         real(rp), allocatable :: residual(:), vector(:), basis_vec(:)
-        real(rp) :: ratio, new_func, pred_func, conv_tol, step_size, &
-                    trial_solution_dot, basis_vec_dot, solution_dot, &
-                    solution_basis_vec_dot, residual_dot, residual_dot_old, beta, &
-                    lanczos_diag_elem, lanczos_off_diag_elem, curvature, &
-                    lanczos_tridiag_chol_pivot
+        real(rp) :: new_func, pred_func, conv_tol, step_size, trial_solution_dot, &
+                    basis_vec_dot, solution_dot, solution_basis_vec_dot, residual_dot, &
+                    residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
+                    curvature, lanczos_tridiag_chol_pivot
         integer(ip) :: imicro
         logical :: accept_step, micro_converged
         real(rp), external :: ddot, dnrm2
@@ -2439,11 +2433,9 @@ contains
             call add_error_origin(error, error_obj_func, settings)
             if (error /= 0) exit
 
-            ! calculate ratio of evaluated function and predicted function
-            ratio = (new_func - func) / (pred_func - func)
-
             ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
+            accept_step = accept_trust_region_step(solution, new_func - func, &
+                                                   pred_func - func, micro_converged, &
                                                    settings, trust_radius, &
                                                    max_precision_reached)
             if (max_precision_reached) exit
@@ -2480,8 +2472,8 @@ contains
                                  lanczos_off_diag_fact(:), red_space_rhs(:), &
                                  red_space_solution(:), red_space_eigenvec(:), &
                                  work(:), stepsize_list(:), residual_dot_list(:)
-        real(rp) :: ratio, new_func, func_diff, lowest_eigval, hard_case_step_size, &
-                    tau, pred_func, red_factor, conv_tol
+        real(rp) :: new_func, func_diff, lowest_eigval, hard_case_step_size, tau, &
+                    pred_func, red_factor, conv_tol
         integer(ip) :: n_first_pass, n_second_pass, n_saved, n_red_space
         logical :: restart_lanczos, accept_step, micro_converged, hard_case, interior
         real(rp), external :: ddot, dnrm2
@@ -2632,11 +2624,9 @@ contains
             call add_error_origin(error, error_obj_func, settings)
             if (error /= 0) exit
 
-            ! calculate ratio of evaluated function and predicted function
-            ratio = (new_func - func) / (pred_func - func)
-
             ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, ratio, micro_converged, &
+            accept_step = accept_trust_region_step(solution, new_func - func, &
+                                                   pred_func - func, micro_converged, &
                                                    settings, trust_radius, &
                                                    max_precision_reached)
             if (max_precision_reached) exit
@@ -2653,21 +2643,38 @@ contains
 
     end subroutine generalized_lanczos_trust_region
 
-    logical function accept_trust_region_step(solution, ratio, micro_converged, &
+    logical function accept_trust_region_step(solution, actual_func_diff, &
+                                              pred_func_diff, micro_converged, &
                                               settings, trust_radius, &
                                               max_precision_reached)
         !
-        ! this function checks whether the trust region step is accepted and modified 
+        ! this function checks whether the trust region step is accepted and modifies 
         ! the trust region accordingly
         !
-        real(rp), intent(in) :: solution(:), ratio
+        real(rp), intent(in) :: solution(:), actual_func_diff, pred_func_diff
         logical, intent(in) :: micro_converged
         type(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: trust_radius
         logical, intent(out) :: max_precision_reached
 
+        real(rp) :: ratio
+
         ! default to maximum precision not yet reached
         max_precision_reached = .false.
+
+        ! check if function value has not decreased up to floating point precision 
+        if (abs(actual_func_diff) < numerical_zero .and. &
+            abs(pred_func_diff) < numerical_zero) then
+            call settings%log("No further improvement of cost function possible. "// &
+                              "Convergence criterion is not fulfilled but "// &
+                              "calculation should be converged up to floating "// &
+                              "point precision.", verbosity_error, .true.)
+            max_precision_reached = .true.
+            return
+        end if
+
+        ! calculate ratio of evaluated function and predicted function
+        ratio = actual_func_diff / pred_func_diff
 
         ! decrease trust radius if micro iterations are unable to converge, if function 
         ! value has not decreased or if individual orbitals change too much
