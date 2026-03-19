@@ -2676,7 +2676,7 @@ contains
 
                     ! check whether solution satisfies convergence criteria or whether 
                     ! trust radius needs to be decreased further
-                    if (abs(lanczos_off_diag(n_red_space - 1) * &
+                    if (abs(lanczos_off_diag(n_red_space) * &
                             red_space_solution(n_red_space)) > conv_tol) &
                         exit gltr_minimizer
 
