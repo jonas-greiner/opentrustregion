@@ -457,7 +457,7 @@ module otr_arh
         ! [o-v], and [c-o] rotation blocks. Because we reuse UHF machinery where 
         ! alpha-occ = [c+o] and beta-occ = [c], a unified spatial trial vector that is 
         ! unpacked into alpha and beta spin channels contains rotations that are 
-        ! internal and this redundant in the UHF context. Without this projection, 
+        ! internal and thus redundant in the UHF context. Without this projection, 
         ! the alpha Hessian vector product would leak non-zero values into 
         ! the [c-c] block and the beta Hessian vector product into the [v-v] blocks. 
         ! This projection thus prevents singular dimensions in the ARH solver.
