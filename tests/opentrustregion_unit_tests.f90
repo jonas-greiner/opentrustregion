@@ -496,9 +496,12 @@ contains
 
         type(solver_settings_type) :: settings
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
-                    aug_hess(4, 4), solution(6), red_space_solution(3), trust_radius, mu
-        integer(ip) :: i, j, error
-        logical :: bracketed
+                    aug_hess(4, 4), red_space_hess_eigvals(3), &
+                    red_space_hess_eigvecs(3, 3), solution(6), red_space_solution(3), &
+                    trust_radius, mu, work(9)
+        integer(ip) :: i, j, error, info
+
+        external :: dsyev
 
         ! assume tests pass
         test_bisection = .true.
@@ -533,17 +536,19 @@ contains
             end do
         end do
 
-        ! perform bisection, check whether error has occured, whether the correct trust 
-        ! region was bracketed, determine whether resulting solution is correct in 
-        ! reduced and full space and respects target trust radius
-        call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                       red_space_solution, mu, bracketed, settings, error)
+        ! diagonalize Hessian
+        red_space_hess_eigvecs = aug_hess(2:, 2:)
+        call dsyev("V", "U", 3, red_space_hess_eigvecs, 3, red_space_hess_eigvals, &
+                   work, 9, info)
+
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution is correct in reduced and full space and respects target 
+        ! trust radius
+        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
+                       red_space_hess_eigvecs, trust_radius, solution, &
+                       red_space_solution, mu, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_bisection failed: Produced error."
-            test_bisection = .false.
-        end if
-        if (.not. bracketed) then
-            write (stderr, *) "test_bisection failed: Unable to bracket trust region."
             test_bisection = .false.
         end if
         if (abs(norm2(solution) - trust_radius) > tol) then
@@ -579,17 +584,18 @@ contains
             end do
         end do
 
+        ! diagonalize Hessian
+        red_space_hess_eigvecs = aug_hess(2:, 2:)
+        call dsyev("V", "U", 3, red_space_hess_eigvecs, 3, red_space_hess_eigvals, &
+                   work, 9, info)
+
         ! perform bisection and determine whether routine correctly throws error since
         ! minimum is closer than target trust radius and no level shift is necessary
-        call bisection(aug_hess, grad_norm, red_space_basis, trust_radius, solution, &
-                       red_space_solution, mu, bracketed, settings, error)
-        if (error /= 0) then
-            write (stderr, *) "test_bisection failed: Produced error."
-            test_bisection = .false.
-        end if
-        if (bracketed) then
-            write (stderr, *) "test_bisection failed: Bisection should fail if "// &
-                "minimum is closer than trust radius."
+        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
+                       red_space_hess_eigvecs, trust_radius, solution, &
+                       red_space_solution, mu, settings, error)
+        if (error == 0) then
+            write (stderr, *) "test_bisection failed: Failed to produce error."
             test_bisection = .false.
         end if
 
