@@ -423,8 +423,12 @@ contains
 
         type(solver_settings_type) :: settings
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
-                    aug_hess(4, 4), solution(6), red_space_solution(3)
-        integer(ip) :: i, j, error
+                    red_space_hess(3, 3), red_space_hess_eigvecs(3, 3), &
+                    red_space_hess_eigvals(3), solution(6), red_space_solution(3), &
+                    work(9)
+        integer(ip) :: i, j, error, info
+
+        external :: dsyev
 
         ! assume tests pass
         test_newton_step = .true.
@@ -448,19 +452,23 @@ contains
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(vars)
-        aug_hess = 0.0_rp
         do i = 1, 3
             do j = 1, 3
-                aug_hess(i + 1, j + 1) = &
+                red_space_hess(i, j) = &
                     dot_product(red_space_basis(:, i), &
                                 matmul(hess, red_space_basis(:, j)))
             end do
         end do
 
+        ! diagonalize Hessian
+        red_space_hess_eigvecs = red_space_hess
+        call dsyev("V", "U", 3, red_space_hess_eigvecs, 3, red_space_hess_eigvals, &
+                   work, 9, info)
+
         ! perform Newton step, check if error has occured and determine whether 
         ! resulting solution is correct in reduced and full space
-        call newton_step(aug_hess, grad_norm, red_space_basis, solution, &
-                         red_space_solution, settings, error)
+        call newton_step(grad_norm, red_space_basis, red_space_hess_eigvals, &
+                         red_space_hess_eigvecs, solution, red_space_solution)
         if (error /= 0) then
             write (stderr, *) "test_newton_step failed: Produced error."
             test_newton_step = .false.
@@ -769,19 +777,19 @@ contains
 
     end function test_symm_mat_min_eig
 
-    logical(c_bool) function test_symm_mat_min_eigval() bind(C)
+    logical(c_bool) function test_symm_mat_diag() bind(C)
         !
         ! this function tests the function for determining the minimum eigenvalue for
         ! a symmetric matrix
         !
-        use opentrustregion, only: solver_settings_type, symm_mat_min_eigval
+        use opentrustregion, only: solver_settings_type, symm_mat_diag
 
         type(solver_settings_type) :: settings
-        real(rp) :: matrix(3, 3), matrix_min_eigval
+        real(rp) :: matrix(3, 3), eigvals(3), eigvecs(3, 3)
         integer(ip) :: error
 
         ! assume tests pass
-        test_symm_mat_min_eigval = .true.
+        test_symm_mat_diag = .true.
 
         ! setup settings object
         call setup_settings(settings)
@@ -792,18 +800,19 @@ contains
                           1.0_rp, 2.0_rp, 5.0_rp], [3, 3])
 
         ! call function and determine if lowest eigenvalue is found
-        matrix_min_eigval = symm_mat_min_eigval(matrix, settings, error)
+        call symm_mat_diag(matrix, eigvals, eigvecs, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_symm_mat_min_eigval failed: Produced error."
-            test_symm_mat_min_eigval = .false.
+            write (stderr, *) "test_symm_mat_diag failed: Produced error."
+            test_symm_mat_diag = .false.
         end if
-        if (abs(matrix_min_eigval - 2.30797852837_rp) > tol) then
-            write (stderr, *) "test_symm_mat_min_eigval failed: Incorrect minimum "// &
-                "eigenvalue for matrix."
-            test_symm_mat_min_eigval = .false.
+        if (norm2(matmul(matrix, eigvecs) - eigvecs * spread(eigvals, dim=1, &
+            ncopies=size(eigvecs, 1))) > tol) then
+            write (stderr, *) "test_symm_mat_diag failed: Incorrect eigenvector "// &
+                "corresponding to minimum eigenvalue for matrix."
+            test_symm_mat_diag = .false.
         end if
 
-    end function test_symm_mat_min_eigval
+    end function test_symm_mat_diag
 
     logical(c_bool) function test_init_rng() bind(C)
         !

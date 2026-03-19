@@ -678,25 +678,19 @@ contains
 
     end subroutine stability_check
 
-    subroutine newton_step(aug_hess, grad_norm, red_space_basis, solution, &
-                           red_space_solution, settings, error)
+    subroutine newton_step(grad_norm, red_space_basis, red_space_hess_eigvals, &
+                           red_space_hess_eigvecs, solution, red_space_solution)
         !
         ! this subroutine performs a Newton step by solving the Newton equations in
         ! reduced space without a level shift
         !
-        real(rp), intent(in) :: aug_hess(:, :), grad_norm, red_space_basis(:, :)
-        type(solver_settings_type), intent(in) :: settings
+        real(rp), intent(in) :: grad_norm, red_space_basis(:, :)
+        real(rp), intent(in) :: red_space_hess_eigvals(:), red_space_hess_eigvecs(:, :)
         real(rp), intent(out) :: solution(:), red_space_solution(:)
-        integer(ip), intent(out) :: error
 
-        integer(ip) :: n_param, n_red, lwork, info
-        integer(ip), allocatable :: ipiv(:)
-        real(rp), allocatable :: red_hess(:, :), work(:)
-        character(300) :: msg
-        external :: dsysv, dgesv, dgemv
-
-        ! initialize error flag
-        error = 0
+        integer(ip) :: n_param, n_red
+        real(rp), allocatable :: eigspace_solution(:)
+        external :: dgemv
 
         ! number of parameters
         n_param = size(solution)
@@ -704,63 +698,13 @@ contains
         ! reduced space size
         n_red = size(red_space_basis, 2)
 
-        ! reduced space Hessian
-        allocate(red_hess(n_red, n_red))
-        red_hess = aug_hess(2:, 2:)
+        ! construct Newton step in eigenvector basis
+        eigspace_solution = -grad_norm * red_space_hess_eigvecs(1, :) / &
+                            red_space_hess_eigvals
 
-        ! set gradient
-        red_space_solution = 0.0_rp
-        red_space_solution(1) = -grad_norm
-
-        ! allocate arrays
-        allocate(ipiv(n_red))
-
-        ! solve linear system
-        if (settings%hess_symm) then
-            ! query optimal workspace size
-            lwork = -1
-            allocate(work(1))
-            call dsysv("U", n_red, 1_ip, red_hess, n_red, ipiv, red_space_solution, &
-                       n_red, work, lwork, info)
-            lwork = int(work(1), kind=ip)
-            deallocate(work)
-            allocate(work(lwork))
-
-            ! solve linear system
-            call dsysv("U", n_red, 1_ip, red_hess, n_red, ipiv, red_space_solution, &
-                       n_red, work, lwork, info)
-
-            ! deallocate work array
-            deallocate(work)
-
-            ! check for errors
-            if (info /= 0) then
-                write (msg, '(A, I0)') "Linear solver failed: Error in DSYSV, "// &
-                                       "info = ", info
-                call settings%log(msg, verbosity_error, .true.)
-                error = 1
-                return
-            end if
-
-        else
-            ! general linear system solver since the Hessian can be non-symmetric for 
-            ! Hessian approximations
-            call dgesv(n_red, 1_ip, red_hess, n_red, ipiv, red_space_solution, n_red, &
-                       info)
-
-            ! check for errors
-            if (info /= 0) then
-                write (msg, '(A, I0)') "Linear solver failed: Error in DGESV, "// &
-                                       "info = ", info
-                call settings%log(msg, verbosity_error, .true.)
-                error = 1
-                return
-            end if
-
-        end if
-
-        ! deallocate arrays
-        deallocate(red_hess, ipiv)
+        ! transform from eigenvector basis to reduced step basis
+        call dgemv("N", n_red, n_red, 1.0_rp, red_space_hess_eigvecs, n_red, &
+                   eigspace_solution, 1_ip, 0.0_rp, red_space_solution, 1_ip)
 
         ! get solution in full space
         call dgemv("N", n_param, n_red, 1.0_rp, red_space_basis, n_param, &
@@ -1105,64 +1049,25 @@ contains
 
     end subroutine add_column
 
-    subroutine mat_min_eig(matrix, symm_matrix, lowest_eigval, lowest_eigvec, &
-                           settings, error)
+    subroutine mat_diag(matrix, symm_matrix, eigvals, eigvecs, settings, error)
         !
-        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
-        ! of a matrix
+        ! this subroutine returns the eigenvalues and eigenvectors of a matrix
         !
         real(rp), intent(in) :: matrix(:, :)
         logical, intent(in) :: symm_matrix
         class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
+        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
         integer(ip), intent(out) :: error
 
         if (symm_matrix) then
-            call symm_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, error)
+            call symm_mat_diag(matrix, eigvals, eigvecs, settings, error)
         else
-            call general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
-                                     error)
+            call general_mat_diag(matrix, eigvals, eigvecs, settings, error)
         end if 
 
-    end subroutine mat_min_eig
+    end subroutine mat_diag
 
-    subroutine symm_mat_min_eig(symm_matrix, lowest_eigval, lowest_eigvec, settings, &
-                                error)
-        !
-        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
-        ! of a symmetric matrix
-        !
-        real(rp), intent(in) :: symm_matrix(:, :)
-        class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
-        integer(ip), intent(out) :: error
-
-        integer(ip) :: n
-        real(rp), allocatable :: eigvals(:), eigvecs(:, :)
-
-        ! initialize error flag
-        error = 0
-
-        ! size of matrix
-        n = size(symm_matrix, 1)
-
-        ! allocate arrays
-        allocate(eigvals(n), eigvecs(n, n))
-
-        ! diagonalize matrix
-        call symm_diag(symm_matrix, eigvals, eigvecs, settings, error)
-        if (error /= 0) return
-
-        ! get lowest eigenvalue and corresponding eigenvector
-        lowest_eigval = eigvals(1)
-        lowest_eigvec = eigvecs(:, 1)
-
-        ! deallocate eigenvalues and eigenvectors
-        deallocate(eigvals, eigvecs)
-
-    end subroutine symm_mat_min_eig
-
-    subroutine symm_diag(symm_matrix, eigvals, eigvecs, settings, error)
+    subroutine symm_mat_diag(symm_matrix, eigvals, eigvecs, settings, error)
         !
         ! this subroutine returns eigenvalues and eigenvectors of a symmetric matrix
         !
@@ -1208,7 +1113,115 @@ contains
             return
         end if
 
-    end subroutine symm_diag
+    end subroutine symm_mat_diag
+
+    subroutine general_mat_diag(matrix, eigvals, eigvecs, settings, error)
+        !
+        ! this subroutine returns the eigenvalues and eigenvectors of a general matrix
+        !
+        real(rp), intent(in) :: matrix(:, :)
+        class(settings_type), intent(in) :: settings
+        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n, lwork, info
+        real(rp), allocatable :: work(:), temp(:, :), imag_eigvals(:), &
+                                 left_eigvecs(:, :)
+        character(300) :: msg
+        external :: dgeev
+
+        ! initialize error flag
+        error = 0
+
+        ! size of matrix
+        n = size(matrix, 1)
+
+        ! copy matrix to avoid modification of original matrix
+        temp = matrix
+
+        ! query optimal workspace size
+        lwork = -1
+        allocate(imag_eigvals(n), left_eigvecs(n, n), work(1))
+        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   eigvecs, n, work, lwork, info)
+        lwork = int(work(1))
+        deallocate(work)
+        allocate(work(lwork))
+
+        ! perform eigendecomposition
+        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   eigvecs, n, work, lwork, info)
+
+        ! deallocate arrays
+        deallocate(temp, imag_eigvals, left_eigvecs, work)
+
+        ! check for successful execution
+        if (info /= 0) then
+            write (msg, '(A, I0)') "Eigendecomposition failed: Error in DGEEV, "// &
+                "info = ", info
+            call settings%log(msg, verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+    end subroutine general_mat_diag
+
+    subroutine mat_min_eig(matrix, symm_matrix, lowest_eigval, lowest_eigvec, &
+                           settings, error)
+        !
+        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
+        ! of a matrix
+        !
+        real(rp), intent(in) :: matrix(:, :)
+        logical, intent(in) :: symm_matrix
+        class(settings_type), intent(in) :: settings
+        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
+        integer(ip), intent(out) :: error
+
+        if (symm_matrix) then
+            call symm_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, error)
+        else
+            call general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
+                                     error)
+        end if 
+
+    end subroutine mat_min_eig
+
+    subroutine symm_mat_min_eig(symm_matrix, lowest_eigval, lowest_eigvec, settings, &
+                                error)
+        !
+        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
+        ! of a symmetric matrix
+        !
+        real(rp), intent(in) :: symm_matrix(:, :)
+        class(settings_type), intent(in) :: settings
+        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n
+        real(rp), allocatable :: eigvals(:), eigvecs(:, :)
+
+        ! initialize error flag
+        error = 0
+
+        ! size of matrix
+        n = size(symm_matrix, 1)
+
+        ! allocate arrays
+        allocate(eigvals(n), eigvecs(n, n))
+
+        ! diagonalize matrix
+        call symm_mat_diag(symm_matrix, eigvals, eigvecs, settings, error)
+        if (error /= 0) return
+
+        ! get lowest eigenvalue and corresponding eigenvector
+        lowest_eigval = eigvals(1)
+        lowest_eigvec = eigvecs(:, 1)
+
+        ! deallocate eigenvalues and eigenvectors
+        deallocate(eigvals, eigvecs)
+
+    end subroutine symm_mat_min_eig
 
     subroutine general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
                                    error)
@@ -1221,11 +1234,8 @@ contains
         real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n, lwork, info, min_idx
-        real(rp), allocatable :: work(:), temp(:, :), eigvals(:), imag_eigvals(:), &
-                                 left_eigvecs(:, :), right_eigvecs(:, :)
-        character(300) :: msg
-        external :: dgeev
+        integer(ip) :: n, min_idx
+        real(rp), allocatable :: eigvals(:), eigvecs(:, :)
 
         ! initialize error flag
         error = 0
@@ -1233,172 +1243,22 @@ contains
         ! size of matrix
         n = size(matrix, 1)
 
-        ! copy matrix to avoid modification of original matrix
-        temp = matrix
+        ! allocate arrays
+        allocate(eigvals(n), eigvecs(n, n))
 
-        ! query optimal workspace size
-        lwork = -1
-        allocate(eigvals(n), imag_eigvals(n), left_eigvecs(n, n), right_eigvecs(n, n), &
-                 work(1))
-        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
-                   right_eigvecs, n, work, lwork, info)
-        lwork = int(work(1))
-        deallocate(work)
-        allocate(work(lwork))
-
-        ! perform eigendecomposition
-        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
-                   right_eigvecs, n, work, lwork, info)
-
-        ! deallocate arrays
-        deallocate(imag_eigvals, left_eigvecs, work)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write (msg, '(A, I0)') "Eigendecomposition failed: Error in DGEEV, "// &
-                "info = ", info
-            call settings%log(msg, verbosity_error, .true.)
-            error = 1
-            return
-        end if
+        ! diagonalize matrix
+        call general_mat_diag(matrix, eigvals, eigvecs, settings, error)
+        if (error /= 0) return
 
         ! get lowest eigenvalue and corresponding eigenvector
         min_idx = minloc(eigvals, dim=1)
         lowest_eigval = eigvals(min_idx)
-        lowest_eigvec = right_eigvecs(:, min_idx)
+        lowest_eigvec = eigvecs(:, min_idx)
 
         ! deallocate eigenvalues and eigenvectors
-        deallocate(eigvals, right_eigvecs)
+        deallocate(eigvals, eigvecs)
 
     end subroutine general_mat_min_eig
-
-    real(rp) function mat_min_eigval(matrix, symm_matrix, settings, error)
-        !
-        ! this function calculates the lowest eigenvalue of a matrix
-        !
-        real(rp), intent(in) :: matrix(:, :)
-        logical, intent(in) :: symm_matrix
-        class(settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
-
-        if (symm_matrix) then
-            mat_min_eigval = symm_mat_min_eigval(matrix, settings, error)
-        else
-            mat_min_eigval = general_mat_min_eigval(matrix, settings, error)
-        end if
-
-    end function mat_min_eigval
-
-    real(rp) function symm_mat_min_eigval(matrix, settings, error)
-        !
-        ! this function calculates the lowest eigenvalue of a symmetric matrix
-        !
-        real(rp), intent(in) :: matrix(:, :)
-        class(settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
-
-        real(rp), allocatable :: eigvals(:), temp(:, :), work(:)
-        integer(ip) :: n, lwork, info
-        character(300) :: msg
-        external :: dsyev
-
-        ! initialize error flag
-        error = 0
-
-        ! size of matrix
-        n = size(matrix, 1)
-
-        ! copy matrix to avoid modification of original matrix
-        temp = matrix
-
-        ! query optimal workspace size
-        lwork = -1
-        allocate(eigvals(n), work(1))
-        call dsyev("N", "U", n, temp, n, eigvals, work, lwork, info)
-        lwork = int(work(1), kind=ip)
-        deallocate(work)
-        allocate(work(lwork))
-
-        ! compute eigenvalues
-        call dsyev("N", "U", n, temp, n, eigvals, work, lwork, info)
-
-        ! deallocate temporary and work array
-        deallocate(temp, work)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write (msg, '(A, I0)') "Eigendecomposition failed: Error in DSYEV, "// &
-                "info = ", info
-            call settings%log(msg, verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
-        ! get lowest eigenvalue
-        symm_mat_min_eigval = eigvals(1)
-
-        ! deallocate eigenvalues
-        deallocate(eigvals)
-
-    end function symm_mat_min_eigval
-
-    real(rp) function general_mat_min_eigval(matrix, settings, error)
-        !
-        ! this function calculates the lowest eigenvalue of a square matrix
-        !
-        real(rp), intent(in) :: matrix(:, :)
-        class(settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
-
-        real(rp), allocatable :: temp(:, :), eigvals(:), imag_eigvals(:), &
-                                 left_eigvecs(:, :), right_eigvecs(:, :)
-        integer(ip) :: n, lwork, info
-        real(rp), allocatable :: work(:)
-        character(300) :: msg
-        external :: dgeev
-
-        ! initialize error flag
-        error = 0
-
-        ! size of matrix
-        n = size(matrix, 1)
-
-        ! copy matrix to avoid modification of original matrix
-        temp = matrix
-
-        ! query optimal workspace size
-        lwork = -1
-        allocate(eigvals(n), imag_eigvals(n), left_eigvecs(n, n), right_eigvecs(n, n), &
-                 work(1))
-        call dgeev("N", "N", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
-                   right_eigvecs, n, work, lwork, info)
-        lwork = int(work(1))
-        deallocate(work)
-        allocate(work(lwork))
-
-        ! compute eigenvalues
-        call dgeev("N", "N", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
-                   right_eigvecs, n, work, lwork, info)
-
-        ! deallocate arrays
-        deallocate(imag_eigvals, left_eigvecs, right_eigvecs, work)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write (msg, '(A, I0)') "Eigendecomposition failed: Error in DGEEV, "// &
-                "info = ", info
-            call settings%log(msg, verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
-        ! get lowest eigenvalue
-        general_mat_min_eigval = minval(eigvals)
-
-        ! deallocate eigenvalues and eigenvectors
-        deallocate(eigvals)
-
-    end function general_mat_min_eigval
 
     subroutine init_rng(seed)
         !
@@ -2194,13 +2054,17 @@ contains
                 ! do a Newton step if the model is positive definite and the step is 
                 ! within the trust region
                 newton = .false.
-                aug_hess_min_eigval = mat_min_eigval(aug_hess(2:, 2:), &
-                                                     settings%hess_symm, settings, &
-                                                     error)
+                allocate(red_space_hess_eigvals(n_trial), &
+                         red_space_hess_eigvecs(n_trial, n_trial))
+                call mat_diag(aug_hess(2:, 2:), settings%hess_symm, &
+                              red_space_hess_eigvals, red_space_hess_eigvecs, &
+                              settings, error)
                 if (error /= 0) return
-                if (aug_hess_min_eigval > newton_eigval_thresh) then
-                    call newton_step(aug_hess, grad_norm, red_space_basis, &
-                                     solution, red_space_solution, settings, error)
+                min_idx = minloc(red_space_hess_eigvals, dim=1)
+                if (red_space_hess_eigvals(min_idx) > newton_eigval_thresh) then
+                    call newton_step(grad_norm, red_space_basis, &
+                                     red_space_hess_eigvals, red_space_hess_eigvecs, &
+                                     solution, red_space_solution)
                     if (error /= 0) return
                     mu = 0.0_rp
                     if (dnrm2(n_param, solution, 1_ip) < trust_radius) newton = .true.

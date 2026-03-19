@@ -121,8 +121,8 @@ fortran_tests = {
         "stability_check",
         "stability_sanity_check",
         "string_to_lowercase",
+        "symm_mat_diag",
         "symm_mat_min_eig",
-        "symm_mat_min_eigval",
         "truncated_conjugate_gradient",
     ],
     "c_interface_tests": [
