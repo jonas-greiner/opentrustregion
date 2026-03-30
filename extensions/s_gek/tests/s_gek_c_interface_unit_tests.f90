@@ -13,7 +13,47 @@ module otr_s_gek_c_interface_unit_tests
 
     implicit none
 
+    logical :: test_passed_mock_change_reference
+    character(:), allocatable :: test_name
+
 contains
+
+    function mock_change_reference(new_ref_c, n_points_c, kappa_list_c, &
+                                   local_grad_list_c, grad_list_c) result(error) bind(C)
+        !
+        ! this subroutine is a mock subroutine for the reference change C function
+        !
+        real(c_rp), intent(in), target :: new_ref_c(*)
+        integer(c_ip), intent(in), value :: n_points_c
+        real(c_rp), intent(inout), target :: kappa_list_c(*), local_grad_list_c(*), &
+                                             grad_list_c(*)
+        integer(c_ip) :: error
+
+        ! initialize logical
+        test_passed_mock_change_reference = .true.
+
+        if (n_points_c /= 4_c_ip) then
+            test_passed_mock_change_reference = .false.
+            write (stderr, *) test_name//" failed: Number of points inside given "// &
+                "change reference function wrong."
+        end if
+
+        if (any((new_ref_c(:n_param) - 1.0_c_rp) > tol_c)) then
+            test_passed_mock_change_reference = .false.
+            write (stderr, *) test_name//" failed: New reference parameters inside "// &
+                "given change reference function wrong."
+        end if
+
+        kappa_list_c(:n_param * n_points_c) = 2.0_c_rp * &
+            kappa_list_c(:n_param * n_points_c)
+        local_grad_list_c(:n_param * n_points_c) = 3.0_c_rp * &
+            local_grad_list_c(:n_param * n_points_c)
+        grad_list_c(:n_param * n_points_c) = 4.0_c_rp * &
+            grad_list_c(:n_param * n_points_c)
+
+        error = 0_c_ip
+
+    end function mock_change_reference
 
     logical(c_bool) function test_update_orbs_s_gek_factory_c_wrapper() bind(C)
         !
@@ -27,9 +67,6 @@ contains
                                   test_passed
         use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings
         use c_interface_unit_tests, only: mock_update_orbs, mock_logger, test_logger
-        use otr_common_c_interface_mock, only: mock_change_reference, test_name, &
-                                               test_passed_mock_change_reference => &
-                                               test_passed
         use test_reference, only: test_update_orbs_c_funptr
 
         type(c_funptr) :: update_orbs_orig_c_funptr, change_reference_c_funptr, &
@@ -113,35 +150,33 @@ contains
 
     end function test_update_orbs_orig_s_gek_f_wrapper
 
-    logical(c_bool) function test_change_reference_s_gek_f_wrapper() bind(C)
+    logical(c_bool) function test_change_reference_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the reference change
         !
         use otr_s_gek, only: change_reference_type
-        use otr_s_gek_c_interface, only: change_reference_s_gek_before_wrapping, &
+        use otr_s_gek_c_interface, only: change_reference_before_wrapping, &
                                          change_reference_f_wrapper
-        use otr_common_c_interface_mock, only: mock_change_reference, test_name, &
-                                               test_passed
-        use otr_common_test_reference, only: test_change_reference_funptr
+        use otr_s_gek_test_reference, only: test_change_reference_funptr
 
         procedure(change_reference_type), pointer :: change_reference_funptr
 
         ! set test name
-        test_name = "test_change_reference_s_gek_f_wrapper"
+        test_name = "test_change_reference_f_wrapper"
 
         ! inject mock subroutine
-        change_reference_s_gek_before_wrapping => mock_change_reference
+        change_reference_before_wrapping => mock_change_reference
 
         ! get pointer to subroutine
         change_reference_funptr => change_reference_f_wrapper
 
         ! test change reference Fortran wrapper
-        test_change_reference_s_gek_f_wrapper = &
+        test_change_reference_f_wrapper = &
             test_change_reference_funptr(change_reference_funptr, &
-                                         "change_reference_s_gek_f_wrapper", "") .and. &
-            test_passed
+                                         "change_reference_f_wrapper", "") .and. &
+            test_passed_mock_change_reference
 
-    end function test_change_reference_s_gek_f_wrapper
+    end function test_change_reference_f_wrapper
 
     logical(c_bool) function test_update_orbs_s_gek_c_wrapper() bind(C)
         !

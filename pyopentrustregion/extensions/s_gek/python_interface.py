@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import POINTER, c_bool, c_void_p, Structure
+from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, Structure
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
@@ -20,13 +20,17 @@ from pyopentrustregion.python_interface import (
     Settings,
     auto_bind_fields,
 )
-from pyopentrustregion.extensions.common.python_interface import (
-    change_reference_interface_type,
-    change_reference_interface_factory,
-)
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any
+
+
+# callback function ctypes specifications, ctypes can only deal with simple return
+# types so we interface to Fortran subroutines by creating pointers to the relevant
+# data
+change_reference_interface_type = CFUNCTYPE(
+    c_int, POINTER(c_real), c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
+)
 
 
 # define classes corresponding to C structs for settings
@@ -73,9 +77,31 @@ def update_orbs_s_gek_factory(
 ]:
     # define interfaces for callback functions
     update_orbs_interface = update_orbs_interface_factory(update_orbs, n_param)
-    change_reference_interface = change_reference_interface_factory(
-        change_reference, n_param
-    )
+
+    @change_reference_interface_type
+    def change_reference_interface(
+        new_ref_ptr, n_points, kappa_list_ptr, local_grad_list_ptr, grad_list_ptr
+    ):
+        """
+        this function provides the interface to change the reference and to write the
+        parameter, local gradient, and gradient lists to the memory provided through
+        pointers
+        """
+        # convert pointers to numpy arrays and deal with row- vs column-major order
+        new_ref = np.ctypeslib.as_array(new_ref_ptr, shape=(n_param,))
+        kappa_list = np.ctypeslib.as_array(kappa_list_ptr, shape=(n_points, n_param))
+        local_grad_list = np.ctypeslib.as_array(
+            local_grad_list_ptr, shape=(n_points, n_param)
+        )
+        grad_list = np.ctypeslib.as_array(grad_list_ptr, shape=(n_points, n_param))
+
+        # change reference and retrieve parameter, local gradient, and gradient lists
+        try:
+            change_reference(new_ref, kappa_list, local_grad_list, grad_list)
+        except RuntimeError:
+            return 1
+
+        return 0
 
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to

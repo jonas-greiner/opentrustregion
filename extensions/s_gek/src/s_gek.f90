@@ -8,9 +8,23 @@ module otr_s_gek
 
     use opentrustregion, only: rp, ip, kw_len, pi, settings_type, update_orbs_type, &
                                hess_x_type
-    use otr_common, only: change_reference_type
 
     implicit none
+
+    abstract interface
+        subroutine change_reference_type(new_ref, n_points, kappa_list, &
+                                         local_grad_list, grad_list, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: new_ref(:)
+            integer(ip), intent(in) :: n_points
+            real(rp), intent(inout), target :: kappa_list(:, :), &
+                                               local_grad_list(:, :), grad_list(:, :)
+            integer(ip), intent(out) :: error
+
+            real(rp) :: energy
+        end subroutine change_reference_type
+    end interface
 
     type, extends(settings_type) :: s_gek_settings_type
         logical :: use_subspace
@@ -348,13 +362,13 @@ module otr_s_gek
             tmp = self%subspace(:, 1:self%n_space)
             call move_alloc(tmp, self%subspace)
 
-            ! set size of covariance matrix
-            self%n_covariance = self%n_points + self%n_space * self%n_points
-
         else
             ! consider full space
             self%n_space = self%n_param
         end if
+
+        ! set size of covariance matrix
+        self%n_covariance = self%n_points + self%n_space * self%n_points
 
         ! deallocate projected arrays
         if (allocated(self%actual_disp_list)) deallocate(self%actual_disp_list)
@@ -535,7 +549,7 @@ module otr_s_gek
         !
         ! this subroutine sets up the kriging model for the S-GEK method
         !
-        use opentrustregion, only: symm_diag
+        use opentrustregion, only: symm_mat_diag
 
         class(s_gek_type), intent(inout) :: self
         real(rp), intent(in) :: kappa_list(:, :), grad_list(:, :), obj_func_list(:)
@@ -554,8 +568,8 @@ module otr_s_gek
             deallocate(self%transform_matrix)
         allocate(hess_eigvals(self%n_space), &
                  self%transform_matrix(self%n_space, self%n_space))
-        call symm_diag(approx_hessian, hess_eigvals, self%transform_matrix, &
-                       self%settings, error)
+        call symm_mat_diag(approx_hessian, hess_eigvals, self%transform_matrix, &
+                           self%settings, error)
         if (error /= 0) return
 
         ! set the characteristic length such that the kriging hessian reproduces the 

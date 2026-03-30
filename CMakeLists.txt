@@ -110,7 +110,6 @@ option(ENABLE_QUASI_NEWTON "Include quasi-Newton extension in OpenTrustRegion" O
 if(ENABLE_QUASI_NEWTON)
     message(STATUS "Including quasi-Newton in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
-        extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/quasi_newton/src/quasi_newton.f90
         extensions/quasi_newton/src/quasi_newton_c_interface.f90
@@ -127,7 +126,6 @@ option(ENABLE_ARH "Include augmented Roothaan-Hall extension in OpenTrustRegion"
 if(ENABLE_ARH)
     message(STATUS "Including augmented Roothaan-Hall in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
-        extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/arh/src/arh.f90
         extensions/arh/src/arh_c_interface.f90
@@ -145,7 +143,6 @@ option(ENABLE_S_GEK
 if(ENABLE_S_GEK)
     message(STATUS "Including subspace gradient-enhanced kriging in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
-        extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/s_gek/src/s_gek.f90
         extensions/s_gek/src/s_gek_c_interface.f90
@@ -204,9 +201,7 @@ if (BUILD_TESTS)
     # conditionally add extension tests
     if(ENABLE_QUASI_NEWTON)
         list(APPEND OPENTRUSTREGION_TESTS
-            extensions/common/tests/common_test_reference.f90
             extensions/common/tests/common_mock.f90
-            extensions/common/tests/common_c_interface_mock.f90
             extensions/quasi_newton/tests/quasi_newton_test_reference.f90
             extensions/quasi_newton/tests/quasi_newton_c_interface_unit_tests.f90
             extensions/quasi_newton/tests/quasi_newton_mock.f90
@@ -215,9 +210,7 @@ if (BUILD_TESTS)
     endif()
     if(ENABLE_ARH)
         list(APPEND OPENTRUSTREGION_TESTS
-            extensions/common/tests/common_test_reference.f90
             extensions/common/tests/common_mock.f90
-            extensions/common/tests/common_c_interface_mock.f90
             extensions/arh/tests/arh_test_reference.f90
             extensions/arh/tests/arh_c_interface_unit_tests.f90
             extensions/arh/tests/arh_mock.f90
@@ -226,9 +219,7 @@ if (BUILD_TESTS)
     endif()
     if(ENABLE_S_GEK)
         list(APPEND OPENTRUSTREGION_TESTS
-            extensions/common/tests/common_test_reference.f90
             extensions/common/tests/common_mock.f90
-            extensions/common/tests/common_c_interface_mock.f90
             extensions/s_gek/tests/s_gek_test_reference.f90
             extensions/s_gek/tests/s_gek_c_interface_unit_tests.f90
             extensions/s_gek/tests/s_gek_mock.f90

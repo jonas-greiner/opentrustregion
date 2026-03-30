@@ -8,9 +8,8 @@ module otr_s_gek_c_interface
 
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
-    use otr_common, only: change_reference_type
-    use otr_common_c_interface, only: change_reference_c_type, n_param
-    use otr_s_gek, only: standard_update_orbs_s_gek_factory => &
+    use otr_common_c_interface, only: n_param
+    use otr_s_gek, only: change_reference_type, standard_update_orbs_s_gek_factory => &
                          update_orbs_s_gek_factory, &
                          standard_update_orbs_s_gek_deconstructor => &
                          update_orbs_s_gek_deconstructor
@@ -19,11 +18,26 @@ module otr_s_gek_c_interface
 
     implicit none
 
+    ! C-interoperable interfaces for the callback functions
+    abstract interface
+        function change_reference_c_type(new_ref_c, n_points_c, kappa_list_c, &
+                                         local_grad_list_c, grad_list_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(in), target :: new_ref_c(*)
+            integer(c_ip), intent(in), value :: n_points_c
+            real(c_rp), intent(inout), target :: kappa_list_c(*), &
+                                                 local_grad_list_c(*), grad_list_c(*)
+            integer(c_ip) :: error_c
+        end function change_reference_c_type
+    end interface
+
     ! define procedure pointer which will point to the Fortran procedures
     procedure(update_orbs_c_type), pointer :: update_orbs_orig_s_gek_before_wrapping &
         => null()
-    procedure(change_reference_c_type), pointer :: &
-        change_reference_s_gek_before_wrapping => null()
+    procedure(change_reference_c_type), pointer :: change_reference_before_wrapping => &
+        null()
     procedure(update_orbs_type), pointer :: update_orbs_s_gek_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_s_gek_before_wrapping => null()
 
@@ -85,7 +99,7 @@ contains
         call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
                              fptr=update_orbs_orig_s_gek_before_wrapping)
         call c_f_procpointer(cptr=change_reference_c_funptr, &
-                             fptr=change_reference_s_gek_before_wrapping)
+                             fptr=change_reference_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         update_orbs_funptr => update_orbs_orig_s_gek_f_wrapper
@@ -138,18 +152,52 @@ contains
         ! this subroutine wraps the change reference subroutine to convert Fortran 
         ! variables to C variables
         !
-        use otr_common_c_interface, only: change_reference_f_wrapper_impl
-        
         real(rp), intent(in), target :: new_ref(:)
         integer(ip), intent(in) :: n_points
         real(rp), intent(inout), target :: kappa_list(:, :), local_grad_list(:, :), &
                                            grad_list(:, :)
         integer(ip), intent(out) :: error
 
+        real(c_rp), pointer :: new_ref_c(:), kappa_list_c(:, :), &
+                               local_grad_list_c(:, :), grad_list_c(:, :)
+        integer(c_ip) :: n_points_c, error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            new_ref_c => new_ref
+            n_points_c = n_points
+            kappa_list_c => kappa_list
+            local_grad_list_c => local_grad_list
+            grad_list_c => grad_list
+        else
+            allocate(new_ref_c(size(new_ref, 1)))
+            allocate(kappa_list_c(size(kappa_list, 1), size(kappa_list, 2)))
+            allocate(local_grad_list_c(size(local_grad_list, 1), &
+                                       size(local_grad_list, 2)))
+            allocate(grad_list_c(size(grad_list, 1), size(grad_list, 2)))
+            new_ref_c = real(new_ref, kind=c_rp)
+            n_points_c = int(n_points, kind=c_ip)
+            kappa_list_c = real(kappa_list, kind=c_rp)
+            local_grad_list_c = real(local_grad_list, kind=c_rp)
+            grad_list_c = real(grad_list, kind=c_rp)
+        end if
+
         ! call change reference C function
-        call change_reference_f_wrapper_impl(change_reference_s_gek_before_wrapping, &
-                                             new_ref, n_points, kappa_list, &
-                                             local_grad_list, grad_list, error)
+        error_c = change_reference_before_wrapping(new_ref_c, n_points_c, &
+                                                   kappa_list_c, local_grad_list_c, &
+                                                   grad_list_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            kappa_list = real(kappa_list_c, kind=rp)
+            local_grad_list = real(local_grad_list_c, kind=rp)
+            grad_list = real(grad_list_c, kind=rp)
+            deallocate(new_ref_c)
+            deallocate(kappa_list_c)
+            deallocate(local_grad_list_c)
+            deallocate(grad_list_c)
+        end if
 
     end subroutine change_reference_f_wrapper
 

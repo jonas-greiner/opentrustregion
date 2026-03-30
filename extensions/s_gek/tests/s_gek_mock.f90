@@ -31,10 +31,9 @@ contains
         ! modified orbital updating function
         !
         use opentrustregion, only: update_orbs_type
-        use otr_common, only: change_reference_type
-        use otr_s_gek, only: s_gek_settings_type
+        use otr_s_gek, only: change_reference_type, s_gek_settings_type
         use test_reference, only: test_update_orbs_funptr
-        use otr_common_test_reference, only: test_change_reference_funptr
+        use otr_s_gek_test_reference, only: test_change_reference_funptr
         use otr_common_mock, only: mock_update_orbs
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_orig_funptr

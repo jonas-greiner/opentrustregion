@@ -44,8 +44,7 @@ contains
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
         use c_interface, only: update_orbs_c_type, hess_x_c_type, logger_c_type
         use test_reference, only: test_update_orbs_c_funptr
-        use otr_common_test_reference, only: test_change_reference_c_funptr
-        use otr_s_gek_test_reference, only: operator(/=)
+        use otr_s_gek_test_reference, only: test_change_reference_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_update_orbs
 
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
