@@ -822,6 +822,7 @@ contains
                 lower_trust_dist = upper_trust_dist
                 upper_alpha = upper_alpha * 10.0_rp
                 call get_ah_lowest_eigenvec(upper_alpha)
+                if (error /= 0) return
                 current_norm = dnrm2(n_param, solution, 1_ip)
                 upper_trust_dist = current_norm - trust_radius
                 if (upper_alpha > upper_alpha_bound) then
@@ -839,6 +840,7 @@ contains
                 upper_trust_dist = lower_trust_dist
                 lower_alpha = lower_alpha / 10.0_rp
                 call get_ah_lowest_eigenvec(lower_alpha)
+                if (error /= 0) return
                 current_norm = dnrm2(n_param, solution, 1_ip)
                 lower_trust_dist = current_norm - trust_radius
                 if (lower_alpha < lower_alpha_bound) then
