@@ -419,39 +419,46 @@ contains
         !
         ! this function tests the Newton step subroutine
         !
-        use opentrustregion, only: solver_settings_type, newton_step
+        use opentrustregion, only: newton_step
 
-        type(solver_settings_type) :: settings
+        integer(ip), parameter :: lwork = 12
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
-                    red_space_hess(3, 3), red_space_hess_eigvecs(3, 3), &
-                    red_space_hess_eigvals(3), solution(6), red_space_solution(3), &
-                    work(9)
-        integer(ip) :: i, j, error, info
+                    red_space_hess(3, 3), red_space_hess_left_eigvecs(3, 3), &
+                    red_space_hess_right_eigvecs(3, 3), red_space_hess_eigvals(3), &
+                    red_space_hess_imag_eigvals(3), solution(6), &
+                    red_space_solution(3), work(lwork), temp(3, 3)
+        integer(ip) :: i, j, info
 
-        external :: dsyev
+        external :: dsyev, dgeev
 
         ! assume tests pass
         test_newton_step = .true.
 
-        ! setup settings object
-        call setup_settings(settings)
-
-        ! defined a reduced space basis
-        red_space_basis = &
-            reshape([1.0_rp/sqrt(2.0_rp), -1.0_rp/sqrt(2.0_rp), 0.0_rp, 0.0_rp, &
-                     0.0_rp, 0.0_rp, 1.0_rp/sqrt(6.0_rp), -1.0_rp/sqrt(6.0_rp), &
-                     -2.0_rp/sqrt(6.0_rp), 0.0_rp, 0.0_rp, 0.0_rp, &
-                     1.0_rp/sqrt(12.0_rp), -1.0_rp/sqrt(12.0_rp), &
-                     1.0_rp/sqrt(12.0_rp), -3.0_rp/sqrt(12.0_rp), 0.0_rp, 0.0_rp], &
-                    [6, 3])
-
         ! point in quadratic region near minimum
         vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
 
-        ! calculate gradient and Hessian to define augmented Hessian
+        ! calculate gradient and Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(vars)
+
+        ! defined a reduced space basis
+        red_space_basis(:, 1) = grad / grad_norm
+        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+
+        ! orthonormalize reduced space basis
+        do i = 2, 3
+            do j = 1, i - 1
+                ! subtract projection onto previous vectors
+                red_space_basis(:, i) = red_space_basis(:, i) - &
+                    dot_product(red_space_basis(:, i), red_space_basis(:, j)) * &
+                    red_space_basis(:, j)
+            end do
+            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
+        end do
+
+        ! define augmented Hessian
         do i = 1, 3
             do j = 1, 3
                 red_space_hess(i, j) = &
@@ -461,28 +468,59 @@ contains
         end do
 
         ! diagonalize Hessian
-        red_space_hess_eigvecs = red_space_hess
-        call dsyev("V", "U", 3, red_space_hess_eigvecs, 3, red_space_hess_eigvals, &
-                   work, 9, info)
+        red_space_hess_right_eigvecs = red_space_hess
+        call dsyev("V", "U", 3_ip, red_space_hess_right_eigvecs, 3_ip, &
+                   red_space_hess_eigvals, work, lwork, info)
+        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
-        ! perform Newton step, check if error has occured and determine whether 
-        ! resulting solution is correct in reduced and full space
+        ! perform Newton step, determine whether resulting solution is correct in 
+        ! reduced and full space
         call newton_step(grad_norm, red_space_basis, red_space_hess_eigvals, &
-                         red_space_hess_eigvecs, solution, red_space_solution)
-        if (error /= 0) then
-            write (stderr, *) "test_newton_step failed: Produced error."
-            test_newton_step = .false.
-        end if
-        if (any(abs(red_space_solution - [-2.555959788079e-2_rp, &
-                                          1.565498761914e-2_rp, &
-                                          4.727080080611e-3_rp]) > tol)) then
-            write (stderr, *) "test_newton_step failed: Reduced space solution not "// &
-                "correct."
+                         red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                         solution, red_space_solution)
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution)) &
+                  + grad) > tol) then
+            write (stderr, *) "test_newton_step failed: Newton step does not "// &
+                "satisfy Newton equation for symmetric Hessian."
             test_newton_step = .false.
         end if
         if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
             write (stderr, *) "test_newton_step failed: Full space solution not "// &
-                "correct."
+                "correct for symmetric Hessian."
+            test_newton_step = .false.
+        end if
+
+        ! make Hessian non-symmetric
+        red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
+
+        ! diagonalize non-symmetric Hessian
+        temp = red_space_hess
+        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
+                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
+                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
+
+        ! biorthonormalize eigenvectors
+        do i = 1, 3
+            red_space_hess_left_eigvecs(:, i) = &
+                red_space_hess_left_eigvecs(:, i) / &
+                dot_product(red_space_hess_left_eigvecs(:, i), &
+                            red_space_hess_right_eigvecs(:, i))
+        end do
+
+        ! perform Newton step, determine whether resulting solution is correct in 
+        ! reduced and full space
+        call newton_step(grad_norm, red_space_basis, red_space_hess_eigvals,  &
+                         red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                         solution, red_space_solution)
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution)) &
+                  + grad) > tol) then
+            write (stderr, *) "test_newton_step failed: Newton step does not "// &
+                "satisfy Newton equation for asymmetric Hessian."
+            test_newton_step = .false.
+        end if
+        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+            write (stderr, *) "test_newton_step failed: Full space solution not "// &
+                "correct for asymmetric Hessian."
             test_newton_step = .false.
         end if
 
@@ -495,10 +533,12 @@ contains
         use opentrustregion, only: solver_settings_type, bisection
 
         type(solver_settings_type) :: settings
+        integer(ip), parameter :: lwork = 12
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
                     aug_hess(4, 4), red_space_hess_eigvals(3), &
-                    red_space_hess_eigvecs(3, 3), solution(6), red_space_solution(3), &
-                    trust_radius, mu, work(9)
+                    red_space_hess_imag_eigvals(3), red_space_hess_left_eigvecs(3, 3), &
+                    red_space_hess_right_eigvecs(3, 3), solution(6), &
+                    red_space_solution(3), trust_radius, mu, work(lwork), temp(3, 3)
         integer(ip) :: i, j, error, info
 
         external :: dsyev
@@ -509,62 +549,222 @@ contains
         ! setup settings object
         call setup_settings(settings)
 
-        ! defined a reduced space basis
-        red_space_basis = &
-            reshape([1.0_rp/sqrt(2.0_rp), -1.0_rp/sqrt(2.0_rp), 0.0_rp, 0.0_rp, &
-                     0.0_rp, 0.0_rp, 1.0_rp/sqrt(6.0_rp), -1.0_rp/sqrt(6.0_rp), &
-                     -2.0_rp/sqrt(6.0_rp), 0.0_rp, 0.0_rp, 0.0_rp, &
-                     1.0_rp/sqrt(12.0_rp), -1.0_rp/sqrt(12.0_rp), &
-                     1.0_rp/sqrt(12.0_rp), -3.0_rp/sqrt(12.0_rp), 0.0_rp, 0.0_rp], &
-                    [6, 3])
-
         ! choose target trust radius
-        trust_radius = 0.4_rp
+        trust_radius = 1.0_rp
 
         ! point with strong negative curvature
         vars = [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
 
-        ! calculate gradient and Hessian to define augmented Hessian
+        ! calculate gradient and Hessian
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(vars)
+
+        ! defined a reduced space basis
+        red_space_basis(:, 1) = grad / grad_norm
+        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+
+        ! orthonormalize reduced space basis
+        do i = 2, 3
+            do j = 1, i - 1
+                ! subtract projection onto previous vectors
+                red_space_basis(:, i) = red_space_basis(:, i) - &
+                    dot_product(red_space_basis(:, i), red_space_basis(:, j)) * &
+                    red_space_basis(:, j)
+            end do
+            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
+        end do
+
+        ! define augmented Hessian
         aug_hess = 0.0_rp
         do i = 1, 3
             do j = 1, 3
-                aug_hess(i + 1, j + 1) = dot_product(red_space_basis(:, i), &
-                                                    matmul(hess, red_space_basis(:, j)))
+                aug_hess(i + 1, j + 1) = &
+                    dot_product(red_space_basis(:, i), &
+                                matmul(hess, red_space_basis(:, j)))
             end do
         end do
 
         ! diagonalize Hessian
-        red_space_hess_eigvecs = aug_hess(2:, 2:)
-        call dsyev("V", "U", 3, red_space_hess_eigvecs, 3, red_space_hess_eigvals, &
-                   work, 9, info)
+        red_space_hess_right_eigvecs = aug_hess(2:, 2:)
+        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
+                   red_space_hess_eigvals, work, 9, info)
+        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection, check whether error has occured and determine whether 
         ! resulting solution is correct in reduced and full space and respects target 
         ! trust radius
         call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_eigvecs, trust_radius, solution, &
-                       red_space_solution, mu, settings, error)
+                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                       trust_radius, solution, red_space_solution, mu, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_bisection failed: Produced error."
+            write (stderr, *) "test_bisection failed: Produced error for symmetric "// &
+                "Hessian."
             test_bisection = .false.
         end if
         if (abs(norm2(solution) - trust_radius) > tol) then
             write (stderr, *) "test_bisection failed: Solution does not respect "// &
-                "trust radius."
+                "trust radius for symmetric Hessian."
             test_bisection = .false.
         end if
-        if (any(abs(red_space_solution - [-0.483593823965_rp, 0.482091645228_rp, &
-                                          0.153783319727_rp]) > tol)) &
-            then
-            write (stderr, *) "test_bisection failed: Reduced space solution not "// &
-                "correct."
+        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
+                         - mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection failed: Step does not satisfy "// &
+                "level-shifted Newton equation for symmetric Hessian."
             test_bisection = .false.
         end if
         if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write (stderr, *) "test_bisection failed: Full space solution not correct."
+            write (stderr, *) "test_bisection failed: Full space solution not "// &
+                              "correct for symmetric Hessian."
+            test_bisection = .false.
+        end if
+
+        ! make Hessian non-symmetric
+        aug_hess(2, 3) = aug_hess(2, 3) + 0.5_rp
+        settings%hess_symm = .false.
+
+        ! diagonalize non-symmetric Hessian
+        temp = aug_hess(2:, 2:)
+        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
+                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
+                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
+
+        ! biorthonormalize eigenvectors
+        do i = 1, 3
+            red_space_hess_left_eigvecs(:, i) = &
+                red_space_hess_left_eigvecs(:, i) / &
+                dot_product(red_space_hess_left_eigvecs(:, i), &
+                            red_space_hess_right_eigvecs(:, i))
+        end do
+
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution is correct in reduced and full space and respects target 
+        ! trust radius
+        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
+                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                       trust_radius, solution, red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection failed: Produced error for "// &
+                "asymmetric Hessian."
+            test_bisection = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol) then
+            write (stderr, *) "test_bisection failed: Solution does not respect "// &
+                "trust radius for asymmetric Hessian."
+            test_bisection = .false.
+        end if
+        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
+                         - mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection failed: Step does not satisfy "// &
+                "level-shifted Newton equation for asymmetric Hessian."
+            test_bisection = .false.
+        end if
+        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+            write (stderr, *) "test_bisection failed: Full space solution not "// &
+                              "correct for asymmetric Hessian."
+            test_bisection = .false.
+        end if
+        
+        ! construct custom augmented Hessian with negative eigenvalue and no coupling 
+        ! to the gradient
+        aug_hess = 0.0_rp
+        aug_hess(2, 2) = 1.0_rp   ! Mode 1 (coupled to gradient)
+        aug_hess(3, 3) = 2.0_rp   ! Mode 2 (positive curvature)
+        aug_hess(2, 3) = 0.5_rp   ! coupling between mode 1 and 2
+        aug_hess(3, 2) = 0.5_rp
+        aug_hess(4, 4) = -2.0_rp  ! Mode 3 (lowest eigenvalue, isolated from gradient)
+        settings%hess_symm = .true.
+        
+        ! diagonalize artificial Hessian
+        red_space_hess_right_eigvecs = aug_hess(2:, 2:)
+        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
+                   red_space_hess_eigvals, work, 9, info)
+        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
+
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution respects target trust radius, contains lowest eigenvector 
+        ! component and has level shift equal to lowest eigenvalue
+        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
+                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                       trust_radius, solution, red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection failed: Produced error for symmetric "// &
+                "Hessian and hard case."
+            test_bisection = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol) then
+            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
+                "respect trust radius for symmetric Hessian."
+            test_bisection = .false.
+        end if
+        if (abs(mu - red_space_hess_eigvals(1)) > tol) then
+            write (stderr, *) "test_bisection failed: Level shift does not equal "// &
+                "the most negative eigenvalue for symmetric Hessian and hard case."
+            test_bisection = .false.
+        end if
+        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
+                         - mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
+                "contain the level-shifted Newton component for symmetric Hessian."
+            test_bisection = .false.
+        end if
+        if (abs(dot_product(red_space_solution, red_space_hess_right_eigvecs(:, 1))) < &
+            tol) then
+            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
+                "contain a component of the lowest eigenvector for symmetric Hessian."
+            test_bisection = .false.
+        end if
+
+        ! make Hessian non-symmetric
+        aug_hess(2, 3) = aug_hess(2, 3) + 0.5_rp
+        settings%hess_symm = .false.
+
+        ! diagonalize non-symmetric Hessian
+        temp = aug_hess(2:, 2:)
+        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
+                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
+                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
+
+        ! biorthonormalize eigenvectors
+        do i = 1, 3
+            red_space_hess_left_eigvecs(:, i) = &
+                red_space_hess_left_eigvecs(:, i) / &
+                dot_product(red_space_hess_left_eigvecs(:, i), &
+                            red_space_hess_right_eigvecs(:, i))
+        end do
+
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution respects target trust radius, contains lowest eigenvector 
+        ! component and has level shift equal to lowest eigenvalue
+        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
+                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                       trust_radius, solution, red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection failed: Produced error for "// &
+                "asymmetric Hessian and hard case."
+            test_bisection = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol) then
+            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
+                "respect trust radius for asymmetric Hessian."
+            test_bisection = .false.
+        end if
+        if (abs(mu - minval(red_space_hess_eigvals)) > tol) then
+            write (stderr, *) "test_bisection failed: Level shift does not equal "// &
+                "the most negative eigenvalue for asymmetric Hessian and hard case."
+            test_bisection = .false.
+        end if
+        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
+                         - mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
+                "contain the level-shifted Newton component for asymmetric Hessian."
+            test_bisection = .false.
+        end if
+        if (abs(dot_product(red_space_solution, red_space_hess_right_eigvecs(:, 1))) < &
+            tol) then
+            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
+                "contain a component of the lowest eigenvector for asymmetric Hessian."
             test_bisection = .false.
         end if
 
@@ -585,17 +785,48 @@ contains
         end do
 
         ! diagonalize Hessian
-        red_space_hess_eigvecs = aug_hess(2:, 2:)
-        call dsyev("V", "U", 3, red_space_hess_eigvecs, 3, red_space_hess_eigvals, &
-                   work, 9, info)
+        red_space_hess_right_eigvecs = aug_hess(2:, 2:)
+        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
+                   red_space_hess_eigvals, work, 9, info)
+        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection and determine whether routine correctly throws error since
         ! minimum is closer than target trust radius and no level shift is necessary
         call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_eigvecs, trust_radius, solution, &
-                       red_space_solution, mu, settings, error)
+                       red_space_hess_left_eigvecs, red_space_hess_right_eigvecs, &
+                       trust_radius, solution, red_space_solution, mu, settings, error)
         if (error == 0) then
-            write (stderr, *) "test_bisection failed: Failed to produce error."
+            write (stderr, *) "test_bisection failed: Failed to produce error for "// &
+                              "symmetric Hessian."
+            test_bisection = .false.
+        end if
+
+        ! make Hessian non-symmetric
+        aug_hess(2, 3) = aug_hess(2, 3) + 0.5_rp
+        settings%hess_symm = .false.
+
+        ! diagonalize non-symmetric Hessian
+        temp = aug_hess(2:, 2:)
+        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
+                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
+                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
+
+        ! biorthonormalize eigenvectors
+        do i = 1, 3
+            red_space_hess_left_eigvecs(:, i) = &
+                red_space_hess_left_eigvecs(:, i) / &
+                dot_product(red_space_hess_left_eigvecs(:, i), &
+                            red_space_hess_right_eigvecs(:, i))
+        end do
+
+        ! perform bisection and determine whether routine correctly throws error since
+        ! minimum is closer than target trust radius and no level shift is necessary
+        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
+                       red_space_hess_left_eigvecs, red_space_hess_right_eigvecs, &
+                       trust_radius, solution, red_space_solution, mu, settings, error)
+        if (error == 0) then
+            write (stderr, *) "test_bisection failed: Failed to produce error for "// &
+                              "asymmetric Hessian."
             test_bisection = .false.
         end if
 
@@ -775,7 +1006,7 @@ contains
                 "eigenvalue for matrix."
             test_symm_mat_min_eig = .false.
         end if
-        if (norm2(matmul(matrix, eigvec) - eigval*eigvec) > tol) then
+        if (norm2(matmul(matrix, eigvec) - eigval * eigvec) > tol) then
             write (stderr, *) "test_symm_mat_min_eig failed: Incorrect eigenvector "// &
                 "corresponding to minimum eigenvalue for matrix."
             test_symm_mat_min_eig = .false.
@@ -783,10 +1014,53 @@ contains
 
     end function test_symm_mat_min_eig
 
+    logical(c_bool) function test_general_mat_min_eig() bind(C)
+        !
+        ! this function tests the subroutine for determining the minimum eigenvalue and
+        ! corresponding right eigenvectors for a square matrix
+        !
+        use opentrustregion, only: solver_settings_type, general_mat_min_eig
+
+        type(solver_settings_type) :: settings
+        real(rp) :: matrix(3, 3)
+        real(rp) :: eigval, eigvec(3)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_general_mat_min_eig = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! initialize symmetric matrix
+        matrix = reshape([3.0_rp, 2.0_rp, 4.0_rp, &
+                          1.0_rp, 4.0_rp, 6.0_rp, &
+                          3.0_rp, 5.0_rp, 5.0_rp], [3, 3])
+
+        ! call routine and determine if lowest eigenvalue and corresponding right 
+        ! eigenvector are found
+        call general_mat_min_eig(matrix, eigval, eigvec, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_general_mat_min_eig failed: Produced error."
+            test_general_mat_min_eig = .false.
+        end if
+        if (abs(eigval + 1.43567185527_rp) > tol) then
+            write (stderr, *) "test_general_mat_min_eig failed: Incorrect minimum "// &
+                "eigenvalue for matrix."
+            test_general_mat_min_eig = .false.
+        end if
+        if (norm2(matmul(matrix, eigvec) - eigval * eigvec) > tol) then
+            write (stderr, *) "test_general_mat_min_eig failed: Incorrect "// &
+                "eigenvector corresponding to minimum eigenvalue for matrix."
+            test_general_mat_min_eig = .false.
+        end if
+
+    end function test_general_mat_min_eig
+
     logical(c_bool) function test_symm_mat_diag() bind(C)
         !
-        ! this function tests the function for determining the minimum eigenvalue for
-        ! a symmetric matrix
+        ! this function tests the function for determining the eigenvalues and 
+        ! eigenvectors for a symmetric matrix
         !
         use opentrustregion, only: solver_settings_type, symm_mat_diag
 
@@ -813,12 +1087,68 @@ contains
         end if
         if (norm2(matmul(matrix, eigvecs) - eigvecs * spread(eigvals, dim=1, &
             ncopies=size(eigvecs, 1))) > tol) then
-            write (stderr, *) "test_symm_mat_diag failed: Incorrect eigenvector "// &
-                "corresponding to minimum eigenvalue for matrix."
+            write (stderr, *) "test_symm_mat_diag failed: Incorrect eigenvectors "// &
+                "and eigenvalues for matrix."
             test_symm_mat_diag = .false.
         end if
 
     end function test_symm_mat_diag
+
+    logical(c_bool) function test_general_mat_diag() bind(C)
+        !
+        ! this function tests the function for determining the eigenvalues and left and 
+        ! right eigenvectors for a square matrix
+        !
+        use opentrustregion, only: solver_settings_type, general_mat_diag
+
+        type(solver_settings_type) :: settings
+        real(rp) :: matrix(3, 3), eigvals(3), right_eigvecs(3, 3), left_eigvecs(3, 3), &
+                    diag(3, 3), eye(3, 3)
+        integer(ip) :: error, i
+
+        ! assume tests pass
+        test_general_mat_diag = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! initialize symmetric matrix
+        matrix = reshape([3.0_rp, 2.0_rp, 4.0_rp, &
+                          1.0_rp, 4.0_rp, 6.0_rp, &
+                          3.0_rp, 5.0_rp, 5.0_rp], [3, 3])
+
+        ! call function and determine if lowest eigenvalue is found
+        call general_mat_diag(matrix, eigvals, right_eigvecs, left_eigvecs, settings, &
+                              error)
+        diag = 0.0_rp
+        eye  = 0.0_rp
+        do i = 1, 3
+            diag(i, i) = eigvals(i)
+            eye(i, i)  = 1.0_rp
+        end do
+        if (error /= 0) then
+            write (stderr, *) "test_general_mat_diag failed: Produced error."
+            test_general_mat_diag = .false.
+        end if
+        if (norm2(matmul(transpose(left_eigvecs), right_eigvecs) - eye) > tol) then
+            write(stderr, *) "test_general_mat_diag failed: Left and right "// &
+                "eigenvectors are not biorthonormal."
+            test_general_mat_diag = .false.
+        end if
+        if (norm2(matmul(matrix, right_eigvecs) - matmul(right_eigvecs, diag)) > tol) &
+            then
+            write(stderr, *) "test_general_mat_diag failed: Incorrect right "// &
+                "eigenvectors or eigenvalues for matrix."
+            test_general_mat_diag = .false.
+        end if
+        if (norm2(matmul(transpose(left_eigvecs), matrix) - &
+                  matmul(diag, transpose(left_eigvecs))) > tol) then
+            write(stderr, *) "test_general_mat_diag failed: Incorrect left "// &
+                "eigenvectors or eigenvalues for matrix."
+            test_general_mat_diag = .false.
+        end if
+
+    end function test_general_mat_diag
 
     logical(c_bool) function test_init_rng() bind(C)
         !

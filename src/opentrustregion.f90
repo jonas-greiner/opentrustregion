@@ -699,13 +699,16 @@ contains
     end subroutine stability_check
 
     subroutine newton_step(grad_norm, red_space_basis, red_space_hess_eigvals, &
-                           red_space_hess_eigvecs, solution, red_space_solution)
+                           red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                           solution, red_space_solution)
         !
         ! this subroutine performs a Newton step by solving the Newton equations in
         ! reduced space without a level shift
         !
         real(rp), intent(in) :: grad_norm, red_space_basis(:, :)
-        real(rp), intent(in) :: red_space_hess_eigvals(:), red_space_hess_eigvecs(:, :)
+        real(rp), intent(in) :: red_space_hess_eigvals(:), &
+                                red_space_hess_right_eigvecs(:, :), &
+                                red_space_hess_left_eigvecs(:, :)
         real(rp), intent(out) :: solution(:), red_space_solution(:)
 
         integer(ip) :: n_param, n_red
@@ -719,11 +722,11 @@ contains
         n_red = size(red_space_basis, 2)
 
         ! construct Newton step in eigenvector basis
-        eigspace_solution = -grad_norm * red_space_hess_eigvecs(1, :) / &
+        eigspace_solution = -grad_norm * red_space_hess_left_eigvecs(1, :) / &
                             red_space_hess_eigvals
 
         ! transform from eigenvector basis to reduced step basis
-        call dgemv("N", n_red, n_red, 1.0_rp, red_space_hess_eigvecs, n_red, &
+        call dgemv("N", n_red, n_red, 1.0_rp, red_space_hess_right_eigvecs, n_red, &
                    eigspace_solution, 1_ip, 0.0_rp, red_space_solution, 1_ip)
 
         ! get solution in full space
@@ -733,8 +736,9 @@ contains
     end subroutine newton_step
 
     subroutine bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                         red_space_hess_eigvecs, trust_radius, solution, &
-                         red_space_solution, mu, settings, error)
+                         red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                         trust_radius, solution, red_space_solution, mu, settings, &
+                         error)
         !
         ! this subroutine performs bisection to find the parameter alpha that matches
         ! the desired trust radius
@@ -742,7 +746,8 @@ contains
         real(rp), intent(inout) :: aug_hess(:, :)
         real(rp), intent(in) :: grad_norm, red_space_basis(:, :), &
                                 red_space_hess_eigvals(:), &
-                                red_space_hess_eigvecs(:, :), trust_radius
+                                red_space_hess_right_eigvecs(:, :), &
+                                red_space_hess_left_eigvecs(:, :), trust_radius
         type(solver_settings_type), intent(in) :: settings
         real(rp), intent(out) :: solution(:), red_space_solution(:), mu
         integer(ip), intent(out) :: error
@@ -770,15 +775,18 @@ contains
         lower_alpha = lower_alpha_bound
         upper_alpha = upper_alpha_bound
 
-        ! check if lowest eigenvector of reduced space Hessian has gradient component
+        ! check if the lowest eigenvalue is negative and if the lowest eigenvector of 
+        ! reduced space Hessian has gradient component
         min_idx = minloc(red_space_hess_eigvals, dim=1)
-        if (abs(red_space_hess_eigvecs(1, min_idx)) <= orthogonality_thres) then
+        if (red_space_hess_eigvals(min_idx) <= 0.0_rp .and. &
+            abs(red_space_hess_left_eigvecs(1, min_idx)) <= orthogonality_thres) then
             ! get crossover point between lowest reduced space Hessian eigenvalue and 
             ! second lowest Hessian eigenvalue in augmented Hessian to get lower 
             ! boundary for alpha which ensures that the solution has a gradient 
             ! component
             lower_alpha = sqrt(red_space_hess_eigvals(min_idx) / &
-                               sum(red_space_hess_eigvecs(1, :)**2 / &
+                               sum(red_space_hess_left_eigvecs(1, :) * &
+                                   red_space_hess_right_eigvecs(1, :) / &
                                    (red_space_hess_eigvals(min_idx) - &
                                     red_space_hess_eigvals), &
                                     mask=[(i, i=1, n_red)] /= min_idx)) / grad_norm
@@ -786,13 +794,13 @@ contains
             ! construct solution at crossover point in eigenvector basis while avoiding 
             ! contributions of lowest Hessian eigenvalue as the gradient component is 
             ! vanishing anyways
-            eigspace_solution = merge(grad_norm * red_space_hess_eigvecs(1, :) / &
+            eigspace_solution = merge(grad_norm * red_space_hess_left_eigvecs(1, :) / &
                                       (red_space_hess_eigvals(min_idx) - &
                                        red_space_hess_eigvals), 0.0_rp, &
                                       [(i, i=1, n_red)] /= min_idx)
 
             ! transform from eigenvector basis to reduced step basis
-            call dgemv("N", n_red, n_red, 1.0_rp, red_space_hess_eigvecs, n_red, &
+            call dgemv("N", n_red, n_red, 1.0_rp, red_space_hess_right_eigvecs, n_red, &
                        eigspace_solution, 1_ip, 0.0_rp, red_space_solution, 1_ip)
             deallocate(eigspace_solution)
 
@@ -808,7 +816,7 @@ contains
                 red_space_solution = red_space_solution + &
                                      sqrt(max(0.0_rp, trust_radius**2 - &
                                               dnrm2(n_param, solution, 1_ip)**2)) * &
-                                     red_space_hess_eigvecs(:, min_idx)
+                                     red_space_hess_right_eigvecs(:, min_idx)
 
                 ! construct full space solution
                 call dgemv("N", n_param, n_red, 1.0_rp, red_space_basis, n_param, &
@@ -1157,20 +1165,23 @@ contains
 
     end subroutine add_column
 
-    subroutine mat_diag(matrix, symm_matrix, eigvals, eigvecs, settings, error)
+    subroutine mat_diag(matrix, symm_matrix, eigvals, right_eigvecs, left_eigvecs, &
+                        settings, error)
         !
         ! this subroutine returns the eigenvalues and eigenvectors of a matrix
         !
         real(rp), intent(in) :: matrix(:, :)
         logical, intent(in) :: symm_matrix
         class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
+        real(rp), intent(out) :: eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
         integer(ip), intent(out) :: error
 
         if (symm_matrix) then
-            call symm_mat_diag(matrix, eigvals, eigvecs, settings, error)
+            call symm_mat_diag(matrix, eigvals, right_eigvecs, settings, error)
+            left_eigvecs = right_eigvecs
         else
-            call general_mat_diag(matrix, eigvals, eigvecs, settings, error)
+            call general_mat_diag(matrix, eigvals, right_eigvecs, left_eigvecs, &
+                                  settings, error)
         end if 
 
     end subroutine mat_diag
@@ -1223,18 +1234,18 @@ contains
 
     end subroutine symm_mat_diag
 
-    subroutine general_mat_diag(matrix, eigvals, eigvecs, settings, error)
+    subroutine general_mat_diag(matrix, eigvals, right_eigvecs, left_eigvecs, &
+                                settings, error)
         !
         ! this subroutine returns the eigenvalues and eigenvectors of a general matrix
         !
         real(rp), intent(in) :: matrix(:, :)
         class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
+        real(rp), intent(out) :: eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n, lwork, info
-        real(rp), allocatable :: work(:), temp(:, :), imag_eigvals(:), &
-                                 left_eigvecs(:, :)
+        integer(ip) :: n, lwork, info, i
+        real(rp), allocatable :: work(:), temp(:, :), imag_eigvals(:)
         character(300) :: msg
         external :: dgeev
 
@@ -1249,19 +1260,25 @@ contains
 
         ! query optimal workspace size
         lwork = -1
-        allocate(imag_eigvals(n), left_eigvecs(n, n), work(1))
-        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
-                   eigvecs, n, work, lwork, info)
+        allocate(imag_eigvals(n), work(1))
+        call dgeev("V", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
         lwork = int(work(1))
         deallocate(work)
         allocate(work(lwork))
 
         ! perform eigendecomposition
-        call dgeev("N", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
-                   eigvecs, n, work, lwork, info)
+        call dgeev("V", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
 
         ! deallocate arrays
-        deallocate(temp, imag_eigvals, left_eigvecs, work)
+        deallocate(temp, imag_eigvals, work)
+
+        ! scale left eigenvectors such that biorthonormality is fulfilled
+        do i = 1, n
+            left_eigvecs(:, i) = left_eigvecs(:, i) / &
+                                 dot_product(left_eigvecs(:, i), right_eigvecs(:, i))
+        end do
 
         ! check for successful execution
         if (info /= 0) then
@@ -1343,7 +1360,7 @@ contains
         integer(ip), intent(out) :: error
 
         integer(ip) :: n, min_idx
-        real(rp), allocatable :: eigvals(:), eigvecs(:, :)
+        real(rp), allocatable :: eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
 
         ! initialize error flag
         error = 0
@@ -1352,19 +1369,20 @@ contains
         n = size(matrix, 1)
 
         ! allocate arrays
-        allocate(eigvals(n), eigvecs(n, n))
+        allocate(eigvals(n), right_eigvecs(n, n), left_eigvecs(n, n))
 
         ! diagonalize matrix
-        call general_mat_diag(matrix, eigvals, eigvecs, settings, error)
+        call general_mat_diag(matrix, eigvals, right_eigvecs, left_eigvecs, settings, &
+                              error)
         if (error /= 0) return
 
         ! get lowest eigenvalue and corresponding eigenvector
         min_idx = minloc(eigvals, dim=1)
         lowest_eigval = eigvals(min_idx)
-        lowest_eigvec = eigvecs(:, min_idx)
+        lowest_eigvec = right_eigvecs(:, min_idx)
 
         ! deallocate eigenvalues and eigenvectors
-        deallocate(eigvals, eigvecs)
+        deallocate(eigvals, right_eigvecs, left_eigvecs)
 
     end subroutine general_mat_min_eig
 
@@ -2092,7 +2110,9 @@ contains
                                  red_space_solution(:), basis_vec(:), h_basis_vec(:), &
                                  h_solution(:), residual(:), solution_normalized(:), &
                                  last_solution_normalized(:), row_vec(:), col_vec(:), &
-                                 red_space_hess_eigvals(:), red_space_hess_eigvecs(:, :)
+                                 red_space_hess_eigvals(:), &
+                                 red_space_hess_right_eigvecs(:, :), &
+                                 red_space_hess_left_eigvecs(:, :)
         integer(ip) :: n_trial, i, initial_imicro, min_idx
         logical :: accept_step, micro_converged, newton
         real(rp) :: residual_norm, red_factor, initial_residual_norm, new_func, &
@@ -2148,16 +2168,19 @@ contains
                 ! within the trust region
                 newton = .false.
                 allocate(red_space_hess_eigvals(n_trial), &
-                         red_space_hess_eigvecs(n_trial, n_trial))
+                         red_space_hess_right_eigvecs(n_trial, n_trial), &
+                         red_space_hess_left_eigvecs(n_trial, n_trial))
                 call mat_diag(aug_hess(2:, 2:), settings%hess_symm, &
-                              red_space_hess_eigvals, red_space_hess_eigvecs, &
-                              settings, error)
+                              red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                              red_space_hess_left_eigvecs, settings, error)
                 if (error /= 0) return
                 min_idx = minloc(red_space_hess_eigvals, dim=1)
                 if (red_space_hess_eigvals(min_idx) > newton_eigval_thresh) then
                     call newton_step(grad_norm, red_space_basis, &
-                                     red_space_hess_eigvals, red_space_hess_eigvecs, &
-                                     solution, red_space_solution)
+                                     red_space_hess_eigvals, &
+                                     red_space_hess_right_eigvecs, &
+                                     red_space_hess_left_eigvecs, solution, &
+                                     red_space_solution)
                     if (error /= 0) return
                     mu = 0.0_rp
                     if (dnrm2(n_param, solution, 1_ip) < trust_radius) newton = .true.
@@ -2166,12 +2189,14 @@ contains
                 ! otherwise perform bisection to find the level shift
                 if (.not. newton) then
                     call bisection(aug_hess, grad_norm, red_space_basis, &
-                                   red_space_hess_eigvals, red_space_hess_eigvecs, &
-                                   trust_radius, solution, red_space_solution, mu, &
-                                   settings, error)
+                                   red_space_hess_eigvals, &
+                                   red_space_hess_right_eigvecs, &
+                                   red_space_hess_left_eigvecs, trust_radius, &
+                                   solution, red_space_solution, mu, settings, error)
                     if (error /= 0) return
                 end if
-                deallocate(red_space_hess_eigvals, red_space_hess_eigvecs)
+                deallocate(red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                           red_space_hess_left_eigvecs)
 
                 ! calculate Hessian linear transformation of solution
                 call dgemv("N", n_param, n_trial, 1.0_rp, h_basis, n_param, &

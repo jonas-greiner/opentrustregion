@@ -100,6 +100,8 @@ fortran_tests = {
         "bisection",
         "bracket",
         "extend_matrix",
+        "general_mat_diag",
+        "general_mat_min_eig",
         "generate_random_trial_vectors",
         "generate_trial_vectors",
         "get_precond_level_shift",
