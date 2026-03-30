@@ -36,8 +36,8 @@ fortran_tests = {
         "assign_qn_f_c",
         "hess_x_qn_c_wrapper",
         "init_qn_settings_c",
+        "transport_f_wrapper",
         "update_orbs_orig_qn_f_wrapper",
-        "change_reference_qn_f_wrapper",
         "update_orbs_qn_c_wrapper",
         "update_orbs_qn_deconstructor_c_wrapper",
         "update_orbs_qn_factory_c_wrapper",
@@ -131,22 +131,11 @@ class QNPyInterfaceTests(unittest.TestCase):
 
             return func, hess_x
 
-        def mock_change_reference(new_ref, kappa_list, local_grad_list, grad_list):
+        def mock_transport(geodesic, tangent_vector):
             """
-            this function is a mock function for the change reference function
+            this function is a mock function for the transport function
             """
-            nonlocal test_passed
-
-            if not np.allclose(new_ref, np.ones(n_param, dtype=np.float64)):
-                print(
-                    " test_update_orbs_s_gek_factory_py_interface failed: New "
-                    "reference parameters inside given change reference function wrong."
-                )
-                test_passed = False
-
-            kappa_list *= 2
-            local_grad_list *= 3
-            grad_list *= 4
+            tangent_vector = geodesic * tangent_vector
 
             return
 
@@ -176,7 +165,7 @@ class QNPyInterfaceTests(unittest.TestCase):
 
         # call quasi-Newton orbital updating factory python interface
         update_orbs_qn = update_orbs_qn_factory(
-            mock_update_orbs, mock_change_reference, n_param, settings
+            mock_update_orbs, mock_transport, n_param, settings
         )
 
         # check if logger was called correctly

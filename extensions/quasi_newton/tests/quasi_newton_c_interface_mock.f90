@@ -33,8 +33,8 @@ module otr_qn_c_interface_mock
 contains
 
     function mock_update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, &
-                                                   change_reference_c_funptr, &
-                                                   n_param_c, settings_c, &
+                                                   transport_c_funptr, n_param_c, &
+                                                   settings_c, &
                                                    update_orbs_qn_c_funptr) &
         result(error_c) bind(C, name="mock_update_orbs_qn_factory")
         !
@@ -44,12 +44,11 @@ contains
         use otr_qn_c_interface, only: qn_settings_type_c
         use c_interface, only: update_orbs_c_type, hess_x_c_type, logger_c_type
         use test_reference, only: test_update_orbs_c_funptr
-        use otr_common_test_reference, only: test_change_reference_c_funptr
-        use otr_qn_test_reference, only: operator(/=)
+        use otr_qn_test_reference, only: test_transport_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_update_orbs
 
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
-                                             change_reference_c_funptr
+                                             transport_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
         type(qn_settings_type_c), intent(in), value :: settings_c
         type(c_funptr), intent(out) :: update_orbs_qn_c_funptr
@@ -65,12 +64,12 @@ contains
                                       "update_orbs_qn_factory_py_interface", &
                                       " by given orbital updating function")
 
-        ! test passed change reference function
+        ! test passed transport function
         test_update_orbs_qn_factory_interface = &
             test_update_orbs_qn_factory_interface .and. &
-            test_change_reference_c_funptr(change_reference_c_funptr, &
-                                           "update_orbs_qn_factory_py_interface", &
-                                           " by given change reference function")
+            test_transport_c_funptr(transport_c_funptr, &
+                                    "update_orbs_qn_factory_py_interface", &
+                                    " by given transport function")
 
         ! check if passed number of parameters is correct
         if (n_param_c /= 3) then

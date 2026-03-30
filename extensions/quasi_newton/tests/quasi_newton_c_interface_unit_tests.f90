@@ -15,6 +15,20 @@ module otr_qn_c_interface_unit_tests
 
 contains
 
+    function mock_transport(geodesic_c, tangent_vector_c) result(error) bind(C)
+        !
+        ! this subroutine is a mock subroutine for the transport C function
+        !
+        real(c_rp), intent(in), target :: geodesic_c(*)
+        real(c_rp), intent(inout), target :: tangent_vector_c(*)
+        integer(c_ip) :: error
+
+        tangent_vector_c(:n_param) = geodesic_c(:n_param) * tangent_vector_c(:n_param)
+
+        error = 0_c_ip
+
+    end function mock_transport
+
     logical(c_bool) function test_update_orbs_qn_factory_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the quasi-Newton orbital update factory
@@ -25,12 +39,9 @@ contains
                                test_passed_mock_update_orbs_qn_factory => test_passed
         use otr_qn_test_reference, only: assignment(=), ref_qn_settings
         use c_interface_unit_tests, only: mock_update_orbs, mock_logger, test_logger
-        use otr_common_c_interface_mock, only: mock_change_reference, test_name, &
-                                               test_passed_mock_change_reference => &
-                                               test_passed
         use test_reference, only: test_update_orbs_c_funptr
 
-        type(c_funptr) :: update_orbs_orig_c_funptr, change_reference_c_funptr, &
+        type(c_funptr) :: update_orbs_orig_c_funptr, transport_c_funptr, &
                           update_orbs_qn_c_funptr
         type(qn_settings_type_c) :: settings
         integer(c_ip) :: error_c
@@ -38,15 +49,12 @@ contains
         ! assume tests pass
         test_update_orbs_qn_factory_c_wrapper = .true.
 
-        ! set test name
-        test_name = "test_update_orbs_qn_factory_c_wrapper"
-
         ! inject mock function
         update_orbs_qn_factory => mock_update_orbs_qn_factory
 
         ! get C function pointers to Fortran functions
         update_orbs_orig_c_funptr = c_funloc(mock_update_orbs)
-        change_reference_c_funptr = c_funloc(mock_change_reference)
+        transport_c_funptr = c_funloc(mock_transport)
 
         ! associate optional settings with values
         settings = ref_qn_settings
@@ -57,9 +65,8 @@ contains
 
         ! call quasi-Newton orbital updating factory C wrapper
         error_c = update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, &
-                                                   change_reference_c_funptr, &
-                                                   n_param_c, settings, &
-                                                   update_orbs_qn_c_funptr)
+                                                   transport_c_funptr, n_param_c, &
+                                                   settings, update_orbs_qn_c_funptr)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -81,8 +88,7 @@ contains
             test_update_orbs_c_funptr(update_orbs_qn_c_funptr, &
                                       "update_orbs_qn_factory_c_wrapper", &
                                       " by returned orbital updating function") .and. &
-            test_passed_mock_update_orbs_qn_factory .and. &
-            test_passed_mock_change_reference
+            test_passed_mock_update_orbs_qn_factory
 
     end function test_update_orbs_qn_factory_c_wrapper
 
@@ -111,35 +117,27 @@ contains
 
     end function test_update_orbs_orig_qn_f_wrapper
 
-    logical(c_bool) function test_change_reference_qn_f_wrapper() bind(C)
+    logical(c_bool) function test_transport_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the reference change
+        ! this function tests the Fortran wrapper for the transport
         !
-        use otr_common, only: change_reference_type
-        use otr_qn_c_interface, only: change_reference_qn_before_wrapping, &
-                                      change_reference_f_wrapper
-        use otr_common_c_interface_mock, only: mock_change_reference, test_name, &
-                                               test_passed
-        use otr_common_test_reference, only: test_change_reference_funptr
+        use otr_qn, only: transport_type
+        use otr_qn_c_interface, only: transport_before_wrapping, transport_f_wrapper
+        use otr_qn_test_reference, only: test_transport_funptr
 
-        procedure(change_reference_type), pointer :: change_reference_funptr
-
-        ! set test name
-        test_name = "test_change_reference_qn_f_wrapper"
+        procedure(transport_type), pointer :: transport_funptr
 
         ! inject mock subroutine
-        change_reference_qn_before_wrapping => mock_change_reference
+        transport_before_wrapping => mock_transport
 
         ! get pointer to subroutine
-        change_reference_funptr => change_reference_f_wrapper
+        transport_funptr => transport_f_wrapper
 
-        ! test change reference Fortran wrapper
-        test_change_reference_qn_f_wrapper = &
-            test_change_reference_funptr(change_reference_funptr, &
-                                         "change_reference_qn_f_wrapper", "") .and. &
-            test_passed
+        ! test transport Fortran wrapper
+        test_transport_f_wrapper = &
+            test_transport_funptr(transport_funptr, "transport_f_wrapper", "")
 
-    end function test_change_reference_qn_f_wrapper
+    end function test_transport_f_wrapper
 
     logical(c_bool) function test_update_orbs_qn_c_wrapper() bind(C)
         !

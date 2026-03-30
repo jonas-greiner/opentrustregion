@@ -6,60 +6,63 @@
 
 module otr_qn
 
-    ! Things to do:
-    ! Implement for other manifolds
-
     use opentrustregion, only: rp, ip, kw_len, settings_type, update_orbs_type, &
                                hess_x_type
-    use otr_common, only: change_reference_type
 
     implicit none
 
     type, extends(settings_type) :: qn_settings_type
         character(kw_len) :: hess_update_scheme
+        integer(ip) :: max_points
     contains
         procedure :: init => init_qn_settings
     end type qn_settings_type
 
     type(qn_settings_type), parameter :: default_qn_settings = &
         qn_settings_type(logger = null(), initialized = .true., &
-                         hess_update_scheme = "sr1", verbose = 0)
+                         verbose = 0, max_points = 10, hess_update_scheme = "sr1")
+
+    abstract interface
+        subroutine transport_type(geodesic, tangent_vector, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: geodesic(:)
+            real(rp), intent(inout), target :: tangent_vector(:)
+            integer(ip), intent(out) :: error
+
+        end subroutine transport_type
+    end interface
 
     type, abstract :: updating_type
-        real(rp), allocatable :: kappa_list(:, :), local_grad_list(:, :), &
-                                 grad_list(:, :), h_diag(:)
+        real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), h_diag(:), &
+                                 last_grad(:)
         integer(ip) :: n_points = 0
         type(qn_settings_type) :: settings
     contains
-        procedure(init_interface), deferred :: init
+        procedure :: init
         procedure :: add
-        procedure(clear_interface), deferred :: clear
+        procedure(skip_add_interface), deferred :: skip_add
+        procedure :: clear
     end type updating_type
 
     type, extends(updating_type) :: sr1_updating_type
     contains
-        procedure :: init => sr1_init
-        procedure :: clear => sr1_clear
+        procedure :: skip_add => sr1_skip_add
     end type sr1_updating_type
 
     type, extends(updating_type) :: bfgs_updating_type
-        real(rp), allocatable :: y_list(:, :)
     contains
-        procedure :: init => bfgs_init
-        procedure :: clear => bfgs_clear
+        procedure :: skip_add => bfgs_skip_add
     end type bfgs_updating_type
 
     abstract interface
-        subroutine init_interface(self, n_param)
-            import updating_type, ip
-            class(updating_type), intent(inout) :: self
-            integer(ip), intent(in) :: n_param
-        end subroutine init_interface
-
-        subroutine clear_interface(self)
-            import updating_type
-            class(updating_type), intent(inout) :: self
-        end subroutine clear_interface
+        function skip_add_interface(self, kappa, grad_diff) result(skip)
+            import updating_type, rp
+            
+            class(updating_type), intent(in) :: self
+            real(rp), intent(in) :: kappa(:), grad_diff(:)
+            logical :: skip
+        end function skip_add_interface
     end interface
 
     ! global variables
@@ -68,24 +71,22 @@ module otr_qn
     type(bfgs_updating_type), target :: bfgs_object
     procedure(update_orbs_type), pointer :: update_orbs_orig_funptr
     procedure(hess_x_type), pointer :: hess_x_qn_funptr
-    procedure(change_reference_type), pointer :: change_reference_funptr
+    procedure(transport_type), pointer :: transport_funptr
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_type), pointer :: update_orbs_qn_ptr => update_orbs_qn
 
     contains
 
-    subroutine update_orbs_qn_factory(update_orbs_funptr_in, &
-                                      change_reference_funptr_in, n_param, settings, &
-                                      error, update_orbs_qn_funptr)
+    subroutine update_orbs_qn_factory(update_orbs_funptr_in, transport_funptr_in, &
+                                      n_param, settings, error, update_orbs_qn_funptr)
         !
         ! this subroutine returns a modified quasi-Newton orbital updating function
         !
         use opentrustregion, only: verbosity_error
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr_in
-        procedure(change_reference_type), intent(in), pointer :: &
-            change_reference_funptr_in
+        procedure(transport_type), intent(in), pointer :: transport_funptr_in
         integer(ip), intent(in) :: n_param
         type(qn_settings_type), intent(inout) :: settings
         integer(ip), intent(out) :: error
@@ -109,9 +110,6 @@ module otr_qn
             return
         end if
 
-        ! initialize updating object
-        call update_object%init(n_param)
-
         ! set settings
         update_object%settings = settings
 
@@ -121,11 +119,14 @@ module otr_qn
             if (error /= 0) return
         end if
 
+        ! initialize updating object
+        call update_object%init(n_param)
+
         ! set pointer to original orbital updating function
         update_orbs_orig_funptr => update_orbs_funptr_in
 
-        ! set pointer to change of reference function
-        change_reference_funptr => change_reference_funptr_in
+        ! set pointer to transport function
+        transport_funptr => transport_funptr_in
 
         ! get pointer to modified orbital updating function
         update_orbs_qn_funptr => update_orbs_qn
@@ -201,76 +202,115 @@ module otr_qn
     subroutine add(self, kappa, grad, error)
         !
         ! this subroutine adds a new rotation and gradient to the corresponding lists 
-        ! and updates the reference accordingly
+        ! and transports the history accordingly
         !
         class(updating_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:), grad(:)
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: list(:, :)
+        real(rp), allocatable :: grad_diff(:)
+        integer(ip) :: n_param, i
 
         ! initialize error flag
         error = 0
 
-        ! extend rotations
-        allocate(list(size(kappa), self%n_points + 1))
-        if (self%n_points > 0) list(:, 1:self%n_points) = &
-            self%kappa_list(:, 1:self%n_points)
-        list(:, self%n_points + 1) = kappa
-        call move_alloc(list, self%kappa_list)
+        ! get number of parameters
+        n_param = size(kappa)
 
-        ! extend local gradients
-        allocate(list(size(kappa), self%n_points + 1))
-        if (self%n_points > 0) list(:, 1:self%n_points) = &
-            self%local_grad_list(:, 1:self%n_points)
-        list(:, self%n_points + 1) = grad
-        call move_alloc(list, self%local_grad_list)
+        ! transport history
+        do i = 1, self%n_points
+            call transport_funptr(kappa, self%kappa_list(:, i), error)
+            if (error /= 0) return
+            call transport_funptr(kappa, self%grad_diff_list(:, i), error)
+            if (error /= 0) return
+        end do
 
-        ! allocate gradients
-        deallocate(self%grad_list)
-        allocate(self%grad_list(size(kappa), self%n_points + 1))
+        ! check if last gradient is available to calculate gradient difference
+        if (allocated(self%last_grad)) then
+            ! calculate gradient difference
+            call transport_funptr(kappa, self%last_grad, error)
+            if (error /= 0) return
+            grad_diff = grad - self%last_grad
 
-        self%n_points = self%n_points + 1
-
-        ! move displacement and gradient to current reference
-        call change_reference_funptr(kappa, self%n_points, self%kappa_list, &
-                                     self%local_grad_list, self%grad_list, error)
-        if (error /= 0) return
+            ! check if step addition should be skipped
+            if (self%skip_add(kappa, grad_diff)) return
+        end if
+        self%last_grad = grad
+        
+        ! check if point is added
+        if (allocated(grad_diff)) then
+            ! add new point
+            if (self%n_points < self%settings%max_points) then
+                self%n_points = self%n_points + 1
+            ! replace old point
+            else
+                self%kappa_list(:, 1:self%n_points - 1) = &
+                    self%kappa_list(:, 2:self%n_points)
+                self%grad_diff_list(:, 1:self%n_points - 1) = &
+                    self%grad_diff_list(:, 2:self%n_points)
+            end if
+            self%kappa_list(:, self%n_points) = kappa
+            self%grad_diff_list(:, self%n_points) = grad_diff
+            deallocate(grad_diff)
+        end if
 
     end subroutine add
 
-    subroutine sr1_init(self, n_param)
+    subroutine init(self, n_param)
         ! 
-        ! this subroutine initializes the SR1 object
+        ! this subroutine initializes an updating object
         !
-        class(sr1_updating_type), intent(inout) :: self
+        class(updating_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
 
         ! allocate arrays
-        allocate(self%kappa_list(n_param, 0))
-        allocate(self%local_grad_list(n_param, 0))
-        allocate(self%grad_list(n_param, 0))
+        allocate(self%kappa_list(n_param, self%settings%max_points), &
+                 self%grad_diff_list(n_param, self%settings%max_points))
 
-    end subroutine sr1_init
+    end subroutine init
 
-    subroutine sr1_clear(self)
+    subroutine clear(self)
         ! 
-        ! this subroutine deallocates the SR1 object
+        ! this subroutine deallocates an updating object
         !
-        class(sr1_updating_type), intent(inout) :: self
+        class(updating_type), intent(inout) :: self
 
-        deallocate(self%kappa_list)
-        deallocate(self%local_grad_list)
-        deallocate(self%grad_list)
+        deallocate(self%kappa_list, self%grad_diff_list, self%last_grad)
         self%n_points = 0
 
-    end subroutine sr1_clear
+    end subroutine clear
+
+    function sr1_skip_add(self, kappa, grad_diff) result(skip)
+        !
+        ! this function implements the skipping criterion for the SR1 update
+        !
+        class(sr1_updating_type), intent(in) :: self
+        real(rp), intent(in) :: kappa(:), grad_diff(:)
+        logical :: skip
+
+        integer(ip) :: n_param
+        real(rp) :: kappa_norm, residual_norm, curvature
+        real(rp), allocatable :: residual(:)
+        real(rp), parameter :: curvature_threshold = 1e-8_rp
+        real(rp), external :: ddot
+
+        skip = .false.
+        n_param = size(kappa)
+        kappa_norm = sqrt(ddot(n_param, kappa, 1, kappa, 1))
+        residual = grad_diff - self%h_diag * kappa
+        residual_norm = sqrt(ddot(n_param, residual, 1, residual, 1))
+        curvature = abs(ddot(n_param, kappa, 1, residual, 1))
+        if (curvature < curvature_threshold * kappa_norm * residual_norm) &
+            skip = .true.
+        deallocate(residual)
+
+    end function sr1_skip_add
 
     subroutine sr1_hess_x_fun(x, hess_x, error)
         !
-        ! this subroutines computes the product of a symmetric rank-1 updated Hessian
-        ! with a trial vector, this cannot use the two-loop recursion like BFGS, so it
-        ! uses L-SR1 instead
+        ! this implements the L-SR1 version according to Byrd, R.H., Nocedal, J. & 
+        ! Schnabel, R.B. Mathematical Programming 63, 129–156 (1994). 
+        ! https://doi.org/10.1007/BF01582063
         !
         use opentrustregion, only: numerical_zero, verbosity_error
 
@@ -278,12 +318,11 @@ module otr_qn
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_param, problem_dim, i, info, lwork
-        real(rp), allocatable :: kappa_diff(:, :), psi(:, :), U(:, :), q(:), z(:), &
-                                 work(:)
+        integer(ip) :: n_param, i, info
+        real(rp), allocatable :: psi(:, :), U(:, :), q(:), z(:)
         integer(ip), allocatable :: ipiv(:)
         character(300) :: msg
-        external :: dgemv, dgemm, dgetrf, dgetri
+        external :: dgemv, dgemm, dgetrf, dgetrs
         real(rp), external :: ddot
 
         ! initialize error flag
@@ -301,33 +340,34 @@ module otr_qn
         ! initialize with Hessian diagonal
         hess_x = sr1_object%h_diag * x
 
-        ! get problem dimension
-        problem_dim = sr1_object%n_points - 1
-
         ! only current point is available
-        if (problem_dim == 0) return
+        if (sr1_object%n_points == 0) return
 
-        ! build psi = grad_diff - h_diag * kappa_diff
-        allocate(kappa_diff(n_param, problem_dim), psi(n_param, problem_dim))
-        do i = 1, problem_dim
-            kappa_diff(:, i) = sr1_object%kappa_list(:, i + 1) - &
-                sr1_object%kappa_list(:, i)
-            psi(:, i) = sr1_object%grad_list(:, i + 1) - sr1_object%grad_list(:, i) - &
-                sr1_object%h_diag * kappa_diff(:, i)
+        ! build psi = grad_diff - h_diag * kappa
+        allocate(psi(n_param, sr1_object%n_points))
+        do i = 1, sr1_object%n_points
+            psi(:, i) = sr1_object%grad_diff_list(:, i) - sr1_object%h_diag * &
+                        sr1_object%kappa_list(:, i)
         end do
 
-        ! build U = psi^T * kappa_diff
-        allocate(U(problem_dim, problem_dim))
-        call dgemm('T','N', problem_dim, problem_dim, n_param, 1.0_rp, psi, n_param, &
-                   kappa_diff, n_param, 0.0_rp, U, problem_dim)
-        deallocate(kappa_diff)
+        ! build U = psi^T * kappa
+        allocate(U(sr1_object%n_points, sr1_object%n_points))
+        call dgemm('T', 'N', sr1_object%n_points, sr1_object%n_points, n_param, &
+                   1.0_rp, psi, n_param, sr1_object%kappa_list, n_param, 0.0_rp, U, &
+                   sr1_object%n_points)
 
         ! symmetrize U
         U = 0.5_rp * (U + transpose(U))
 
-        ! invert U
-        allocate(ipiv(problem_dim))
-        call dgetrf(problem_dim, problem_dim, U, problem_dim, ipiv, info)
+        ! q = psi^T * x
+        allocate(q(sr1_object%n_points))
+        call dgemv('T', n_param, sr1_object%n_points, 1.0_rp, psi, n_param, x, 1_ip, &
+                   0.0_rp, q, 1_ip)
+
+        ! LU factorize U
+        allocate(ipiv(sr1_object%n_points))
+        call dgetrf(sr1_object%n_points, sr1_object%n_points, U, sr1_object%n_points, &
+                    ipiv, info)
 
         ! check for successful execution
         if (info /= 0) then
@@ -338,92 +378,76 @@ module otr_qn
             return
         end if
 
-        lwork = -1
-        allocate(work(1))
-        call dgetri(problem_dim, U, problem_dim, ipiv, work, lwork, info)
-
-        lwork = int(work(1))
-        deallocate(work)
-        allocate(work(lwork))
-        call dgetri(problem_dim, U, problem_dim, ipiv, work, lwork, info)
-        deallocate(ipiv)
-
+        ! solve U * z = q
+        z = q
+        deallocate(q)
+        call dgetrs('N', sr1_object%n_points, 1_ip, U, sr1_object%n_points, ipiv, z, &
+                    sr1_object%n_points, info)
+        
         ! check for successful execution
         if (info /= 0) then
-            write (msg, '(A, I0)') "Matrix inversion failed: Error in DGETRI, "// &
+            write (msg, '(A, I0)') "Matrix solve failed: Error in DGETRS, "// &
                 "info = ", info
             call sr1_object%settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
-
-        ! q = psi^T * x
-        allocate(q(problem_dim))
-        call dgemv('T', n_param, problem_dim, 1.0_rp, psi, n_param, x, 1_ip, 0.0_rp, &
-                   q, 1_ip)
-
-        ! z = U^-1 * q
-        allocate(z(problem_dim))
-        call dgemv('N', problem_dim, problem_dim, 1.0_rp, U, problem_dim, q, 1_ip, &
-                   0.0_rp, z, 1_ip)
-        deallocate(U, q)
+        deallocate(U, ipiv)
 
         ! w += psi * z
-        call dgemv('N', n_param, problem_dim, 1.0_rp, psi, n_param, z, 1_ip, 1.0_rp, &
-                   hess_x, 1_ip)
+        call dgemv('N', n_param, sr1_object%n_points, 1.0_rp, psi, n_param, z, 1_ip, &
+                   1.0_rp, hess_x, 1_ip)
 
         ! deallocate arrays
         deallocate(psi, z)
 
     end subroutine sr1_hess_x_fun
 
-    subroutine bfgs_init(self, n_param)
+    function bfgs_skip_add(self, kappa, grad_diff) result(skip)
         !
-        ! this subroutine initializes the BFGS object
+        ! this function implements the skipping criterion for the BFGS update
         !
-        class(bfgs_updating_type), intent(inout) :: self
-        integer(ip), intent(in) :: n_param
+        class(bfgs_updating_type), intent(in) :: self
+        real(rp), intent(in) :: kappa(:), grad_diff(:)
+        logical :: skip
 
-        ! allocate arrays
-        allocate(self%kappa_list(n_param, 0))
-        allocate(self%local_grad_list(n_param, 0))
-        allocate(self%grad_list(n_param, 0))
-        allocate(self%y_list(n_param, 0))
+        integer(ip) :: n_param
+        real(rp) :: kappa_norm, grad_diff_norm, kappa_grad_dot
+        real(rp), parameter :: curvature_threshold = 1e-14_rp
+        real(rp), external :: ddot
 
-    end subroutine bfgs_init
+        skip = .false.
+        n_param = size(kappa)
+        kappa_norm = sqrt(ddot(n_param, kappa, 1, kappa, 1))
+        grad_diff_norm = sqrt(ddot(n_param, grad_diff, 1, grad_diff, 1))
+        kappa_grad_dot = ddot(n_param, kappa, 1, grad_diff, 1)
 
-    subroutine bfgs_clear(self)
-        !
-        ! this subroutine deallocates the BFGS object
-        !
-        class(bfgs_updating_type), intent(inout) :: self
+        ! avoid zero near-zero curvature to avoid singular compact scaling matrix, 
+        ! negative curvature is not a problem since this is handled by the trust region 
+        ! solver
+        if (abs(kappa_grad_dot) < curvature_threshold * kappa_norm * grad_diff_norm) &
+            skip = .true.
 
-        deallocate(self%kappa_list)
-        deallocate(self%local_grad_list)
-        deallocate(self%grad_list)
-        deallocate(self%y_list)
-        self%n_points = 0
-
-    end subroutine bfgs_clear
+    end function bfgs_skip_add
 
     subroutine bfgs_hess_x_fun(x, hess_x, error)
         !
-        ! this implements the two-loop recursion for the BFGS update of the Hessian 
-        ! applied to a vector x according to T. H. Fischer and J. Almloef, JPC 96, 9768 
-        ! (1992), doi:10.1021/j100203a036
+        ! this implements the L-BFGS version according to Byrd, R.H., Nocedal, J. & 
+        ! Schnabel, R.B. Mathematical Programming 63, 129–156 (1994). 
+        ! https://doi.org/10.1007/BF01582063
         !
-        use opentrustregion, only: numerical_zero
+        use opentrustregion, only: numerical_zero, verbosity_error
 
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_param, it
-        real(rp) :: s_mat(6), t_mat(4)
-        logical :: update_y
-        real(rp), allocatable :: list(:, :), kappa_diff(:), grad_diff(:), &
-                                 curr_kappa_diff(:), curr_grad_diff(:)
-        real(rp), parameter :: vanish_denom_thr = 1.0e-9_rp
+        integer(ip) :: n_param, i, j, info
+        real(rp) :: kappa_grad_dot
+        real(rp), allocatable :: compact_scal_mat(:, :), solution(:)
+        integer(ip), allocatable :: ipiv(:)
+        character(300) :: msg
+        external :: dgetrf, dgetrs
         real(rp), external :: ddot
 
         ! initialize error flag
@@ -438,114 +462,94 @@ module otr_qn
             return
         end if
 
-        ! initialize dot products
-        s_mat = 0.0_rp
-        t_mat = 0.0_rp
-
         ! initialize with Hessian diagonal
         hess_x = bfgs_object%h_diag * x
 
         ! only current point is available
-        if (bfgs_object%n_points == 1) return
+        if (bfgs_object%n_points == 0) return
 
-        ! get current displacement and gradient difference
-        curr_kappa_diff = bfgs_object%kappa_list(:, bfgs_object%n_points) - &
-                          bfgs_object%kappa_list(:, bfgs_object%n_points - 1)
-        curr_grad_diff = bfgs_object%grad_list(:, bfgs_object%n_points) - &
-                         bfgs_object%grad_list(:, bfgs_object%n_points - 1)
+        ! build compact scaling matrix
+        ! [ kappa^T * h_diag * kappa    L ]
+        ! [             L^T            -D ]
+        allocate(compact_scal_mat(2 * bfgs_object%n_points, 2 * bfgs_object%n_points))
+        compact_scal_mat = 0.0_rp
+        do j = 1, bfgs_object%n_points
+            do i = 1, bfgs_object%n_points
+                ! Weighted Top-Left: S_i^T * diag(h_diag) * S_j
+                ! Using a manual loop or dot_product for weighted sum
+                compact_scal_mat(i, j) = ddot(n_param, &
+                                              bfgs_object%kappa_list(:, i), 1, &
+                                              bfgs_object%h_diag * &
+                                              bfgs_object%kappa_list(:, j), 1)
+                
+                ! L and D parts (do not depend on initial Hessian)
+                kappa_grad_dot = ddot(n_param, bfgs_object%kappa_list(:, i), 1, &
+                                      bfgs_object%grad_diff_list(:, j), 1)
+                if (i > j) then
+                    compact_scal_mat(i, j + bfgs_object%n_points) = kappa_grad_dot      
+                    compact_scal_mat(j + bfgs_object%n_points, i) = kappa_grad_dot      
+                else if (i == j) then
+                    compact_scal_mat(i + bfgs_object%n_points, j + &
+                                     bfgs_object%n_points) = -kappa_grad_dot
+                end if
+            end do
+        end do
 
-        ! initialize initial Hessian approximation multiplied with displacement
-        update_y = .false.
-        if (size(bfgs_object%y_list, 2) < bfgs_object%n_points - 1) then
-            update_y = .true.
-            allocate(list(size(x), bfgs_object%n_points - 1))
-            if (bfgs_object%n_points > 2) list(:, :bfgs_object%n_points - 2) = &
-                bfgs_object%y_list
-            list(:, bfgs_object%n_points - 1) = bfgs_object%h_diag * curr_kappa_diff
-            call move_alloc(list, bfgs_object%y_list)
+        ! build right-hand side
+        ! [ kappa^T * h_diag * x ]
+        ! [   grad_diff^T * x    ]
+        allocate(solution(2 * bfgs_object%n_points))
+        do i = 1, bfgs_object%n_points
+            ! weighted dot product for the top half of RHS
+            solution(i) = ddot(n_param, bfgs_object%kappa_list(:, i), 1, &
+                               bfgs_object%h_diag * x, 1)
+            solution(i + bfgs_object%n_points) = ddot(n_param, &
+                                             bfgs_object%grad_diff_list(:, i), 1, x, 1)
+        end do
+        
+        ! LU factorize compact scaling matrix
+        allocate(ipiv(2 * bfgs_object%n_points))
+        call dgetrf(2 * bfgs_object%n_points, 2 * bfgs_object%n_points, &
+                    compact_scal_mat, 2 * bfgs_object%n_points, ipiv, info)
+
+        ! check for successful execution
+        if (info /= 0) then
+            write (msg, '(A, I0)') "Matrix inversion failed: Error in DGETRF, "// &
+                "info = ", info
+            call bfgs_object%settings%log(msg, verbosity_error, .true.)
+            error = 1
+            return
         end if
 
-        ! loop over up to (n-2)th iteration
-        do it = 1, bfgs_object%n_points - 2
-            ! get displacement and gradient difference for iteration
-            kappa_diff = bfgs_object%kappa_list(:, it + 1) - &
-                         bfgs_object%kappa_list(:, it)
-            grad_diff = bfgs_object%grad_list(:, it + 1) - bfgs_object%grad_list(:, it)
+        ! solve compact_scal_mat * solution = rhs
+        call dgetrs('N', 2 * bfgs_object%n_points, 1, compact_scal_mat, &
+                    2 * bfgs_object%n_points, ipiv, solution, &
+                    2 * bfgs_object%n_points, info)
+        deallocate(compact_scal_mat, ipiv)
 
-            ! calculate dot products (s_mat(2) is the inverse of the paper)
-            s_mat(1) = ddot(n_param, kappa_diff, 1_ip, grad_diff, 1_ip)
-            if (abs(s_mat(1)) < vanish_denom_thr) then
-                s_mat(1) = 0.0_rp
-            else
-                s_mat(1) = 1.0_rp / s_mat(1)
-            end if
-            s_mat(2) = ddot(n_param, kappa_diff, 1_ip, bfgs_object%y_list(:, it), 1_ip)
-            if (abs(s_mat(2)) < vanish_denom_thr) then
-                s_mat(2) = 1.0_rp / vanish_denom_thr
-            else
-                s_mat(2) = 1.0_rp / s_mat(2)
-            end if
-            s_mat(3) = ddot(n_param, grad_diff, 1_ip, x, 1_ip)
-            s_mat(4) = ddot(n_param, bfgs_object%y_list(:, it), 1_ip, x, 1_ip)
+        ! check for successful execution
+        if (info /= 0) then
+            write (msg, '(A, I0)') "Matrix inversion failed: Error in DGETRS, "// &
+                "info = ", info
+            call bfgs_object%settings%log(msg, verbosity_error, .true.)
+            error = 1
+            return
+        end if
 
-            ! get dot products for current Hessian approximation multiplied with 
-            ! displacement
-            if (update_y) then
-                s_mat(5) = ddot(n_param, grad_diff, 1_ip, curr_kappa_diff, 1_ip)
-                s_mat(6) = ddot(n_param, bfgs_object%y_list(:, it), 1_ip, &
-                                curr_kappa_diff, 1_ip)
-            end if
-
-            ! calculate more dot products
-            t_mat(1) = s_mat(1) * s_mat(3)
-            t_mat(2) = s_mat(2) * s_mat(4)
-            if (update_y) then
-                t_mat(3) = s_mat(1) * s_mat(5)
-                t_mat(4) = s_mat(2) * s_mat(6)
-            end if
-
-            ! calculate current Hessian approximation multiplied with trial vector
-            hess_x = hess_x + t_mat(1) * grad_diff - t_mat(2) * &
-                     bfgs_object%y_list(:, it)
-
-            ! get current Hessian approximation multiplied with displacement
-            if (update_y) then
-                bfgs_object%y_list(:, bfgs_object%n_points - 1) = &
-                    bfgs_object%y_list(:, bfgs_object%n_points - 1) + t_mat(3) * &
-                    grad_diff(:) - t_mat(4) * bfgs_object%y_list(:, it)
-            end if
+        ! construct Hessian linear transformation
+        ! hess_x = hess_diag * x - ([hess_diag * kappa, grad_diff] * solution)
+        do i = 1, bfgs_object%n_points
+            ! subtract rotation difference contributions
+            hess_x = hess_x - (solution(i) * bfgs_object%h_diag * &
+                     bfgs_object%kappa_list(:, i))
+            ! subtract gradient difference contributions
+            hess_x = hess_x - solution(i + bfgs_object%n_points) * &
+                     bfgs_object%grad_diff_list(:, i)
         end do
 
         ! deallocate arrays
-        if (allocated(kappa_diff)) deallocate(kappa_diff)
-        if (allocated(grad_diff)) deallocate(grad_diff)
+        deallocate(solution)
 
-        ! calculate dot products
-        s_mat(1) = ddot(n_param, curr_kappa_diff, 1_ip, curr_grad_diff, 1_ip)
-        if (abs(s_mat(1)) < vanish_denom_thr) then
-            s_mat(1) = 0.0_rp
-        else
-            s_mat(1) = 1.0_rp / s_mat(1)
-        end if
-        s_mat(2) = ddot(n_param, curr_kappa_diff, 1_ip, &
-                        bfgs_object%y_list(:, bfgs_object%n_points - 1), 1_ip)
-        if (abs(s_mat(2)) < vanish_denom_thr) then
-            s_mat(2) = 1.0_rp / vanish_denom_thr
-        else
-            s_mat(2) = 1.0_rp / s_mat(2)
-        end if
-        s_mat(3) = ddot(n_param, curr_grad_diff, 1_ip, x, 1_ip)
-        s_mat(4) = ddot(n_param, bfgs_object%y_list(:, bfgs_object%n_points - 1), &
-                        1_ip, x, 1_ip)
-        t_mat(1) = s_mat(1) * s_mat(3)
-        t_mat(2) = s_mat(2) * s_mat(4)
-
-        ! calculate final Hessian approximation multiplied with trial vector
-        hess_x = hess_x + t_mat(1) * curr_grad_diff - t_mat(2) * &
-            bfgs_object%y_list(:, bfgs_object%n_points - 1)
-
-        ! deallocate arrays
-        deallocate(curr_kappa_diff, curr_grad_diff)
     end subroutine bfgs_hess_x_fun
 
 end module otr_qn

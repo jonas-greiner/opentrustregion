@@ -8,21 +8,31 @@ module otr_qn_c_interface
 
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
-    use otr_common, only: change_reference_type
-    use otr_common_c_interface, only: change_reference_c_type, n_param
-    use otr_qn, only: standard_update_orbs_qn_factory => update_orbs_qn_factory, &
-                      standard_update_orbs_qn_deconstructor => &
+    use otr_common_c_interface, only: n_param
+    use otr_qn, only: transport_type, standard_update_orbs_qn_factory => &
+                      update_orbs_qn_factory, standard_update_orbs_qn_deconstructor => &
                       update_orbs_qn_deconstructor
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_funloc, &
                                            c_f_procpointer, c_associated, c_null_funptr
 
     implicit none
 
+    ! C-interoperable interfaces for the callback functions
+    abstract interface
+        function transport_c_type(geodesic_c, tangent_vector_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(in), target :: geodesic_c(*)
+            real(c_rp), intent(inout), target :: tangent_vector_c(*)
+            integer(c_ip) :: error_c
+        end function transport_c_type
+    end interface
+
     ! define procedure pointer which will point to the Fortran procedures
     procedure(update_orbs_c_type), pointer :: update_orbs_orig_qn_before_wrapping => &
         null()
-    procedure(change_reference_c_type), pointer :: change_reference_qn_before_wrapping &
-        => null()
+    procedure(transport_c_type), pointer :: transport_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_qn_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_qn_before_wrapping => null()
 
@@ -30,7 +40,7 @@ module otr_qn_c_interface
     type, bind(C) :: qn_settings_type_c
         type(c_funptr) :: logger
         logical(c_bool) :: initialized
-        integer(c_ip) :: verbose
+        integer(c_ip) :: verbose, max_points
         character(c_char) :: hess_update_scheme(kw_len + 1)
     end type
 
@@ -42,8 +52,7 @@ module otr_qn_c_interface
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_type), pointer :: update_orbs_orig_qn_f_wrapper_ptr => &
         update_orbs_orig_qn_f_wrapper
-    procedure(change_reference_type), pointer :: change_reference_f_wrapper_ptr => &
-        change_reference_f_wrapper
+    procedure(transport_type), pointer :: transport_f_wrapper_ptr => transport_f_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_qn_c_wrapper_ptr => &
         update_orbs_qn_c_wrapper
     procedure(hess_x_c_type), pointer :: hess_x_qn_c_wrapper_ptr => &
@@ -58,7 +67,7 @@ module otr_qn_c_interface
 contains
 
     function update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, &
-                                              change_reference_c_funptr, n_param_c, &
+                                              transport_c_funptr, n_param_c, &
                                               settings_c, update_orbs_qn_c_funptr) &
         result(error_c) bind(C, name="update_orbs_qn_factory")
         !
@@ -68,7 +77,7 @@ contains
         use otr_qn, only: qn_settings_type
 
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
-                                             change_reference_c_funptr
+                                             transport_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
         type(qn_settings_type_c), intent(in), value :: settings_c
         type(c_funptr), intent(out) :: update_orbs_qn_c_funptr
@@ -76,7 +85,7 @@ contains
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
                                                 update_orbs_qn_funptr
-        procedure(change_reference_type), pointer :: change_reference_funptr
+        procedure(transport_type), pointer :: transport_funptr
         type(qn_settings_type) :: settings
         integer(ip) :: error
 
@@ -84,12 +93,11 @@ contains
         ! procedure pointer
         call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
                              fptr=update_orbs_orig_qn_before_wrapping)
-        call c_f_procpointer(cptr=change_reference_c_funptr, &
-                             fptr=change_reference_qn_before_wrapping)
+        call c_f_procpointer(cptr=transport_c_funptr, fptr=transport_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         update_orbs_funptr => update_orbs_orig_qn_f_wrapper
-        change_reference_funptr => change_reference_f_wrapper
+        transport_funptr => transport_f_wrapper
 
         ! convert number of parameters to Fortran kind and store globally to access 
         ! assumed size arrays passed from C to Fortran
@@ -99,8 +107,8 @@ contains
         settings = settings_c
 
         ! associate the global procedure pointer to the update_orbs function
-        call update_orbs_qn_factory(update_orbs_funptr, change_reference_funptr, &
-                                    n_param, settings, error, update_orbs_qn_funptr)
+        call update_orbs_qn_factory(update_orbs_funptr, transport_funptr, n_param, &
+                                    settings, error, update_orbs_qn_funptr)
         update_orbs_qn_before_wrapping => update_orbs_qn_funptr
 
         ! get a C function pointer to the update_orbs wrapper function
@@ -130,26 +138,41 @@ contains
 
     end subroutine update_orbs_orig_qn_f_wrapper
 
-    subroutine change_reference_f_wrapper(new_ref, n_points, kappa_list, &
-                                          local_grad_list, grad_list, error)
+    subroutine transport_f_wrapper(geodesic, tangent_vector, error)
         !
-        ! this subroutine wraps the change reference subroutine to convert Fortran 
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: change_reference_f_wrapper_impl
-        
-        real(rp), intent(in), target :: new_ref(:)
-        integer(ip), intent(in) :: n_points
-        real(rp), intent(inout), target :: kappa_list(:, :), local_grad_list(:, :), &
-                                           grad_list(:, :)
+        ! this subroutine wraps the transport subroutine to convert Fortran variables 
+        ! to C variables
+        !        
+        real(rp), intent(in), target :: geodesic(:)
+        real(rp), intent(inout), target :: tangent_vector(:)
         integer(ip), intent(out) :: error
 
-        ! call change reference C function
-        call change_reference_f_wrapper_impl(change_reference_qn_before_wrapping, &
-                                             new_ref, n_points, kappa_list, &
-                                             local_grad_list, grad_list, error)
+        real(c_rp), pointer :: geodesic_c(:), tangent_vector_c(:)
+        integer(c_ip) :: error_c
 
-    end subroutine change_reference_f_wrapper
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            geodesic_c => geodesic
+            tangent_vector_c => tangent_vector
+        else
+            allocate(geodesic_c(size(geodesic, 1)))
+            allocate(tangent_vector_c(size(tangent_vector, 1)))
+            geodesic_c = real(geodesic, kind=c_rp)
+            tangent_vector_c = real(tangent_vector, kind=c_rp)
+        end if
+
+        ! call transport C function
+        error_c = transport_before_wrapping(geodesic_c, tangent_vector_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            tangent_vector = real(tangent_vector_c, kind=rp)
+            deallocate(geodesic_c)
+            deallocate(tangent_vector_c)
+        end if
+
+    end subroutine transport_f_wrapper
 
     function update_orbs_qn_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                          hess_x_c_funptr) result(error_c) bind(C)
@@ -231,6 +254,7 @@ contains
 
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
+            settings%max_points = int(settings_c%max_points, kind=ip)
 
             ! convert characters
             settings%hess_update_scheme = &
@@ -258,6 +282,7 @@ contains
 
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)
+            settings_c%max_points = int(settings%max_points, kind=c_ip)
 
             ! convert characters
             settings_c%hess_update_scheme = character_to_c(settings%hess_update_scheme)

@@ -6,26 +6,27 @@
 
 module otr_qn_test_reference
 
-    use opentrustregion, only: ip, kw_len
-    use c_interface, only: c_ip
-    use, intrinsic :: iso_c_binding, only: c_char
+    use opentrustregion, only: rp, ip, kw_len, stderr
+    use c_interface, only: c_rp, c_ip
+    use test_reference, only: n_param, tol, tol_c
+    use, intrinsic :: iso_c_binding, only: c_char, c_funptr, c_f_procpointer
 
     implicit none
 
     ! derived types for quasi-Newton settings
     type ref_qn_settings_type
-        integer(ip) :: verbose
+        integer(ip) :: verbose, max_points
         character(kw_len, c_char) :: hess_update_scheme
     end type
 
     type, bind(C) :: ref_qn_settings_type_c
-        integer(c_ip) :: verbose
+        integer(c_ip) :: verbose, max_points
         character(c_char) :: hess_update_scheme(kw_len + 1)
     end type
 
     ! general reference parameters
     type(ref_qn_settings_type) :: ref_qn_settings = &
-        ref_qn_settings_type(verbose = 3, hess_update_scheme = "bfgs")
+        ref_qn_settings_type(verbose = 3, max_points = 100, hess_update_scheme = "bfgs")
 
     interface assignment(=)
         module procedure assign_ref_to_qn
@@ -48,6 +49,103 @@ module otr_qn_test_reference
     end interface
 
 contains
+
+    function test_transport_funptr(transport_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided transport function pointer
+        !
+        use opentrustregion, only: update_orbs_type, hess_x_type
+        use otr_qn, only: transport_type
+
+        procedure(transport_type), intent(in), pointer :: transport_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        real(rp), allocatable :: geodesic(:), tangent_vector(:)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! allocate arrays
+        allocate(geodesic(n_param), tangent_vector(n_param))
+
+        ! initialize input arrays
+        geodesic = 2.0_rp
+        tangent_vector = 3.0_rp
+
+        ! call transport function pointer
+        call transport_funptr(geodesic, tangent_vector, error)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+        end if
+
+        ! check tangent vector
+        if (any((tangent_vector - 6.0_rp) > tol)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
+                message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(geodesic, tangent_vector)
+
+    end function test_transport_funptr
+
+    function test_transport_c_funptr(transport_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided transport C function pointer
+        !
+        use otr_qn_c_interface, only: transport_c_type
+
+        type(c_funptr), intent(in) :: transport_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(transport_c_type), pointer :: transport_funptr
+        real(c_rp), allocatable :: geodesic(:), tangent_vector(:)
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=transport_c_funptr, fptr=transport_funptr)
+
+        ! allocate arrays
+        allocate(geodesic(n_param), tangent_vector(n_param))
+
+        ! initialize new reference
+        geodesic = 2.0_c_rp
+        tangent_vector = 3.0_c_rp
+
+        ! call transport function pointer
+        error = transport_funptr(geodesic, tangent_vector)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+        end if
+
+        ! check tangent vector
+        if (any((tangent_vector - 6.0_c_rp) > tol_c)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
+                message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(geodesic, tangent_vector)
+
+    end function test_transport_c_funptr
 
     subroutine get_reference_qn_values(ref_settings_out) bind(C)
         !
@@ -74,6 +172,7 @@ contains
 
         ! set reference values
         lhs%verbose = rhs%verbose
+        lhs%max_points = rhs%max_points
         lhs%hess_update_scheme = rhs%hess_update_scheme
 
         ! set initialization logical
@@ -110,6 +209,7 @@ contains
         type(ref_qn_settings_type), intent(in) :: rhs
 
         lhs%verbose = int(rhs%verbose, kind=c_ip)
+        lhs%max_points = int(rhs%max_points, kind=c_ip)
         lhs%hess_update_scheme = character_to_c(rhs%hess_update_scheme)
 
     end subroutine assign_ref_to_ref_c
@@ -124,8 +224,9 @@ contains
         type(qn_settings_type), intent(in) :: lhs
         type(ref_qn_settings_type), intent(in) :: rhs
 
-        equal_qn_to_ref = lhs%verbose == rhs%verbose .and. lhs%hess_update_scheme == &
-            rhs%hess_update_scheme
+        equal_qn_to_ref = lhs%verbose == rhs%verbose .and. &
+                          lhs%max_points == rhs%max_points .and. &
+                          lhs%hess_update_scheme == rhs%hess_update_scheme
 
     end function equal_qn_to_ref
 
@@ -184,8 +285,9 @@ contains
 
         type(qn_settings_type), intent(in) :: lhs, rhs
         
-        equal_qn = lhs%verbose == rhs%verbose .and. lhs%hess_update_scheme == &
-            rhs%hess_update_scheme
+        equal_qn = lhs%verbose == rhs%verbose .and. &
+                   lhs%max_points == rhs%max_points .and. &
+                   lhs%hess_update_scheme == rhs%hess_update_scheme
 
     end function equal_qn
 
