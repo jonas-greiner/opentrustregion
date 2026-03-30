@@ -169,6 +169,7 @@ The optimization process can be fine-tuned using the following settings:
 
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for optimization using non-redundant parameters. When this is used, all other passed routines (`update_orbs`, `hess_x`, and `precond`) must be self-projecting.
+- **`modify_step`** (subroutine): Modifies a proposed step in-place and returns an integer error code (0 for success, positive integers < 100 for errors). Can for example be used to apply gauge transformations which improve convergence.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
@@ -344,6 +345,7 @@ The library uses structured integer return codes to indicate whether a function 
 | `14`               | `precond`           |
 | `15`               | `conv_check`        |
 | `16`               | `project`           |
+| `17`               | `modify_step`       |
 
 ### Error Codes (`EE`)
 

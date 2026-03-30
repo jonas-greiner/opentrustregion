@@ -103,6 +103,7 @@ precond_interface_type = CFUNCTYPE(
     c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
 project_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
+modify_step_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 conv_check_interface_type = CFUNCTYPE(c_int, POINTER(c_bool))
 logger_interface_type = CFUNCTYPE(None, c_char_p)
 
@@ -250,6 +251,34 @@ def project_interface_factory(
     return project_interface
 
 
+def modify_step_interface_factory(
+    modify_step: Optional[Callable[[np.ndarray], None]], n_param: int
+) -> Any:
+    """
+    this function is a factory for the step modification interface
+    """
+    if modify_step is None:
+        return None
+
+    @modify_step_interface_type
+    def modify_step_interface(kappa_ptr):
+        """
+        this function interfaces the step modification function
+        """
+        # convert pointers to numpy array and float
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
+
+        # call step modification function
+        try:
+            modify_step(kappa)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+    return modify_step_interface
+
+
 def conv_check_interface_factory(conv_check: Optional[Callable[[], bool]]) -> Any:
     """
     this function is a factory for the convergence check interface
@@ -296,6 +325,7 @@ class SolverSettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
         ("project", c_void_p),
+        ("modify_step", c_void_p),
         ("conv_check", c_void_p),
         ("logger", c_void_p),
         ("stability", c_bool),
@@ -376,10 +406,12 @@ class SolverSettings(Settings):
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
+    modify_step: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
     project_interface: Any
+    modify_step_interface: Any
     conv_check_interface: Any
     logger_interface: Any
 
@@ -494,6 +526,9 @@ def solver(
     )
     settings.set_optional_callback(
         "project", project_interface_factory(settings.project, n_param)
+    )
+    settings.set_optional_callback(
+        "modify_step", modify_step_interface_factory(settings.modify_step, n_param)
     )
     settings.set_optional_callback(
         "conv_check", conv_check_interface_factory(settings.conv_check)

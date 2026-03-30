@@ -592,6 +592,100 @@ contains
 
     end function test_project_c_funptr
 
+    function test_modify_step_funptr(modify_step_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided step modification function pointer
+        !
+        use opentrustregion, only: modify_step_type
+
+        procedure(modify_step_type), intent(in), pointer :: modify_step_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        real(rp), allocatable :: kappa(:)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! allocate arrays
+        allocate(kappa(n_param))
+
+        ! initialize kappa
+        kappa = 1.0_rp
+
+        ! call step modification subroutine
+        call modify_step_funptr(kappa, error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check modified kappa
+        if (any(abs(kappa - 2.0_rp) > tol)) then
+            write (stderr, *) "test_"//test_name//" failed: Modified kappa returned"// &
+                message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(kappa)
+
+    end function test_modify_step_funptr
+
+    function test_modify_step_c_funptr(modify_step_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided step modification C function pointer
+        !
+        use c_interface, only: modify_step_c_type
+
+        type(c_funptr), intent(in) :: modify_step_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(modify_step_c_type), pointer :: modify_step_funptr
+        real(c_rp), allocatable :: kappa(:)
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=modify_step_c_funptr, fptr=modify_step_funptr)
+
+        ! allocate arrays
+        allocate(kappa(n_param))
+
+        ! initialize kappa
+        kappa = 1.0_c_rp
+
+        ! call step modification function
+        error = modify_step_funptr(kappa)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check modified kappa
+        if (any(abs(kappa - 2.0_c_rp) > tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Modified kappa returned"// &
+                message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(kappa)
+
+    end function test_modify_step_c_funptr
+
     function test_conv_check_funptr(conv_check_funptr, test_name, message) &
         result(test_passed)
         !
@@ -691,6 +785,7 @@ contains
         ! unassociate function pointers
         lhs%precond => null()
         lhs%project => null()
+        lhs%modify_step => null()
         lhs%conv_check => null()
         lhs%logger => null()
 

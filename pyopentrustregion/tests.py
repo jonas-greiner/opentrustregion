@@ -137,6 +137,7 @@ fortran_tests = {
         "init_solver_settings_c",
         "init_stability_settings_c",
         "logger_f_wrapper",
+        "modify_step_f_wrapper",
         "obj_func_f_wrapper",
         "precond_f_wrapper",
         "project_f_wrapper",
@@ -295,6 +296,12 @@ class PyInterfaceTests(unittest.TestCase):
             """
             vector[:] = 2 * vector
 
+        def mock_modify_step(kappa):
+            """
+            this function is a mock function for the step modification function
+            """
+            kappa[:] = 2 * kappa
+
         def mock_conv_check():
             """
             this function is a mock function for the convergence check function
@@ -314,6 +321,7 @@ class PyInterfaceTests(unittest.TestCase):
         settings = SolverSettings()
         settings.precond = mock_precond
         settings.project = mock_project
+        settings.modify_step = mock_modify_step
         settings.conv_check = mock_conv_check
         settings.logger = mock_logger
         for field_info in settings.c_struct._fields_:

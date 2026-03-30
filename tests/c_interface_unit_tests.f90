@@ -9,7 +9,7 @@ module c_interface_unit_tests
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
                            obj_func_c_type, precond_c_type, project_c_type, &
-                           conv_check_c_type, logger_c_type
+                           modify_step_c_type, conv_check_c_type, logger_c_type
     use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
                                            c_char, c_associated, c_null_ptr, c_null_char
@@ -22,11 +22,12 @@ module c_interface_unit_tests
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_c_type), pointer :: mock_update_orbs_ptr => mock_update_orbs
     procedure(hess_x_c_type), pointer :: mock_hess_x_ptr => mock_hess_x
-    procedure(obj_func_c_type), pointer ::  mock_obj_func_ptr => mock_obj_func
-    procedure(precond_c_type), pointer ::  mock_precond_ptr => mock_precond
-    procedure(project_c_type), pointer ::  mock_project_ptr => mock_project
-    procedure(conv_check_c_type), pointer ::  mock_conv_check_ptr => mock_conv_check
-    procedure(logger_c_type), pointer ::  mock_logger_ptr => mock_logger
+    procedure(obj_func_c_type), pointer :: mock_obj_func_ptr => mock_obj_func
+    procedure(precond_c_type), pointer :: mock_precond_ptr => mock_precond
+    procedure(project_c_type), pointer :: mock_project_ptr => mock_project
+    procedure(modify_step_c_type), pointer :: mock_modify_step_ptr => mock_modify_step
+    procedure(conv_check_c_type), pointer :: mock_conv_check_ptr => mock_conv_check
+    procedure(logger_c_type), pointer :: mock_logger_ptr => mock_logger
 
 contains
 
@@ -110,6 +111,19 @@ contains
 
     end function mock_project
 
+    function mock_modify_step(kappa) result(error) bind(C)
+        !
+        ! this function is a test function for the C step modification function
+        !
+        real(c_rp), intent(inout), target :: kappa(*)
+        integer(c_ip) :: error
+
+        kappa(:n_param) = 2 * kappa(:n_param)
+
+        error = 0
+
+    end function mock_modify_step
+
     function mock_conv_check(converged) result(error) bind(C)
         !
         ! this function is a test function for the convergence check function
@@ -161,6 +175,7 @@ contains
         settings = ref_settings
         settings%precond = c_funloc(mock_precond)
         settings%project = c_funloc(mock_project)
+        settings%modify_step = c_funloc(mock_modify_step)
         settings%conv_check = c_funloc(mock_conv_check)
         settings%logger = c_funloc(mock_logger)
 
@@ -410,6 +425,29 @@ contains
 
     end function test_project_f_wrapper
 
+    logical(c_bool) function test_modify_step_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the step modification function
+        !
+        use opentrustregion, only: modify_step_type
+        use c_interface, only: modify_step_before_wrapping, modify_step_f_wrapper
+        use test_reference, only: test_modify_step_funptr
+
+        procedure(modify_step_type), pointer :: modify_step_funptr
+
+        ! inject mock function
+        modify_step_before_wrapping => mock_modify_step
+
+        ! get pointer to subroutine
+        modify_step_funptr => modify_step_f_wrapper
+
+        ! test step modification wrapper
+        test_modify_step_f_wrapper = test_modify_step_funptr(modify_step_funptr, &
+                                                             "modify_step_f_wrapper", &
+                                                             "")
+
+    end function test_modify_step_f_wrapper
+
     logical(c_bool) function test_conv_check_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the convergence check function
@@ -476,7 +514,8 @@ contains
 
         ! check function pointers
         if (c_associated(settings%precond) .or. c_associated(settings%project) .or. &
-            c_associated(settings%conv_check) .or. c_associated(settings%logger)) then
+            c_associated(settings%modify_step) .or. c_associated(settings%conv_check) &
+            .or. c_associated(settings%logger)) then
             write (stderr, *) "test_init_solver_settings_c failed: Function "// &
                 "pointers should not be initialized."
             test_init_solver_settings_c = .false.
@@ -533,8 +572,8 @@ contains
         use c_interface, only: solver_settings_type_c, assignment(=)
         use opentrustregion, only: solver_settings_type
         use test_reference, only: assignment(=), ref_settings, test_precond_funptr, &
-                                  test_project_funptr, test_conv_check_funptr, &
-                                  operator(/=)
+                                  test_project_funptr, test_modify_step_funptr, &
+                                  test_conv_check_funptr, operator(/=)
 
         type(solver_settings_type_c) :: settings_c
         type(solver_settings_type) :: settings
@@ -546,6 +585,7 @@ contains
         settings_c = ref_settings
         settings_c%precond = c_funloc(mock_precond)
         settings_c%project = c_funloc(mock_project)
+        settings_c%modify_step = c_funloc(mock_modify_step)
         settings_c%conv_check = c_funloc(mock_conv_check)
         settings_c%logger = c_funloc(mock_logger)
 
@@ -572,6 +612,17 @@ contains
             test_assign_solver_f_c = test_assign_solver_f_c .and. &
                 test_project_funptr(settings%project, "assign_solver_f_c", &
                                     " by projection function")
+        end if
+
+        ! check step modification function
+        if (.not. associated(settings%modify_step)) then
+            test_assign_solver_f_c = .false.
+            write (stderr, *) "test_assign_solver_f_c failed: Step modification "// &
+                "function not associated with value."
+        else
+            test_assign_solver_f_c = test_assign_solver_f_c .and. &
+                test_modify_step_funptr(settings%modify_step, "assign_solver_f_c", &
+                                        " by step modification function")
         end if
 
         ! check convergence check
@@ -725,6 +776,11 @@ contains
             test_assign_solver_c_f = .false.
             write (stderr, *) "test_assign_solver_c_f failed: Projection function "// &
                 "associated."
+        end if
+        if (c_associated(settings_c%modify_step)) then
+            test_assign_solver_c_f = .false.
+            write (stderr, *) "test_assign_solver_c_f failed: Step modification "// &
+                "function associated."
         end if
         if (c_associated(settings_c%conv_check)) then
             test_assign_solver_c_f = .false.

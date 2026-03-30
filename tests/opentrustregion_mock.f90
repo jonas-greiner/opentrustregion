@@ -29,7 +29,7 @@ contains
         use opentrustregion, only: solver_settings_type
         use test_reference, only: test_update_orbs_funptr, test_obj_func_funptr, &
                                   test_precond_funptr, test_project_funptr, &
-                                  test_conv_check_funptr
+                                  test_modify_step_funptr, test_conv_check_funptr
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
@@ -80,6 +80,17 @@ contains
             test_passed = test_passed .and. &
             test_project_funptr(settings%project, "solver_c_wrapper", &
                                 " by given projection subroutine")
+        end if
+
+        ! check if optional step modification subroutine is correctly passed
+        if (.not. associated(settings%modify_step)) then
+            test_passed = .false.
+            write (stderr, *) "test_solver_c_wrapper failed: Passed step "// &
+                "modification function not associated with value."
+        else
+            test_passed = test_passed .and. &
+            test_modify_step_funptr(settings%modify_step, "solver_c_wrapper", &
+                                    " by given step modification subroutine")
         end if
 
         ! check if optional convergence check function is correctly passed

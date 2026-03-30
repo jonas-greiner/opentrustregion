@@ -38,10 +38,12 @@ contains
         !
         use c_interface, only: solver_settings_type_c, update_orbs_c_type, &
                                hess_x_c_type, obj_func_c_type, precond_c_type, &
-                               project_c_type, conv_check_c_type, logger_c_type
+                               project_c_type, modify_step_c_type, conv_check_c_type, &
+                               logger_c_type
         use test_reference, only: test_update_orbs_c_funptr, test_obj_func_c_funptr, &
                                   test_precond_c_funptr, test_project_c_funptr, &
-                                  test_conv_check_c_funptr, operator(/=)
+                                  test_modify_step_c_funptr, test_conv_check_c_funptr, &
+                                  operator(/=)
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
@@ -77,6 +79,11 @@ contains
         test_solver_interface = test_solver_interface .and. &
             test_project_c_funptr(settings_c%project, "solver_py_interface", &
                                   " by given projection function")
+
+        ! test passed step modification function
+        test_solver_interface = test_solver_interface .and. &
+            test_modify_step_c_funptr(settings_c%modify_step, "solver_py_interface", &
+                                      " by given step modification function")
 
         ! test passed convergence check function
         test_solver_interface = test_solver_interface .and. &

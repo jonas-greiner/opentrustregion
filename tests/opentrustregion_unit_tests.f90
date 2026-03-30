@@ -1156,7 +1156,8 @@ contains
 
         ! check function pointers
         if (associated(settings%precond) .or. associated(settings%project) .or. &
-            associated(settings%conv_check) .or. associated(settings%logger)) then
+            associated(settings%modify_step) .or. associated(settings%conv_check) .or. &
+            associated(settings%logger)) then
             write (stderr, *) "test_init_solver_settings failed: Function pointers "// &
                 "should not be initialized."
             test_init_solver_settings = .false.
