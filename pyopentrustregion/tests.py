@@ -94,7 +94,6 @@ def print_separator(string: str):
 # define all tests in alphabetical order
 fortran_tests = {
     "opentrustregion_tests": [
-        "abs_diag_precond",
         "accept_trust_region_step",
         "add_column",
         "add_error_origin",
@@ -103,6 +102,7 @@ fortran_tests = {
         "extend_matrix",
         "generate_random_trial_vectors",
         "generate_trial_vectors",
+        "get_precond_level_shift",
         "gram_schmidt",
         "init_rng",
         "init_solver_settings",
