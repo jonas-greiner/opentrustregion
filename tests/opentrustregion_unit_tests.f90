@@ -1285,73 +1285,39 @@ contains
 
     end function test_level_shifted_diag_precond
 
-    logical(c_bool) function test_abs_diag_precond() bind(C)
+    logical(c_bool) function test_get_precond_level_shift() bind(C)
         !
-        ! this function tests the subroutine that constructs the absolute diagonal 
-        ! preconditioner
+        ! this function tests the function that computes the level shift for the 
+        ! default level-shifted diagonal preconditioner
         !
-        use opentrustregion, only: solver_settings_type, abs_diag_precond
+        use opentrustregion, only: get_precond_level_shift, precond_factor
 
-        real(rp) :: vector(3), h_diag(3), precond_vector(3)
-        type(solver_settings_type) :: settings
-        integer(ip) :: error
+        real(rp) :: h_diag(3)
+        real(rp) :: mu
 
         ! assume tests pass
-        test_abs_diag_precond = .true.
-
-        ! setup settings object
-        call setup_settings(settings)
+        test_get_precond_level_shift = .true.
 
         ! initialize quantities
-        vector = [1.0_rp, 1.0_rp, 1.0_rp]
-        h_diag = [-2.0_rp, 0.0_rp, 2.0_rp]
+        h_diag = [-2.0_rp, 1.0_rp, 2.0_rp]
 
-        ! call subroutine and check if results match
-        call abs_diag_precond(vector, h_diag, precond_vector, settings, error)
-        if (error /= 0) then
-            write (stderr, *) "test_abs_diag_precond failed: Returned error for "// &
-                "default preconditioner."
-            test_abs_diag_precond = .false.
-        end if
-        if (any(abs(precond_vector - [0.5_rp, 1e10_rp, 0.5_rp]) > tol)) then
-            write (stderr, *) "test_abs_diag_precond failed: Returned "// &
-                "preconditioned vector not correct for default preconditioner."
-            test_abs_diag_precond = .false.
+        ! call function and check if results match for negative minimum diagonal element
+        if (abs(get_precond_level_shift(h_diag) - &
+                (-2.0_rp - precond_factor * 5.0_rp / 3)) > tol) then
+            write (stderr, *) "test_get_precond_level_shift failed: Returned level "// &
+                "shift not correct for negative minimum diagonal element."
+            test_get_precond_level_shift = .false.
         end if
 
-        ! test custum projector
-        settings%project => mock_project
-
-        ! call subroutine and check if results match
-        call abs_diag_precond(vector, h_diag, precond_vector, settings, error)
-        if (error /= 0) then
-            write (stderr, *) "test_abs_diag_precond failed: Returned error for "// &
-                "custom projector."
-            test_abs_diag_precond = .false.
-        end if
-        if (any(abs(precond_vector - [1.0_rp, 2e10_rp, 1.0_rp]) > tol)) then
-            write (stderr, *) "test_abs_diag_precond failed: Returned "// &
-                "preconditioned vector not correct for custom projector."
-            test_abs_diag_precond = .false.
+        ! call function and check if results match for positive minimum diagonal element
+        h_diag(1) = 1.0_rp
+        if (abs(get_precond_level_shift(h_diag) - 0.0_rp) > tol) then
+            write (stderr, *) "test_get_precond_level_shift failed: Returned level "// &
+                "shift not correct for positive minimum diagonal element."
+            test_get_precond_level_shift = .false.
         end if
 
-        ! test custom preconditioner
-        settings%precond => mock_precond
-
-        ! call subroutine and check if results match
-        call abs_diag_precond(vector, h_diag, precond_vector, settings, error)
-        if (error /= 0) then
-            write (stderr, *) "test_abs_diag_precond failed: Returned error for "// &
-                "custom preconditioner."
-            test_abs_diag_precond = .false.
-        end if
-        if (any(abs(precond_vector - [0.0_rp, 0.0_rp, 0.0_rp]) > tol)) then
-            write (stderr, *) "test_abs_diag_precond failed: Returned "// &
-                "preconditioned vector not correct for custom preconditioner."
-            test_abs_diag_precond = .false.
-        end if
-
-    end function test_abs_diag_precond
+    end function test_get_precond_level_shift
 
     logical(c_bool) function test_orthogonal_projection() bind(C)
         !

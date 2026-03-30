@@ -38,7 +38,8 @@ module opentrustregion
 
     ! define useful parameters
     real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
-                           hess_symm_thres = 1e-12_rp, residual_norm_floor = 1e-12_rp, &
+                           precond_factor = 1e-1_rp, hess_symm_thres = 1e-12_rp, &
+                           residual_norm_floor = 1e-12_rp, &
                            level_shift_local_thres = 1e-12_rp
 
     ! define verbosity levels
@@ -1632,37 +1633,21 @@ contains
         
     end subroutine level_shifted_diag_precond
 
-    subroutine abs_diag_precond(vector, h_diag, precond_vector, settings, error)
+    function get_precond_level_shift(h_diag) result(mu)
         !
-        ! this function defines the default absolute diagonal preconditioner
+        ! this function computes the level shift for the default level-shifted diagonal 
+        ! preconditioner
         !
-        real(rp), intent(in) :: vector(:), h_diag(:)
-        real(rp), intent(out) :: precond_vector(:)
-        class(optimizer_settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
+        real(rp), intent(in) :: h_diag(:)
+        real(rp) :: mu
 
-        ! initialize error flag
-        error = 0
-
-        ! check for user-defined preconditioner
-        if (associated(settings%precond)) then
-            call settings%precond(vector, 0.0_rp, precond_vector, error)
-            call add_error_origin(error, error_precond, settings)
-            if (error /= 0) return
-        ! construct positive-definite preconditioner
+        mu = minval(h_diag)
+        if (mu < 0.0_rp) then
+            mu = mu - precond_factor * sum(abs(h_diag)) / size(h_diag)
         else
-            precond_vector = max(abs(h_diag), precond_floor)
-            precond_vector = vector / precond_vector
-
-            ! ensure basis vector stays in subspace
-            if (associated(settings%project)) then
-                call settings%project(precond_vector, error)
-                call add_error_origin(error, error_project, settings)
-                if (error /= 0) return
-            end if
+            mu = 0.0_rp
         end if
-        
-    end subroutine abs_diag_precond
+    end function get_precond_level_shift
 
     function orthogonal_projection(vector, direction) result(complement)
         !
@@ -2346,7 +2331,7 @@ contains
         real(rp) :: new_func, pred_func, conv_tol, step_size, trial_solution_dot, &
                     basis_vec_dot, solution_dot, solution_basis_vec_dot, residual_dot, &
                     residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
-                    curvature, lanczos_tridiag_chol_pivot
+                    curvature, lanczos_tridiag_chol_pivot, precond_mu
         integer(ip) :: imicro
         logical :: accept_step, micro_converged
         real(rp), external :: ddot, dnrm2
@@ -2359,6 +2344,9 @@ contains
 
         ! compute the stopping tolerance
         conv_tol = max(settings%local_red_factor * grad_norm, residual_norm_floor)
+
+        ! calculate preconditioner level shift
+        precond_mu = get_precond_level_shift(h_diag)
 
         ! allocate space for vectors
         allocate(residual(n_param), vector(n_param), basis_vec(n_param))
@@ -2399,7 +2387,8 @@ contains
             ! start of microiterations
             do
                 ! obtain the preconditioned residual
-                call abs_diag_precond(residual, h_diag, vector, settings, error)
+                call level_shifted_diag_precond(residual, precond_mu, h_diag, vector, &
+                                                settings, error)
                 call add_error_origin(error, error_precond, settings)
                 if (error /= 0) exit
 
@@ -2978,7 +2967,7 @@ contains
                     basis_vec_dot, solution_dot, solution_basis_vec_dot, residual_dot, &
                     residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
                     residual_norm, red_factor, conv_tol, last_red_space_solution, &
-                    curvature, lanczos_tridiag_chol_pivot
+                    curvature, lanczos_tridiag_chol_pivot, precond_mu
         logical :: negative_curvature, try_warm, use_old
         real(rp), external :: dnrm2, ddot
 
@@ -2990,6 +2979,9 @@ contains
 
         ! number of parameters
         n_param = size(residual)
+
+        ! calculate preconditioner level shift
+        precond_mu = get_precond_level_shift(h_diag)
 
         ! initialize micro iteration convergence flag
         micro_converged = .false.
@@ -3068,7 +3060,8 @@ contains
         ! start of microiterations
         do
             ! obtain the preconditioned residual
-            call abs_diag_precond(residual, h_diag, vector, settings, error)
+            call level_shifted_diag_precond(residual, precond_mu, h_diag, vector, &
+                                            settings, error)
             call add_error_origin(error, error_precond, settings)
             if (error /= 0) exit
 
@@ -3222,8 +3215,9 @@ contains
                                 solution = solution + (hard_case_step_size / u_norm) * &
                                            eigenvec
                             end if
-                            call abs_diag_precond(solution, h_diag, vector, settings, &
-                                                  error)
+                            call level_shifted_diag_precond(residual, precond_mu, &
+                                                            h_diag, vector, settings, &
+                                                            error)
                             call add_error_origin(error, error_precond, settings)
                             if (error /= 0) return
                             micro_converged = .true.
@@ -3409,7 +3403,8 @@ contains
         
         integer(ip) :: n_param, imicro
         real(rp), allocatable :: vector(:), basis_vec(:), residual(:)
-        real(rp) :: tau, step_size, beta, residual_dot, residual_dot_old, u_norm
+        real(rp) :: tau, step_size, beta, residual_dot, residual_dot_old, u_norm, &
+                    precond_mu
         real(rp), external :: ddot
 
         ! initialize error flag
@@ -3420,6 +3415,9 @@ contains
 
         ! number of parameters
         n_param = size(residual_start)
+
+        ! calculate preconditioner level shift
+        precond_mu = get_precond_level_shift(h_diag)
 
         ! initialize tau in case of saved vectors
         tau = tau_start
@@ -3433,7 +3431,8 @@ contains
         ! start second pass loop
         do
             ! obtain the preconditioned residual
-            call abs_diag_precond(residual, h_diag, vector, settings, error)
+            call level_shifted_diag_precond(residual, precond_mu, h_diag, vector, &
+                                            settings, error)
             call add_error_origin(error, error_precond, settings)
             if (error /= 0) exit
 
