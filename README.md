@@ -733,6 +733,7 @@ arh_deconstructor(dm_ao)
 The ARH factory function can be fine-tuned using the following settings:
 
 - **`restricted`** (boolean): Controls whether a spin-restricted formalism is used.
+- **`symm_arh`** (boolean): Controls whether a symmetric version of the ARH formalism is used.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
 
 ### Subspace Gradient-Enhanced Kriging Extension

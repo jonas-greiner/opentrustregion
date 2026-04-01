@@ -32,6 +32,7 @@ typedef struct {
     logger_fp logger;
     c_bool initialized;
     c_bool restricted;
+    c_bool symm_arh;
     c_int verbose;
 } arh_settings_type;
 

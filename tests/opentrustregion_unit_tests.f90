@@ -2168,6 +2168,23 @@ contains
             test_solver_sanity_check = .false.
         end if
 
+        ! check if Hessian symmetry is correctly handled
+        settings%hess_symm = .false.
+        settings%subsystem_solver = "tcg"
+        call solver_sanity_check(settings, 3_ip, grad, error)
+        if (error == 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for non-symmetric Hessian with TCG solver."
+            test_solver_sanity_check = .false.
+        end if
+        settings%subsystem_solver = "gltr"
+        call solver_sanity_check(settings, 3_ip, grad, error)
+        if (error == 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for non-symmetric Hessian with GLTR solver."
+            test_solver_sanity_check = .false.
+        end if
+
         ! reset log message
         log_message = ""
 

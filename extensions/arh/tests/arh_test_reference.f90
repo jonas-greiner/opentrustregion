@@ -19,18 +19,18 @@ module otr_arh_test_reference
 
     ! derived types for ARH settings
     type ref_arh_settings_type
-        logical :: restricted
+        logical :: restricted, symm_arh
         integer(ip) :: verbose
     end type
 
     type, bind(C) :: ref_arh_settings_type_c
-        logical(c_bool) :: restricted
+        logical(c_bool) :: restricted, symm_arh
         integer(c_ip) :: verbose
     end type
 
     ! general reference parameters
     type(ref_arh_settings_type) :: ref_arh_settings = &
-        ref_arh_settings_type(restricted = .true., verbose = 3)
+        ref_arh_settings_type(restricted = .true., symm_arh = .false., verbose = 3)
 
     interface assignment(=)
         module procedure assign_ref_to_arh
@@ -536,6 +536,7 @@ contains
 
         ! set reference values
         lhs%restricted = rhs%restricted
+        lhs%symm_arh = rhs%symm_arh
         lhs%verbose = rhs%verbose
 
         ! set initialization logical
@@ -572,6 +573,7 @@ contains
         type(ref_arh_settings_type), intent(in) :: rhs
 
         lhs%restricted = logical(rhs%restricted, kind=c_bool)
+        lhs%symm_arh = logical(rhs%symm_arh, kind=c_bool)
         lhs%verbose = int(rhs%verbose, kind=c_ip)
 
     end subroutine assign_ref_to_ref_c
@@ -587,6 +589,7 @@ contains
         type(ref_arh_settings_type), intent(in) :: rhs
 
         equal_arh_to_ref = (lhs%restricted .eqv. rhs%restricted) .and. &
+                           (lhs%symm_arh .eqv. rhs%symm_arh) .and. &
                            lhs%verbose == rhs%verbose
 
     end function equal_arh_to_ref
@@ -647,11 +650,11 @@ contains
         type(arh_settings_type), intent(in) :: lhs, rhs
         
         equal_arh = (lhs%restricted .eqv. rhs%restricted) .and. &
-                    lhs%verbose == rhs%verbose
+                    (lhs%symm_arh .eqv. rhs%symm_arh) .and. lhs%verbose == rhs%verbose
 
     end function equal_arh
 
-    logical function not_equal_arh(lhs, rhs)
+    logical function not_equal_arh(lhs, rhs) 
         !
         ! this function overloads the negated comparison operator to compare ARH 
         ! settings to different ARH settings

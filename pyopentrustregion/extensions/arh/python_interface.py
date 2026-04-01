@@ -49,6 +49,7 @@ class ARHSettingsC(Structure):
         ("logger", c_void_p),
         ("initialized", c_bool),
         ("restricted", c_bool),
+        ("symm_arh", c_bool),
         ("verbose", c_int),
     ]
 

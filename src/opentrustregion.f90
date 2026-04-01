@@ -2889,7 +2889,19 @@ contains
             return
         end if
 
-        ! check whether projection functions is passed
+        ! check whether non-symmetric Hessian is requested with a solver that cannot 
+        ! handle it
+        if (.not. settings%hess_symm .and. (settings%subsystem_solver == "tcg" .or. &
+                                            settings%subsystem_solver == "gltr")) then
+            call settings%log("Non-symmetric Hessian not supported with "// &
+                              "truncated conjugate gradient or generalized "// &
+                              "Lanczos trust region solvers.", verbosity_error, &
+                              .true.)
+            error = 1
+            return
+        end if
+
+        ! check whether projection function is passed
         if (associated(settings%project)) call settings%log(project_warning_msg, &
                                                             verbosity_warning)
 

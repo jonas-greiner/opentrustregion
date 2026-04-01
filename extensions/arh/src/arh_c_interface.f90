@@ -71,7 +71,7 @@ module otr_arh_c_interface
     ! derived type for ARH settings
     type, bind(C) :: arh_settings_type_c
         type(c_funptr) :: logger
-        logical(c_bool) :: initialized, restricted
+        logical(c_bool) :: initialized, restricted, symm_arh
         integer(c_ip) :: verbose
     end type
 
@@ -558,6 +558,7 @@ contains
 
             ! convert logicals
             settings%restricted = logical(settings_c%restricted)
+            settings%symm_arh = logical(settings_c%symm_arh)
 
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
@@ -583,6 +584,7 @@ contains
 
             ! convert logicals
             settings_c%restricted = logical(settings%restricted, kind=c_bool)
+            settings_c%symm_arh = logical(settings%symm_arh, kind=c_bool)
 
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)

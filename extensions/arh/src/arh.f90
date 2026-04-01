@@ -12,14 +12,14 @@ module otr_arh
     implicit none
 
     type, extends(settings_type) :: arh_settings_type
-        logical :: restricted
+        logical :: restricted, symm_arh
     contains
         procedure :: init => init_arh_settings
     end type arh_settings_type
 
     type(arh_settings_type), parameter :: default_arh_settings = &
         arh_settings_type(logger = null(), initialized = .true., restricted = .false., &
-                          verbose = 0)
+                          symm_arh = .true., verbose = 0)
 
     abstract interface
         function get_energy_closed_shell_type(dm, error) result(energy)
@@ -763,36 +763,58 @@ module otr_arh
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_diff, i
-        real(rp), allocatable :: dm_oao_x(:, :), vec(:, :)
+        real(rp), allocatable :: dm_oao_x(:, :), vec1(:, :), vec2(:, :)
+        real(rp) :: factor
 
         ! number of density matrix differences
         n_diff = size(dm_diff, 4)
 
+        ! get factor for symmetrization
+        if (settings%symm_arh) then
+            factor = 0.5_rp
+        else
+            factor = 1.0_rp
+        end if
+
         ! calculate two-electron contributions
         two_el = 0.0_rp
         if (n_diff > 0) then
-            ! contract density matrix with trial vector
+            ! get commutator of trial vector and current density matrix
             allocate(dm_oao_x(n_ao, n_ao))
             call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, 1), n_ao, &
                        x(:, :, 1), n_ao, 0.0_rp, dm_oao_x, n_ao)
             dm_oao_x = dm_oao_x + transpose(dm_oao_x)
 
-            ! get vector containing density matrix difference
-            allocate(vec(n_diff, 1))
+            ! get traces of density and Fock matrix differences with commutator of 
+            ! trial vector and current density matrix
+            allocate(vec1(n_diff, 1))
+            if (settings%symm_arh) allocate(vec2(n_diff, 1))
             do i = 1, n_diff
-                vec(i, 1) = sum(dm_diff(:, :, 1, i) * dm_oao_x)
+                vec1(i, 1) = sum(dm_diff(:, :, 1, i) * dm_oao_x)
+                if (settings%symm_arh) vec2(i, 1) = sum(fock_diff(:, :, 1, i) * &
+                                                        dm_oao_x)
             end do
             deallocate(dm_oao_x)
 
-            ! multiply inverse metric with vector through linear solver
-            call solve_symm_linear_system(metric(:, :, 1), vec, settings, error)
+            ! multiply inverse metric with vectors through linear solver
+            call solve_symm_linear_system(metric(:, :, 1), vec1, settings, error)
             if (error /= 0) return
+            if (settings%symm_arh) then
+                call solve_symm_linear_system(metric(:, :, 1), vec2, settings, error)
+                if (error /= 0) return
+            end if
 
-            ! contract with Fock matrix differences
+            ! contract with Fock and density matrix differences
             do i = 1, n_diff
-                two_el(:, :, 1) = two_el(:, :, 1) + vec(i, 1) * fock_diff(:, :, 1, i)
+                two_el(:, :, 1) = two_el(:, :, 1) + factor * vec1(i, 1) * &
+                                  fock_diff(:, :, 1, i)
+                if (settings%symm_arh) then
+                    two_el(:, :, 1) = two_el(:, :, 1) + factor * vec2(i, 1) * &
+                                      dm_diff(:, :, 1, i)
+                end if
             end do
-            deallocate(vec)
+            deallocate(vec1)
+            if (settings%symm_arh) deallocate(vec2)
 
             ! add only v-o and o-v contributions of ARH two-electron part
             two_el = project(two_el, dm_oao)
@@ -803,7 +825,7 @@ module otr_arh
     function get_two_el_contribution_open_shell(dm_oao, x, dm_diff, same_v_diff, &
                                                 opposite_v_diff, metric, n_ao, &
                                                 n_particle, settings, error) &
-            result(two_el)
+        result(two_el)
         !
         ! this function computes the two-electron contribution to the ARH Hessian for
         ! the open-shell case
@@ -817,15 +839,23 @@ module otr_arh
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_diff, i, j, k
-        real(rp), allocatable :: dm_oao_x(:, :, :), vec(:, :)
+        real(rp), allocatable :: dm_oao_x(:, :, :), vec1(:, :), vec2(:, :), vec3(:, :)
+        real(rp) :: factor
 
         ! number of density matrix differences
         n_diff = size(dm_diff, 4)
 
+        ! get factor for symmetrization
+        if (settings%symm_arh) then
+            factor = 0.5_rp
+        else
+            factor = 1.0_rp
+        end if
+
         ! calculate two-electron contributions
         two_el = 0.0_rp
         if (n_diff > 0) then
-            ! contract density matrix with trial vector
+            ! get commutator of trial vector and current density matrix
             allocate(dm_oao_x(n_ao, n_ao, n_particle))
             do j = 1, n_particle
                 call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, j), n_ao, &
@@ -834,31 +864,56 @@ module otr_arh
             end do
             
             ! loop over particles
-            allocate(vec(n_diff, n_particle))
+            allocate(vec1(n_diff, n_particle))
+            if (settings%symm_arh) allocate(vec2(n_diff, 1), vec3(n_diff, n_particle))
             do j = 1, n_particle
-                ! get vector containing density matrix difference
+                ! get traces of density matrix and integral differences with commutator 
+                ! of trial vector and current density matrix
                 do i = 1, n_diff
+                    if (settings%symm_arh) vec2(i, 1) = &
+                        sum((same_v_diff(:, :, j, i) - opposite_v_diff(:, :, j, i)) * &
+                            dm_oao_x(:, :, j))
                     do k = 1, n_particle
-                        vec(i, k) = sum(dm_diff(:, :, j, i) * dm_oao_x(:, :, k))
+                        vec1(i, k) = sum(dm_diff(:, :, j, i) * dm_oao_x(:, :, k))
+                        if (settings%symm_arh) vec3(i, k) = &
+                            sum(opposite_v_diff(:, :, j, i) * dm_oao_x(:, :, k))
                     end do
                 end do
 
-                ! multiply inverse metric with vector through linear solver
-                call solve_symm_linear_system(metric(:, :, j), vec, settings, error)
+                ! multiply inverse metric with vectors through linear solver
+                call solve_symm_linear_system(metric(:, :, j), vec1, settings, error)
                 if (error /= 0) return
+                if (settings%symm_arh) then
+                    call solve_symm_linear_system(metric(:, :, j), vec2, settings, error)
+                    if (error /= 0) return
+                    do k = 1, n_particle
+                        call solve_symm_linear_system(metric(:, :, k), vec3(:, k:k), settings, error)
+                        if (error /= 0) return
+                    end do
+                end if
 
-                ! contract with same and opposite spin potential differences
+                ! contract with same and opposite spin potential and density matrix 
+                ! differences
                 do i = 1, n_diff
-                    two_el(:, :, j) = two_el(:, :, j) + vec(i, j) * &
+                    two_el(:, :, j) = two_el(:, :, j) + factor * vec1(i, j) * &
                                       (same_v_diff(:, :, j, i) - &
                                        opposite_v_diff(:, :, j, i))
+                    if (settings%symm_arh) then
+                        two_el(:, :, j) = two_el(:, :, j) + factor * vec2(i, 1) * &
+                                          dm_diff(:, :, j, i)
+                    end if
                     do k = 1, n_particle
-                        two_el(:, :, j) = two_el(:, :, j) + vec(i, k) * &
+                        two_el(:, :, j) = two_el(:, :, j) + factor * vec1(i, k) * &
                                           opposite_v_diff(:, :, k, i)
+                        if (settings%symm_arh) then
+                            two_el(:, :, j) = two_el(:, :, j) + factor * vec3(i, k) * &
+                                              dm_diff(:, :, k, i)
+                        end if
                     end do
                 end do
             end do
-            deallocate(dm_oao_x, vec)
+            deallocate(dm_oao_x, vec1)
+            if (settings%symm_arh) deallocate(vec2, vec3)
 
             ! add only v-o and o-v contributions of ARH two-electron part
             two_el = project(two_el, dm_oao)
