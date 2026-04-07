@@ -2475,7 +2475,7 @@ contains
         ! run truncated conjugate gradient, check whether the solution lies at the 
         ! trust region boundary and reduces the function value
         call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
-                                          obj_func, hess_x_funptr, settings, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
                                           trust_radius, solution, solution_norm, &
                                           imicro, max_precision_reached, error)
         if (error /= 0) then
@@ -2513,7 +2513,7 @@ contains
         ! run truncated conjugate gradient, check whether the solution lies at the 
         ! trust region boundary and reduces the function value
         call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
-                                          obj_func, hess_x_funptr, settings, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
                                           trust_radius, solution, solution_norm, &
                                           imicro, max_precision_reached, error)
         if (error /= 0) then
