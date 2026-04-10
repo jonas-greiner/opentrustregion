@@ -358,6 +358,7 @@ contains
                     call add_error_origin(error, error_solver, settings)
                     if (error /= 0) return
                     stability_settings%precond => settings%precond
+                    stability_settings%project => settings%project
                     stability_settings%verbose = settings%verbose
                     stability_settings%logger => settings%logger
                     call stability_check(h_diag, hess_x_funptr, stable, error, &
@@ -542,6 +543,13 @@ contains
         allocate(red_space_basis(n_param, 1 + settings%n_random_trial_vectors))
         red_space_basis(:, 1) = 0.0_rp
         red_space_basis(minloc(h_diag), 1) = 1.0_rp
+        if (associated(settings%project)) then
+            call settings%project(red_space_basis(:, 1), error)
+            call add_error_origin(error, error_project, settings)
+            if (error /= 0) return
+            red_space_basis(:, 1) = red_space_basis(:, 1) / &
+                                    dnrm2(n_param, red_space_basis(:, 1), 1_ip)
+        end if
         call generate_random_trial_vectors(red_space_basis, settings, error)
         call add_error_origin(error, error_stability_check, settings)
         if (error /= 0) return
