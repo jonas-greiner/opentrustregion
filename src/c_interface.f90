@@ -160,6 +160,8 @@ module c_interface
     procedure(modify_step_type), pointer :: modify_step_f_wrapper_ptr => &
         modify_step_f_wrapper
     procedure(conv_check_type), pointer :: conv_check_f_wrapper_ptr => &
+    procedure(hess_x_type), pointer :: stability_hess_x_f_wrapper_ptr => &
+                                       stability_hess_x_f_wrapper
     procedure(hess_x_type), pointer :: approx_hess_x_f_wrapper_ptr => &
                                        approx_hess_x_f_wrapper
     procedure(logger_type), pointer :: logger_f_wrapper_ptr => logger_f_wrapper
