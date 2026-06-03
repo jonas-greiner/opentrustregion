@@ -402,6 +402,11 @@ class SolverSettings(Settings):
         self._stability_settings = StabilitySettings(
             settings_c=self.settings_c.stability_settings
         )
+
+    @property
+    def stability_settings(self) -> StabilitySettings:
+        return self._stability_settings
+
     def set_optional_callbacks(self, n_param: int):
         """
         this function sets the interfaces for the optional callback functions

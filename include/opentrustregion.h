@@ -105,6 +105,8 @@ typedef struct {
     c_int verbose;
 
     char subsystem_solver[OTR_KW_LEN + 1];
+
+    stability_settings_type stability_settings;
 } solver_settings_type;
 
 // Fortran-callable init subroutine for solver settings
