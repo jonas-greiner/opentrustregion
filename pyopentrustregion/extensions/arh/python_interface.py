@@ -17,7 +17,8 @@ from pyopentrustregion.python_interface import (
     update_orbs_interface_type,
     hess_x_interface_type,
     project_interface_type,
-    logger_interface_factory,
+    logger_interface_type,
+    LoggerInterface,
     Settings,
     auto_bind_fields,
 )
@@ -174,7 +175,9 @@ def arh_factory(
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
-    settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
+    settings.set_optional_callback(
+        "logger", settings.logger, LoggerInterface, logger_interface_type
+    )
 
     if not hasattr(lib, "arh_factory"):
         raise RuntimeError(

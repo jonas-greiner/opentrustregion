@@ -7,19 +7,21 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, Structure
+from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, Structure
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
     c_int,
     c_real,
     update_orbs_interface_type,
-    hess_x_interface_type,
-    update_orbs_interface_factory,
-    logger_interface_factory,
+    logger_interface_type,
+    UpdateOrbsInterface,
+    LoggerInterface,
     Settings,
     auto_bind_fields,
 )
+from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any
@@ -63,6 +65,40 @@ class SGEKSettings(Settings):
 auto_bind_fields(SGEKSettings)
 
 
+# define interface factories
+@dataclass
+class ChangeReferenceInterface:
+    """
+    this class provides the interface to change the reference and to write the
+    parameter, local gradient, and gradient lists to the memory provided through
+    pointers
+    """
+
+    change_reference: Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], None]
+    n_param: int
+
+    def __call__(
+        self, new_ref_ptr, n_points, kappa_list_ptr, local_grad_list_ptr, grad_list_ptr
+    ) -> int:
+        # convert matrix pointers to numpy arrays
+        new_ref = np.ctypeslib.as_array(new_ref_ptr, shape=(self.n_param,))
+        kappa_list = np.ctypeslib.as_array(
+            kappa_list_ptr, shape=(n_points, self.n_param)
+        )
+        local_grad_list = np.ctypeslib.as_array(
+            local_grad_list_ptr, shape=(n_points, self.n_param)
+        )
+        grad_list = np.ctypeslib.as_array(grad_list_ptr, shape=(n_points, self.n_param))
+
+        # change reference and retrieve parameter, local gradient, and gradient lists
+        try:
+            self.change_reference(new_ref, kappa_list, local_grad_list, grad_list)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+
 def update_orbs_s_gek_factory(
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -76,37 +112,19 @@ def update_orbs_s_gek_factory(
     Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
 ]:
     # define interfaces for callback functions
-    update_orbs_interface = update_orbs_interface_factory(update_orbs, n_param)
-
-    @change_reference_interface_type
-    def change_reference_interface(
-        new_ref_ptr, n_points, kappa_list_ptr, local_grad_list_ptr, grad_list_ptr
-    ):
-        """
-        this function provides the interface to change the reference and to write the
-        parameter, local gradient, and gradient lists to the memory provided through
-        pointers
-        """
-        # convert pointers to numpy arrays and deal with row- vs column-major order
-        new_ref = np.ctypeslib.as_array(new_ref_ptr, shape=(n_param,))
-        kappa_list = np.ctypeslib.as_array(kappa_list_ptr, shape=(n_points, n_param))
-        local_grad_list = np.ctypeslib.as_array(
-            local_grad_list_ptr, shape=(n_points, n_param)
-        )
-        grad_list = np.ctypeslib.as_array(grad_list_ptr, shape=(n_points, n_param))
-
-        # change reference and retrieve parameter, local gradient, and gradient lists
-        try:
-            change_reference(new_ref, kappa_list, local_grad_list, grad_list)
-        except RuntimeError:
-            return 1
-
-        return 0
+    update_orbs_interface = update_orbs_interface_type(
+        UpdateOrbsInterface(update_orbs, n_param)
+    )
+    change_reference_interface = change_reference_interface_type(
+        ChangeReferenceInterface(change_reference, n_param)
+    )
 
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
-    settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
+    settings.set_optional_callback(
+        "logger", settings.logger, LoggerInterface, logger_interface_type
+    )
 
     if not hasattr(lib, "update_orbs_s_gek_factory"):
         raise RuntimeError(
@@ -137,48 +155,13 @@ def update_orbs_s_gek_factory(
     if error:
         raise RuntimeError("OpenTrustRegion S-GEK update factory produced error.")
 
-    # python wrapper which converts numpy arrays to ctypes and calls the C function
-    def update_orbs_s_gek_interface(
-        kappa: np.ndarray, grad: np.ndarray, h_diag: np.ndarray
-    ) -> Tuple[float, Callable[[np.ndarray, np.ndarray], None]]:
-        # initialize real
-        func = c_real()
-
-        # get pointers to arrays
-        kappa_ptr = kappa.ctypes.data_as(POINTER(c_real))
-        grad_ptr = grad.ctypes.data_as(POINTER(c_real))
-        h_diag_ptr = h_diag.ctypes.data_as(POINTER(c_real))
-
-        # initialize Hessian linear transformation function pointer
-        hess_x_s_gek_funptr = hess_x_interface_type()
-
-        # update orbital function
-        error = update_orbs_s_gek_funptr(
-            kappa_ptr, func, grad_ptr, h_diag_ptr, hess_x_s_gek_funptr
-        )
-        if error != 0:
-            raise RuntimeError("S-GEK orbital updating function raised error.")
-
-        def hess_x_s_gek_interface(x: np.ndarray, hess_x: np.ndarray):
-            # get pointers to arrays
-            x_ptr = x.ctypes.data_as(POINTER(c_real))
-            hess_x_ptr = hess_x.ctypes.data_as(POINTER(c_real))
-
-            # update orbital function
-            error = hess_x_s_gek_funptr(x_ptr, hess_x_ptr)
-            if error != 0:
-                raise RuntimeError(
-                    "S-GEK Hessian linear transformation function raised error."
-                )
-
-        return func.value, hess_x_s_gek_interface
-
-    # keep all functions alive that are involved in the S-GEK orbital update
-    update_orbs_s_gek_interface.update_orbs_interface = update_orbs_interface
-    update_orbs_s_gek_interface.change_reference_interface = change_reference_interface
-    update_orbs_s_gek_interface.update_orbs_s_gek_funptr = update_orbs_s_gek_funptr
-
-    return update_orbs_s_gek_interface
+    return UpdateOrbsPyInterface(
+        update_orbs_funptr=update_orbs_s_gek_funptr,
+        saved_objects={
+            "update_orbs_interface": update_orbs_interface,
+            "change_reference_interface": change_reference_interface,
+        },
+    )
 
 
 def update_orbs_s_gek_deconstructor():

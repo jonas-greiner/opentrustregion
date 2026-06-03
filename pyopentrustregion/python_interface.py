@@ -28,6 +28,7 @@ from ctypes import (
     c_char,
     Structure,
 )
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -109,215 +110,183 @@ logger_interface_type = CFUNCTYPE(None, c_char_p)
 
 
 # define interface factories
-def update_orbs_interface_factory(
+@dataclass
+class ObjFuncInterface:
+    """
+    this class provides the interface for the objective function
+    """
+
+    obj_func: Callable[[np.ndarray], float]
+    n_param: int
+
+    def __call__(self, kappa_ptr, func_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
+
+        try:
+            func_ptr[0] = self.obj_func(kappa)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+
+@dataclass
+class HessXInterface:
+    """
+    this class provides the interface for the Hessian linear transformation
+    """
+
+    hess_x: Callable[[np.ndarray, np.ndarray], None]
+    n_param: int
+
+    def __call__(self, x_ptr, hx_ptr) -> int:
+        # convert trial vector pointer to numpy array
+        x = np.ctypeslib.as_array(x_ptr, shape=(self.n_param,))
+        hx = np.ctypeslib.as_array(hx_ptr, shape=(self.n_param,))
+
+        # perform linear transformation
+        try:
+            self.hess_x(x, hx)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+
+@dataclass
+class UpdateOrbsInterface:
+    """
+    this class provides the interface to the orbital updating function
+    """
+
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
-    ],
-    n_param: int,
-) -> Any:
-    """
-    this function is a factory for the orbital updating interface
-    """
+    ]
+    n_param: int
+    hess_x_funptr: Optional[Any] = None
 
-    @update_orbs_interface_type
-    def update_orbs_interface(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_funptr):
-        """
-        this function provides the interface to update the orbitals and to write the
-        function value, gradient, Hessian diagonal to the memory provided through
-        pointers and returns a function pointer to the Hessian linear transformation
-        """
-        # convert orbital rotation matrix pointer to numpy array
-        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
-        grad = np.ctypeslib.as_array(grad_ptr, shape=(n_param,))
-        h_diag = np.ctypeslib.as_array(h_diag_ptr, shape=(n_param,))
+    def __call__(self, kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_funptr) -> int:
+        # convert matrix pointers to numpy arrays
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
+        grad = np.ctypeslib.as_array(grad_ptr, shape=(self.n_param,))
+        h_diag = np.ctypeslib.as_array(h_diag_ptr, shape=(self.n_param,))
 
         # update orbitals and retrieve objective function, gradient, Hessian diagonal
         # and Hessian linear transformation function
         try:
-            func_ptr[0], hess_x = update_orbs(kappa, grad, h_diag)
+            func_ptr[0], hess_x = self.update_orbs(kappa, grad, h_diag)
         except RuntimeError:
             return 1
 
-        # attach the Hessian-vector product interface to the returned interface so that
-        # it persists in Python to ensure that it is not garbage collected when the
-        # factory completes
-        update_orbs_interface.hess_x_interface = hess_x_interface_factory(
-            hess_x, n_param
-        )
-
-        # store the function pointer in hess_x_funptr so that it can be accessed by
-        # Fortran
-        hess_x_funptr[0] = update_orbs_interface.hess_x_interface
+        # attach the response interface to the object so that it persists in Python
+        # to ensure that it is not garbage collected when the factory completes
+        self.hess_x_funptr = hess_x_interface_type(HessXInterface(hess_x, self.n_param))
+        hess_x_funptr[0] = self.hess_x_funptr
 
         return 0
 
-    # attach the orbital updating function to the returned interface so that it
-    # persists in Python to ensure that it is not garbage collected when the factory
-    # completes
-    update_orbs_interface.update_orbs = update_orbs
 
-    return update_orbs_interface
-
-
-# define interface factories
-def hess_x_interface_factory(
-    hess_x: Callable[[np.ndarray, np.ndarray], None], n_param: int
-) -> Any:
+@dataclass
+class PrecondInterface:
     """
-    this function is a factory for the Hessian linear transformation interface
+    this class provides the interface to the preconditioning function
     """
 
-    @hess_x_interface_type
-    def hess_x_interface(x_ptr, hx_ptr):
-        """
-        this function interfaces the Hessian linear transformation
-        """
-        # convert trial vector pointer to numpy array
-        x = np.ctypeslib.as_array(x_ptr, shape=(n_param,))
-        hx = np.ctypeslib.as_array(hx_ptr, shape=(n_param,))
+    precond: Callable[[np.ndarray, float, np.ndarray], None]
+    n_param: int
 
-        # perform linear transformation
-        try:
-            hess_x(x, hx)
-        except RuntimeError:
-            return 1
-
-        return 0
-
-    # attach the Hessian-vector product function to the returned interface so that it
-    # persists in Python to ensure that it is not garbage collected when the factory
-    # completes
-    hess_x_interface.hess_x = hess_x
-
-    return hess_x_interface
-
-
-def precond_interface_factory(
-    precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]], n_param: int
-) -> Any:
-    """
-    this function is a factory for the preconditioning interface
-    """
-    if precond is None:
-        return None
-
-    @precond_interface_type
-    def precond_interface(residual_ptr, mu_ptr, precond_residual_ptr):
-        """
-        this function interfaces the preconditioner
-        """
-        # convert pointers to numpy array and float
-        residual = np.ctypeslib.as_array(residual_ptr, shape=(n_param,))
+    def __call__(self, residual_ptr, mu_ptr, precond_residual_ptr) -> int:
+        # convert pointers to numpy arrays and float
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
         mu = mu_ptr[0]
-        precond_residual = np.ctypeslib.as_array(precond_residual_ptr, shape=(n_param,))
+        precond_residual = np.ctypeslib.as_array(
+            precond_residual_ptr, shape=(self.n_param,)
+        )
 
         # call preconditioner
         try:
-            precond(residual, mu, precond_residual)
+            self.precond(residual, mu, precond_residual)
         except RuntimeError:
             return 1
 
         return 0
 
-    return precond_interface
 
-
-def project_interface_factory(
-    project: Optional[Callable[[np.ndarray], None]], n_param: int
-) -> Any:
+@dataclass
+class ProjectInterface:
     """
-    this function is a factory for the projection interface
+    this class provides the interface to the projection function
     """
-    if project is None:
-        return None
 
-    @project_interface_type
-    def project_interface(vector_ptr):
-        """
-        this function interfaces the projection function
-        """
-        # convert pointers to numpy array and float
-        vector = np.ctypeslib.as_array(vector_ptr, shape=(n_param,))
+    project: Callable[[np.ndarray], None]
+    n_param: int
+
+    def __call__(self, vector_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
 
         # call projection function
         try:
-            project(vector)
+            self.project(vector)
         except RuntimeError:
             return 1
 
         return 0
 
-    return project_interface
 
-
-def modify_step_interface_factory(
-    modify_step: Optional[Callable[[np.ndarray], None]], n_param: int
-) -> Any:
+@dataclass
+class ModifyStepInterface:
     """
-    this function is a factory for the step modification interface
+    this class provides the interface to the step modification function
     """
-    if modify_step is None:
-        return None
 
-    @modify_step_interface_type
-    def modify_step_interface(kappa_ptr):
-        """
-        this function interfaces the step modification function
-        """
-        # convert pointers to numpy array and float
-        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
+    modify_step: Callable[[np.ndarray], None]
+    n_param: int
+
+    def __call__(self, kappa_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
 
         # call step modification function
         try:
-            modify_step(kappa)
+            self.modify_step(kappa)
         except RuntimeError:
             return 1
 
         return 0
 
-    return modify_step_interface
 
-
-def conv_check_interface_factory(conv_check: Optional[Callable[[], bool]]) -> Any:
+@dataclass
+class ConvCheckInterface:
     """
-    this function is a factory for the convergence check interface
+    this class provides the interface to the convergence check function
     """
-    if conv_check is None:
-        return None
 
-    @conv_check_interface_type
-    def conv_check_interface(conv_ptr):
-        """
-        this function interfaces the convergence check
-        """
+    conv_check: Callable[[], bool]
+
+    def __call__(self, conv_ptr) -> int:
         # call convergence check
         try:
-            conv_ptr[0] = conv_check()
+            conv_ptr[0] = self.conv_check()
         except RuntimeError:
             return 1
 
         return 0
 
-    return conv_check_interface
 
-
-def logger_interface_factory(logger: Optional[Callable[[str], None]]) -> Any:
+@dataclass
+class LoggerInterface:
     """
-    this function is a factory for the logging interface
+    this class provides the interface to the logging function
     """
-    if logger is None:
-        return None
 
-    @logger_interface_type
-    def logger_interface(message):
-        """
-        this function interfaces the logging
-        """
+    logger: Callable[[str], None]
+
+    def __call__(self, message):
         # call logger
-        logger(string_at(message).decode("utf-8"))
-
-    return logger_interface
+        self.logger(string_at(message).decode("utf-8"))
 
 
 # define classes corresponding to C structs for settings
@@ -387,16 +356,25 @@ class Settings:
             if field_type is c_void_p:
                 setattr(self, field_name, None)
 
-    def set_optional_callback(self, attr_name, func_interface):
+    def set_optional_callback(
+        self, attr_name, func, func_interface, func_interface_type, *args
+    ):
         """
         this function sets a callback in the C struct from a Python function while also
         keeping the interface alive in the Python object
         """
+        # create interface if function is not None
+        interface = (
+            func_interface_type(func_interface(func, *args))
+            if func is not None
+            else None
+        )
+
         # create c_void_p pointer, points to NULL if func_interface is None
-        setattr(self.settings_c, attr_name, cast(func_interface, c_void_p))
+        setattr(self.settings_c, attr_name, cast(interface, c_void_p))
 
         # keep interface alive
-        setattr(self.settings_c, attr_name + "_interface", func_interface)
+        setattr(self.settings_c, attr_name + "_interface", interface)
 
 
 class SolverSettings(Settings):
@@ -415,6 +393,31 @@ class SolverSettings(Settings):
     conv_check_interface: Any
     logger_interface: Any
 
+    def set_optional_callbacks(self, n_param: int):
+        """
+        this function sets the interfaces for the optional callback functions
+        """
+        self.set_optional_callback(
+            "precond", self.precond, PrecondInterface, precond_interface_type, n_param
+        )
+        self.set_optional_callback(
+            "project", self.project, ProjectInterface, project_interface_type, n_param
+        )
+        self.set_optional_callback(
+            "modify_step",
+            self.modify_step,
+            ModifyStepInterface,
+            modify_step_interface_type,
+            n_param,
+        )
+        self.set_optional_callback(
+            "conv_check", self.conv_check, ConvCheckInterface, conv_check_interface_type
+        )
+        self.set_optional_callback(
+            "logger", self.logger, LoggerInterface, logger_interface_type
+        )
+        self.stability_settings.set_optional_callbacks(n_param)
+
 
 class StabilitySettings(Settings):
 
@@ -427,6 +430,20 @@ class StabilitySettings(Settings):
     precond_interface: Any
     project_interface: Any
     logger_interface: Any
+
+    def set_optional_callbacks(self, n_param: int):
+        """
+        this function sets the interfaces for the optional callback functions
+        """
+        self.set_optional_callback(
+            "precond", self.precond, PrecondInterface, precond_interface_type, n_param
+        )
+        self.set_optional_callback(
+            "project", self.project, ProjectInterface, project_interface_type, n_param
+        )
+        self.set_optional_callback(
+            "logger", self.logger, LoggerInterface, logger_interface_type
+        )
 
 
 def auto_bind_fields(cls: type[Settings]):
@@ -501,39 +518,16 @@ def solver(
     settings: SolverSettings,
 ):
     # define interfaces for callback functions
-    update_orbs_interface = update_orbs_interface_factory(update_orbs, n_param)
-
-    @obj_func_interface_type
-    def obj_func_interface(kappa_ptr, func_ptr):
-        """
-        this function interfaces the objective function
-        """
-        # convert orbital rotation matrix pointer to numpy array
-        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
-
-        try:
-            func_ptr[0] = obj_func(kappa)
-        except RuntimeError:
-            return 1
-
-        return 0
+    test = ObjFuncInterface(obj_func, n_param)
+    obj_func_interface = obj_func_interface_type(test)
+    update_orbs_interface = update_orbs_interface_type(
+        UpdateOrbsInterface(update_orbs, n_param)
+    )
 
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
-    settings.set_optional_callback(
-        "precond", precond_interface_factory(settings.precond, n_param)
-    )
-    settings.set_optional_callback(
-        "project", project_interface_factory(settings.project, n_param)
-    )
-    settings.set_optional_callback(
-        "modify_step", modify_step_interface_factory(settings.modify_step, n_param)
-    )
-    settings.set_optional_callback(
-        "conv_check", conv_check_interface_factory(settings.conv_check)
-    )
-    settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
+    settings.set_optional_callbacks(n_param)
 
     # define result and argument types
     lib.solver.restype = c_int
@@ -561,18 +555,12 @@ def stability_check(
     kappa: Optional[np.ndarray] = None,
 ) -> bool:
     # define interfaces for callback functions
-    hess_x_interface = hess_x_interface_factory(hess_x, n_param)
+    hess_x_interface = hess_x_interface_type(HessXInterface(hess_x, n_param))
 
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
-    settings.set_optional_callback(
-        "precond", precond_interface_factory(settings.precond, n_param)
-    )
-    settings.set_optional_callback(
-        "project", project_interface_factory(settings.project, n_param)
-    )
-    settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
+    settings.set_optional_callbacks(n_param)
 
     # define result and argument types
     lib.stability_check.restype = c_int

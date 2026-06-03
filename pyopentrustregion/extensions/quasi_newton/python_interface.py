@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
@@ -15,12 +15,13 @@ from pyopentrustregion.python_interface import (
     c_real,
     kw_len,
     update_orbs_interface_type,
-    hess_x_interface_type,
-    update_orbs_interface_factory,
-    logger_interface_factory,
+    logger_interface_type,
+    UpdateOrbsInterface,
+    LoggerInterface,
     Settings,
     auto_bind_fields,
 )
+from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any
@@ -62,6 +63,33 @@ class QNSettings(Settings):
 auto_bind_fields(QNSettings)
 
 
+# define interface factories
+@dataclass
+class TransportInterface:
+    """
+    this class provides the interface to transport a tangent vector along a
+    geodesic and to write it to the memory provided through pointers
+    """
+
+    transport: Callable[[np.ndarray, np.ndarray], None]
+    n_param: int
+
+    def __call__(self, geodesic_ptr, tangent_vector_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        geodesic = np.ctypeslib.as_array(geodesic_ptr, shape=(self.n_param,))
+        tangent_vector = np.ctypeslib.as_array(
+            tangent_vector_ptr, shape=(self.n_param,)
+        )
+
+        # transport and retrieve tangent vector
+        try:
+            self.transport(geodesic, tangent_vector)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+
 def update_orbs_qn_factory(
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -75,30 +103,19 @@ def update_orbs_qn_factory(
     Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
 ]:
     # define interfaces for callback functions
-    update_orbs_interface = update_orbs_interface_factory(update_orbs, n_param)
-
-    @transport_interface_type
-    def transport_interface(geodesic_ptr, tangent_vector_ptr):
-        """
-        this function provides the interface to transport a tangent vector along a
-        geodesic and to write it to the memory provided through pointers
-        """
-        # convert pointers to numpy arrays and deal with row- vs column-major order
-        geodesic = np.ctypeslib.as_array(geodesic_ptr, shape=(n_param,))
-        tangent_vector = np.ctypeslib.as_array(tangent_vector_ptr, shape=(n_param,))
-
-        # transport and retrieve tangent vector
-        try:
-            transport(geodesic, tangent_vector)
-        except RuntimeError:
-            return 1
-
-        return 0
+    update_orbs_interface = update_orbs_interface_type(
+        UpdateOrbsInterface(update_orbs, n_param)
+    )
+    transport_interface = transport_interface_type(
+        TransportInterface(transport=transport, n_param=n_param)
+    )
 
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
-    settings.set_optional_callback("logger", logger_interface_factory(settings.logger))
+    settings.set_optional_callback(
+        "logger", settings.logger, LoggerInterface, logger_interface_type
+    )
 
     if not hasattr(lib, "update_orbs_qn_factory"):
         raise RuntimeError(
@@ -131,48 +148,14 @@ def update_orbs_qn_factory(
             "OpenTrustRegion quasi-Newton update factory produced error."
         )
 
-    # python wrapper which converts numpy arrays to ctypes and calls the C function
-    def update_orbs_qn_interface(
-        kappa: np.ndarray, grad: np.ndarray, h_diag: np.ndarray
-    ) -> Tuple[float, Callable[[np.ndarray, np.ndarray], None]]:
-        # initialize real
-        func = c_real()
-
-        # get pointers to arrays
-        kappa_ptr = kappa.ctypes.data_as(POINTER(c_real))
-        grad_ptr = grad.ctypes.data_as(POINTER(c_real))
-        h_diag_ptr = h_diag.ctypes.data_as(POINTER(c_real))
-
-        # initialize Hessian linear transformation function pointer
-        hess_x_qn_funptr = hess_x_interface_type()
-
-        # update orbital function
-        error = update_orbs_qn_funptr(
-            kappa_ptr, func, grad_ptr, h_diag_ptr, hess_x_qn_funptr
-        )
-        if error != 0:
-            raise RuntimeError("Quasi-Newton orbital updating function raised error.")
-
-        def hess_x_qn_interface(x: np.ndarray, hess_x: np.ndarray):
-            # get pointers to arrays
-            x_ptr = x.ctypes.data_as(POINTER(c_real))
-            hess_x_ptr = hess_x.ctypes.data_as(POINTER(c_real))
-
-            # update orbital function
-            error = hess_x_qn_funptr(x_ptr, hess_x_ptr)
-            if error != 0:
-                raise RuntimeError(
-                    "Quasi-Newton Hessian linear transformation function raised error."
-                )
-
-        return func.value, hess_x_qn_interface
-
-    # keep all functions alive that are involved in the quasi-Newton orbital update
-    update_orbs_qn_interface.update_orbs_interface = update_orbs_interface
-    update_orbs_qn_interface.transport_interface = transport_interface
-    update_orbs_qn_interface.update_orbs_qn_funptr = update_orbs_qn_funptr
-
-    return update_orbs_qn_interface
+    return UpdateOrbsPyInterface(
+        update_orbs_funptr=update_orbs_qn_funptr,
+        saved_objects={
+            "update_orbs_interface": update_orbs_interface,
+            "transport_interface": transport_interface,
+            "init_hess_interface": init_hess_interface,
+        },
+    )
 
 
 def update_orbs_qn_deconstructor():

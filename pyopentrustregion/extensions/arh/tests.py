@@ -425,7 +425,9 @@ class ARHPyInterfaceTests(unittest.TestCase):
         def dummy_logger():
             return dummy_error_code
 
-        settings.set_optional_callback("logger", CFUNCTYPE(c_int)(dummy_logger))
+        settings.set_optional_callback(
+            "logger", dummy_logger, lambda x: x, CFUNCTYPE(c_int)
+        )
 
         c_ptr = getattr(settings.settings_c, "logger")
         c_interface = getattr(settings.settings_c, "logger_interface", None)
