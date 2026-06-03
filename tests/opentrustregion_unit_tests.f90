@@ -1466,7 +1466,7 @@ contains
         !
         use opentrustregion, only: solver_settings_type, &
                                    default_settings => default_solver_settings
-        use test_reference, only: operator(/=)
+        use test_reference, only: test_associated_solver_funptr, operator(/=)
 
         type(solver_settings_type) :: settings
         integer(ip) :: error
@@ -1505,7 +1505,7 @@ contains
         !
         use opentrustregion, only: stability_settings_type, &
                                    default_settings => default_stability_settings
-        use test_reference, only: operator(/=)
+        use test_reference, only: test_associated_stability_funptr, operator(/=)
 
         type(stability_settings_type) :: settings
         integer(ip) :: error
