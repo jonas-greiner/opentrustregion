@@ -35,6 +35,7 @@ fortran_tests = {
         "assign_qn_c_f",
         "assign_qn_f_c",
         "hess_x_qn_c_wrapper",
+        "init_hess_f_wrapper",
         "init_qn_settings_c",
         "transport_f_wrapper",
         "update_orbs_orig_qn_f_wrapper",
@@ -135,7 +136,14 @@ class QNPyInterfaceTests(unittest.TestCase):
             """
             this function is a mock function for the transport function
             """
-            tangent_vector = geodesic * tangent_vector
+
+            return
+
+        def mock_init_hess(vector):
+            """
+            this function is a mock function for the initial Hessian function
+            """
+            vector[:] = 2 * vector
 
             return
 
@@ -165,7 +173,7 @@ class QNPyInterfaceTests(unittest.TestCase):
 
         # call quasi-Newton orbital updating factory python interface
         update_orbs_qn = update_orbs_qn_factory(
-            mock_update_orbs, mock_transport, n_param, settings
+            mock_update_orbs, mock_transport, mock_init_hess, n_param, settings
         )
 
         # check if logger was called correctly
