@@ -52,7 +52,7 @@ contains
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
                                              transport_c_funptr, init_hess_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
-        type(qn_settings_type_c), intent(in), value :: settings_c
+        type(qn_settings_type_c), intent(inout) :: settings_c
         type(c_funptr), intent(out) :: update_orbs_qn_c_funptr
         integer(c_ip) :: error_c
 

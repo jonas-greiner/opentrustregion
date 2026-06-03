@@ -341,7 +341,7 @@ class Settings:
     c_struct: type[Structure]
     init_c_struct: Any
 
-    def __init__(self):
+    def __init__(self, settings_c: Optional[Structure] = None):
         """
         this function initializes the settings class
         """
@@ -349,9 +349,13 @@ class Settings:
         self.init_c_struct.argtypes = [POINTER(self.c_struct)]
         self.init_c_struct.restype = None
 
-        # call C-side initialization to populate defaults
-        self.settings_c = self.c_struct()
-        self.init_c_struct(byref(self.settings_c))
+        # call C-side initialization to populate defaults, use passed settings if
+        # provided
+        if settings_c is None:
+            self.settings_c = self.c_struct()
+            self.init_c_struct(byref(self.settings_c))
+        else:
+            self.settings_c = settings_c
 
         # initializes all optional function pointers to None
         for field_info in self.settings_c._fields_:
@@ -569,12 +573,12 @@ def solver(
         update_orbs_interface_type,
         obj_func_interface_type,
         c_int,
-        SolverSettingsC,
+        POINTER(SolverSettingsC),
     ]
 
     # call Fortran function
     error = lib.solver(
-        update_orbs_interface, obj_func_interface, n_param, settings.settings_c
+        update_orbs_interface, obj_func_interface, n_param, byref(settings.settings_c)
     )
 
     if error:
@@ -603,7 +607,7 @@ def stability_check(
         hess_x_interface_type,
         c_int,
         POINTER(c_bool),
-        StabilitySettingsC,
+        POINTER(StabilitySettingsC),
         c_void_p,
     ]
 
@@ -616,7 +620,7 @@ def stability_check(
         hess_x_interface,
         n_param,
         byref(stable),
-        settings.settings_c,
+        byref(settings.settings_c),
         kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else kappa,
     )
 

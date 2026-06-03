@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure
+from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, c_char, Structure
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
@@ -159,7 +159,7 @@ def update_orbs_qn_factory(
         transport_interface_type,
         init_hess_interface_type,
         c_int,
-        QNSettingsC,
+        POINTER(QNSettingsC),
         POINTER(update_orbs_interface_type),
     ]
 
@@ -170,7 +170,7 @@ def update_orbs_qn_factory(
         transport_interface,
         init_hess_interface,
         n_param,
-        settings.settings_c,
+        byref(settings.settings_c),
         update_orbs_qn_funptr,
     )
 

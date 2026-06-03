@@ -152,7 +152,7 @@ c_int solver(
     update_orbs_fp update_orbs_ptr, 
     obj_func_fp obj_func_ptr, 
     c_int n_param, 
-    solver_settings_type settings
+    solver_settings_type *settings
 );
 
 /**
@@ -171,7 +171,7 @@ c_int stability_check(
     hess_x_fp hess_x_ptr,
     c_int n_param,
     c_bool* stable,
-    stability_settings_type settings,
+    stability_settings_type *settings,
     const void* kappa_ptr
 );
 

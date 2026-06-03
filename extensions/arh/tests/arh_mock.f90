@@ -55,7 +55,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
+        type(arh_settings_type), intent(inout) :: settings
 
         ! initialize logical
         test_passed = .true.
@@ -145,7 +145,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
+        type(arh_settings_type), intent(inout) :: settings
 
         ! initialize logical
         test_passed = .true.

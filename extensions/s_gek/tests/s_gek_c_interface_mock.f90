@@ -50,7 +50,7 @@ contains
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
                                              change_reference_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
-        type(s_gek_settings_type_c), intent(in), value :: settings_c
+        type(s_gek_settings_type_c), intent(inout) :: settings_c
         type(c_funptr), intent(out) :: update_orbs_s_gek_c_funptr
         integer(c_ip) :: error_c
 

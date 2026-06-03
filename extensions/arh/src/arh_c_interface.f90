@@ -126,8 +126,8 @@ contains
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
-        type(c_funptr), intent(in), value :: get_energy_c_funptr, get_fock_c_funptr
-        type(arh_settings_type_c), intent(in), value :: settings_c
+        type(c_funptr), intent(in), value :: get_energy_c_funptr, update_dm_c_funptr
+        type(arh_settings_type_c), intent(inout) :: settings_c
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, &
                                        update_orbs_arh_c_funptr, project_arh_c_funptr
         integer(c_ip) :: error_c

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, Structure
+from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, Structure, byref
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
@@ -197,7 +197,7 @@ def arh_factory(
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
         POINTER(project_interface_type),
-        ARHSettingsC,
+        POINTER(ARHSettingsC),
     ]
 
     # call Fortran function
@@ -214,7 +214,7 @@ def arh_factory(
         obj_func_arh_funptr,
         update_orbs_arh_funptr,
         project_arh_funptr,
-        settings.settings_c,
+        byref(settings.settings_c),
     )
 
     if error:

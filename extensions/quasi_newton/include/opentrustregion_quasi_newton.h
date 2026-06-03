@@ -58,7 +58,7 @@ c_int update_orbs_qn_factory(
     transport_fp transport_c_funptr,
     init_hess_fp init_hess_c_funptr,
     c_int n_param,
-    qn_settings_type settings,
+    qn_settings_type *settings,
     update_orbs_fp* update_orbs_qn_c_funptr
 );
 

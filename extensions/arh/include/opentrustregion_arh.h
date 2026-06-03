@@ -69,7 +69,7 @@ c_int arh_factory(
     obj_func_fp* obj_func_arh_c_funptr,
     update_orbs_fp* update_orbs_arh_c_funptr,
     precond_fp* precond_arh_c_funptr,
-    arh_settings_type settings_c
+    arh_settings_type *settings_c
 );
 
 /**

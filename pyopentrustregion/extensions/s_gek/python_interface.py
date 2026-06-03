@@ -138,7 +138,7 @@ def update_orbs_s_gek_factory(
         update_orbs_interface_type,
         change_reference_interface_type,
         c_int,
-        SGEKSettingsC,
+        POINTER(SGEKSettingsC),
         POINTER(update_orbs_interface_type),
     ]
 
@@ -148,7 +148,7 @@ def update_orbs_s_gek_factory(
         update_orbs_interface,
         change_reference_interface,
         n_param,
-        settings.settings_c,
+        byref(settings.settings_c),
         update_orbs_s_gek_funptr,
     )
 
