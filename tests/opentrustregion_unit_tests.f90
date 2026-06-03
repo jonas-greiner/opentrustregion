@@ -2534,6 +2534,214 @@ contains
 
     end function test_truncated_conjugate_gradient
 
+    logical(c_bool) function test_generalized_lanczos_trust_region() bind(C)
+        !
+        ! this function tests the generalized Lanczos trust region subroutine
+        !
+        use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
+                                   generalized_lanczos_trust_region, &
+                                   trust_radius_shrink_ratio, &
+                                   trust_radius_expand_ratio, &
+                                   trust_radius_shrink_factor, &
+                                   trust_radius_expand_factor
+
+        integer(ip), parameter :: n_param = 6
+        real(rp) :: func, grad_norm, trust_radius, lambda, ratio, solution_norm, mu
+        real(rp), dimension(n_param) :: grad, h_diag, solution, residual, precond
+        integer(ip) :: i, imicro, error
+        procedure(obj_func_type), pointer :: obj_func_funptr
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        type(solver_settings_type) :: settings
+        logical :: max_precision_reached
+
+        ! assume tests pass
+        test_generalized_lanczos_trust_region = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! initialize variables
+        trust_radius = 0.4_rp
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x_fun
+
+        ! start in quadratic region near minimum
+        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+        func = hartmann6d_func(curr_vars)
+        call hartmann6d_gradient(curr_vars, grad)
+        grad_norm = norm2(grad)
+        call hartmann6d_hessian(curr_vars)
+        h_diag = [(hess(i, i), i=1, size(h_diag))]
+
+        ! run generalized Lanczos trust region without perturbation, check if error has 
+        ! occured, whether the Lagrange multiplier shift vanishes and whether the 
+        ! solution stays within trust region and describes the Newton step
+        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+                                              obj_func, hess_x_funptr, .false., &
+                                              settings, trust_radius, solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near minimum."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (abs(lambda) > tol) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Lagrange multiplier is not zero near minimum."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        residual = grad + hartmann6d_hess_x(solution)
+        if (sqrt(dot_product(residual, residual / h_diag)) > &
+            settings%local_red_factor * grad_norm) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not describe Newton step near minimum."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
+             / trust_radius_shrink_factor) .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. solution_norm > trust_radius) .or. &
+            (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius &
+            / trust_radius_expand_factor)) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not stay within trust region near minimum."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! run generalized Lanczos trust region with perturbation, check if error has 
+        ! occured, whether the Lagrange multiplier shift vanishes and whether the 
+        ! solution stays within trust region and reduces the function value
+        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+                                              obj_func, hess_x_funptr, .true., &
+                                              settings, trust_radius, solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near minimum for perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (abs(lambda) > tol) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Lagrange multiplier is not zero near minimum for perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if (ratio <= 0.0_rp) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not reduce function value near minimum for "// &
+                "perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
+             / trust_radius_shrink_factor) .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. solution_norm > trust_radius) .or. &
+            (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius &
+            / trust_radius_expand_factor)) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not stay within trust region near minimum for "// &
+                "perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! start near saddle point
+        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
+        func = hartmann6d_func(curr_vars)
+        call hartmann6d_gradient(curr_vars, grad)
+        grad_norm = norm2(grad)
+        call hartmann6d_hessian(curr_vars)
+        h_diag = [(hess(i, i), i=1, size(h_diag))]
+        trust_radius = 0.4_rp
+
+        ! run generalized Lanczos trust region without perturbation, check if error has 
+        ! occured, whether the Lagrange multiplier is positive and whether the solution 
+        ! lies at the trust region boundary and describes a level-shifted Newton step
+        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+                                              obj_func, hess_x_funptr, .false., &
+                                              settings, trust_radius, solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near saddle point."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (lambda <= 0.0_rp) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Lagrange multiplier is not positive near saddle point."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        mu = minval(h_diag) - 1e-1_rp * sum(abs(h_diag)) / size(h_diag)
+        precond = h_diag - mu
+        residual = grad + hartmann6d_hess_x(solution) + lambda * solution * precond
+        if (sqrt(dot_product(residual, residual / precond)) > &
+            settings%global_red_factor * grad_norm) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not describe level-shifted Newton step near saddle "// &
+                "point."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if ((trust_radius_shrink_ratio > ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
+             .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. abs(solution_norm - trust_radius) < tol) .or. &
+            (ratio > trust_radius_expand_ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not lie at trust region boundary near saddle point."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! run generalized Lanczos trust region with perturbation, check if error has 
+        ! occured, whether the Lagrange multiplier is positive and whether the solution 
+        ! lies at the trust region boundary and reduces the function value
+        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+                                              obj_func, hess_x_funptr, .true., &
+                                              settings, trust_radius, solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near saddle point for perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (lambda <= 0.0_rp) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Lagrange multiplier is not positive near saddle point for "// &
+                "perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if (ratio <= 0.0_rp) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not reduce function value near saddle point for "// &
+                "perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if ((trust_radius_shrink_ratio > ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
+             .or. &
+            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
+             .and. abs(solution_norm - trust_radius) < tol) .or. &
+            (ratio > trust_radius_expand_ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not lie at trust region boundary near saddle point "// &
+                "for perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+    end function test_generalized_lanczos_trust_region
+
     logical(c_bool) function test_add_error_origin() bind(C)
         !
         ! this function tests the subroutine that adds the error origin to an error 

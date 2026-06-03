@@ -102,6 +102,7 @@ fortran_tests = {
         "extend_matrix",
         "general_mat_diag",
         "general_mat_min_eig",
+        "generalized_lanczos_trust_region",
         "generate_random_trial_vectors",
         "generate_trial_vectors",
         "get_precond_level_shift",
