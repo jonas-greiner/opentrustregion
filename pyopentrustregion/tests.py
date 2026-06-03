@@ -21,7 +21,7 @@ from ctypes import (
 )
 from unittest.mock import patch
 from pathlib import Path
-
+from typing import TYPE_CHECKING
 
 # check if numpy is available
 try:
@@ -42,6 +42,9 @@ try:
         c_int,
         c_real,
     )
+
+    if TYPE_CHECKING:
+        from pyopentrustregion.python_interface import Settings
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.absolute()))
     from pyopentrustregion import (
@@ -52,6 +55,9 @@ except ImportError:
         c_int,
         c_real,
     )
+
+    if TYPE_CHECKING:
+        from pyopentrustregion.python_interface import Settings
 
 ext = "dylib" if sys.platform == "darwin" else "so"
 
