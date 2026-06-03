@@ -2442,7 +2442,7 @@ contains
 
             ! reset problem
             residual = grad
-            call perturb_vector(residual)
+            if (settings%n_random_trial_vectors > 0) call perturb_vector(residual)
             solution = 0.0_rp
 
             ! initialize micro iteration convergence flag
@@ -2680,7 +2680,7 @@ contains
 
             ! reset problem
             residual = grad
-            call perturb_vector(residual)
+            if (settings%n_random_trial_vectors > 0) call perturb_vector(residual)
             solution = 0.0_rp
             eigenvec = 0.0_rp
 

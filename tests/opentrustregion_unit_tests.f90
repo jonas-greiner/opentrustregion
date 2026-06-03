@@ -2548,6 +2548,7 @@ contains
         ! setup settings object
         call setup_settings(settings)
         settings%n_micro = 50
+        settings%n_random_trial_vectors = 1
 
         ! initialize variables
         trust_radius = 0.4_rp
@@ -2657,6 +2658,7 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
+        settings%n_random_trial_vectors = 0
 
         ! initialize variables
         trust_radius = 0.4_rp
@@ -2675,10 +2677,10 @@ contains
         ! occured, whether the Lagrange multiplier shift vanishes and whether the 
         ! solution stays within trust region and describes the Newton step
         call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
-                                              obj_func, hess_x_funptr, .false., &
-                                              settings, trust_radius, solution, &
-                                              solution_norm, lambda, imicro, &
-                                              max_precision_reached, error)
+                                              obj_func, hess_x_funptr, settings, &
+                                              trust_radius, solution, solution_norm, &
+                                              lambda, imicro, max_precision_reached, &
+                                              error)
         if (error /= 0) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Produced error near minimum."
@@ -2712,11 +2714,12 @@ contains
         ! run generalized Lanczos trust region with perturbation, check if error has 
         ! occured, whether the Lagrange multiplier shift vanishes and whether the 
         ! solution stays within trust region and reduces the function value
+        settings%n_random_trial_vectors = 1
         call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
-                                              obj_func, hess_x_funptr, .true., &
-                                              settings, trust_radius, solution, &
-                                              solution_norm, lambda, imicro, &
-                                              max_precision_reached, error)
+                                              obj_func, hess_x_funptr, settings, &
+                                              trust_radius, solution, solution_norm, &
+                                              lambda, imicro, max_precision_reached, &
+                                              error)
         if (error /= 0) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Produced error near minimum for perturbed system."
@@ -2759,11 +2762,12 @@ contains
         ! run generalized Lanczos trust region without perturbation, check if error has 
         ! occured, whether the Lagrange multiplier is positive and whether the solution 
         ! lies at the trust region boundary and describes a level-shifted Newton step
+        settings%n_random_trial_vectors = 0
         call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
-                                              obj_func, hess_x_funptr, .false., &
-                                              settings, trust_radius, solution, &
-                                              solution_norm, lambda, imicro, &
-                                              max_precision_reached, error)
+                                              obj_func, hess_x_funptr, settings, &
+                                              trust_radius, solution, solution_norm, &
+                                              lambda, imicro, max_precision_reached, &
+                                              error)
         if (error /= 0) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Produced error near saddle point."
@@ -2801,11 +2805,12 @@ contains
         ! run generalized Lanczos trust region with perturbation, check if error has 
         ! occured, whether the Lagrange multiplier is positive and whether the solution 
         ! lies at the trust region boundary and reduces the function value
+        settings%n_random_trial_vectors = 1
         call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
-                                              obj_func, hess_x_funptr, .true., &
-                                              settings, trust_radius, solution, &
-                                              solution_norm, lambda, imicro, &
-                                              max_precision_reached, error)
+                                              obj_func, hess_x_funptr, settings, &
+                                              trust_radius, solution, solution_norm, &
+                                              lambda, imicro, max_precision_reached, &
+                                              error)
         if (error /= 0) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Produced error near saddle point for perturbed system."
