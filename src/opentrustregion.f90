@@ -184,6 +184,7 @@ module opentrustregion
         type(stability_settings_type) :: stability_settings
         procedure(modify_step_type), pointer, nopass :: modify_step => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
+        procedure(hess_x_type), pointer, nopass :: stability_hess_x => null()
     contains
         procedure :: init => init_solver_settings, print_results
     end type
@@ -197,10 +198,11 @@ module opentrustregion
                                 verbose = 0, diag_solver = "davidson")
     type(solver_settings_type), parameter :: default_solver_settings = &
         solver_settings_type(precond = null(), project = null(), modify_step = null(), &
-                             conv_check = null(), logger = null(), &
-                             stability = .false., line_search = .false., &
-                             hess_symm = .true., initialized = .true., &
-                             conv_tol = 1e-5_rp, start_trust_radius = -1.0_rp, &
+                             conv_check = null(), stability_hess_x = null(), &
+                             logger = null(), stability = .false., &
+                             line_search = .false., hess_symm = .true., &
+                             initialized = .true., conv_tol = 1e-5_rp, &
+                             start_trust_radius = -1.0_rp, &
                              global_red_factor = 1e-3_rp, local_red_factor = 1e-4_rp, &
                              n_random_trial_vectors = 1, n_macro = 150, n_micro = 50, &
                              jacobi_davidson_start = 30, seed = 42, verbose = 0, &
@@ -230,7 +232,7 @@ contains
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson, i
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
-        procedure(hess_x_type), pointer :: hess_x_funptr
+        procedure(hess_x_type), pointer :: hess_x_funptr, stability_hess_x_funptr
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
@@ -355,8 +357,14 @@ contains
                 conv_check_passed) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
-                    call stability_check(h_diag, hess_x_funptr, stable, error, &
-                                         settings%stability_settings, kappa=kappa)
+                    if (associated(settings%stability_hess_x)) then
+                        stability_hess_x_funptr => settings%stability_hess_x
+                    else
+                        stability_hess_x_funptr => hess_x_funptr
+                    end if
+                    call stability_check(h_diag, stability_hess_x_funptr, stable, &
+                                         error, settings%stability_settings, &
+                                         kappa=kappa)
                     call add_error_origin(error, error_stability_check, settings)
                     if (error /= 0) return
                     if (.not. stable) then
@@ -385,15 +393,21 @@ contains
                                               "along eigenvector direction "// &
                                               "corresponding to negative eigenvalue.", &
                                               verbosity_error, .true.)
-                        else
+                        else if (.not. associated(settings%stability_hess_x)) then
                             call settings%log("Reached saddle point. This is "// &
                                               "likely due to symmetry and can be "// &
                                               "avoided by increasing the number of "// &
                                               "random trial vectors. The algorithm "// &
-                                              "will continue by moving along "// &
+                                              "will continue by moving along the "// &
                                               "eigenvector direction corresponding "// &
                                               "to negative eigenvalue.", &
                                               verbosity_error, .true.)
+                        else
+                            call settings%log("Reached saddle point. The algorithm "// &
+                                              "will continue by moving along the "// &
+                                              "eigenvector direction corresponding "// &
+                                              "to negative eigenvalue.", &
+                                              verbosity_warning, .false.)
                         end if
                         max_precision_reached = .false.
                         cycle

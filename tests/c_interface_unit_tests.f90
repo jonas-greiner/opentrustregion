@@ -497,6 +497,31 @@ contains
 
     end function test_conv_check_f_wrapper
 
+    logical(c_bool) function test_stability_hess_x_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the stability check Hessian 
+        ! linear transformation function
+        !
+        use opentrustregion, only: hess_x_type
+        use c_interface, only: stability_hess_x_before_wrapping, &
+                               stability_hess_x_f_wrapper
+        use test_reference, only: test_hess_x_funptr
+
+        procedure(hess_x_type), pointer :: stability_hess_x_funptr
+
+        ! inject mock function
+        stability_hess_x_before_wrapping => mock_hess_x
+
+        ! get pointer to subroutine
+        stability_hess_x_funptr => stability_hess_x_f_wrapper
+
+        ! test stability check Hessian linear transformation wrapper
+        test_stability_hess_x_f_wrapper = &
+            test_hess_x_funptr(stability_hess_x_funptr, "stability_hess_x_f_wrapper", &
+                               "")
+
+    end function test_stability_hess_x_f_wrapper
+
     logical(c_bool) function test_logger_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the logging function

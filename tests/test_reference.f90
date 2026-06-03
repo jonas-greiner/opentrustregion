@@ -1268,6 +1268,7 @@ contains
         lhs%project => null()
         lhs%modify_step => null()
         lhs%conv_check => null()
+        lhs%stability_hess_x => null()
         lhs%logger => null()
 
         ! set reference values

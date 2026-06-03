@@ -154,6 +154,7 @@ fortran_tests = {
         "project_f_wrapper",
         "solver_c_wrapper",
         "stability_check_c_wrapper",
+        "stability_hess_x_f_wrapper",
         "update_orbs_f_wrapper",
     ],
     "system_tests": ["h2o_atomic_fb", "h2o_saddle_fb"],

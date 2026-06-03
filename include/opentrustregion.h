@@ -84,6 +84,7 @@ typedef struct {
     project_fp project;
     modify_step_fp modify_step;
     conv_check_fp conv_check;
+    hess_x_fp stability_hess_x;
     logger_fp logger;
 
     c_bool stability;

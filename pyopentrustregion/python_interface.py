@@ -313,6 +313,7 @@ class SolverSettingsC(Structure):
         ("project", c_void_p),
         ("modify_step", c_void_p),
         ("conv_check", c_void_p),
+        ("stability_hess_x", c_void_p),
         ("logger", c_void_p),
         ("stability", c_bool),
         ("line_search", c_bool),
@@ -387,11 +388,13 @@ class SolverSettings(Settings):
     project: Optional[Callable[[np.ndarray], None]]
     modify_step: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
+    stability_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
     project_interface: Any
     modify_step_interface: Any
     conv_check_interface: Any
+    stability_hess_x_interface: Any
     logger_interface: Any
 
     def __init__(self):
@@ -418,6 +421,13 @@ class SolverSettings(Settings):
         )
         self.set_optional_callback(
             "conv_check", self.conv_check, ConvCheckInterface, conv_check_interface_type
+        )
+        self.set_optional_callback(
+            "stability_hess_x",
+            self.stability_hess_x,
+            HessXInterface,
+            hess_x_interface_type,
+            n_param,
         )
         self.set_optional_callback(
             "logger", self.logger, LoggerInterface, logger_interface_type
