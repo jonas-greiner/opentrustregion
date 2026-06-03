@@ -16,6 +16,14 @@ from pyopentrustregion.tests import (
 
 # try to load extension module tests if available
 try:
+    from pyopentrustregion.extensions.oao.tests import (
+        OAOCInterfaceTests,
+        OAOPyInterfaceTests,
+    )
+except AttributeError:
+    pass
+
+try:
     from pyopentrustregion.extensions.quasi_newton.tests import (
         QNCInterfaceTests,
         QNPyInterfaceTests,

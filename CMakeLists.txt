@@ -14,7 +14,7 @@ endif()
 # set flags for build types
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
     set(CMAKE_Fortran_FLAGS_DEBUG "-g -Wall -Wextra -fcheck=all -fbacktrace")
-    set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -march=native")
+    set(CMAKE_Fortran_FLAGS_RELEASE "-g -Wall -Wextra -fcheck=all -fbacktrace")
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
     set(CMAKE_Fortran_FLAGS_DEBUG "-g -warn all -traceback")
     set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -xHost")
@@ -103,10 +103,37 @@ set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
 # base include directories
 set(OPENTRUSTREGION_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# option to include orthogonal AO extension in the main library
+option(ENABLE_OAO "Include orthogonal AO extension in OpenTrustRegion" OFF)
+
 # option to include quasi-Newton extension in the main library
 option(ENABLE_QUASI_NEWTON "Include quasi-Newton extension in OpenTrustRegion" OFF)
 
+# option to include augmented Roothaan-Hall extension in the main library
+option(ENABLE_ARH "Include augmented Roothaan-Hall extension in OpenTrustRegion" OFF)
+if(ENABLE_ARH)
+    if(NOT ENABLE_OAO)
+        message(STATUS "Including orthogonal AO extension module as a dependency for augmented Roothann-Hall")
+        set(ENABLE_OAO ON CACHE BOOL "Enabled by ARH dependency" FORCE)
+    endif()
+endif()
+
+# option to include subspace gradient-enhanced kriging extension in the main library
+option(ENABLE_S_GEK 
+       "Include subspace gradient-enhanced kriging extension in OpenTrustRegion" OFF)
+
 # conditionally add extension files
+if(ENABLE_OAO)
+    message(STATUS "Including orthogonal AO in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common_c_interface.f90
+        extensions/oao/src/oao.f90
+        extensions/oao/src/oao_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include
+    )
+endif()
 if(ENABLE_QUASI_NEWTON)
     message(STATUS "Including quasi-Newton in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
@@ -118,11 +145,6 @@ if(ENABLE_QUASI_NEWTON)
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include
     )
 endif()
-
-# option to include augmented Roothaan-Hall extension in the main library
-option(ENABLE_ARH "Include augmented Roothaan-Hall extension in OpenTrustRegion" OFF)
-
-# conditionally add extension files
 if(ENABLE_ARH)
     message(STATUS "Including augmented Roothaan-Hall in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
@@ -134,12 +156,6 @@ if(ENABLE_ARH)
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include
     )
 endif()
-
-# option to include subspace gradient-enhanced kriging extension in the main library
-option(ENABLE_S_GEK 
-       "Include subspace gradient-enhanced kriging extension in OpenTrustRegion" OFF)
-
-# conditionally add extension files
 if(ENABLE_S_GEK)
     message(STATUS "Including subspace gradient-enhanced kriging in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
@@ -181,7 +197,7 @@ target_link_libraries(opentrustregion
 
 # set include directories
 target_include_directories(opentrustregion PUBLIC
-                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                           "$<BUILD_INTERFACE:${OPENTRUSTREGION_INCLUDE_DIRS}>"
                            $<INSTALL_INTERFACE:include>
 )
 
@@ -199,6 +215,15 @@ if (BUILD_TESTS)
         tests/opentrustregion_system_tests.f90)
 
     # conditionally add extension tests
+    if(ENABLE_OAO)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/oao/tests/oao_test_reference.f90
+            extensions/oao/tests/oao_c_interface_unit_tests.f90
+            extensions/oao/tests/oao_mock.f90
+            extensions/oao/tests/oao_c_interface_mock.f90
+        )
+    endif()
     if(ENABLE_QUASI_NEWTON)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
@@ -274,6 +299,11 @@ install(TARGETS opentrustregion
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ 
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+if(ENABLE_OAO)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endif()
 if(ENABLE_QUASI_NEWTON)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}

@@ -9,80 +9,31 @@ module otr_arh_c_interface_unit_tests
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, tol_c, n_param
-    use otr_arh_test_reference, only: n_particle, n_ao, n_ao_c
-    use otr_arh_c_interface, only: get_energy_c_type, get_fock_c_type, &
-                                   get_fock_jk_c_type
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_funloc, c_associated, &
-                                           c_f_procpointer
+    use otr_oao_test_reference, only: n_particle, n_ao, n_ao_c
+    use otr_arh_test_reference, only: ref_arh_settings
+    use otr_arh_c_interface, only: update_dm_jk_c_type
+    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_funloc, c_associated
 
     implicit none
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(get_energy_c_type), pointer :: mock_get_energy_2d_ptr => &
-                                             mock_get_energy_2d, &
-                                             mock_get_energy_3d_ptr => &
-                                             mock_get_energy_3d
-    procedure(get_fock_c_type), pointer :: mock_get_fock_ptr => mock_get_fock
-    procedure(get_fock_jk_c_type), pointer :: mock_get_fock_jk_ptr => mock_get_fock_jk
+    procedure(update_dm_jk_c_type), pointer :: mock_update_dm_jk_ptr => &
+                                               mock_update_dm_jk
 
 contains
 
-    function mock_get_energy_2d(dm_ao, energy) result(error) bind(C)
+    function mock_update_dm_jk(dm_ao, energy, fock, coulomb, exchange, &
+                               get_response_c_funptr) result(error) bind(C)
         !
-        ! this function is a test function for the energy C function for 2D density
-        ! matrices
+        ! this subroutine is a test subroutine for the density matrix updating C 
+        ! function with separate Coulomb and exchange matrix contributions
         !
-        real(c_rp), intent(in), target :: dm_ao(*)
-        real(c_rp), intent(out) :: energy
-        integer(c_ip) :: error
+        use otr_oao_c_interface_unit_tests, only: mock_get_response_3d
 
-        energy = sum(dm_ao(:n_ao ** 2))
-
-        error = 0
-
-    end function mock_get_energy_2d
-
-    function mock_get_energy_3d(dm_ao, energy) result(error) bind(C)
-        !
-        ! this function is a test function for the energy C function for 3D density
-        ! matrices
-        !
-        real(c_rp), intent(in), target :: dm_ao(*)
-        real(c_rp), intent(out) :: energy
-        integer(c_ip) :: error
-
-        energy = sum(dm_ao(:n_ao ** 2 * n_particle))
-
-        error = 0
-
-    end function mock_get_energy_3d
-
-    function mock_get_fock(dm_ao, energy, fock) result(error) bind(C)
-        !
-        ! this subroutine is a test subroutine for the Fock matrix C function
-        !
-        real(c_rp), intent(in), target :: dm_ao(*)
-        real(c_rp), intent(out) :: energy
-        real(c_rp), intent(out), target :: fock(*)
-        integer(c_ip) :: error
-
-        energy = sum(dm_ao(:n_ao ** 2))
-
-        fock(:n_ao ** 2) = 2 * dm_ao(:n_ao ** 2)
-
-        error = 0_c_ip
-
-    end function mock_get_fock
-
-    function mock_get_fock_jk(dm_ao, energy, fock, coulomb, exchange) result(error) &
-        bind(C)
-        !
-        ! this subroutine is a test subroutine for the Fock, Coulomb, and exchange 
-        ! matrix C function
-        !
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         real(c_rp), intent(out), target :: fock(*), coulomb(*), exchange(*)
+        type(c_funptr), intent(out) :: get_response_c_funptr
         integer(c_ip) :: error
 
         energy = sum(dm_ao(:n_ao ** 2 * n_particle))
@@ -91,9 +42,11 @@ contains
         coulomb(:n_ao ** 2 * n_particle) = 3 * dm_ao(:n_ao ** 2 * n_particle)
         exchange(:n_ao ** 2 * n_particle) = 4 * dm_ao(:n_ao ** 2 * n_particle)
 
+        get_response_c_funptr = c_funloc(mock_get_response_3d)
+
         error = 0_c_ip
 
-    end function mock_get_fock_jk
+    end function mock_update_dm_jk
 
     logical(c_bool) function test_arh_factory_c_wrapper() bind(C)
         !
@@ -103,14 +56,16 @@ contains
                                        arh_factory_open_shell, arh_factory_c_wrapper
         use otr_arh_mock, only: mock_arh_factory_closed_shell, &
                                 mock_arh_factory_open_shell, test_passed
-        use otr_arh_test_reference, only: assignment(=), ref_arh_settings
+        use otr_oao_c_interface_unit_tests, only: mock_get_energy_2d, &
+                                                  mock_update_dm_2d, mock_get_energy_3d
+        use otr_arh_test_reference, only: assignment(=)
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_project_c_funptr
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
-        type(c_funptr) :: get_energy_c_funptr, get_fock_c_funptr, &
+        type(c_funptr) :: get_energy_c_funptr, update_dm_c_funptr, &
                           obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
                           project_arh_c_funptr
         type(arh_settings_type_c) :: settings_c
@@ -133,7 +88,7 @@ contains
 
         ! get C function pointers to Fortran functions
         get_energy_c_funptr = c_funloc(mock_get_energy_2d)
-        get_fock_c_funptr = c_funloc(mock_get_fock)
+        update_dm_c_funptr = c_funloc(mock_update_dm_2d)
 
         ! associate optional settings with values
         settings_c = ref_arh_settings
@@ -145,7 +100,7 @@ contains
         ! call ARH orbital updating factory C wrapper for closed-shell case
         error_c = arh_factory_c_wrapper(dm_ao_2d_c, ao_overlap_c, n_particle_c, &
                                         n_ao_c, get_energy_c_funptr, &
-                                        get_fock_c_funptr, obj_func_arh_c_funptr, &
+                                        update_dm_c_funptr, obj_func_arh_c_funptr, &
                                         update_orbs_arh_c_funptr, &
                                         project_arh_c_funptr, settings_c)
 
@@ -194,110 +149,47 @@ contains
 
         ! get C function pointers to Fortran functions
         get_energy_c_funptr = c_funloc(mock_get_energy_3d)
-        get_fock_c_funptr = c_funloc(mock_get_fock_jk)
+        update_dm_c_funptr = c_funloc(mock_update_dm_jk)
 
         ! call ARH orbital updating factory C wrapper for open-shell case
         error_c = arh_factory_c_wrapper(dm_ao_3d_c, ao_overlap_c, n_particle_c, &
                                         n_ao_c, get_energy_c_funptr, &
-                                        get_fock_c_funptr, obj_func_arh_c_funptr, &
+                                        update_dm_c_funptr, obj_func_arh_c_funptr, &
                                         update_orbs_arh_c_funptr, &
                                         project_arh_c_funptr, settings_c)
 
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
 
-        ! check if tests for dm_ao_3d_c, get_energy_c_funptr and get_fock_c_funptr have 
+        ! check if tests for dm_ao_3d_c, get_energy_c_funptr and update_dm_c_funptr have 
         ! passed
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. test_passed
 
     end function test_arh_factory_c_wrapper
 
-    logical(c_bool) function test_get_energy_f_wrapper() bind(C)
+    logical(c_bool) function test_update_dm_jk_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the energy function
+        ! this function tests the Fortran wrapper for the density matrix updating C 
+        ! function with separate Coulomb and exchange matrix contributions
         !
-        use otr_arh, only: get_energy_closed_shell_type, get_energy_open_shell_type
-        use otr_arh_c_interface, only: get_energy_before_wrapping, &
-                                       get_energy_closed_shell_f_wrapper, &
-                                       get_energy_open_shell_f_wrapper
-        use otr_arh_test_reference, only: test_get_energy_closed_shell_funptr, &
-                                          test_get_energy_open_shell_funptr
+        use otr_arh, only: update_dm_jk_type
+        use otr_arh_c_interface, only: update_dm_jk_before_wrapping, &
+                                       update_dm_jk_f_wrapper
+        use otr_arh_test_reference, only: test_update_dm_jk_funptr
 
-        procedure(get_energy_closed_shell_type), pointer :: &
-            get_energy_closed_shell_funptr
-        procedure(get_energy_open_shell_type), pointer :: get_energy_open_shell_funptr
-
-        ! inject mock function
-        get_energy_before_wrapping => mock_get_energy_2d
-
-        ! get pointer to function
-        get_energy_closed_shell_funptr => get_energy_closed_shell_f_wrapper
-
-        ! test energy wrapper
-        test_get_energy_f_wrapper = &
-            test_get_energy_closed_shell_funptr(get_energy_closed_shell_funptr, &
-                                                "get_energy_closed_shell_f_wrapper", &
-                                                " for closed-shell case")
-
-        ! inject mock function
-        get_energy_before_wrapping => mock_get_energy_3d
-
-        ! get pointer to function
-        get_energy_open_shell_funptr => get_energy_open_shell_f_wrapper
-
-        ! test energy wrapper
-        test_get_energy_f_wrapper = test_get_energy_f_wrapper .and. &
-            test_get_energy_open_shell_funptr(get_energy_open_shell_funptr, &
-                                              "get_energy_open_shell_f_wrapper", &
-                                              " for open-shell case")
-
-    end function test_get_energy_f_wrapper
-
-    logical(c_bool) function test_get_fock_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the Fock matrix function
-        !
-        use otr_arh, only: get_fock_type
-        use otr_arh_c_interface, only: get_fock_before_wrapping, get_fock_f_wrapper
-        use otr_arh_test_reference, only: test_get_fock_funptr
-
-        procedure(get_fock_type), pointer :: get_fock_funptr
+        procedure(update_dm_jk_type), pointer :: update_dm_jk_funptr
 
         ! inject mock subroutine
-        get_fock_before_wrapping => mock_get_fock
+        update_dm_jk_before_wrapping => mock_update_dm_jk
 
         ! get pointer to subroutine
-        get_fock_funptr => get_fock_f_wrapper
+        update_dm_jk_funptr => update_dm_jk_f_wrapper
 
-        ! test Fock matrix wrapper
-        test_get_fock_f_wrapper = &
-            test_get_fock_funptr(get_fock_funptr, "get_fock_f_wrapper", "")
-
-    end function test_get_fock_f_wrapper
-
-    logical(c_bool) function test_get_fock_jk_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the Fock, Coulomb and exchange 
-        ! matrix function
-        !
-        use otr_arh, only: get_fock_jk_type
-        use otr_arh_c_interface, only: get_fock_jk_before_wrapping, &
-            get_fock_jk_f_wrapper
-        use otr_arh_test_reference, only: test_get_fock_jk_funptr
-
-        procedure(get_fock_jk_type), pointer :: get_fock_jk_funptr
-
-        ! inject mock subroutine
-        get_fock_jk_before_wrapping => mock_get_fock_jk
-
-        ! get pointer to subroutine
-        get_fock_jk_funptr => get_fock_jk_f_wrapper
-
-        ! test Fock matrix wrapper
-        test_get_fock_jk_f_wrapper = &
-            test_get_fock_jk_funptr(get_fock_jk_funptr, "get_fock_jk_f_wrapper", "")
+        ! test density matrix updating wrapper
+        test_update_dm_jk_f_wrapper = &
+            test_update_dm_jk_funptr(update_dm_jk_funptr, "update_dm_jk_f_wrapper", "")
         
-    end function test_get_fock_jk_f_wrapper
+    end function test_update_dm_jk_f_wrapper
 
     logical(c_bool) function test_update_orbs_arh_c_wrapper() bind(C)
         !
@@ -344,29 +236,6 @@ contains
 
     end function test_hess_x_arh_c_wrapper
 
-    logical(c_bool) function test_project_arh_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the ARH projection subroutine
-        !
-        use otr_common_c_interface, only: n_param_global => n_param
-        use otr_arh_c_interface, only: project_arh_before_wrapping, &
-                                       project_arh_c_wrapper
-        use otr_arh_mock, only: mock_project_arh
-        use test_reference, only: test_project_c_funptr
-
-        ! set global number of parameters for assumed size arrays
-        n_param_global = n_param
-
-        ! inject mock subroutine
-        project_arh_before_wrapping => mock_project_arh
-
-        ! test orbital updating function
-        test_project_arh_c_wrapper = &
-            test_project_c_funptr(c_funloc(project_arh_c_wrapper), &
-                                  "project_arh_c_wrapper", "")
-
-    end function test_project_arh_c_wrapper
-
     logical(c_bool) function test_init_arh_settings_c() bind(C)
         !
         ! this function tests that the ARH settings initialization routine correctly
@@ -384,13 +253,6 @@ contains
         ! initialize settings
         call init_arh_settings_c(settings)
 
-        ! check function pointers
-        if (c_associated(settings%logger)) then
-            write(stderr, *) "test_init_arh_settings_c failed: Function pointers "// &
-                "should not be initialized."
-            test_init_arh_settings_c = .false.
-        end if
-
         ! check settings
         if (settings /= default_arh_settings) then
             write(stderr, *) "test_init_arh_settings_c failed: Settings not "// &
@@ -400,72 +262,6 @@ contains
 
     end function test_init_arh_settings_c
 
-    logical(c_bool) function test_arh_deconstructor_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the ARH deconstructor
-        !
-        use otr_arh_c_interface, only: arh_deconstructor_closed_shell, &
-                                       arh_deconstructor_open_shell, &
-                                       arh_deconstructor_c_wrapper, &
-                                       n_particle_global => n_particle, &
-                                       n_ao_global => n_ao
-        use otr_arh_mock, only: mock_arh_deconstructor_closed_shell, &
-                                mock_arh_deconstructor_open_shell
-
-        real(c_rp), allocatable :: dm_ao_2d_c(:, :), dm_ao_3d_c(:, :, :)
-        integer(c_ip) :: error_c
-
-        ! assume tests pass
-        test_arh_deconstructor_c_wrapper = .true.
-
-        ! set global number of particles and AOs for assumed size arrays
-        n_particle_global = n_particle
-        n_ao_global = n_ao
-
-        ! inject mock functions
-        arh_deconstructor_closed_shell => mock_arh_deconstructor_closed_shell
-        arh_deconstructor_open_shell => mock_arh_deconstructor_open_shell
-
-        ! allocate 2D density matrix
-        allocate(dm_ao_2d_c(n_ao, n_ao))
-
-        ! call ARH orbital updating deconstructor C wrapper
-        error_c = arh_deconstructor_c_wrapper(dm_ao_2d_c)
-
-        ! check if error is as expected
-        if (error_c /= 0) then
-            test_arh_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_arh_deconstructor_c_wrapper failed: Returned error."
-        end if
-
-        ! check if 2D density matrix is as expected
-        if (any(abs(dm_ao_2d_c - 1.0_c_rp) > tol_c)) then
-            test_arh_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_arh_deconstructor_c_wrapper failed: Returned AO "// &
-                "density matrix for closed-shell case wrong."
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao_2d_c)
-
-        ! allocate 3D density matrix
-        allocate(dm_ao_3d_c(n_ao, n_ao, n_particle))
-
-        ! call ARH orbital updating deconstructor C wrapper
-        error_c = arh_deconstructor_c_wrapper(dm_ao_3d_c)
-
-        ! check if 3D density matrix is as expected
-        if (any(abs(dm_ao_3d_c - 1.0_c_rp) > tol_c)) then
-            test_arh_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_arh_deconstructor_c_wrapper failed: Returned AO "// &
-                "density matrix for open-shell case wrong."
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao_3d_c)
-
-    end function test_arh_deconstructor_c_wrapper
-
     logical(c_bool) function test_assign_arh_f_c() bind(C)
         !
         ! this function tests that the function that converts ARH settings from C to
@@ -473,8 +269,9 @@ contains
         !
         use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
         use otr_arh, only: arh_settings_type
-        use otr_arh_test_reference, only: assignment(=), ref_arh_settings, operator(/=)
+        use otr_arh_test_reference, only: assignment(=)
         use c_interface_unit_tests, only: mock_logger, test_logger
+        use otr_oao_test_reference, only: operator(/=)
 
         type(arh_settings_type_c) :: settings_c
         type(arh_settings_type) :: settings
@@ -527,7 +324,8 @@ contains
         !
         use otr_arh, only: arh_settings_type
         use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
-        use otr_arh_test_reference, only: ref_arh_settings, assignment(=), operator(/=)
+        use otr_arh_test_reference, only: assignment(=)
+        use otr_oao_test_reference, only: operator(/=)
 
         type(arh_settings_type)   :: settings
         type(arh_settings_type_c) :: settings_c
@@ -541,7 +339,7 @@ contains
         ! convert to C settings
         settings_c = settings
 
-        ! check that callback function pointers are not associated
+        ! check logging function
         if (c_associated(settings_c%logger)) then
             test_assign_arh_c_f = .false.
             write(stderr, *) "test_assign_arh_c_f failed: Logger function associated."

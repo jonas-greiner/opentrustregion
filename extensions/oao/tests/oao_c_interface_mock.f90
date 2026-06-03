@@ -1,0 +1,204 @@
+! Copyright (C) 2025- Jonas Greiner
+!
+! This Source Code Form is subject to the terms of the Mozilla Public
+! License, v. 2.0. If a copy of the MPL was not distributed with this
+! file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+module otr_oao_c_interface_mock
+
+    use opentrustregion, only: stderr
+    use c_interface, only: c_rp, c_ip
+    use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c, &
+                                   oao_deconstructor_c_wrapper
+    use otr_oao_test_reference, only: ref_oao_settings, n_particle, n_ao
+    use test_reference, only: n_param
+    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+                                           c_funloc, c_null_char
+
+    implicit none
+
+    logical(c_bool), bind(C) :: test_oao_factory_interface = .true._c_bool
+
+    ! create function pointers to ensure that routines comply with interface
+    procedure(oao_factory_c_wrapper), pointer :: mock_oao_factory_c_wrapper_ptr => &
+        mock_oao_factory_c_wrapper
+    procedure(init_oao_settings_c), pointer :: mock_init_oao_settings_c_ptr => &
+        mock_init_oao_settings_c
+    procedure(oao_deconstructor_c_wrapper), pointer :: &
+        mock_oao_deconstructor_2d_c_wrapper_ptr => &
+        mock_oao_deconstructor_2d_c_wrapper, &
+        mock_oao_deconstructor_3d_c_wrapper_ptr => mock_oao_deconstructor_3d_c_wrapper
+
+contains
+
+    function mock_oao_factory_c_wrapper(dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, &
+                                        get_energy_c_funptr, update_dm_c_funptr, &
+                                        obj_func_oao_c_funptr, &
+                                        update_orbs_oao_c_funptr, &
+                                        project_oao_c_funptr, settings_c) &
+        result(error_c) bind(C, name="mock_oao_factory")
+        !
+        ! this subroutine is a mock routine for the OAO orbital updating factory C
+        ! wrapper subroutine
+        !
+        use otr_oao_c_interface, only: oao_settings_type_c
+        use c_interface, only: obj_func_c_type, update_orbs_c_type, project_c_type, &
+                               logger_c_type
+        use test_reference, only: tol_c
+        use otr_oao_test_reference, only: test_get_energy_2d_c_funptr, &
+                                          test_get_energy_3d_c_funptr, &
+                                          test_update_dm_2d_c_funptr, &
+                                          test_update_dm_3d_c_funptr, operator(/=)
+        use c_interface_unit_tests, only: mock_obj_func, mock_update_orbs, mock_project
+
+        real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
+        integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
+        type(c_funptr), intent(in), value :: get_energy_c_funptr, update_dm_c_funptr
+        type(c_funptr), intent(out) :: obj_func_oao_c_funptr, &
+                                       update_orbs_oao_c_funptr, project_oao_c_funptr
+        type(oao_settings_type_c), intent(inout) :: settings_c
+        integer(c_ip) :: error_c
+
+        procedure(logger_c_type), pointer :: logger_funptr
+        character(:), allocatable, target :: message
+        procedure(obj_func_c_type), pointer :: obj_func_oao_funptr
+        procedure(update_orbs_c_type), pointer :: update_orbs_oao_funptr
+        procedure(project_c_type), pointer :: project_oao_funptr
+
+        ! closed-shell case
+        if (n_particle_c == 1) then
+            ! check passed arrays
+            if (any(abs(dm_ao_c(:n_ao_c ** 2) - 1.0_c_rp) > tol_c)) then
+                write(stderr, *) "test_oao_factory_py_interface failed: Passed AO "// &
+                    "density matrix for closed-shell case wrong."
+                test_oao_factory_interface = .false.
+            end if
+            if (any(abs(ao_overlap_c(:n_ao_c ** 2) - 2.0_c_rp) > tol_c)) then
+                write(stderr, *) "test_oao_factory_py_interface failed: Passed "// &
+                    "AO overlap matrix wrong."
+                test_oao_factory_interface = .false.
+            end if
+
+            ! test passed energy function
+            test_oao_factory_interface = test_oao_factory_interface .and. &
+                test_get_energy_2d_c_funptr(get_energy_c_funptr, &
+                                            "oao_factory_py_interface", &
+                                            " by given energy function for "// &
+                                            "closed-shell case")
+
+            ! test passed density matrix updating function
+            test_oao_factory_interface = test_oao_factory_interface .and. &
+                test_update_dm_2d_c_funptr(update_dm_c_funptr, &
+                                           "oao_factory_py_interface", &
+                                           " by given density matrix updating "// &
+                                           "function for closed-shell case")
+
+            ! check if passed number of AOs is correct
+            if (n_ao_c /= 3) then
+                write (stderr, *) "test_oao_factory_py_interface failed: Passed "// &
+                    "number of AOs wrong."
+                test_oao_factory_interface = .false.
+            end if
+
+            ! get Fortran pointer to passed logging function and call it
+            message = "test" // c_null_char
+            call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
+            call logger_funptr(message)
+
+            ! check optional settings against reference values
+            if (settings_c /= ref_oao_settings) then
+                write(stderr, *) "test_oao_factory_py_interface failed: Passed "// &
+                    "settings associated with wrong values."
+                test_oao_factory_interface = .false.
+            end if
+
+            ! set function pointers to mock to OAO mock functions
+            obj_func_oao_c_funptr = c_funloc(mock_obj_func)
+            update_orbs_oao_c_funptr = c_funloc(mock_update_orbs)
+            project_oao_c_funptr = c_funloc(mock_project)
+
+        ! open-shell case
+        else if (n_particle_c == 2) then
+            ! check passed arrays
+            if (any(abs(dm_ao_c(:n_ao_c ** 2 * n_particle_c) - 1.0_c_rp) > tol_c)) then
+                write(stderr, *) "test_oao_factory_py_interface failed: Passed AO "// &
+                    "density matrix for open-shell case wrong."
+                test_oao_factory_interface = .false.
+            end if
+
+            ! test passed energy function
+            test_oao_factory_interface = test_oao_factory_interface .and. &
+                test_get_energy_3d_c_funptr(get_energy_c_funptr, &
+                                            "oao_factory_py_interface", &
+                                            " by given energy function for "// &
+                                            "open-shell case")
+
+            ! test passed density matrix updating function
+            test_oao_factory_interface = test_oao_factory_interface .and. &
+                test_update_dm_3d_c_funptr(update_dm_c_funptr, &
+                                           "oao_factory_py_interface", " by given "// &
+                                           "density matrix updating function for "// &
+                                           "open-shell case")
+
+        ! number of particles is not correct
+        else
+            write (stderr, *) "test_oao_factory_py_interface failed: Passed number "// &
+                "of particles wrong."
+            test_oao_factory_interface = .false.
+
+        end if
+
+        ! set return arguments
+        error_c = 0
+
+    end function mock_oao_factory_c_wrapper
+
+    subroutine mock_init_oao_settings_c(settings) &
+        bind(C, name="mock_init_oao_settings")
+        !
+        ! this subroutine is a mock routine for the C OAO setting initialization 
+        ! subroutine
+        !
+        use otr_oao_c_interface, only: oao_settings_type_c
+        use otr_oao_test_reference, only: assignment(=)
+
+        type(oao_settings_type_c), intent(inout) :: settings
+
+        ! set reference values
+        settings = ref_oao_settings
+
+    end subroutine mock_init_oao_settings_c
+
+    function mock_oao_deconstructor_2d_c_wrapper(dm_ao_c) result(error_c) &
+        bind(C, name="mock_oao_deconstructor_2d")
+        !
+        ! this subroutine is a mock routine for the C OAO deconstructor subroutine for 
+        ! 2D density matrices
+        !
+        real(c_rp), intent(out), target :: dm_ao_c(*)
+
+        integer(c_ip) :: error_c
+
+        ! set return arguments
+        dm_ao_c(:n_ao ** 2) = 1.0_c_rp
+        error_c = 0
+
+    end function mock_oao_deconstructor_2d_c_wrapper
+
+    function mock_oao_deconstructor_3d_c_wrapper(dm_ao_c) result(error_c) &
+        bind(C, name="mock_oao_deconstructor_3d")
+        !
+        ! this subroutine is a mock routine for the C OAO deconstructor subroutine for 
+        ! 3D density matrices
+        !
+        real(c_rp), intent(out), target :: dm_ao_c(*)
+
+        integer(c_ip) :: error_c
+
+        ! set return arguments
+        dm_ao_c(:n_ao ** 2 * n_particle) = 1.0_c_rp
+        error_c = 0
+
+    end function mock_oao_deconstructor_3d_c_wrapper
+
+end module otr_oao_c_interface_mock

@@ -6,11 +6,10 @@
 
 module otr_arh_mock
 
-    use opentrustregion, only: rp, ip, stderr, obj_func_type, project_type
-    use otr_arh, only: arh_factory_closed_shell, arh_factory_open_shell, &
-                       arh_deconstructor_closed_shell, arh_deconstructor_open_shell
+    use opentrustregion, only: rp, ip, stderr
+    use otr_arh, only: arh_factory_closed_shell, arh_factory_open_shell
     use test_reference, only: tol
-    use otr_arh_test_reference, only: ref_arh_settings, operator(/=)
+    use otr_arh_test_reference, only: ref_arh_settings
 
     implicit none
 
@@ -21,17 +20,11 @@ module otr_arh_mock
         => mock_arh_factory_closed_shell
     procedure(arh_factory_open_shell), pointer :: mock_arh_factory_open_shell_ptr => &
         mock_arh_factory_open_shell
-    procedure(arh_deconstructor_closed_shell), pointer :: &
-        mock_arh_deconstructor_closed_shell_ptr => mock_arh_deconstructor_closed_shell
-    procedure(arh_deconstructor_open_shell), pointer :: &
-        mock_arh_deconstructor_open_shell_ptr => mock_arh_deconstructor_open_shell
-    procedure(obj_func_type), pointer :: mock_obj_func_arh_ptr => mock_obj_func_arh
-    procedure(project_type), pointer ::  mock_project_arh_ptr => mock_project_arh
 
 contains
 
     subroutine mock_arh_factory_closed_shell(dm_ao, ao_overlap, n_particle, n_ao, &
-                                             get_energy_funptr, get_fock_funptr, &
+                                             get_energy_funptr, update_dm_funptr, &
                                              obj_func_arh_funptr, &
                                              update_orbs_arh_funptr, &
                                              project_arh_funptr, error, settings)
@@ -39,18 +32,20 @@ contains
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
         !
-        use opentrustregion, only: update_orbs_type, hess_x_type
-        use otr_arh, only: get_energy_closed_shell_type, get_fock_type, &
-                           arh_settings_type
-        use otr_arh_test_reference, only: test_get_energy_closed_shell_funptr, &
-                                          test_get_fock_funptr
+        use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
+                                   project_type
+        use otr_oao, only: get_energy_2d_type, update_dm_2d_type
+        use otr_arh, only: arh_settings_type
+        use otr_oao_test_reference, only: test_get_energy_2d_funptr, &
+                                          test_update_dm_2d_funptr, operator(/=)
+        use otr_oao_mock, only: mock_obj_func_oao, mock_project_oao
         use otr_common_mock, only: mock_update_orbs
 
         real(rp), intent(in) :: dm_ao(:, :), ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_closed_shell_type), intent(in), pointer :: &
+        procedure(get_energy_2d_type), intent(in), pointer :: &
             get_energy_funptr
-        procedure(get_fock_type), intent(in), pointer :: get_fock_funptr
+        procedure(update_dm_2d_type), intent(in), pointer :: update_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
@@ -88,14 +83,13 @@ contains
 
         ! test passed energy function
         test_passed = test_passed .and. &
-            test_get_energy_closed_shell_funptr(get_energy_funptr, &
-                                                "arh_factory_c_wrapper", &
-                                                " by given energy function")
+            test_get_energy_2d_funptr(get_energy_funptr, "arh_factory_c_wrapper", &
+                                      " by given energy function")
 
-        ! test passed Fock matrix function
+        ! test passed density matrix updating function
         test_passed = test_passed .and. &
-            test_get_fock_funptr(get_fock_funptr, "arh_factory_c_wrapper", &
-                                 " by given Fock matrix function")
+            test_update_dm_2d_funptr(update_dm_funptr, "arh_factory_c_wrapper", &
+                                     " by given density matrix updating function")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -115,14 +109,14 @@ contains
 
         ! set output quantities
         error = 0
-        obj_func_arh_funptr => mock_obj_func_arh
+        obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
-        project_arh_funptr => mock_project_arh
+        project_arh_funptr => mock_project_oao
 
     end subroutine mock_arh_factory_closed_shell
 
     subroutine mock_arh_factory_open_shell(dm_ao, ao_overlap, n_particle, n_ao, &
-                                           get_energy_funptr, get_fock_jk_funptr, &
+                                           get_energy_funptr, update_dm_jk_funptr, &
                                            obj_func_arh_funptr, &
                                            update_orbs_arh_funptr, project_arh_funptr, &
                                            error, settings)          
@@ -130,17 +124,19 @@ contains
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
         !
-        use opentrustregion, only: update_orbs_type, hess_x_type
-        use otr_arh, only: get_energy_open_shell_type, get_fock_jk_type, &
-                           arh_settings_type
-        use otr_arh_test_reference, only: test_get_energy_open_shell_funptr, &
-                                          test_get_fock_jk_funptr
+        use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
+                                   project_type
+        use otr_oao, only: get_energy_3d_type
+        use otr_arh, only: update_dm_jk_type, arh_settings_type
+        use otr_oao_test_reference, only: test_get_energy_3d_funptr, operator(/=)
+        use otr_arh_test_reference, only: test_update_dm_jk_funptr
+        use otr_oao_mock, only: mock_obj_func_oao, mock_project_oao
         use otr_common_mock, only: mock_update_orbs
 
         real(rp), intent(in) :: dm_ao(:, :, :), ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_open_shell_type), intent(in), pointer :: get_energy_funptr
-        procedure(get_fock_jk_type), intent(in), pointer :: get_fock_jk_funptr
+        procedure(get_energy_3d_type), intent(in), pointer :: get_energy_funptr
+        procedure(update_dm_jk_type), intent(in), pointer :: update_dm_jk_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
@@ -178,15 +174,14 @@ contains
 
         ! test passed energy function
         test_passed = test_passed .and. &
-            test_get_energy_open_shell_funptr(get_energy_funptr, &
-                                              "arh_factory_c_wrapper", &
-                                              " by given energy function")
+            test_get_energy_3d_funptr(get_energy_funptr, "arh_factory_c_wrapper", &
+                                      " by given energy function")
 
-        ! test passed Fock, Coulomb, and exchange matrix function
+        ! test passed density matrix updating function
         test_passed = test_passed .and. &
-            test_get_fock_jk_funptr(get_fock_jk_funptr, "arh_factory_c_wrapper", &
-                                    " by given Fock, Coulomb, and exchange matrix "// &
-                                    "function")
+            test_update_dm_jk_funptr(update_dm_jk_funptr, "arh_factory_c_wrapper", &
+                                     " by given density matrix updating function "// &
+                                     "with separate Coulomb and exchange contributions")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -206,65 +201,10 @@ contains
 
         ! set output quantities
         error = 0
-        obj_func_arh_funptr => mock_obj_func_arh
+        obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
-        project_arh_funptr => mock_project_arh
+        project_arh_funptr => mock_project_oao
 
     end subroutine mock_arh_factory_open_shell
-
-    subroutine mock_arh_deconstructor_closed_shell(dm_ao, error)
-        !
-        ! this subroutine is a test function for the ARH deconstructor for the 
-        ! closed-shell case
-        !
-        real(rp), intent(out) :: dm_ao(:, :)
-        integer(ip), intent(out) :: error
-
-        dm_ao = 1.0_rp
-
-        error = 0
-
-    end subroutine mock_arh_deconstructor_closed_shell
-
-    subroutine mock_arh_deconstructor_open_shell(dm_ao, error)
-        !
-        ! this subroutine is a test function for the ARH deconstructor for the 
-        ! open-shell case
-        !
-        real(rp), intent(out) :: dm_ao(:, :, :)
-        integer(ip), intent(out) :: error
-
-        dm_ao = 1.0_rp
-
-        error = 0
-
-    end subroutine mock_arh_deconstructor_open_shell
-
-    function mock_obj_func_arh(kappa, error) result(func)
-        !
-        ! this function is a test function for the ARH C objective function
-        !
-        real(rp), intent(in), target :: kappa(:)
-        integer(ip), intent(out) :: error
-        real(rp) :: func
-
-        func = sum(kappa)
-
-        error = 0
-
-    end function mock_obj_func_arh
-
-    subroutine mock_project_arh(vector, error)
-        !
-        ! this function is a test function for the ARH C projection function
-        !
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-
-        vector = 2.0_rp * vector
-
-        error = 0
-
-    end subroutine mock_project_arh
 
 end module otr_arh_mock
