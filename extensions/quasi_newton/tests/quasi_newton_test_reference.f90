@@ -56,7 +56,6 @@ contains
         !
         ! this function tests a provided transport function pointer
         !
-        use opentrustregion, only: update_orbs_type, hess_x_type
         use otr_qn, only: transport_type
 
         procedure(transport_type), intent(in), pointer :: transport_funptr

@@ -1420,7 +1420,7 @@ contains
             write (stderr, *) "test_gram_schmidt failed: Added vector not normalized."
             test_gram_schmidt = .false.
         end if
-        if (abs(sum(abs(lin_trans_vector - matmul(symm_matrix, vector)))) > tol) then
+        if (sum(abs(lin_trans_vector - matmul(symm_matrix, vector))) > tol) then
             write (stderr, *) "test_gram_schmidt failed: Added linear "// &
                 "transformation not correct."
             test_gram_schmidt = .false.
@@ -1477,7 +1477,7 @@ contains
         ! initialize settings
         call settings%init(error)
 
-        ! check function pointers
+        ! check for error
         if (error /= 0) then
             write (stderr, *) "test_init_solver_settings failed: Function raised "// &
                 "error."
@@ -1516,7 +1516,7 @@ contains
         ! initialize settings
         call settings%init(error)
 
-        ! check function pointers
+        ! check for error
         if (error /= 0) then
             write (stderr, *) "test_init_stability_settings failed: Function "// &
                 "raised error."
@@ -1573,7 +1573,7 @@ contains
             test_level_shifted_diag_precond = .false.
         end if
 
-        ! test custum projector
+        ! test custom projector
         settings%project => mock_project
 
         ! call subroutine and check if results match
@@ -1617,7 +1617,6 @@ contains
         use opentrustregion, only: get_precond_level_shift, precond_factor
 
         real(rp) :: h_diag(3)
-        real(rp) :: mu
 
         ! assume tests pass
         test_get_precond_level_shift = .true.

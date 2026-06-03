@@ -294,8 +294,8 @@ contains
 
     end subroutine update_orbs_f_wrapper
 
-    recursive subroutine update_orbs_f_wrapper_impl(update_orbs_funptr, kappa, func, grad, &
-                                                    h_diag, hess_x, error)
+    recursive subroutine update_orbs_f_wrapper_impl(update_orbs_funptr, kappa, func, &
+                                                    grad, h_diag, hess_x, error)
         !
         ! this subroutine wraps the orbital update subroutine to convert Fortran 
         ! variables to C variables for a given function pointer, can be recursive in 

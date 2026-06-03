@@ -68,8 +68,8 @@ contains
 
         ! check optional settings against reference values
         if (settings_c /= ref_settings) then
-            write (stderr, *) "test_solver_py_interface failed: Passed settings "// &
-                "associated with wrong values."
+            write (stderr, *) "test_solver_py_interface failed: Passed optional "// &
+                "settings associated with wrong values."
             test_solver_interface = .false.
         end if
 
@@ -128,7 +128,7 @@ contains
         ! check optional settings against reference values
         if (settings_c /= ref_settings) then
             write (stderr, *) "test_stability_check_py_interface failed: Passed "// &
-                "settings associated with wrong values."
+                "optional settings associated with wrong values."
             test_stability_check_interface = .false.
         end if
 

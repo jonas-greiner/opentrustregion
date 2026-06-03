@@ -3199,7 +3199,8 @@ contains
                 ! check whether convergence on the trust region boundary has been 
                 ! achieved or the iteration limit is reached
                 if (imicro >= settings%n_micro .OR. (.NOT. interior .and. &
-                    abs(lanczos_off_diag_elem * last_red_space_solution) <= conv_tol)) then
+                    abs(lanczos_off_diag_elem * last_red_space_solution) <= conv_tol)) &
+                    then
                     ! check whether any earlier point produces fraction_opt of the 
                     ! optimal solution and if yes, use this point to avoid iterations 
                     ! in second Lanczos pass

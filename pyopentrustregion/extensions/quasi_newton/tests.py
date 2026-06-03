@@ -136,6 +136,7 @@ class QNPyInterfaceTests(unittest.TestCase):
             """
             this function is a mock function for the transport function
             """
+            tangent_vector[:] = geodesic * tangent_vector
 
             return
 

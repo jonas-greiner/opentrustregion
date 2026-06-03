@@ -11,17 +11,7 @@ module otr_qn
 
     implicit none
 
-    type, extends(settings_type) :: qn_settings_type
-        character(kw_len) :: hess_update_scheme
-        integer(ip) :: max_points
-    contains
-        procedure :: init => init_qn_settings
-    end type qn_settings_type
-
-    type(qn_settings_type), parameter :: default_qn_settings = &
-        qn_settings_type(logger = null(), initialized = .true., &
-                         verbose = 0, max_points = 10, hess_update_scheme = "sr1")
-
+    ! interfaces for callback functions
     abstract interface
         subroutine transport_type(geodesic, tangent_vector, error)
             import :: rp, ip
@@ -43,9 +33,20 @@ module otr_qn
         end subroutine init_hess_type
     end interface
 
+    ! derived type for settings
+    type, extends(settings_type) :: qn_settings_type
+        character(kw_len) :: hess_update_scheme
+        integer(ip) :: max_points
+    contains
+        procedure :: init => init_qn_settings
+    end type qn_settings_type
+
+    type(qn_settings_type), parameter :: default_qn_settings = &
+        qn_settings_type(logger = null(), initialized = .true., verbose = 0, &
+                         max_points = 10, hess_update_scheme = "sr1")
+
     type, abstract :: updating_type
-        real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), h_diag(:), &
-                                 last_grad(:)
+        real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:)
         integer(ip) :: n_points = 0
         type(qn_settings_type) :: settings
     contains
@@ -253,7 +254,7 @@ module otr_qn
         self%last_grad = grad
         
         ! check if point is added
-        if (allocated(grad_diff)) then
+        if (allocated(grad_diff) .and. self%settings%max_points > 0) then
             ! add new point
             if (self%n_points < self%settings%max_points) then
                 self%n_points = self%n_points + 1

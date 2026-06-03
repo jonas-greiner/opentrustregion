@@ -58,7 +58,7 @@ typedef c_int precond_fn(
 );
 typedef precond_fn* precond_fp;
 
-/* Projectionor callback */
+/* Projection callback */
 typedef c_int project_fn(c_real* vector);
 typedef project_fn* project_fp;
 

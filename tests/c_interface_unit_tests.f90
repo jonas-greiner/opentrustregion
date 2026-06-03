@@ -12,7 +12,7 @@ module c_interface_unit_tests
                            modify_step_c_type, conv_check_c_type, logger_c_type
     use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
-                                           c_char, c_associated, c_null_ptr, c_null_char
+                                           c_char, c_null_ptr, c_null_char
 
     implicit none
 
@@ -700,7 +700,7 @@ contains
             test_assign_solver_c_f = .false.
 
         ! check against reference values
-        if (settings /= ref_settings) then
+        if (settings_c /= ref_settings) then
             write (stderr, *) "test_assign_solver_c_f failed: Settings not "// &
                 "converted correctly."
             test_assign_solver_c_f = .false.
@@ -743,7 +743,7 @@ contains
             test_assign_stability_c_f = .false.
 
         ! check against reference values
-        if (settings /= ref_settings) then
+        if (settings_c /= ref_settings) then
             write (stderr, *) "test_assign_stability_c_f failed: Settings not "// &
                 "converted correctly."
             test_assign_stability_c_f = .false.
