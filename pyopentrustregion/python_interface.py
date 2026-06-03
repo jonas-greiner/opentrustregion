@@ -290,6 +290,23 @@ class LoggerInterface:
 
 
 # define classes corresponding to C structs for settings
+class StabilitySettingsC(Structure):
+    _fields_ = [
+        ("precond", c_void_p),
+        ("project", c_void_p),
+        ("logger", c_void_p),
+        ("hess_symm", c_bool),
+        ("initialized", c_bool),
+        ("conv_tol", c_real),
+        ("n_random_trial_vectors", c_int),
+        ("n_iter", c_int),
+        ("jacobi_davidson_start", c_int),
+        ("seed", c_int),
+        ("verbose", c_int),
+        ("diag_solver", c_char * (kw_len + 1)),
+    ]
+
+
 class SolverSettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
@@ -312,23 +329,7 @@ class SolverSettingsC(Structure):
         ("seed", c_int),
         ("verbose", c_int),
         ("subsystem_solver", c_char * (kw_len + 1)),
-    ]
-
-
-class StabilitySettingsC(Structure):
-    _fields_ = [
-        ("precond", c_void_p),
-        ("project", c_void_p),
-        ("logger", c_void_p),
-        ("hess_symm", c_bool),
-        ("initialized", c_bool),
-        ("conv_tol", c_real),
-        ("n_random_trial_vectors", c_int),
-        ("n_iter", c_int),
-        ("jacobi_davidson_start", c_int),
-        ("seed", c_int),
-        ("verbose", c_int),
-        ("diag_solver", c_char * (kw_len + 1)),
+        ("stability_settings", StabilitySettingsC),
     ]
 
 
@@ -393,6 +394,11 @@ class SolverSettings(Settings):
     conv_check_interface: Any
     logger_interface: Any
 
+    def __init__(self):
+        super().__init__()
+        self._stability_settings = StabilitySettings(
+            settings_c=self.settings_c.stability_settings
+        )
     def set_optional_callbacks(self, n_param: int):
         """
         this function sets the interfaces for the optional callback functions
@@ -454,8 +460,11 @@ def auto_bind_fields(cls: type[Settings]):
     for field_info in cls.c_struct._fields_:
         field_name, field_type = field_info[:2]
 
-        # skip if function pointer, these will be initialized separately
-        if field_type is c_void_p:
+        # skip if function pointer (these will be initialized separately) or nested
+        # structures
+        if field_type is c_void_p or (
+            isinstance(field_type, type) and issubclass(field_type, Structure)
+        ):
             continue
 
         # character arrays need to be handled separately

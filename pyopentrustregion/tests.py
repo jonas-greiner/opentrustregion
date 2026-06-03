@@ -279,6 +279,9 @@ class PyInterfaceTests(unittest.TestCase):
                 setattr(settings, field_name, getattr(self, "mock_" + field_name))
             elif field_name == "initialized":
                 continue
+            elif issubclass(field_type, Structure):
+                self.assign_ref_to_settings(getattr(settings, field_name))
+                continue
             else:
                 setattr(settings, field_name, getattr(self, field_name + "_ref"))
 
@@ -300,6 +303,8 @@ class PyInterfaceTests(unittest.TestCase):
                 if not getattr(settings, field_name):
                     print(" Field initialized not initialized correctly.")
                     test_passed = False
+            elif issubclass(field_type, Structure):
+                test_passed = self.equal_settings_to_ref(getattr(settings, field_name))
             else:
                 ref_value = getattr(self, field_name + "_ref")
                 if field_type == c_real:
