@@ -146,7 +146,7 @@ module opentrustregion
     type, abstract :: settings_type
         logical :: initialized = .false.
         integer(ip) :: verbose
-        procedure(logger_type), pointer, nopass :: logger
+        procedure(logger_type), pointer, nopass :: logger => null()
     contains
         procedure :: log => print_message
         procedure(init_type), deferred :: init
