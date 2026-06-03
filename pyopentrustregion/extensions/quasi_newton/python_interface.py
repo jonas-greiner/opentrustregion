@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
+from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
