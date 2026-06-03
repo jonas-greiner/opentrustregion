@@ -876,6 +876,373 @@ contains
 
     end function test_conv_check_c_funptr
 
+    function test_mock_solver_funptr(settings, test_name, message) result(test_passed)
+        ! 
+        ! this function tests that optional mock function pointers for the solver are 
+        ! correct
+        ! 
+        use opentrustregion, only: solver_settings_type, logger_type
+
+        type(solver_settings_type), intent(in) :: settings
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! test passed preconditioner subroutine
+        test_passed = test_passed .and. &
+            test_precond_funptr(settings%precond, test_name, " by"//message// &
+                                " preconditioner subroutine")
+
+        ! test passed projection subroutine
+        test_passed = test_passed .and. &
+            test_project_funptr(settings%project, test_name, " by"//message// &
+                                " projection subroutine")
+
+        ! test passed step modification subroutine
+        test_passed = test_passed .and. &
+            test_modify_step_funptr(settings%modify_step, test_name, " by"//message// &
+                                    " step modification subroutine")
+
+        ! test passed convergence check function
+        test_passed = test_passed .and. &
+            test_conv_check_funptr(settings%conv_check, test_name, " by"//message// &
+                                   " convergence check function")
+
+        test_passed = test_passed .and. &
+            test_hess_x_funptr(settings%stability_hess_x, test_name, " by"//message// &
+                               " stability Hessian linear transformation function")
+
+        ! test passed logging function
+        if (.not. associated(settings%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//": Logging function not associated with value."
+        else
+            call settings%logger("test")
+        end if
+
+        ! check stability check optional function pointers
+        test_passed = test_passed .and. &
+                      test_mock_stability_funptr(settings%stability_settings, &
+                                                 test_name, message)
+
+    end function test_mock_solver_funptr
+
+    function test_mock_solver_c_funptr(settings_c, test_name, message) &
+        result(test_passed)
+        ! 
+        ! this function tests that optional mock C function pointers for the solver are 
+        ! correct
+        ! 
+        use c_interface, only: solver_settings_type_c, logger_c_type
+
+        type(solver_settings_type_c), intent(in) :: settings_c
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(logger_c_type), pointer :: logger_funptr
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! test passed preconditioner function
+        test_passed = test_passed .and. &
+            test_precond_c_funptr(settings_c%precond, test_name, " by"//message// &
+                                  " preconditioning function")
+
+        ! test passed projection function
+        test_passed = test_passed .and. &
+            test_project_c_funptr(settings_c%project, test_name, " by"//message// &
+                                  " projection function")
+
+        ! test passed step modification function
+        test_passed = test_passed .and. &
+            test_modify_step_c_funptr(settings_c%modify_step, test_name, " by"// &
+                                      message//" step modification function")
+
+        ! test passed convergence check function
+        test_passed = test_passed .and. &
+            test_conv_check_c_funptr(settings_c%conv_check, test_name, " by"// &
+                                     message//" convergence check function")
+
+        ! test passed stability check Hessian linear transformation function
+        test_passed = test_passed .and. &
+            test_hess_x_c_funptr(settings_c%stability_hess_x, test_name, " by"// &
+                                 message//" stability check Hessian linear "// &
+                                 "transformation function")
+
+        ! get Fortran pointer to passed logging function and call it
+        if (.not. c_associated(settings_c%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//": Logging function not associated with value."
+        else
+            call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
+            call logger_funptr("test"//c_null_char)
+        end if
+
+        ! check stability check optional function pointers
+        test_passed = test_passed .and. &
+                      test_mock_stability_c_funptr(settings_c%stability_settings, &
+                                                   test_name, " by given")
+
+    end function test_mock_solver_c_funptr
+
+    function test_mock_stability_funptr(settings, test_name, message) &
+        result(test_passed)
+        ! 
+        ! this function tests that optional mock function pointers for the stability 
+        ! check are correct
+        ! 
+        use opentrustregion, only: stability_settings_type, logger_type
+
+        type(stability_settings_type), intent(in) :: settings
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! test passed preconditioner subroutine
+        test_passed = test_passed .and. &
+            test_precond_funptr(settings%precond, test_name, " by"//message// &
+                                " preconditioner subroutine")
+
+        ! test passed projection subroutine
+        test_passed = test_passed .and. &
+            test_project_funptr(settings%project, test_name, " by"//message// &
+                                " projection subroutine")
+
+        ! test passed approximate Hessian linear transformation subroutine
+        test_passed = test_passed .and. &
+            test_hess_x_funptr(settings%approx_hess_x, test_name, " by"//message// &
+                               " approximate Hessian linear transformation subroutine")
+
+        ! test passed logging function
+        if (.not. associated(settings%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//": Logging function not associated with value."
+        else
+            call settings%logger("test")
+        end if
+
+    end function test_mock_stability_funptr
+
+    function test_mock_stability_c_funptr(settings_c, test_name, message) &
+        result(test_passed)
+        ! 
+        ! this function tests that optional mock C function pointers for the stability 
+        ! check are correct
+        ! 
+        use c_interface, only: stability_settings_type_c, logger_c_type
+        use, intrinsic :: iso_c_binding, only: c_associated
+
+        type(stability_settings_type_c), intent(in) :: settings_c
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(logger_c_type), pointer :: logger_funptr
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! test passed preconditioner
+        test_passed = test_passed .and. &
+            test_precond_c_funptr(settings_c%precond, test_name, " by"//message// &
+                                  " preconditioning function")
+
+        ! test passed projection function
+        test_passed = test_passed .and. &
+            test_project_c_funptr(settings_c%project, test_name, " by"//message// &
+                                  " projection function")
+
+        ! test passed approximate Hessian linear transformation function
+        test_passed = test_passed .and. &
+            test_hess_x_c_funptr(settings_c%approx_hess_x, test_name, " by"//message// &
+                                 "approximate Hessian linear transformation function")
+
+        ! get Fortran pointer to passed logging function and call it
+        if (.not. c_associated(settings_c%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//": Logging function not associated with value."
+        else
+            call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
+            call logger_funptr("test"//c_null_char)
+        end if
+
+    end function test_mock_stability_c_funptr
+
+    function test_associated_solver_funptr(settings, test_name) result(test_passed)
+        !
+        ! this function tests that all function pointers for the solver are not 
+        ! associated
+        !
+        use opentrustregion, only: solver_settings_type
+
+        type(solver_settings_type), intent(in) :: settings
+        character(*), intent(in) :: test_name
+        logical :: test_passed
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check that optional function pointers are not associated
+        if (associated(settings%precond)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Preconditioner function associated."
+        end if
+        if (associated(settings%project)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Projection function associated."
+        end if
+        if (associated(settings%modify_step)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Step modification function "// &
+                "associated."
+        end if
+        if (associated(settings%conv_check)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Convergence check function "// &
+                "associated."
+        end if
+        if (associated(settings%stability_hess_x)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Stability check Hessian linear "// &
+                "transformation function associated."
+        end if
+        if (associated(settings%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Logger function associated."
+        end if
+
+        ! check stability check optional function pointers
+        test_passed = &
+            test_passed .and. &
+            test_associated_stability_funptr(settings%stability_settings, test_name)
+
+    end function test_associated_solver_funptr
+
+    function test_associated_solver_c_funptr(settings_c, test_name) result(test_passed)
+        !
+        ! this function tests that all C function pointers for the solver are not 
+        ! associated
+        !
+        use c_interface, only: solver_settings_type_c
+
+        type(solver_settings_type_c), intent(in) :: settings_c
+        character(*), intent(in) :: test_name
+        logical :: test_passed
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check that optional function pointers are not associated
+        if (c_associated(settings_c%precond)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Preconditioner function associated."
+        end if
+        if (c_associated(settings_c%project)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Projection function associated."
+        end if
+        if (c_associated(settings_c%modify_step)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Step modification function "// &
+                "associated."
+        end if
+        if (c_associated(settings_c%conv_check)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Convergence check function "// &
+                "associated."
+        end if
+        if (c_associated(settings_c%stability_hess_x)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Stability check Hessian linear "// &
+                "transformation function associated."
+        end if
+        if (c_associated(settings_c%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Logger function associated."
+        end if
+
+        ! check stability check optional function pointers
+        test_passed = &
+            test_passed .and. &
+            test_associated_stability_c_funptr(settings_c%stability_settings, test_name)
+
+    end function test_associated_solver_c_funptr
+
+    function test_associated_stability_funptr(settings, test_name) result(test_passed)
+        !
+        ! this function tests that all function pointers for the stability check are 
+        ! not associated
+        !
+        use opentrustregion, only: stability_settings_type
+
+        type(stability_settings_type), intent(in) :: settings
+        character(*), intent(in) :: test_name
+        logical :: test_passed
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check that optional function pointers are not associated
+        if (associated(settings%precond)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Preconditioner function associated."
+        end if
+        if (associated(settings%project)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Projection function associated."
+        end if
+        if (associated(settings%approx_hess_x)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Approximate Hessian linear "// &
+                "transformation function associated."
+        end if
+        if (associated(settings%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Logger function associated."
+        end if
+
+    end function test_associated_stability_funptr
+
+    function test_associated_stability_c_funptr(settings_c, test_name) &
+        result(test_passed)
+        !
+        ! this function tests that all C function pointers for the stability check are 
+        ! not associated
+        !
+        use c_interface, only: stability_settings_type_c
+
+        type(stability_settings_type_c), intent(in) :: settings_c
+        character(*), intent(in) :: test_name
+        logical :: test_passed
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check that optional function pointers are not associated
+        if (c_associated(settings_c%precond)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Preconditioner function associated."
+        end if
+        if (c_associated(settings_c%project)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Projection function associated."
+        end if
+        if (c_associated(settings_c%approx_hess_x)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Approximate Hessian linear "// &
+                "transformation function associated."
+        end if
+        if (c_associated(settings_c%logger)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Logger function associated."
+        end if
+
+    end function test_associated_stability_c_funptr
+
     subroutine get_reference_values(ref_settings_out) bind(C)
         !
         ! this subroutine exports the reference values for tests
