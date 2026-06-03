@@ -276,60 +276,86 @@ class PyInterfaceTests(unittest.TestCase):
             else:
                 setattr(settings, field_name, getattr(self, field_name + "_ref"))
 
-            def hess_x(x, hess_x):
-                hess_x[:] = 4 * x
+    def mock_obj_func(self, kappa):
+        """
+        this function is a mock function for the objective function
+        """
+        return np.sum(kappa)
 
-            return func, hess_x
+    def mock_hess_x(self, x, hess_x):
+        """
+        this function is a mock function for the Hessian linear transformation
+        function
+        """
+        hess_x[:] = 4 * x
 
-        def mock_precond(residual, mu, precond_residual):
-            """
-            this function is a mock function for the preconditioner function
-            """
-            precond_residual[:] = mu * residual
+    def mock_update_orbs(self, kappa, grad, h_diag):
+        """
+        this function is a mock function for the orbital update function
+        """
+        func = np.sum(kappa)
+        grad[:] = 2 * kappa
+        h_diag[:] = 3 * kappa
 
-        def mock_project(vector):
-            """
-            this function is a mock function for the projection function
-            """
-            vector[:] = 2 * vector
+        return func, self.mock_hess_x
 
-        def mock_modify_step(kappa):
-            """
-            this function is a mock function for the step modification function
-            """
-            kappa[:] = 2 * kappa
+    def mock_precond(self, residual, mu, precond_residual):
+        """
+        this function is a mock function for the preconditioner function
+        """
+        precond_residual[:] = mu * residual
 
-        def mock_conv_check():
-            """
-            this function is a mock function for the convergence check function
-            """
-            return True
+    def mock_project(self, vector):
+        """
+        this function is a mock function for the projection function
+        """
+        vector[:] = 2 * vector
 
-        def mock_logger(message):
-            """
-            this function is a mock function for the logging function
-            """
-            nonlocal test_logger
-            if message == "test":
-                test_logger = True
-            return
+    def mock_modify_step(self, kappa):
+        """
+        this function is a mock function for the step modification function
+        """
+        kappa[:] = 2 * kappa
 
-        # initialize settings object
+    def mock_conv_check(self):
+        """
+        this function is a mock function for the convergence check function
+        """
+        return True
+
+    mock_approx_hess_x = mock_hess_x
+    mock_stability_hess_x = mock_hess_x
+
+    def mock_logger(self, message):
+        """
+        this function is a mock function for the logging function
+        """
+        if message != "test":
+            self.test_logger = False
+        return
+
+    # replace original library with mock library
+    @patch("pyopentrustregion.python_interface.lib.solver", lib.mock_solver)
+    def test_solver_py_interface(self):
+        """
+        this function tests the solver python interface
+        """
+        # initialize settings object and assign reference values
         settings = SolverSettings()
         self.assign_ref_to_settings(settings)
 
         # initialize logging boolean
-        test_logger = False
+        self.test_logger = True
 
         # call solver python interface with optional arguments
-        solver(mock_obj_func, mock_update_orbs, n_param, settings)
+        solver(self.mock_obj_func, self.mock_update_orbs, n_param, settings)
 
         # check if logger was called correctly
-        if not test_logger:
+        if not self.test_logger:
             print(" test_solver_py_interface failed: Called logging function wrong.")
 
         self.assertTrue(
-            c_bool.in_dll(lib, "test_solver_interface").value and test_logger,
+            c_bool.in_dll(lib, "test_solver_interface").value and self.test_logger,
             "test_solver_py_interface failed",
         )
         print(" test_solver_py_interface PASSED")
@@ -346,31 +372,7 @@ class PyInterfaceTests(unittest.TestCase):
         n_param = 3
         h_diag = np.full(n_param, 3.0, dtype=np.float64)
 
-        def mock_hess_x(x, hess_x):
-            hess_x[:] = 4 * x
-
-        def mock_precond(residual, mu, precond_residual):
-            """
-            this function is a mock function for the preconditioner function
-            """
-            precond_residual[:] = mu * residual
-
-        def mock_project(vector):
-            """
-            this function is a mock function for the projection function
-            """
-            vector[:] = 2 * vector
-
-        def mock_logger(message):
-            """
-            this function is a mock function for the logging function
-            """
-            nonlocal test_logger
-            if message == "test":
-                test_logger = True
-            return
-
-        # initialize settings object
+        # initialize settings object and assign reference values
         settings = StabilitySettings()
         self.assign_ref_to_settings(settings)
 
@@ -378,13 +380,15 @@ class PyInterfaceTests(unittest.TestCase):
         kappa = np.empty(n_param, dtype=np.float64)
 
         # initialize logging boolean
-        test_logger = False
+        self.test_logger = True
 
         # call stability check python interface with optional arguments
-        stable = stability_check(h_diag, mock_hess_x, n_param, settings, kappa=kappa)
+        stable = stability_check(
+            h_diag, self.mock_hess_x, n_param, settings, kappa=kappa
+        )
 
         # check if logger was called correctly
-        if not test_logger:
+        if not self.test_logger:
             print(
                 " test_stability_check_py_interface failed: Called logging function "
                 "wrong."
@@ -406,7 +410,7 @@ class PyInterfaceTests(unittest.TestCase):
 
         self.assertTrue(
             c_bool.in_dll(lib, "test_stability_check_interface").value
-            and test_logger
+            and self.test_logger
             and not stable
             and not wrong_direction,
             "test_stability_check_py_interface failed",

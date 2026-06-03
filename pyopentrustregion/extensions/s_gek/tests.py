@@ -115,6 +115,23 @@ class SGEKPyInterfaceTests(unittest.TestCase):
 
     assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
 
+    mock_update_orbs = PyInterfaceTests.mock_update_orbs
+    mock_hess_x = PyInterfaceTests.mock_hess_x
+
+    def mock_change_reference(self, new_ref, kappa_list, local_grad_list, grad_list):
+        """
+        this function is a mock function for the change reference function
+        """
+        self.change_reference_new_ref = np.allclose(
+            new_ref, np.ones(n_param, dtype=np.float64)
+        )
+
+        kappa_list *= 2
+        local_grad_list *= 3
+        grad_list *= 4
+
+        return
+
     mock_logger = PyInterfaceTests.mock_logger
 
     # replace original library with mock library
@@ -127,39 +144,6 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         this function tests the S-GEK orbital updating factory python interface
         """
         n_param = 3
-
-        def mock_update_orbs(kappa, grad, h_diag):
-            """
-            this function is a mock function for the orbital update function
-            """
-            func = np.sum(kappa)
-            grad[:] = 2 * kappa
-            h_diag[:] = 3 * kappa
-
-            def hess_x(x, hess_x):
-                hess_x[:] = 4 * x
-
-            return func, hess_x
-
-        def mock_change_reference(new_ref, kappa_list, local_grad_list, grad_list):
-            """
-            this function is a mock function for the change reference function
-            """
-            nonlocal test_passed
-
-            if not np.allclose(new_ref, np.ones(n_param, dtype=np.float64)):
-                print(
-                    " test_update_orbs_s_gek_factory_py_interface failed: New "
-                    "reference parameters inside given change reference function wrong."
-                )
-                test_passed = False
-
-            kappa_list *= 2
-            local_grad_list *= 3
-            grad_list *= 4
-
-            return
-
         # initialize test flag
         test_passed = True
 
@@ -172,7 +156,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
 
         # call S-GEK orbital updating factory python interface
         update_orbs_s_gek = update_orbs_s_gek_factory(
-            mock_update_orbs, mock_change_reference, n_param, settings
+            self.mock_update_orbs, self.mock_change_reference, n_param, settings
         )
 
         # check if logger was called correctly
@@ -197,6 +181,12 @@ class SGEKPyInterfaceTests(unittest.TestCase):
             test_passed = False
 
         # check results
+        if self.change_reference_new_ref is not True:
+            print(
+                " test_update_orbs_s_gek_factory_py_interface failed: New "
+                "reference parameters inside given change reference function wrong."
+            )
+            test_passed = False
         if func != 3.0:
             print(
                 " test_update_orbs_s_gek_factory_py_interface failed: Returned"

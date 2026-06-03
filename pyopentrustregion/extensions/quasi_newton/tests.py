@@ -116,6 +116,25 @@ class QNPyInterfaceTests(unittest.TestCase):
 
     assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
 
+    mock_update_orbs = PyInterfaceTests.mock_update_orbs
+    mock_hess_x = PyInterfaceTests.mock_hess_x
+
+    def mock_transport(self, geodesic, tangent_vector):
+        """
+        this function is a mock function for the transport function
+        """
+        tangent_vector[:] = geodesic * tangent_vector
+
+        return
+
+    def mock_init_hess(self, vector):
+        """
+        this function is a mock function for the initial Hessian function
+        """
+        vector[:] = 2 * vector
+
+        return
+
     mock_logger = PyInterfaceTests.mock_logger
 
     # replace original library with mock library
@@ -129,35 +148,6 @@ class QNPyInterfaceTests(unittest.TestCase):
         """
         n_param = 3
 
-        def mock_update_orbs(kappa, grad, h_diag):
-            """
-            this function is a mock function for the orbital update function
-            """
-            func = np.sum(kappa)
-            grad[:] = 2 * kappa
-            h_diag[:] = 3 * kappa
-
-            def hess_x(x, hess_x):
-                hess_x[:] = 4 * x
-
-            return func, hess_x
-
-        def mock_transport(geodesic, tangent_vector):
-            """
-            this function is a mock function for the transport function
-            """
-            tangent_vector[:] = geodesic * tangent_vector
-
-            return
-
-        def mock_init_hess(vector):
-            """
-            this function is a mock function for the initial Hessian function
-            """
-            vector[:] = 2 * vector
-
-            return
-
         # initialize test flag
         test_passed = True
 
@@ -170,7 +160,11 @@ class QNPyInterfaceTests(unittest.TestCase):
 
         # call quasi-Newton orbital updating factory python interface
         update_orbs_qn = update_orbs_qn_factory(
-            mock_update_orbs, mock_transport, mock_init_hess, n_param, settings
+            self.mock_update_orbs,
+            self.mock_transport,
+            self.mock_init_hess,
+            n_param,
+            settings,
         )
 
         # check if logger was called correctly

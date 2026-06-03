@@ -116,6 +116,8 @@ class ARHPyInterfaceTests(unittest.TestCase):
         return super().setUpClass()
 
     assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
+    mock_logger = PyInterfaceTests.mock_logger
+
     # replace original library with mock library
     @patch("pyopentrustregion.python_interface.lib.arh_factory", lib.mock_arh_factory)
     def test_arh_factory_py_interface(self):
@@ -151,15 +153,6 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
             return np.sum(dm_ao)
 
-        def mock_logger(message):
-            """
-            this function is a mock function for the logging function
-            """
-            nonlocal test_logger
-            if message == "test":
-                test_logger = True
-            return
-
         # initialize test flag
         test_passed = True
 
@@ -168,7 +161,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
         self.assign_ref_to_settings(settings)
 
         # initialize logging boolean
-        test_logger = False
+        self.test_logger = True
 
         # number of particles
         n_particle = 1
@@ -188,7 +181,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
         )
 
         # check if logger was called correctly
-        if not test_logger:
+        if not self.test_logger:
             print(
                 " test_arh_factory_py_interface failed: Called logging function wrong."
             )
