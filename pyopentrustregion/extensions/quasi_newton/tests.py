@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 from pyopentrustregion.tests import (
     lib,
+    n_param,
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
@@ -146,8 +147,6 @@ class QNPyInterfaceTests(unittest.TestCase):
         """
         this function tests the quasi-Newton orbital updating factory python interface
         """
-        n_param = 3
-
         # initialize test flag
         test_passed = True
 

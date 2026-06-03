@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 from pyopentrustregion.tests import (
     lib,
+    n_param,
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
@@ -126,7 +127,6 @@ class ARHPyInterfaceTests(unittest.TestCase):
         mock_get_energy and mock_get_fock_jk are passed correctly for the open-shell
         case since everything else is the same in the closed-shell case)
         """
-        n_param = n_ao * (n_ao - 1) // 2
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
 
         def mock_get_energy(dm_ao):

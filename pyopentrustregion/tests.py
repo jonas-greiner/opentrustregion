@@ -183,6 +183,10 @@ def add_tests(cls):
     return cls
 
 
+# number of parameters
+n_param = c_int.in_dll(lib, "test_n_param").value
+
+
 @add_tests
 class OpenTrustRegionTests(unittest.TestCase):
     """
@@ -401,7 +405,6 @@ class PyInterfaceTests(unittest.TestCase):
         """
         this function tests the stability check python interface
         """
-        n_param = 3
         h_diag = np.full(n_param, 3.0, dtype=np.float64)
 
         # initialize settings object and assign reference values

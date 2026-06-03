@@ -19,7 +19,8 @@ module test_reference
 
     ! number of parameters
     integer(ip), parameter :: n_param = 3_ip
-    integer(c_ip), parameter :: n_param_c = int(n_param, kind=c_ip)
+    integer(c_ip), protected, bind(C, name="test_n_param") :: &
+        n_param_c = int(n_param, kind=c_ip)
 
     ! derived types for solver settings
     type ref_settings_type
