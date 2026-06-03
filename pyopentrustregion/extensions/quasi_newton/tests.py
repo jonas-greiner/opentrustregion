@@ -116,6 +116,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         return super().setUpClass()
 
     assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
+    equal_settings_to_ref = PyInterfaceTests.equal_settings_to_ref
 
     mock_update_orbs = PyInterfaceTests.mock_update_orbs
     mock_hess_x = PyInterfaceTests.mock_hess_x
