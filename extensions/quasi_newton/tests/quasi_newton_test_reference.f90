@@ -9,7 +9,8 @@ module otr_qn_test_reference
     use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: n_param, tol, tol_c
-    use, intrinsic :: iso_c_binding, only: c_char, c_funptr, c_f_procpointer
+    use, intrinsic :: iso_c_binding, only: c_char, c_funptr, c_f_procpointer, &
+                                           c_associated
 
     implicit none
 
@@ -68,6 +69,14 @@ contains
         ! assume tests pass
         test_passed = .true.
 
+        ! check if function pointer is associated
+        if (.not. associated(transport_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Transport function not "// &
+                "associated with value."
+            return
+        end if
+
         ! allocate arrays
         allocate(geodesic(n_param), tangent_vector(n_param))
 
@@ -114,6 +123,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(transport_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Transport function not "// &
+                "associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=transport_c_funptr, fptr=transport_funptr)
@@ -164,6 +181,14 @@ contains
         ! assume tests pass
         test_passed = .true.
 
+        ! check if function pointer is associated
+        if (.not. associated(init_hess_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Initial Hessian "// &
+                "function not associated with value."
+            return
+        end if
+
         ! allocate arrays
         allocate(vector(n_param))
 
@@ -209,6 +234,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(init_hess_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Initial Hessian "// &
+                "function not associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=init_hess_c_funptr, fptr=init_hess_funptr)

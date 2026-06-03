@@ -1484,14 +1484,10 @@ contains
             test_init_solver_settings = .false.
         end if
 
-        ! check function pointers
-        if (associated(settings%precond) .or. associated(settings%project) .or. &
-            associated(settings%modify_step) .or. associated(settings%conv_check) .or. &
-            associated(settings%logger)) then
-            write (stderr, *) "test_init_solver_settings failed: Function pointers "// &
-                "should not be initialized."
+        ! check that callback function pointers are not associated
+        if (.not. test_associated_solver_funptr(settings, &
+                                                "test_init_solver_settings")) &
             test_init_solver_settings = .false.
-        end if
 
         ! check settings
         if (settings /= default_settings) then
@@ -1527,13 +1523,10 @@ contains
             test_init_stability_settings = .false.
         end if
 
-        ! check function pointers
-        if (associated(settings%precond) .or. associated(settings%project) .or. &
-            associated(settings%logger)) then
-            write (stderr, *) "test_init_stability_settings failed: Function "// &
-                "pointers should not be initialized."
+        ! check that callback function pointers are not associated
+        if (.not. test_associated_stability_funptr(settings, &
+                                                   "test_init_stability_settings")) &
             test_init_stability_settings = .false.
-        end if
 
         ! check settings
         if (settings /= default_settings) then

@@ -11,7 +11,7 @@ module c_interface_mock
                            init_solver_settings_c, init_stability_settings_c
     use test_reference, only: ref_settings, n_param
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_pointer, &
-                                           c_f_procpointer, c_associated, c_null_char
+                                           c_f_procpointer, c_associated
 
     implicit none
 
@@ -36,22 +36,14 @@ contains
         !
         ! this subroutine is a mock routine for the solver C wrapper subroutine
         !
-        use c_interface, only: solver_settings_type_c, update_orbs_c_type, &
-                               hess_x_c_type, obj_func_c_type, precond_c_type, &
-                               project_c_type, modify_step_c_type, conv_check_c_type, &
-                               logger_c_type
+        use c_interface, only: solver_settings_type_c
         use test_reference, only: test_update_orbs_c_funptr, test_obj_func_c_funptr, &
-                                  test_precond_c_funptr, test_project_c_funptr, &
-                                  test_modify_step_c_funptr, test_conv_check_c_funptr, &
-                                  operator(/=)
+                                  test_mock_solver_c_funptr, operator(/=)
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
         type(solver_settings_type_c), intent(in), value :: settings_c
         integer(c_ip) :: error_c
-
-        procedure(logger_c_type), pointer :: logger_funptr
-        character(:), allocatable, target :: message
 
         ! test passed orbital update function
         test_solver_interface = test_solver_interface .and. &
@@ -70,30 +62,9 @@ contains
             test_solver_interface = .false.
         end if
 
-        ! test passed preconditioner function
-        test_solver_interface = test_solver_interface .and. &
-            test_precond_c_funptr(settings_c%precond, "solver_py_interface", &
-                                  " by given preconditioning function")
-
-        ! test passed projection function
-        test_solver_interface = test_solver_interface .and. &
-            test_project_c_funptr(settings_c%project, "solver_py_interface", &
-                                  " by given projection function")
-
-        ! test passed step modification function
-        test_solver_interface = test_solver_interface .and. &
-            test_modify_step_c_funptr(settings_c%modify_step, "solver_py_interface", &
-                                      " by given step modification function")
-
-        ! test passed convergence check function
-        test_solver_interface = test_solver_interface .and. &
-            test_conv_check_c_funptr(settings_c%conv_check, "solver_py_interface", &
-                                     " by given convergence check function")
-
-        ! get Fortran pointer to passed logging function and call it
-        message = "test" // c_null_char
-        call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-        call logger_funptr(message)
+        ! check optional function pointers
+        if (.not. test_mock_solver_c_funptr(settings_c, "solver_py_interface", &
+                                            " given")) test_solver_interface = .false.
 
         ! check optional settings against reference values
         if (settings_c /= ref_settings) then
@@ -114,10 +85,9 @@ contains
         ! this subroutine is a mock routine for the stability check C wrapper
         ! subroutine
         !
-        use c_interface, only: stability_settings_type_c, hess_x_c_type, &
-                               precond_c_type, project_c_type, logger_c_type
-        use test_reference, only: tol_c, test_hess_x_c_funptr, test_precond_c_funptr, &
-                                  test_project_c_funptr, operator(/=)
+        use c_interface, only: stability_settings_type_c, logger_c_type
+        use test_reference, only: tol_c, test_hess_x_c_funptr, &
+                                  test_mock_stability_c_funptr, operator(/=)
 
         real(c_rp), intent(in), target :: h_diag_c(*)
         type(c_funptr), intent(in), value :: hess_x_c_funptr
@@ -129,7 +99,6 @@ contains
 
         real(c_rp), pointer :: kappa_ptr(:)
         procedure(logger_c_type), pointer :: logger_funptr
-        character(:), allocatable, target :: message
 
         ! check if Hessian diagonal is passed correctly
         if (any(abs(h_diag_c(:n_param_c) - 3.0_c_rp) > tol_c)) then
@@ -150,20 +119,11 @@ contains
             test_stability_check_interface = .false.
         end if
 
-        ! test passed preconditioner
-        test_stability_check_interface = test_stability_check_interface .and. &
-            test_precond_c_funptr(settings_c%precond, "stability_check_py_interface", &
-                                  " by given preconditioning function")
-
-        ! test passed projection function
-        test_stability_check_interface = test_stability_check_interface .and. &
-            test_project_c_funptr(settings_c%project, "stability_check_py_interface", &
-                                  " by given projection function")
-
-        ! get Fortran pointer to passed logging function and call it
-        message = "test" // c_null_char
-        call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-        call logger_funptr(message)
+        ! check optional function pointers
+        if (.not. test_mock_stability_c_funptr(settings_c, &
+                                               "stability_check_py_interface", &
+                                               " given")) &
+            test_stability_check_interface = .false.
 
         ! check optional settings against reference values
         if (settings_c /= ref_settings) then

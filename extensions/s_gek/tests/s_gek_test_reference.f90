@@ -9,7 +9,8 @@ module otr_s_gek_test_reference
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
      use test_reference, only: n_param, tol, tol_c
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer
+    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+                                           c_associated
 
     implicit none
 
@@ -68,6 +69,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(change_reference_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Change reference "// &
+                "function not associated with value."
+            return
+        end if
 
         ! initialize number of points
         n_points = 4
@@ -137,6 +146,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(change_reference_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Change reference "// &
+                "function not associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=change_reference_c_funptr, &

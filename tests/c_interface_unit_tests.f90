@@ -149,6 +149,39 @@ contains
 
     end subroutine mock_logger
 
+    subroutine solver_set_mock(settings)
+        !
+        ! this function sets optional mock routines for the C solver settings object
+        !
+        use c_interface, only: solver_settings_type_c
+
+        type(solver_settings_type_c) :: settings
+
+        settings%precond = c_funloc(mock_precond)
+        settings%project = c_funloc(mock_project)
+        settings%modify_step = c_funloc(mock_modify_step)
+        settings%conv_check = c_funloc(mock_conv_check)
+        settings%stability_hess_x = c_funloc(mock_hess_x)
+        settings%logger = c_funloc(mock_logger)
+        call stability_set_mock(settings%stability_settings)
+
+    end subroutine solver_set_mock
+
+    subroutine stability_set_mock(settings)
+        !
+        ! this function sets optional mock routines for the C stability settings object
+        !
+        use c_interface, only: stability_settings_type_c
+
+        type(stability_settings_type_c) :: settings
+
+        settings%precond = c_funloc(mock_precond)
+        settings%project = c_funloc(mock_project)
+        settings%approx_hess_x = c_funloc(mock_hess_x)
+        settings%logger = c_funloc(mock_logger)
+
+    end subroutine stability_set_mock
+
     logical(c_bool) function test_solver_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the solver
@@ -173,11 +206,7 @@ contains
 
         ! associate optional settings with values
         settings = ref_settings
-        settings%precond = c_funloc(mock_precond)
-        settings%project = c_funloc(mock_project)
-        settings%modify_step = c_funloc(mock_modify_step)
-        settings%conv_check = c_funloc(mock_conv_check)
-        settings%logger = c_funloc(mock_logger)
+        call solver_set_mock(settings)
 
         ! initialize logger logical
         test_logger = .true.
@@ -237,9 +266,7 @@ contains
 
         ! associate optional arguments with values
         settings = ref_settings
-        settings%precond = c_funloc(mock_precond)
-        settings%project = c_funloc(mock_project)
-        settings%logger = c_funloc(mock_logger)
+        call stability_set_mock(settings)
 
         ! unassociate returned direction pointer
         kappa_c_ptr = c_null_ptr
@@ -502,7 +529,7 @@ contains
         !
         use c_interface, only: solver_settings_type_c, init_solver_settings_c
         use opentrustregion, only: default_solver_settings
-        use test_reference, only: operator(/=)
+        use test_reference, only: test_associated_solver_c_funptr, operator(/=)
 
         type(solver_settings_type_c) :: settings
 
@@ -512,14 +539,10 @@ contains
         ! initialize settings
         call init_solver_settings_c(settings)
 
-        ! check function pointers
-        if (c_associated(settings%precond) .or. c_associated(settings%project) .or. &
-            c_associated(settings%modify_step) .or. c_associated(settings%conv_check) &
-            .or. c_associated(settings%logger)) then
-            write (stderr, *) "test_init_solver_settings_c failed: Function "// &
-                "pointers should not be initialized."
+        ! check that callback function pointers are not associated
+        if (.not. test_associated_solver_c_funptr(settings, &
+                                                  "test_init_solver_settings_c")) &
             test_init_solver_settings_c = .false.
-        end if
 
         ! check settings
         if (settings /= default_solver_settings) then
@@ -537,7 +560,7 @@ contains
         !
         use c_interface, only: stability_settings_type_c, init_stability_settings_c
         use opentrustregion, only: default_stability_settings
-        use test_reference, only: operator(/=)
+        use test_reference, only: test_associated_stability_c_funptr, operator(/=)
 
         type(stability_settings_type_c) :: settings
 
@@ -547,13 +570,11 @@ contains
         ! initialize settings
         call init_stability_settings_c(settings)
 
-        ! check function pointers
-        if (c_associated(settings%precond) .or. c_associated(settings%project) .or. &
-            c_associated(settings%logger)) then
-            write (stderr, *) "test_init_stability_settings_c failed: Function "// &
-                "pointers should not be initialized."
+        ! check that callback function pointers are not associated
+        if (.not. &
+            test_associated_stability_c_funptr(settings, &
+                                               "test_init_stability_settings_c")) &
             test_init_stability_settings_c = .false.
-        end if
 
         ! check settings
         if (settings /= default_stability_settings) then
@@ -571,9 +592,8 @@ contains
         !
         use c_interface, only: solver_settings_type_c, assignment(=)
         use opentrustregion, only: solver_settings_type
-        use test_reference, only: assignment(=), ref_settings, test_precond_funptr, &
-                                  test_project_funptr, test_modify_step_funptr, &
-                                  test_conv_check_funptr, operator(/=)
+        use test_reference, only: assignment(=), ref_settings, &
+                                  test_mock_solver_funptr, operator(/=)
 
         type(solver_settings_type_c) :: settings_c
         type(solver_settings_type) :: settings
@@ -583,73 +603,15 @@ contains
 
         ! initialize the C settings with custom values
         settings_c = ref_settings
-        settings_c%precond = c_funloc(mock_precond)
-        settings_c%project = c_funloc(mock_project)
-        settings_c%modify_step = c_funloc(mock_modify_step)
-        settings_c%conv_check = c_funloc(mock_conv_check)
-        settings_c%logger = c_funloc(mock_logger)
+        call solver_set_mock(settings_c)
 
         ! convert to Fortran settings
         settings = settings_c
 
-        ! check preconditioner function
-        if (.not. associated(settings%precond)) then
+        ! check optional function pointers
+        test_logger = .true.
+        if (.not. test_mock_solver_funptr(settings, "assign_solver_f_c", "")) &
             test_assign_solver_f_c = .false.
-            write (stderr, *) "test_assign_solver_f_c failed: Preconditioner "// &
-                "function not associated with value."
-        else
-            test_assign_solver_f_c = test_assign_solver_f_c .and. &
-                test_precond_funptr(settings%precond, "assign_solver_f_c", &
-                                    " by preconditioner function")
-        end if
-
-        ! check projection function
-        if (.not. associated(settings%project)) then
-            test_assign_solver_f_c = .false.
-            write (stderr, *) "test_assign_solver_f_c failed: Projection function "// &
-                "not associated with value."
-        else
-            test_assign_solver_f_c = test_assign_solver_f_c .and. &
-                test_project_funptr(settings%project, "assign_solver_f_c", &
-                                    " by projection function")
-        end if
-
-        ! check step modification function
-        if (.not. associated(settings%modify_step)) then
-            test_assign_solver_f_c = .false.
-            write (stderr, *) "test_assign_solver_f_c failed: Step modification "// &
-                "function not associated with value."
-        else
-            test_assign_solver_f_c = test_assign_solver_f_c .and. &
-                test_modify_step_funptr(settings%modify_step, "assign_solver_f_c", &
-                                        " by step modification function")
-        end if
-
-        ! check convergence check
-        if (.not. associated(settings%conv_check)) then
-            test_assign_solver_f_c = .false.
-            write (stderr, *) "test_assign_solver_f_c failed: Convergence check "// &
-                "function not associated with value."
-        else
-            test_assign_solver_f_c = test_assign_solver_f_c .and. &
-                test_conv_check_funptr(settings%conv_check, "assign_solver_f_c", &
-                                       " by convergence check function")
-        end if
-
-        ! check logging function
-        if (.not. associated(settings%logger)) then
-            test_assign_solver_f_c = .false.
-            write (stderr, *) "test_assign_solver_f_c failed: Logging function "// &
-                "not associated with value."
-        else
-            test_logger = .true.
-            call settings%logger("test")
-            if (.not. test_logger) then
-                test_assign_solver_f_c = .false.
-                write (stderr, *) "test_assign_solver_f_c failed: Called logging "// &
-                    "subroutine wrong."
-            end if
-        end if
 
         ! check against reference values
         if (settings /= ref_settings) then
@@ -674,8 +636,8 @@ contains
         !
         use c_interface, only: stability_settings_type_c, assignment(=)
         use opentrustregion, only: stability_settings_type
-        use test_reference, only: assignment(=), ref_settings, test_precond_funptr, &
-                                  test_project_funptr, operator(/=)
+        use test_reference, only: assignment(=), ref_settings, &
+                                  test_mock_stability_funptr, operator(/=)
 
         type(stability_settings_type_c) :: settings_c
         type(stability_settings_type)   :: settings
@@ -685,49 +647,15 @@ contains
 
         ! initialize the C settings with custom values
         settings_c = ref_settings
-        settings_c%precond = c_funloc(mock_precond)
-        settings_c%project = c_funloc(mock_project)
-        settings_c%logger  = c_funloc(mock_logger)
+        call stability_set_mock(settings_c)
 
         ! convert to Fortran settings
         settings = settings_c
 
-        ! check preconditioner function
-        if (.not. associated(settings%precond)) then
+        ! check optional function pointers
+        test_logger = .true.
+        if (.not. test_mock_stability_funptr(settings, "assign_stability_f_c", "")) &
             test_assign_stability_f_c = .false.
-            write (stderr, *) "test_assign_stability_f_c failed: Preconditioner "// &
-                "function not associated with value."
-        else
-            test_assign_stability_f_c = test_assign_stability_f_c .and. &
-                test_precond_funptr(settings%precond, "assign_stability_f_c", &
-                                    " by preconditioner function")
-        end if
-
-        ! check projection function
-        if (.not. associated(settings%project)) then
-            test_assign_stability_f_c = .false.
-            write (stderr, *) "test_assign_stability_f_c failed: Projection "// &
-                "function not associated with value."
-        else
-            test_assign_stability_f_c = test_assign_stability_f_c .and. &
-            test_project_funptr(settings%project, "assign_stability_f_c", &
-                                " by projection function")
-        end if
-
-        ! check logging function
-        if (.not. associated(settings%logger)) then
-            test_assign_stability_f_c = .false.
-            write (stderr, *) "test_assign_stability_f_c failed: Logging function "// &
-                "not associated with value."
-        else
-            test_logger = .true.
-            call settings%logger("stability test")
-            if (.not. test_logger) then
-                test_assign_stability_f_c = .false.
-                write (stderr, *) "test_assign_stability_f_c failed: Logging "// &
-                    "callback did not trigger."
-            end if
-        end if
 
         ! check against reference values
         if (settings /= ref_settings) then
@@ -752,7 +680,8 @@ contains
         !
         use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c, assignment(=)
-        use test_reference, only: ref_settings, assignment(=), operator(/=)
+        use test_reference, only: ref_settings, assignment(=), &
+                                  test_associated_solver_c_funptr, operator(/=)
 
         type(solver_settings_type)   :: settings
         type(solver_settings_type_c) :: settings_c
@@ -767,31 +696,8 @@ contains
         settings_c = settings
 
         ! check that callback function pointers are not associated
-        if (c_associated(settings_c%precond)) then
+        if (.not. test_associated_solver_c_funptr(settings_c, "assign_solver_c_f")) &
             test_assign_solver_c_f = .false.
-            write (stderr, *) "test_assign_solver_c_f failed: Preconditioner "// &
-                "function associated."
-        end if
-        if (c_associated(settings_c%project)) then
-            test_assign_solver_c_f = .false.
-            write (stderr, *) "test_assign_solver_c_f failed: Projection function "// &
-                "associated."
-        end if
-        if (c_associated(settings_c%modify_step)) then
-            test_assign_solver_c_f = .false.
-            write (stderr, *) "test_assign_solver_c_f failed: Step modification "// &
-                "function associated."
-        end if
-        if (c_associated(settings_c%conv_check)) then
-            test_assign_solver_c_f = .false.
-            write (stderr, *) "test_assign_solver_c_f failed: Convergence check "// &
-                "function associated."
-        end if
-        if (c_associated(settings_c%logger)) then
-            test_assign_solver_c_f = .false.
-            write (stderr, *) "test_assign_solver_c_f failed: Logger function "// &
-                "associated."
-        end if
 
         ! check against reference values
         if (settings /= ref_settings) then
@@ -816,7 +722,8 @@ contains
         !
         use opentrustregion, only: stability_settings_type
         use c_interface, only: stability_settings_type_c, assignment(=)
-        use test_reference, only: ref_settings, assignment(=), operator(/=)
+        use test_reference, only: ref_settings, assignment(=), &
+                                  test_associated_stability_c_funptr, operator(/=)
 
         type(stability_settings_type)   :: settings
         type(stability_settings_type_c) :: settings_c
@@ -831,21 +738,9 @@ contains
         settings_c = settings
 
         ! check that callback function pointers are not associated
-        if (c_associated(settings_c%precond)) then
+        if (.not. test_associated_stability_c_funptr(settings_c, &
+                                                     "assign_stability_c_f")) &
             test_assign_stability_c_f = .false.
-            write (stderr, *) "test_assign_stability_c_f failed: Preconditioner "// &
-                "function associated."
-        end if
-        if (c_associated(settings_c%project)) then
-            test_assign_stability_c_f = .false.
-            write (stderr, *) "test_assign_stability_c_f failed: Projection "// &
-                "function associated."
-        end if
-        if (c_associated(settings_c%logger)) then
-            test_assign_stability_c_f = .false.
-            write (stderr, *) "test_assign_stability_c_f failed: Logger function "// &
-                "associated."
-        end if
 
         ! check against reference values
         if (settings /= ref_settings) then
