@@ -152,14 +152,15 @@ module c_interface
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_type), pointer :: update_orbs_f_wrapper_ptr => &
-        update_orbs_f_wrapper
+                                            update_orbs_f_wrapper
     procedure(hess_x_type), pointer :: hess_x_f_wrapper_ptr => hess_x_f_wrapper
     procedure(obj_func_type), pointer :: obj_func_f_wrapper_ptr => obj_func_f_wrapper
     procedure(precond_type), pointer :: precond_f_wrapper_ptr => precond_f_wrapper
     procedure(project_type), pointer :: project_f_wrapper_ptr => project_f_wrapper
     procedure(modify_step_type), pointer :: modify_step_f_wrapper_ptr => &
-        modify_step_f_wrapper
+                                            modify_step_f_wrapper
     procedure(conv_check_type), pointer :: conv_check_f_wrapper_ptr => &
+                                           conv_check_f_wrapper
     procedure(hess_x_type), pointer :: stability_hess_x_f_wrapper_ptr => &
                                        stability_hess_x_f_wrapper
     procedure(hess_x_type), pointer :: approx_hess_x_f_wrapper_ptr => &

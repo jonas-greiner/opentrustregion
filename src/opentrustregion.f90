@@ -579,7 +579,7 @@ contains
         ! increment number of Hessian linear transformations
         tot_hess_x = tot_hess_x + n_trial
 
-        ! construct augmented Hessian in reduced space
+        ! construct reduced space Hessian
         allocate(red_space_hess(n_trial, n_trial))
         call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, red_space_basis, &
                    n_param, h_basis, n_param, 0.0_rp, red_space_hess, n_trial)
