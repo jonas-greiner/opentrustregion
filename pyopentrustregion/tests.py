@@ -278,6 +278,36 @@ class PyInterfaceTests(unittest.TestCase):
             else:
                 setattr(settings, field_name, getattr(self, field_name + "_ref"))
 
+    def equal_settings_to_ref(self, settings: Settings) -> bool:
+        test_passed = True
+        for field_info in settings.c_struct._fields_:
+            field_name, field_type = field_info[:2]
+            if field_type == c_void_p:
+                if (
+                    getattr(settings, field_name) is not None
+                    or getattr(settings.settings_c, field_name) is not None
+                ):
+                    print(
+                        f" Optional function pointer {field_name} not initialized "
+                        "correctly."
+                    )
+                    test_passed = False
+            elif field_name == "initialized":
+                if not getattr(settings, field_name):
+                    print(" Field initialized not initialized correctly.")
+                    test_passed = False
+            else:
+                ref_value = getattr(self, field_name + "_ref")
+                if field_type == c_real:
+                    match = np.isclose(getattr(settings, field_name), ref_value)
+                else:
+                    match = getattr(settings, field_name) == ref_value
+                if not match:
+                    print(field_name, getattr(settings, field_name), ref_value)
+                    print(f" Field {field_name} not initialized correctly.")
+                    test_passed = False
+        return test_passed
+
     def mock_obj_func(self, kappa):
         """
         this function is a mock function for the objective function
@@ -425,40 +455,11 @@ class PyInterfaceTests(unittest.TestCase):
         this function ensure the SolverSettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        settings = SolverSettings()
         test_passed = True
-        for field_info in settings.c_struct._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type == c_void_p:
-                if (
-                    getattr(settings, field_name) is not None
-                    or getattr(settings.settings_c, field_name) is not None
-                ):
-                    print(
-                        " test_solver_settings failed: Optional function pointer "
-                        f"{field_name} not initialized correctly."
-                    )
-                    test_passed = False
-            elif field_name == "initialized":
-                if not getattr(settings, field_name):
-                    print(
-                        " test_solver_settings failed: Field initialized not "
-                        "initialized correctly."
-                    )
-                    test_passed = False
-            else:
-                ref_value = getattr(self, field_name + "_ref")
-                if field_type == c_real:
-                    match = np.isclose(getattr(settings, field_name), ref_value)
-                else:
-                    match = getattr(settings, field_name) == ref_value
-                if not match:
-                    print(field_name, getattr(settings, field_name), ref_value)
-                    print(
-                        f" test_solver_settings failed: Field {field_name} not "
-                        "initialized correctly."
-                    )
-                    test_passed = False
+        settings = SolverSettings()
+        if not self.equal_settings_to_ref(settings):
+            print(" test_solver_settings failed: Settings not initialized correctly.")
+            test_passed = False
 
         dummy_error_code = 42
 
@@ -493,40 +494,13 @@ class PyInterfaceTests(unittest.TestCase):
         this function ensure the StabilitySettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        settings = StabilitySettings()
         test_passed = True
-        for field_info in settings.c_struct._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type == c_void_p:
-                if (
-                    getattr(settings, field_name) is not None
-                    or getattr(settings.settings_c, field_name) is not None
-                ):
-                    print(
-                        " test_stability_settings failed: Optional function pointer "
-                        f"{field_name} not initialized correctly."
-                    )
-                    test_passed = False
-            elif field_name == "initialized":
-                if not getattr(settings, field_name):
-                    print(
-                        " test_stability_settings failed: Field initialized not "
-                        "initialized correctly."
-                    )
-                    test_passed = False
-            else:
-                ref_value = getattr(self, field_name + "_ref")
-                if field_type == c_real:
-                    match = np.isclose(getattr(settings, field_name), ref_value)
-                else:
-                    match = getattr(settings, field_name) == ref_value
-                if not match:
-                    print(field_name, getattr(settings, field_name), ref_value)
-                    print(
-                        f" test_stability_settings failed: Field {field_name} not "
-                        "initialized correctly."
-                    )
-                    test_passed = False
+        settings = StabilitySettings()
+        if not self.equal_settings_to_ref(settings):
+            print(
+                " test_stability_settings failed: Settings not initialized correctly."
+            )
+            test_passed = False
 
         self.assertTrue(test_passed, "test_stability_settings failed")
         print(" test_stability_settings PASSED")

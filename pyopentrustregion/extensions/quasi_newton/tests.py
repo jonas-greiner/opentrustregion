@@ -275,40 +275,11 @@ class QNPyInterfaceTests(unittest.TestCase):
         this function ensure the QNSettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        settings = QNSettings()
         test_passed = True
-        for field_info in settings.c_struct._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type == c_void_p:
-                if (
-                    getattr(settings, field_name) is not None
-                    or getattr(settings.settings_c, field_name) is not None
-                ):
-                    print(
-                        " test_qn_settings failed: Optional function pointer "
-                        f"{field_name} not initialized correctly."
-                    )
-                    test_passed = False
-            elif field_name == "initialized":
-                if not getattr(settings, field_name):
-                    print(
-                        " test_qn_settings failed: Field initialized not "
-                        "initialized correctly."
-                    )
-                    test_passed = False
-            else:
-                ref_value = getattr(self, field_name + "_ref")
-                if field_type == c_real:
-                    match = np.isclose(getattr(settings, field_name), ref_value)
-                else:
-                    match = getattr(settings, field_name) == ref_value
-                if not match:
-                    print(field_name, getattr(settings, field_name), ref_value)
-                    print(
-                        f" test_qn_settings failed: Field {field_name} not "
-                        "initialized correctly."
-                    )
-                    test_passed = False
+        settings = QNSettings()
+        if not self.equal_settings_to_ref(settings):
+            print(" test_qn_settings failed: Settings not initialized correctly.")
+            test_passed = False
 
         dummy_error_code = 42
 
