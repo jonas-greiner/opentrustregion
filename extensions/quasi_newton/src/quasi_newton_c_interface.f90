@@ -9,9 +9,9 @@ module otr_qn_c_interface
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
     use otr_common_c_interface, only: n_param
-    use otr_qn, only: transport_type, standard_update_orbs_qn_factory => &
-                      update_orbs_qn_factory, standard_update_orbs_qn_deconstructor => &
-                      update_orbs_qn_deconstructor
+    use otr_qn, only: transport_type, init_hess_type, standard_update_orbs_qn_factory &
+                      => update_orbs_qn_factory, standard_update_orbs_qn_deconstructor &
+                      => update_orbs_qn_deconstructor
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_funloc, &
                                            c_f_procpointer, c_associated, c_null_funptr
 
@@ -29,10 +29,20 @@ module otr_qn_c_interface
         end function transport_c_type
     end interface
 
+    abstract interface
+        function init_hess_c_type(vector_c) result(error_c) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(inout), target :: vector_c(*)
+            integer(c_ip) :: error_c
+        end function init_hess_c_type
+    end interface
+
     ! define procedure pointer which will point to the Fortran procedures
     procedure(update_orbs_c_type), pointer :: update_orbs_orig_qn_before_wrapping => &
         null()
     procedure(transport_c_type), pointer :: transport_before_wrapping => null()
+    procedure(init_hess_c_type), pointer :: init_hess_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_qn_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_qn_before_wrapping => null()
 
@@ -53,6 +63,7 @@ module otr_qn_c_interface
     procedure(update_orbs_type), pointer :: update_orbs_orig_qn_f_wrapper_ptr => &
         update_orbs_orig_qn_f_wrapper
     procedure(transport_type), pointer :: transport_f_wrapper_ptr => transport_f_wrapper
+    procedure(init_hess_type), pointer :: init_hess_f_wrapper_ptr => init_hess_f_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_qn_c_wrapper_ptr => &
         update_orbs_qn_c_wrapper
     procedure(hess_x_c_type), pointer :: hess_x_qn_c_wrapper_ptr => &
@@ -67,9 +78,10 @@ module otr_qn_c_interface
 contains
 
     function update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, &
-                                              transport_c_funptr, n_param_c, &
-                                              settings_c, update_orbs_qn_c_funptr) &
-        result(error_c) bind(C, name="update_orbs_qn_factory")
+                                              transport_c_funptr, init_hess_c_funptr, &
+                                              n_param_c, settings_c, &
+                                              update_orbs_qn_c_funptr) result(error_c) &
+        bind(C, name="update_orbs_qn_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C 
         ! variables to Fortran variables
@@ -77,7 +89,7 @@ contains
         use otr_qn, only: qn_settings_type
 
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
-                                             transport_c_funptr
+                                             transport_c_funptr, init_hess_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
         type(qn_settings_type_c), intent(in), value :: settings_c
         type(c_funptr), intent(out) :: update_orbs_qn_c_funptr
@@ -86,6 +98,7 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
                                                 update_orbs_qn_funptr
         procedure(transport_type), pointer :: transport_funptr
+        procedure(init_hess_type), pointer :: init_hess_funptr
         type(qn_settings_type) :: settings
         integer(ip) :: error
 
@@ -94,10 +107,12 @@ contains
         call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
                              fptr=update_orbs_orig_qn_before_wrapping)
         call c_f_procpointer(cptr=transport_c_funptr, fptr=transport_before_wrapping)
+        call c_f_procpointer(cptr=init_hess_c_funptr, fptr=init_hess_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         update_orbs_funptr => update_orbs_orig_qn_f_wrapper
         transport_funptr => transport_f_wrapper
+        init_hess_funptr => init_hess_f_wrapper
 
         ! convert number of parameters to Fortran kind and store globally to access 
         ! assumed size arrays passed from C to Fortran
@@ -107,8 +122,9 @@ contains
         settings = settings_c
 
         ! associate the global procedure pointer to the update_orbs function
-        call update_orbs_qn_factory(update_orbs_funptr, transport_funptr, n_param, &
-                                    settings, error, update_orbs_qn_funptr)
+        call update_orbs_qn_factory(update_orbs_funptr, transport_funptr, &
+                                    init_hess_funptr, n_param, error, settings, &
+                                    update_orbs_qn_funptr)
         update_orbs_qn_before_wrapping => update_orbs_qn_funptr
 
         ! get a C function pointer to the update_orbs wrapper function
@@ -173,6 +189,37 @@ contains
         end if
 
     end subroutine transport_f_wrapper
+
+    subroutine init_hess_f_wrapper(vector, error)
+        !
+        ! this subroutine wraps the initial Hessian subroutine to convert Fortran 
+        ! variables to C variables
+        !
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+
+        real(c_rp), pointer :: vector_c(:)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            vector_c => vector
+        else
+            allocate(vector_c(size(vector, 1)))
+            vector_c = real(vector, kind=c_rp)
+        end if
+
+        ! call initial Hessian C function
+        error_c = init_hess_before_wrapping(vector_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            vector = real(vector_c, kind=rp)
+            deallocate(vector_c)
+        end if
+
+    end subroutine init_hess_f_wrapper
 
     function update_orbs_qn_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                          hess_x_c_funptr) result(error_c) bind(C)

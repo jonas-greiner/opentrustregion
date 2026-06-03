@@ -14,6 +14,14 @@ extern "C" {
 #endif
 
 /* ------------------------------------------------------------------
+ * Declarations for quasi-Newton functions and function pointer types
+ * ------------------------------------------------------------------ */
+
+/* Hessian initialization callback */
+typedef c_int init_hess_fn(c_real* vector_c);
+typedef init_hess_fn* init_hess_fp;
+
+/* ------------------------------------------------------------------
  * Struct corresponding to Fortran type(qn_settings_type_c)
  * ------------------------------------------------------------------ */
 typedef struct {
@@ -34,6 +42,7 @@ void init_qn_settings(qn_settings_type* settings);
  * Fortran-callable update_orbs_qn_factory interface
  *
  * @param update_orbs_orig_c_funptr    Pointer to original update_orbs callback
+ * @param init_hess_c_funptr           C pointer to init_hess callback
  * @param n_param                      Number of parameters
  * @param settings                     Quasi-Newton settings
  * @param update_orbs_qn_c_funptr      Pointer to new update_orbs callback
@@ -41,6 +50,7 @@ void init_qn_settings(qn_settings_type* settings);
  */
 c_int update_orbs_qn_factory(
     update_orbs_fp update_orbs_orig_c_funptr,
+    init_hess_fp init_hess_c_funptr,
     c_int n_param,
     qn_settings_type settings,
     update_orbs_fp* update_orbs_qn_c_funptr

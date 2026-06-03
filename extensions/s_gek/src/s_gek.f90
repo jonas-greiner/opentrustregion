@@ -80,7 +80,7 @@ module otr_s_gek
 
     subroutine update_orbs_s_gek_factory(update_orbs_funptr_in, &
                                          change_reference_funptr_in, n_param, &
-                                         settings, error, update_orbs_s_gek_funptr)
+                                         error, settings, update_orbs_s_gek_funptr)
         !
         ! this subroutine returns a modified S-GEK orbital updating function
         !

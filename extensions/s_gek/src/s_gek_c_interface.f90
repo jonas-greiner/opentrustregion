@@ -114,7 +114,7 @@ contains
 
         ! associate the global procedure pointer to the update_orbs function
         call update_orbs_s_gek_factory(update_orbs_funptr, change_reference_funptr, &
-                                       n_param, settings, error, &
+                                       n_param, error, settings, &
                                        update_orbs_s_gek_funptr)
         update_orbs_s_gek_before_wrapping => update_orbs_s_gek_funptr
 

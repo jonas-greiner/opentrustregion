@@ -147,6 +147,100 @@ contains
 
     end function test_transport_c_funptr
 
+    function test_init_hess_funptr(init_hess_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided initial Hessian function pointer
+        !
+        use otr_qn, only: init_hess_type
+
+        procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        real(rp), allocatable :: vector(:)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! allocate arrays
+        allocate(vector(n_param))
+
+        ! initialize input arrays
+        vector = 2.0_rp
+
+        ! call initial Hessian function pointer
+        call init_hess_funptr(vector, error)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+        end if
+
+        ! check vector
+        if (any((vector - 4.0_rp) > tol)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Vector returned"//message &
+                //" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(vector)
+
+    end function test_init_hess_funptr
+
+    function test_init_hess_c_funptr(init_hess_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided initial Hessian C function pointer
+        !
+        use otr_qn_c_interface, only: init_hess_c_type
+
+        type(c_funptr), intent(in) :: init_hess_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(init_hess_c_type), pointer :: init_hess_funptr
+        real(c_rp), allocatable :: vector(:)
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=init_hess_c_funptr, fptr=init_hess_funptr)
+
+        ! allocate arrays
+        allocate(vector(n_param))
+
+        ! initialize new reference
+        vector = 2.0_c_rp
+
+        ! call initial Hessian function pointer
+        error = init_hess_funptr(vector)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+        end if
+
+        ! check vector
+        if (any((vector - 4.0_c_rp) > tol_c)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Vector returned"//message &
+                //" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(vector)
+
+    end function test_init_hess_c_funptr
+
     subroutine get_reference_qn_values(ref_settings_out) bind(C)
         !
         ! this subroutine exports the quasi-Newton reference values for tests

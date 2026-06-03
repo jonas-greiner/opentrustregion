@@ -33,6 +33,16 @@ module otr_qn
         end subroutine transport_type
     end interface
 
+    abstract interface
+        subroutine init_hess_type(vector, error)
+            import :: rp, ip
+
+            real(rp), intent(inout), target :: vector(:)
+            integer(ip), intent(out) :: error
+
+        end subroutine init_hess_type
+    end interface
+
     type, abstract :: updating_type
         real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), h_diag(:), &
                                  last_grad(:)
@@ -56,12 +66,13 @@ module otr_qn
     end type bfgs_updating_type
 
     abstract interface
-        function skip_add_interface(self, kappa, grad_diff) result(skip)
-            import updating_type, rp
+        function skip_add_interface(self, kappa, grad_diff, error) result(skip)
+            import updating_type, rp, ip
             
             class(updating_type), intent(in) :: self
             real(rp), intent(in) :: kappa(:), grad_diff(:)
             logical :: skip
+            integer(ip), intent(out) :: error
         end function skip_add_interface
     end interface
 
@@ -72,6 +83,7 @@ module otr_qn
     procedure(update_orbs_type), pointer :: update_orbs_orig_funptr
     procedure(hess_x_type), pointer :: hess_x_qn_funptr
     procedure(transport_type), pointer :: transport_funptr
+    procedure(init_hess_type), pointer :: init_hess_funptr
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_type), pointer :: update_orbs_qn_ptr => update_orbs_qn
@@ -79,7 +91,8 @@ module otr_qn
     contains
 
     subroutine update_orbs_qn_factory(update_orbs_funptr_in, transport_funptr_in, &
-                                      n_param, settings, error, update_orbs_qn_funptr)
+                                      init_hess_funptr_in, n_param, error, settings, &
+                                      update_orbs_qn_funptr)
         !
         ! this subroutine returns a modified quasi-Newton orbital updating function
         !
@@ -87,9 +100,10 @@ module otr_qn
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr_in
         procedure(transport_type), intent(in), pointer :: transport_funptr_in
+        procedure(init_hess_type), intent(in), pointer :: init_hess_funptr_in
         integer(ip), intent(in) :: n_param
-        type(qn_settings_type), intent(inout) :: settings
         integer(ip), intent(out) :: error
+        type(qn_settings_type), intent(inout) :: settings
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
 
         ! initialize error flag
@@ -128,6 +142,9 @@ module otr_qn
         ! set pointer to transport function
         transport_funptr => transport_funptr_in
 
+        ! set pointer to Hessian initialization function
+        init_hess_funptr => init_hess_funptr_in
+
         ! get pointer to modified orbital updating function
         update_orbs_qn_funptr => update_orbs_qn
 
@@ -156,9 +173,6 @@ module otr_qn
         ! add new step
         call update_object%add(kappa, grad, error)
         if (error /= 0) return
-
-        ! set Hessian diagonal
-        update_object%h_diag = h_diag
         
     end subroutine update_orbs_qn
 
@@ -233,7 +247,8 @@ module otr_qn
             grad_diff = grad - self%last_grad
 
             ! check if step addition should be skipped
-            if (self%skip_add(kappa, grad_diff)) return
+            if (self%skip_add(kappa, grad_diff, error)) return
+            if (error /= 0) return
         end if
         self%last_grad = grad
         
@@ -280,13 +295,14 @@ module otr_qn
 
     end subroutine clear
 
-    function sr1_skip_add(self, kappa, grad_diff) result(skip)
+    function sr1_skip_add(self, kappa, grad_diff, error) result(skip)
         !
         ! this function implements the skipping criterion for the SR1 update
         !
         class(sr1_updating_type), intent(in) :: self
         real(rp), intent(in) :: kappa(:), grad_diff(:)
         logical :: skip
+        integer(ip), intent(out) ::  error
 
         integer(ip) :: n_param
         real(rp) :: kappa_norm, residual_norm, curvature
@@ -294,10 +310,16 @@ module otr_qn
         real(rp), parameter :: curvature_threshold = 1e-8_rp
         real(rp), external :: ddot
 
+        ! initialize error flag
+        error = 0
+
         skip = .false.
         n_param = size(kappa)
         kappa_norm = sqrt(ddot(n_param, kappa, 1, kappa, 1))
-        residual = grad_diff - self%h_diag * kappa
+        residual = -kappa
+        call init_hess_funptr(residual, error)
+        if (error /= 0) return
+        residual = residual + grad_diff
         residual_norm = sqrt(ddot(n_param, residual, 1, residual, 1))
         curvature = abs(ddot(n_param, kappa, 1, residual, 1))
         if (curvature < curvature_threshold * kappa_norm * residual_norm) &
@@ -338,16 +360,20 @@ module otr_qn
         end if
 
         ! initialize with Hessian diagonal
-        hess_x = sr1_object%h_diag * x
+        hess_x = x
+        call init_hess_funptr(hess_x, error)
+        if (error /= 0) return
 
         ! only current point is available
         if (sr1_object%n_points == 0) return
 
-        ! build psi = grad_diff - h_diag * kappa
+        ! build psi = grad_diff - h_start * kappa
         allocate(psi(n_param, sr1_object%n_points))
         do i = 1, sr1_object%n_points
-            psi(:, i) = sr1_object%grad_diff_list(:, i) - sr1_object%h_diag * &
-                        sr1_object%kappa_list(:, i)
+            psi(:, i) = -sr1_object%kappa_list(:, i)
+            call init_hess_funptr(psi(:, i), error)
+            if (error /= 0) return
+            psi(:, i) = psi(:, i) + sr1_object%grad_diff_list(:, i)
         end do
 
         ! build U = psi^T * kappa
@@ -403,18 +429,22 @@ module otr_qn
 
     end subroutine sr1_hess_x_fun
 
-    function bfgs_skip_add(self, kappa, grad_diff) result(skip)
+    function bfgs_skip_add(self, kappa, grad_diff, error) result(skip)
         !
         ! this function implements the skipping criterion for the BFGS update
         !
         class(bfgs_updating_type), intent(in) :: self
         real(rp), intent(in) :: kappa(:), grad_diff(:)
+        integer(ip), intent(out) :: error
         logical :: skip
 
         integer(ip) :: n_param
         real(rp) :: kappa_norm, grad_diff_norm, kappa_grad_dot
         real(rp), parameter :: curvature_threshold = 1e-14_rp
         real(rp), external :: ddot
+
+        ! initialize error flag
+        error = 0
 
         skip = .false.
         n_param = size(kappa)
@@ -444,7 +474,7 @@ module otr_qn
 
         integer(ip) :: n_param, i, j, info
         real(rp) :: kappa_grad_dot
-        real(rp), allocatable :: compact_scal_mat(:, :), solution(:)
+        real(rp), allocatable :: compact_scal_mat(:, :), solution(:), init_hess_x(:)
         integer(ip), allocatable :: ipiv(:)
         character(300) :: msg
         external :: dgetrf, dgetrs
@@ -463,24 +493,27 @@ module otr_qn
         end if
 
         ! initialize with Hessian diagonal
-        hess_x = bfgs_object%h_diag * x
+        hess_x = x
+        call init_hess_funptr(hess_x, error)
+        if (error /= 0) return
 
         ! only current point is available
         if (bfgs_object%n_points == 0) return
 
         ! build compact scaling matrix
-        ! [ kappa^T * h_diag * kappa    L ]
+        ! [ kappa^T * h_start * kappa    L ]
         ! [             L^T            -D ]
         allocate(compact_scal_mat(2 * bfgs_object%n_points, 2 * bfgs_object%n_points))
         compact_scal_mat = 0.0_rp
         do j = 1, bfgs_object%n_points
+            init_hess_x = bfgs_object%kappa_list(:, j)
+            call init_hess_funptr(init_hess_x, error)
+            if (error /= 0) return
             do i = 1, bfgs_object%n_points
-                ! Weighted Top-Left: S_i^T * diag(h_diag) * S_j
+                ! Weighted Top-Left: kappa_i^T * h_start * kappa_j
                 ! Using a manual loop or dot_product for weighted sum
-                compact_scal_mat(i, j) = ddot(n_param, &
-                                              bfgs_object%kappa_list(:, i), 1, &
-                                              bfgs_object%h_diag * &
-                                              bfgs_object%kappa_list(:, j), 1)
+                compact_scal_mat(i, j) = ddot(n_param, bfgs_object%kappa_list(:, i), &
+                                              1, init_hess_x, 1)
                 
                 ! L and D parts (do not depend on initial Hessian)
                 kappa_grad_dot = ddot(n_param, bfgs_object%kappa_list(:, i), 1, &
@@ -496,15 +529,14 @@ module otr_qn
         end do
 
         ! build right-hand side
-        ! [ kappa^T * h_diag * x ]
+        ! [ kappa^T * h_start * x ]
         ! [   grad_diff^T * x    ]
         allocate(solution(2 * bfgs_object%n_points))
         do i = 1, bfgs_object%n_points
             ! weighted dot product for the top half of RHS
-            solution(i) = ddot(n_param, bfgs_object%kappa_list(:, i), 1, &
-                               bfgs_object%h_diag * x, 1)
-            solution(i + bfgs_object%n_points) = ddot(n_param, &
-                                             bfgs_object%grad_diff_list(:, i), 1, x, 1)
+            solution(i) = ddot(n_param, bfgs_object%kappa_list(:, i), 1, hess_x, 1)
+            solution(i + bfgs_object%n_points) = &
+                ddot(n_param, bfgs_object%grad_diff_list(:, i), 1, x, 1)
         end do
         
         ! LU factorize compact scaling matrix
@@ -540,8 +572,10 @@ module otr_qn
         ! hess_x = hess_diag * x - ([hess_diag * kappa, grad_diff] * solution)
         do i = 1, bfgs_object%n_points
             ! subtract rotation difference contributions
-            hess_x = hess_x - (solution(i) * bfgs_object%h_diag * &
-                     bfgs_object%kappa_list(:, i))
+            init_hess_x = bfgs_object%kappa_list(:, i)
+            call init_hess_funptr(init_hess_x, error)
+            if (error /= 0) return
+            hess_x = hess_x - (solution(i) * init_hess_x)
             ! subtract gradient difference contributions
             hess_x = hess_x - solution(i + bfgs_object%n_points) * &
                      bfgs_object%grad_diff_list(:, i)

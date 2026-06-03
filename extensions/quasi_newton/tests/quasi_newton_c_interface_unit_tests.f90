@@ -29,6 +29,19 @@ contains
 
     end function mock_transport
 
+    function mock_init_hess(vector_c) result(error) bind(C)
+        !
+        ! this subroutine is a mock subroutine for the initial Hessian C function
+        !
+        real(c_rp), intent(inout), target :: vector_c(*)
+        integer(c_ip) :: error
+
+        vector_c(:n_param) = 2.0_c_rp * vector_c(:n_param)
+
+        error = 0_c_ip
+
+    end function mock_init_hess
+
     logical(c_bool) function test_update_orbs_qn_factory_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the quasi-Newton orbital update factory
@@ -42,7 +55,7 @@ contains
         use test_reference, only: test_update_orbs_c_funptr
 
         type(c_funptr) :: update_orbs_orig_c_funptr, transport_c_funptr, &
-                          update_orbs_qn_c_funptr
+                          init_hess_c_funptr, update_orbs_qn_c_funptr
         type(qn_settings_type_c) :: settings
         integer(c_ip) :: error_c
 
@@ -55,6 +68,7 @@ contains
         ! get C function pointers to Fortran functions
         update_orbs_orig_c_funptr = c_funloc(mock_update_orbs)
         transport_c_funptr = c_funloc(mock_transport)
+        init_hess_c_funptr = c_funloc(mock_init_hess)
 
         ! associate optional settings with values
         settings = ref_qn_settings
@@ -65,7 +79,8 @@ contains
 
         ! call quasi-Newton orbital updating factory C wrapper
         error_c = update_orbs_qn_factory_c_wrapper(update_orbs_orig_c_funptr, &
-                                                   transport_c_funptr, n_param_c, &
+                                                   transport_c_funptr, &
+                                                   init_hess_c_funptr, n_param_c, &
                                                    settings, update_orbs_qn_c_funptr)
 
         ! check if logging subroutine was correctly called
@@ -138,6 +153,28 @@ contains
             test_transport_funptr(transport_funptr, "transport_f_wrapper", "")
 
     end function test_transport_f_wrapper
+
+    logical(c_bool) function test_init_hess_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the initial Hessian
+        !
+        use otr_qn, only: init_hess_type
+        use otr_qn_c_interface, only: init_hess_before_wrapping, init_hess_f_wrapper
+        use otr_qn_test_reference, only: test_init_hess_funptr
+
+        procedure(init_hess_type), pointer :: init_hess_funptr
+
+        ! inject mock subroutine
+        init_hess_before_wrapping => mock_init_hess
+
+        ! get pointer to subroutine
+        init_hess_funptr => init_hess_f_wrapper
+
+        ! test initial Hessian Fortran wrapper
+        test_init_hess_f_wrapper = &
+            test_init_hess_funptr(init_hess_funptr, "init_hess_f_wrapper", "")
+
+    end function test_init_hess_f_wrapper
 
     logical(c_bool) function test_update_orbs_qn_c_wrapper() bind(C)
         !

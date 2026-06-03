@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
 transport_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
+init_hess_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 
 
 # define classes corresponding to C structs for settings
@@ -90,12 +91,36 @@ class TransportInterface:
         return 0
 
 
+@dataclass
+class InitHessInterface:
+    """
+    this class provides the interface to initialize the Hessian and to write it
+    to the memory provided through pointers
+    """
+
+    init_hess: Callable[[np.ndarray], None]
+    n_param: int
+
+    def __call__(self, vector_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
+
+        # initialize Hessian and retrieve vector
+        try:
+            self.init_hess(vector)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+
 def update_orbs_qn_factory(
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
     transport: Callable[[np.ndarray, np.ndarray], None],
+    init_hess: Callable[[np.ndarray], None],
     n_param: int,
     settings: QNSettings,
 ) -> Callable[
@@ -108,6 +133,9 @@ def update_orbs_qn_factory(
     )
     transport_interface = transport_interface_type(
         TransportInterface(transport=transport, n_param=n_param)
+    )
+    init_hess_interface = init_hess_interface_type(
+        InitHessInterface(init_hess=init_hess, n_param=n_param)
     )
 
     # set interfaces for optional callback functions, these need to be set here since
@@ -128,6 +156,7 @@ def update_orbs_qn_factory(
     lib.update_orbs_qn_factory.argtypes = [
         update_orbs_interface_type,
         transport_interface_type,
+        init_hess_interface_type,
         c_int,
         QNSettingsC,
         POINTER(update_orbs_interface_type),
@@ -138,6 +167,7 @@ def update_orbs_qn_factory(
     error = lib.update_orbs_qn_factory(
         update_orbs_interface,
         transport_interface,
+        init_hess_interface,
         n_param,
         settings.settings_c,
         update_orbs_qn_funptr,

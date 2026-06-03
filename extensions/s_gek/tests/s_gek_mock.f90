@@ -25,7 +25,7 @@ contains
 
     subroutine mock_update_orbs_s_gek_factory(update_orbs_orig_funptr, &
                                               change_reference_funptr, n_param, &
-                                              settings, error, update_orbs_s_gek_funptr)
+                                              error, settings, update_orbs_s_gek_funptr)
         !
         ! this function returns is a test function for the function which returns a 
         ! modified orbital updating function
@@ -39,8 +39,8 @@ contains
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_orig_funptr
         procedure(change_reference_type), intent(in), pointer :: change_reference_funptr
         integer(ip), intent(in) :: n_param
-        type(s_gek_settings_type), intent(inout) :: settings
         integer(ip), intent(out) :: error
+        type(s_gek_settings_type), intent(inout) :: settings
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
 
         ! initialize logical
