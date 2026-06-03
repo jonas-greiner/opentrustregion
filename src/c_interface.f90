@@ -40,6 +40,7 @@ module c_interface
     procedure(modify_step_c_type), pointer :: modify_step_before_wrapping => null()
     procedure(conv_check_c_type), pointer :: conv_check_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: stability_hess_x_before_wrapping => null()
+    procedure(hess_x_c_type), pointer :: approx_hess_x_before_wrapping => null()
     procedure(logger_c_type), pointer :: logger_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
@@ -125,7 +126,7 @@ module c_interface
 
     ! derived type for stability check settings
     type, bind(C) :: stability_settings_type_c
-        type(c_funptr) :: precond, project, logger
+        type(c_funptr) :: precond, project, approx_hess_x, logger
         logical(c_bool) :: hess_symm, initialized
         real(c_rp) :: conv_tol
         integer(c_ip) :: n_random_trial_vectors, n_iter, jacobi_davidson_start, seed, &
@@ -159,7 +160,8 @@ module c_interface
     procedure(modify_step_type), pointer :: modify_step_f_wrapper_ptr => &
         modify_step_f_wrapper
     procedure(conv_check_type), pointer :: conv_check_f_wrapper_ptr => &
-        conv_check_f_wrapper
+    procedure(hess_x_type), pointer :: approx_hess_x_f_wrapper_ptr => &
+                                       approx_hess_x_f_wrapper
     procedure(logger_type), pointer :: logger_f_wrapper_ptr => logger_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
@@ -564,6 +566,19 @@ contains
 
     end subroutine stability_hess_x_f_wrapper
 
+    subroutine approx_hess_x_f_wrapper(x, hess_x, error)
+        !
+        ! this subroutine exposes a C-implemented approximate Hessian linear 
+        ! transformation to Fortran
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+
+        call hess_x_f_wrapper_impl(approx_hess_x_before_wrapping, x, hess_x, error)
+
+    end subroutine approx_hess_x_f_wrapper
+
     subroutine logger_f_wrapper(message)
         !
         ! this subroutine exposes a C-implemented logger function to Fortran
@@ -722,6 +737,13 @@ contains
             else
                 settings%project => null()
             end if
+            if (c_associated(settings_c%approx_hess_x)) then
+                call c_f_procpointer(cptr=settings_c%approx_hess_x, &
+                                     fptr=approx_hess_x_before_wrapping)
+                settings%approx_hess_x => approx_hess_x_f_wrapper
+            else
+                settings%approx_hess_x => null()
+            end if
             if (c_associated(settings_c%logger)) then
                 call c_f_procpointer(cptr=settings_c%logger, &
                                      fptr=logger_before_wrapping)
@@ -818,6 +840,7 @@ contains
             ! callback functions cannot be converted
             settings_c%precond = c_null_funptr
             settings_c%project = c_null_funptr
+            settings_c%approx_hess_x = c_null_funptr
             settings_c%logger = c_null_funptr
 
             ! convert logicals

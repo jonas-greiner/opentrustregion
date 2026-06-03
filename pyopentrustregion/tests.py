@@ -137,6 +137,7 @@ fortran_tests = {
         "truncated_conjugate_gradient",
     ],
     "c_interface_tests": [
+        "approx_hess_x_f_wrapper",
         "assign_solver_c_f",
         "assign_solver_f_c",
         "assign_stability_c_f",

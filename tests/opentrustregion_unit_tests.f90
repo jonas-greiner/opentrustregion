@@ -211,6 +211,23 @@ contains
 
     end subroutine mock_project
 
+    subroutine mock_approx_hess_x(x, hess_x, error)
+        !
+        ! this subroutine is a test subroutine for the approximate Hessian linear 
+        ! transformation subroutine
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: i
+
+        hess_x = [(hess(i, i) * x(i), i = 1, size(x))]
+
+        error = 0
+
+    end subroutine mock_approx_hess_x
+
     subroutine logger(message)
         !
         ! this subroutine is a mock logging subroutine
@@ -347,7 +364,7 @@ contains
         !
         use opentrustregion, only: hess_x_type, stability_settings_type, stability_check
 
-        real(rp) :: vars(6), h_diag(6), direction(6)
+        real(rp) :: vars(6), h_diag(6), direction(6), eigval_vec(6)
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable
         integer(ip) :: error, i
@@ -380,9 +397,36 @@ contains
         end if
         if (all(abs(direction) > tol)) then
             write (stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return zero vector for minimum"
+                "not return zero vector for minimum."
             test_stability_check = .false.
         end if
+
+        ! set approximate Hessian linear transformation
+        settings%approx_hess_x => mock_approx_hess_x
+
+        ! run stability, check if error has occured check and determine whether minimum 
+        ! is stable and the returned direction vanishes
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        if (error /= 0) then
+            write (stderr, *) "test_stability_check failed: Produced error with "// &
+                "approximate Hessian linear transformation."
+            test_stability_check = .false.
+        end if
+        if (.not. stable) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "approximate Hessian linear transformation incorrectly classifies "// &
+                "stability of minimum."
+            test_stability_check = .false.
+        end if
+        if (all(abs(direction) > tol)) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "approximate Hessian linear transformation does not return zero "// &
+                "vector for minimum."
+            test_stability_check = .false.
+        end if
+
+        ! initialize settings
+        call settings%init(error)
 
         ! start at saddle point and determine Hessian diagonal and define linear
         ! linear transformation
@@ -403,13 +447,50 @@ contains
                 "incorrectly classifies stability of saddle point."
             test_stability_check = .false.
         end if
-        if (abs(abs(dot_product(direction, &
-                                [-0.173375920238_rp, -0.518489821791_rp, &
-                                 -6.432848975252e-3_rp, -0.340127852882_rp, &
-                                 3.066460316955e-3_rp, 0.765095650196_rp])) - 1.0_rp) &
-            > tol) then
+        call hess_x_funptr(direction, eigval_vec, error)
+        eigval_vec = eigval_vec / direction
+        if (maxval(eigval_vec) - minval(eigval_vec) > tol) then
             write (stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return correct direction for saddle point."
+                "not return eigenvector direction for saddle point."
+            test_stability_check = .false.
+        end if
+        if (sum(eigval_vec) / 6 > 0.0_rp) then
+            write (stderr, *) "test_stability_check failed: Stability check does "// &
+                "not return eigenvector direction corresponding to negative " // &
+                "eigenvalue for saddle point."
+            test_stability_check = .false.
+        end if
+
+        ! set approximate Hessian linear transformation
+        settings%approx_hess_x => mock_approx_hess_x
+
+        ! run stability check, check if error has occured and determine whether saddle 
+        ! point is unstable and the returned direction is correct
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        if (error /= 0) then
+            write (stderr, *) "test_stability_check failed: Produced error with "// &
+                "approximate Hessian linear transformation."
+            test_stability_check = .false.
+        end if
+        if (stable) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "approximate Hessian linear transformation incorrectly classifies "// &
+                "stability of saddle point."
+            test_stability_check = .false.
+        end if
+        call hess_x_funptr(direction, eigval_vec, error)
+        eigval_vec = eigval_vec / direction
+        if (maxval(eigval_vec) - minval(eigval_vec) > tol) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "approximate Hessian linear transformation does not return "// &
+                "eigenvector direction for saddle point."
+            test_stability_check = .false.
+        end if
+        if (sum(eigval_vec) / 6 > 0.0_rp) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "approximate Hessian linear transformation does not return "// &
+                "eigenvector direction corresponding to negative eigenvalue for " // &
+                "saddle point."
             test_stability_check = .false.
         end if
 

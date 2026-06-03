@@ -172,6 +172,7 @@ module opentrustregion
     type, extends(optimizer_settings_type) :: stability_settings_type
         integer(ip) :: n_iter
         character(kw_len) :: diag_solver
+        procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
     contains
         procedure :: init => init_stability_settings
     end type
@@ -191,7 +192,8 @@ module opentrustregion
 
     ! default settings
     type(stability_settings_type), parameter :: default_stability_settings = &
-        stability_settings_type(precond = null(), project = null(), logger = null(), &
+        stability_settings_type(precond = null(), project = null(), &
+                                approx_hess_x = null(), logger = null(), &
                                 hess_symm = .true., initialized = .true., &
                                 conv_tol = 1e-8_rp, n_random_trial_vectors = 20, &
                                 n_iter = 100, jacobi_davidson_start = 50, seed = 42, &
@@ -513,6 +515,7 @@ contains
         type(stability_settings_type), intent(inout) :: settings
         real(rp), intent(out), optional :: kappa(:)
 
+        procedure(hess_x_type), pointer :: approx_hess_x_funptr
         integer(ip) :: n_param, n_trial, i, iter
         real(rp), allocatable :: solution(:), h_solution(:), residual(:), &
                                  basis_vec(:), h_basis_vec(:), red_space_basis(:, :), &
@@ -585,6 +588,14 @@ contains
         allocate(red_space_solution(n_trial), solution(n_param), h_solution(n_param), &
                  residual(n_param), basis_vec(n_param), h_basis_vec(n_param))
 
+        ! check if user provided an approximate Hessian linear transformation for 
+        ! Jacobi-Davidson correction equation
+        if (associated(settings%approx_hess_x)) then
+            approx_hess_x_funptr => settings%approx_hess_x
+        else
+            approx_hess_x_funptr => hess_x_funptr
+        end if
+
         ! loop over iterations
         do iter = 1, settings%n_iter
             ! solve reduced space problem
@@ -632,8 +643,8 @@ contains
             else
                 ! solve Jacobi-Davidson correction equations
                 minres_tol = 3.0_rp ** (-(iter - settings%jacobi_davidson_start - 1))
-                call minres(-residual, hess_x_funptr, solution, eigval, minres_tol, &
-                            basis_vec, h_basis_vec, settings, error)
+                call minres(-residual, approx_hess_x_funptr, solution, eigval, &
+                            minres_tol, basis_vec, h_basis_vec, settings, error)
                 call add_error_origin(error, error_stability_check, settings)
                 if (error /= 0) return
 
@@ -644,9 +655,11 @@ contains
                 call add_error_origin(error, error_stability_check, settings)
                 if (error /= 0) return
 
-                ! check if resulting linear transformation still respects Hessian 
-                ! symmetry which can happen due to numerical noise accumulation
-                if (abs(ddot(n_param, red_space_basis(:, n_trial), 1_ip, h_basis_vec, &
+                ! check if approximate linear transformation is used or if resulting 
+                ! exact linear transformation still respects Hessian symmetry which 
+                ! can not be the case due to numerical noise accumulation
+                if (associated(settings%approx_hess_x) .or. &
+                    abs(ddot(n_param, red_space_basis(:, n_trial), 1_ip, h_basis_vec, &
                              1_ip) &
                         - ddot(n_param, basis_vec, 1_ip, h_basis(:, n_trial), 1_ip)) > &
                     hess_symm_thres) then
@@ -1770,7 +1783,7 @@ contains
                     g_min, tmp, rhs2, a_norm, vec_norm, qr_norm
         real(rp), allocatable :: matvec(:), r1(:), r2(:), y(:), w(:), hw(:), w1(:), &
                                  hw1(:), w2(:), hw2(:), v(:), hv(:)
-        logical :: stop_iteration
+        logical :: increment_hess_x, stop_iteration
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
@@ -1786,13 +1799,21 @@ contains
         allocate(matvec(n), r1(n), r2(n), y(n), w(n), hw(n), w1(n), hw1(n), w2(n), &
                  hw2(n), v(n), hv(n))
 
+        ! increment Hessian-vector product count logical
+        select type(settings)
+            type is (solver_settings_type)
+                increment_hess_x = .true.
+            type is (stability_settings_type)
+                increment_hess_x = .not. associated(settings%approx_hess_x)
+        end select
+
         ! initial guess
         if (present(guess)) then
             vec = guess
             call jacobi_davidson_correction(hess_x_funptr, vec, solution, eigval, &
                                             matvec, hvec, settings, error)
             if (error /= 0) return
-            tot_hess_x = tot_hess_x + 1
+            if (increment_hess_x) tot_hess_x = tot_hess_x + 1
         else
             vec = 0.0_rp
             hvec = 0.0_rp
@@ -1848,7 +1869,7 @@ contains
             call jacobi_davidson_correction(hess_x_funptr, v, solution, eigval, y, hv, &
                                             settings, error)
             if (error /= 0) return
-            tot_hess_x = tot_hess_x + 1
+            if (increment_hess_x) tot_hess_x = tot_hess_x + 1
 
             ! get new trial vector
             if (iteration >= 2) y = y - (beta / old_beta) * r1

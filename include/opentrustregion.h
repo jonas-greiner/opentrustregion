@@ -115,6 +115,7 @@ void init_solver_settings(solver_settings_type* settings);
 // Struct corresponding to Fortran type(stability_settings_type_c)
 typedef struct {
     precond_fp precond;
+    hess_x_fp approx_hess_x;
     logger_fp logger;
 
     c_bool hess_symm;

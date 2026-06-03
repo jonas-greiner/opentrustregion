@@ -522,6 +522,29 @@ contains
 
     end function test_stability_hess_x_f_wrapper
 
+    logical(c_bool) function test_approx_hess_x_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the approximate Hessian linear 
+        ! transformation function
+        !
+        use opentrustregion, only: hess_x_type
+        use c_interface, only: approx_hess_x_before_wrapping, approx_hess_x_f_wrapper
+        use test_reference, only: test_hess_x_funptr
+
+        procedure(hess_x_type), pointer :: approx_hess_x_funptr
+
+        ! inject mock function
+        approx_hess_x_before_wrapping => mock_hess_x
+
+        ! get pointer to subroutine
+        approx_hess_x_funptr => approx_hess_x_f_wrapper
+
+        ! test approximate Hessian linear transformation wrapper
+        test_approx_hess_x_f_wrapper = test_hess_x_funptr(approx_hess_x_funptr, &
+                                                          "approx_hess_x_f_wrapper", "")
+
+    end function test_approx_hess_x_f_wrapper
+
     logical(c_bool) function test_logger_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the logging function

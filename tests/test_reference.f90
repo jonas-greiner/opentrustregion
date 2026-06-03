@@ -1306,6 +1306,7 @@ contains
         ! unassociate function pointers
         lhs%precond => null()
         lhs%project => null()
+        lhs%approx_hess_x => null()
         lhs%logger => null()
 
         ! set reference values

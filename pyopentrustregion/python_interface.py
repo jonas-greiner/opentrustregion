@@ -294,6 +294,7 @@ class StabilitySettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
         ("project", c_void_p),
+        ("approx_hess_x", c_void_p),
         ("logger", c_void_p),
         ("hess_symm", c_bool),
         ("initialized", c_bool),
@@ -447,9 +448,11 @@ class StabilitySettings(Settings):
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
+    approx_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
     project_interface: Any
+    approx_hess_x_interface: Any
     logger_interface: Any
 
     def set_optional_callbacks(self, n_param: int):
@@ -461,6 +464,13 @@ class StabilitySettings(Settings):
         )
         self.set_optional_callback(
             "project", self.project, ProjectInterface, project_interface_type, n_param
+        )
+        self.set_optional_callback(
+            "approx_hess_x",
+            self.approx_hess_x,
+            HessXInterface,
+            hess_x_interface_type,
+            n_param,
         )
         self.set_optional_callback(
             "logger", self.logger, LoggerInterface, logger_interface_type
