@@ -24,20 +24,21 @@ module otr_qn_mock
 contains
 
     subroutine mock_update_orbs_qn_factory(update_orbs_orig_funptr, transport_funptr, &
-                                           n_param, settings, error, &
+                                           init_hess_funptr, n_param, error, settings, &
                                            update_orbs_qn_funptr)
         !
         ! this function returns is a test function for the function which returns a 
         ! modified orbital updating function
         !
         use opentrustregion, only: update_orbs_type
-        use otr_qn, only: transport_type, qn_settings_type
+        use otr_qn, only: transport_type, init_hess_type, qn_settings_type
         use test_reference, only: test_update_orbs_funptr
-        use otr_qn_test_reference, only: test_transport_funptr
+        use otr_qn_test_reference, only: test_transport_funptr, test_init_hess_funptr
         use otr_common_mock, only: mock_update_orbs
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_orig_funptr
         procedure(transport_type), intent(in), pointer :: transport_funptr
+        procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
         integer(ip), intent(in) :: n_param
         type(qn_settings_type), intent(inout) :: settings
         integer(ip), intent(out) :: error
@@ -57,6 +58,12 @@ contains
             test_transport_funptr(transport_funptr, &
                                   "update_orbs_qn_factory_c_wrapper", &
                                   " by given transport function")
+
+        ! test passed initial Hessian function
+        test_passed = test_passed .and. &
+            test_init_hess_funptr(init_hess_funptr, &
+                                  "update_orbs_qn_factory_c_wrapper", &
+                                  " by given initial Hessian function")
 
         ! check number of parameters
         if (n_param /= 3) then
