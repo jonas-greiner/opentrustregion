@@ -260,27 +260,15 @@ class PyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    # replace original library with mock library
-    @patch("pyopentrustregion.python_interface.lib.solver", lib.mock_solver)
-    def test_solver_py_interface(self):
-        """
-        this function tests the solver python interface
-        """
-        n_param = 3
-
-        def mock_obj_func(kappa):
-            """
-            this function is a mock function for the objective function
-            """
-            return np.sum(kappa)
-
-        def mock_update_orbs(kappa, grad, h_diag):
-            """
-            this function is a mock function for the orbital update function
-            """
-            func = np.sum(kappa)
-            grad[:] = 2 * kappa
-            h_diag[:] = 3 * kappa
+    def assign_ref_to_settings(self, settings: Settings):
+        for field_info in settings.c_struct._fields_:
+            field_name, field_type = field_info[:2]
+            if field_type == c_void_p:
+                setattr(settings, field_name, getattr(self, "mock_" + field_name))
+            elif field_name == "initialized":
+                continue
+            else:
+                setattr(settings, field_name, getattr(self, field_name + "_ref"))
 
             def hess_x(x, hess_x):
                 hess_x[:] = 4 * x
@@ -322,16 +310,7 @@ class PyInterfaceTests(unittest.TestCase):
 
         # initialize settings object
         settings = SolverSettings()
-        settings.precond = mock_precond
-        settings.project = mock_project
-        settings.modify_step = mock_modify_step
-        settings.conv_check = mock_conv_check
-        settings.logger = mock_logger
-        for field_info in settings.c_struct._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type == c_void_p or field_name == "initialized":
-                continue
-            setattr(settings, field_name, getattr(self, field_name + "_ref"))
+        self.assign_ref_to_settings(settings)
 
         # initialize logging boolean
         test_logger = False
@@ -387,14 +366,7 @@ class PyInterfaceTests(unittest.TestCase):
 
         # initialize settings object
         settings = StabilitySettings()
-        settings.precond = mock_precond
-        settings.project = mock_project
-        settings.logger = mock_logger
-        for field_info in settings.c_struct._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type == c_void_p or field_name == "initialized":
-                continue
-            setattr(settings, field_name, getattr(self, field_name + "_ref"))
+        self.assign_ref_to_settings(settings)
 
         # allocate memory for descent direction
         kappa = np.empty(n_param, dtype=np.float64)

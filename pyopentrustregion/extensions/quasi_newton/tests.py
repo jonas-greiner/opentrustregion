@@ -17,7 +17,13 @@ from ctypes import (
 )
 from unittest.mock import patch
 
-from pyopentrustregion.tests import lib, NUMPY_AVAILABLE, add_tests, print_separator
+from pyopentrustregion.tests import (
+    lib,
+    NUMPY_AVAILABLE,
+    add_tests,
+    print_separator,
+    PyInterfaceTests,
+)
 from pyopentrustregion.python_interface import c_real, c_int
 from pyopentrustregion.extensions.quasi_newton import (
     QNSettings,
@@ -108,6 +114,10 @@ class QNPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
+    assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
+
+    mock_logger = PyInterfaceTests.mock_logger
+
     # replace original library with mock library
     @patch(
         "pyopentrustregion.python_interface.lib.update_orbs_qn_factory",
@@ -148,29 +158,15 @@ class QNPyInterfaceTests(unittest.TestCase):
 
             return
 
-        def mock_logger(message):
-            """
-            this function is a mock function for the logging function
-            """
-            nonlocal test_logger
-            if message == "test":
-                test_logger = True
-            return
-
         # initialize test flag
         test_passed = True
 
         # initialize settings object
         settings = QNSettings()
-        settings.logger = mock_logger
-        for field_info in settings.c_struct._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type == c_void_p or field_name == "initialized":
-                continue
-            setattr(settings, field_name, getattr(self, field_name + "_ref"))
+        self.assign_ref_to_settings(settings)
 
         # initialize logging boolean
-        test_logger = False
+        self.test_logger = True
 
         # call quasi-Newton orbital updating factory python interface
         update_orbs_qn = update_orbs_qn_factory(
@@ -178,7 +174,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         )
 
         # check if logger was called correctly
-        if not test_logger:
+        if not self.test_logger:
             print(
                 " test_update_orbs_qn_factory_py_interface failed: Called logging "
                 "function wrong."

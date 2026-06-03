@@ -17,9 +17,15 @@ from ctypes import (
 )
 from unittest.mock import patch
 
-from pyopentrustregion.tests import lib, NUMPY_AVAILABLE, add_tests, print_separator
+from pyopentrustregion.tests import (
+    lib,
+    NUMPY_AVAILABLE,
+    add_tests,
+    print_separator,
+    PyInterfaceTests,
+)
 from pyopentrustregion.python_interface import c_real, c_int
-
+from pyopentrustregion.extensions.arh import ARHSettings, arh_factory
 from pyopentrustregion.extensions.arh import ARHSettings, arh_factory, arh_deconstructor
 
 if NUMPY_AVAILABLE:
@@ -109,6 +115,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
+    assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
     # replace original library with mock library
     @patch("pyopentrustregion.python_interface.lib.arh_factory", lib.mock_arh_factory)
     def test_arh_factory_py_interface(self):
@@ -158,12 +165,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
         # initialize settings object
         settings = ARHSettings()
-        settings.logger = mock_logger
-        for field_info in settings.c_struct._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type == c_void_p or field_name == "initialized":
-                continue
-            setattr(settings, field_name, getattr(self, field_name + "_ref"))
+        self.assign_ref_to_settings(settings)
 
         # initialize logging boolean
         test_logger = False
