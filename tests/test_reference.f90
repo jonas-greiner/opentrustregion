@@ -9,7 +9,7 @@ module test_reference
     use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
-                                           c_associated
+                                           c_null_char, c_associated
 
     implicit none
 
