@@ -408,7 +408,7 @@ module otr_arh
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, n_param, i
-        real(rp), allocatable :: x_full(:, :, :), hess_x_full(:, :, :), test(:, :, :)
+        real(rp), allocatable :: x_full(:, :, :), hess_x_full(:, :, :)
         type(arh_settings_type), pointer :: arh_settings
 
         external :: dgemm
