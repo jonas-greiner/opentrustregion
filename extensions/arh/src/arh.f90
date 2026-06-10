@@ -351,8 +351,7 @@ module otr_arh
         allocate(same_v_ao(n_ao, n_ao, n_particle), &
                  opposite_v_ao(n_ao, n_ao, n_particle))
         same_v_ao = coulomb_ao - exchange_ao
-        opposite_v_ao(:, :, 1) = coulomb_ao(:, :, 2)
-        opposite_v_ao(:, :, 2) = coulomb_ao(:, :, 1)
+        opposite_v_ao = coulomb_ao
         deallocate(coulomb_ao, exchange_ao)
 
         ! transform same and opposite spin potentials to OAO basis
@@ -662,10 +661,9 @@ module otr_arh
                 ! of trial vector and current density matrix
                 do i = 1, n_diff
                     if (settings%symm_arh) vec2(i) = &
-                        sum((same_v_diff(:, :, j, i) - opposite_v_diff(:, :, j, i)) * &
-                            dm_oao_x(:, :, j))
+                        sum(same_v_diff(:, :, j, i) * dm_oao_x(:, :, j))
                     do k = 1, n_particle
-                        vec1(i, k) = sum(dm_diff(:, :, j, i) * dm_oao_x(:, :, k))
+                        vec1(i, k) = sum(dm_diff(:, :, k, i) * dm_oao_x(:, :, k))
                         if (settings%symm_arh) vec3(i, k) = &
                             sum(opposite_v_diff(:, :, j, i) * dm_oao_x(:, :, k))
                     end do
@@ -681,12 +679,6 @@ module otr_arh
                 end if
                 do i = 1, n_diff
                     if (metric_eigvals(i, j) > numerical_zero) then
-                        do k = 1, n_particle
-                            tmp_vec1(:, k) = &
-                                tmp_vec1(:, k) + &
-                                ddot(n_diff, metric_eigvecs(:, i, j), 1, vec1(:, k), &
-                                     1) / metric_eigvals(i, j) * metric_eigvecs(:, i, j)
-                        end do
                         if (settings%symm_arh) then
                             tmp_vec2 = &
                                 tmp_vec2 + &
@@ -694,16 +686,23 @@ module otr_arh
                                 / metric_eigvals(i, j) * metric_eigvecs(:, i, j)
                         end if
                     end if
-                    if (settings%symm_arh) then
-                        do k = 1, n_particle
-                            if (metric_eigvals(i, k) > numerical_zero) then
-                                tmp_vec3(:, k) = tmp_vec3(:, k) + &
-                                    ddot(n_diff, metric_eigvecs(:, i, k), 1, &
-                                         vec3(:, k), 1) / metric_eigvals(i, k) * &
-                                    metric_eigvecs(:, i, k)
+                    do k = 1, n_particle
+                        if (metric_eigvals(i, k) > numerical_zero) then
+                            tmp_vec1(:, k) = &
+                                tmp_vec1(:, k) + &
+                                ddot(n_diff, metric_eigvecs(:, i, k), 1, vec1(:, k), &
+                                     1) / metric_eigvals(i, k) * metric_eigvecs(:, i, k)
+                        end if
+                        if (settings%symm_arh) then
+                            if (metric_eigvals(i, j) > numerical_zero) then
+                                tmp_vec3(:, k) = &
+                                    tmp_vec3(:, k) + &
+                                    ddot(n_diff, metric_eigvecs(:, i, j), 1, &
+                                         vec3(:, k), 1) / metric_eigvals(i, j) * &
+                                    metric_eigvecs(:, i, j)
                             end if
-                        end do
-                    end if
+                        end if
+                    end do
                 end do
                 vec1 = tmp_vec1
                 deallocate(tmp_vec1)
@@ -717,18 +716,18 @@ module otr_arh
                 ! differences
                 do i = 1, n_diff
                     two_el(:, :, j) = two_el(:, :, j) + factor * vec1(i, j) * &
-                                      (same_v_diff(:, :, j, i) - &
-                                       opposite_v_diff(:, :, j, i))
+                                      same_v_diff(:, :, j, i)
                     if (settings%symm_arh) then
                         two_el(:, :, j) = two_el(:, :, j) + factor * vec2(i) * &
                                           dm_diff(:, :, j, i)
                     end if
                     do k = 1, n_particle
+                        if (k == j) cycle
                         two_el(:, :, j) = two_el(:, :, j) + factor * vec1(i, k) * &
                                           opposite_v_diff(:, :, k, i)
                         if (settings%symm_arh) then
                             two_el(:, :, j) = two_el(:, :, j) + factor * vec3(i, k) * &
-                                              dm_diff(:, :, k, i)
+                                              dm_diff(:, :, j, i)
                         end if
                     end do
                 end do
