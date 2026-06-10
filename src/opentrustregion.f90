@@ -41,7 +41,8 @@ module opentrustregion
     real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
                            precond_factor = 1e-1_rp, hess_symm_thres = 1e-12_rp, &
                            residual_norm_floor = 1e-12_rp, &
-                           level_shift_local_thres = 1e-12_rp
+                           level_shift_local_thres = 1e-12_rp, &
+                           newton_eigval_thresh = -1e-5_rp
 
     ! define verbosity levels
     integer(ip), parameter :: verbosity_silent = 0, verbosity_error = 1, &
@@ -211,8 +212,13 @@ module opentrustregion
                              global_red_factor = 1e-3_rp, local_red_factor = 1e-4_rp, &
                              n_random_trial_vectors = 1, n_macro = 150, n_micro = 50, &
                              jacobi_davidson_start = 30, seed = 42, verbose = 0, &
-                             subsystem_solver = "davidson", &
+                             subsystem_solver = "davidson_ls", &
                              stability_settings = default_stability_settings)
+
+    ! define setting options
+    character(kw_len), parameter :: subsystem_solvers(6) = &
+            [character(len=kw_len) :: "davidson_ls", "davidson_ah", &
+             "jacobi-davidson_ls", "jacobi-davidson_ah", "tcg", "gltr"]
 
     ! define global variables
     integer(ip) :: tot_orb_update = 0, tot_hess_x = 0
@@ -266,8 +272,7 @@ contains
 
         ! initialize starting trust radius
         if (settings%start_trust_radius <= 0.0_rp) then
-            if (settings%subsystem_solver == "davidson" .or. &
-                settings%subsystem_solver == "jacobi-davidson") then
+            if (string_in("davidson", settings%subsystem_solver)) then
                 trust_radius = default_spherical_trust_radius
             else
                 trust_radius = default_ellipsoidal_trust_radius
@@ -426,8 +431,7 @@ contains
                 end if
             end if
 
-            if (settings%subsystem_solver == "davidson" .or. &
-                settings%subsystem_solver == "jacobi-davidson") then
+            if (string_in("davidson", settings%subsystem_solver)) then
                 ! solve trust region subproblem with (Jacobi-)Davidson
                 call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
                                             obj_func, hess_x_funptr, settings, &
@@ -766,15 +770,15 @@ contains
 
     end subroutine newton_step
 
-    subroutine bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                         red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                         trust_radius, solution, red_space_solution, mu, settings, &
-                         error)
+    subroutine bisection_ah(red_space_hess, grad_norm, red_space_basis, &
+                            red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                            red_space_hess_left_eigvecs, trust_radius, solution, &
+                            red_space_solution, mu, settings, error)
         !
         ! this subroutine performs bisection to find the parameter alpha that matches
         ! the desired trust radius
         !
-        real(rp), intent(inout) :: aug_hess(:, :)
+        real(rp), intent(inout) :: red_space_hess(:, :)
         real(rp), intent(in) :: grad_norm, red_space_basis(:, :), &
                                 red_space_hess_eigvals(:), &
                                 red_space_hess_right_eigvecs(:, :), &
@@ -783,10 +787,10 @@ contains
         real(rp), intent(out) :: solution(:), red_space_solution(:), mu
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: eigspace_solution(:)
+        real(rp), allocatable :: aug_hess(:, :), eigspace_solution(:)
         real(rp) :: lower_alpha, middle_alpha, upper_alpha, lower_trust_dist, &
                     middle_trust_dist, upper_trust_dist, current_norm
-        integer(ip) :: n_param, n_red, iter, min_idx, i
+        integer(ip) :: n_param, n_red, n_aug, iter, min_idx, i
         real(rp), parameter :: lower_alpha_bound = 1e-30_rp, &
                                upper_alpha_bound = 1e30_rp, &
                                alpha_conv_factor = 1e-12_rp, &
@@ -801,6 +805,14 @@ contains
 
         ! reduced space size
         n_red = size(red_space_basis, 2)
+
+        ! augmented Hessian size
+        n_aug = n_red + 1
+
+        ! construct augmented Hessian
+        allocate(aug_hess(n_aug, n_aug))
+        aug_hess = 0.0_rp
+        aug_hess(2:n_aug, 2:n_aug) = red_space_hess
 
         ! lower and upper bracket for alpha
         lower_alpha = lower_alpha_bound
@@ -853,8 +865,9 @@ contains
                 call dgemv("N", n_param, n_red, 1.0_rp, red_space_basis, n_param, &
                         red_space_solution, 1_ip, 0.0_rp, solution, 1_ip)
 
-                ! set level shift
+                ! set level shift and return
                 mu = red_space_hess_eigvals(min_idx)
+                deallocate(aug_hess)
                 return
             end if
         else
@@ -942,9 +955,13 @@ contains
                 call settings%log("Maximum number of bisection iterations reached.", &
                                   verbosity_error, .true.)
                 error = 1
+                deallocate(aug_hess)
                 return
             end if
         end do
+
+        ! deallocate arrays
+        deallocate(aug_hess)
 
     contains
 
@@ -958,24 +975,24 @@ contains
             external :: dgemv
 
             ! finish construction of augmented Hessian
-            aug_hess(1, 2) = alpha*grad_norm
-            aug_hess(2, 1) = alpha*grad_norm
+            aug_hess(1, 2) = alpha * grad_norm
+            aug_hess(2, 1) = alpha * grad_norm
 
-            ! allocate eigenvector
-            allocate(eigvec(n_red + 1))
+            ! allocate the final eigenvector array
+            allocate(eigvec(n_aug))
 
             ! perform eigendecomposition and get lowest eigenvalue and corresponding
             ! eigenvector
             call mat_min_eig(aug_hess, settings%hess_symm, mu, eigvec, settings, error)
             if (error /= 0) return
 
-            ! check if eigenvector has level-shift component (should always be the case
-            ! due to handling in bisection)
+            ! check if eigenvector has level-shift component
             if (abs(eigvec(1)) <= orthogonality_thres) then
                 call settings%log("Lowest augmented Hessian eigenvector does not "// &
                                   "have level-shift component.", verbosity_error, &
                                   .true.)
                 error = 1
+                deallocate(eigvec)
                 return
             end if
 
@@ -990,7 +1007,248 @@ contains
 
         end subroutine get_ah_lowest_eigenvec
 
-    end subroutine bisection
+    end subroutine bisection_ah
+
+    subroutine bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                            red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                            red_space_hess_left_eigvecs, trust_radius, solution, &
+                            red_space_solution, final_mu, settings, error)
+        !
+        ! this subroutine performs bisection to find the level shift such that the step
+        ! matches the desired trust radius
+        !
+        real(rp), intent(in) :: red_space_hess(:, :)
+        real(rp), intent(in) :: grad_norm, red_space_basis(:, :), &
+                                red_space_hess_right_eigvecs(:, :), &
+                                red_space_hess_left_eigvecs(:, :), trust_radius
+        complex(rp), intent(in) :: red_space_hess_eigvals(:)
+        type(solver_settings_type), intent(in) :: settings
+        real(rp), intent(out) :: solution(:), red_space_solution(:), final_mu
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_param, n_red, iter, min_idx
+        real(rp) :: current_norm, upper_mu, lower_mu, middle_mu, sign_factor
+        logical :: singular_start
+        real(rp), parameter :: orthogonality_thres = 1e-12_rp, &
+                               positive_definite_shift = 1e-8_rp, &
+                               alpha_conv_factor = 1e-12_rp
+        external :: dgemv
+        real(rp), external :: dnrm2
+
+        ! initialize error flag
+        error = 0
+
+        ! number of parameters
+        n_param = size(solution)
+
+        ! reduced space size
+        n_red = size(red_space_basis, 2)
+
+        ! initialize singularity flag
+        singular_start = .false.
+        
+        ! determine maximum level shift
+        min_idx = minloc(red_space_hess_eigvals%re, dim=1)
+        if (red_space_hess_eigvals(min_idx)%re < 0.0_rp) then
+            ! check if lowest eigenvector of reduced space Hessian has gradient 
+            ! component or if minimum eigenvalue has significant imaginary part since 
+            ! both cases lead to no pole in the solution norm at the lowest eigenvalue
+            if (abs(red_space_hess_left_eigvecs(1, min_idx)) <= orthogonality_thres &
+                .or. abs(red_space_hess_eigvals(min_idx)%im) >= numerical_zero) then
+                upper_mu = red_space_hess_eigvals(min_idx)%re
+                singular_start = .true.
+            ! ensure level-shifted Hessian is positive definite
+            else
+                upper_mu = red_space_hess_eigvals(min_idx)%re - positive_definite_shift
+            end if
+        else
+            upper_mu = 0.0_rp
+        end if
+        
+        ! evaluate step length at the lower bound of the shift
+        call get_level_shifted_step(upper_mu, singular_start)
+        if (error /= 0) return
+        
+        ! check if trust radius can be reached in bisection
+        if (current_norm < trust_radius) then
+            ! check if reduced space Hessian is non-positive definite otherwise accept 
+            ! interior solution as Newton step
+            if (red_space_hess_eigvals(min_idx)%re <= newton_eigval_thresh) then
+                ! hard case occured if lowest eigenvalue is real, trust radius cannot 
+                ! be reached because the eigenvector corresponding to the lowest 
+                ! eigenvalue is orthogonal to the gradient, leading to no pole in the 
+                ! solution norm
+                if (abs(red_space_hess_eigvals(min_idx)%im) < numerical_zero) then
+                    ! ensure that we are moving in negative gradient direction by 
+                    ! checking the sign of the gradient component, for an asymmetric 
+                    ! Hessian this can be non-zero even if the left eigenvector is 
+                    ! orthogonal to the gradient
+                    if (red_space_hess_right_eigvecs(1, min_idx) > 0.0_rp) then
+                        sign_factor = -1.0_rp
+                    else
+                        sign_factor = 1.0_rp
+                    end if
+                    
+                    ! fill the rest of the trust radius with the lowest eigenvector
+                    red_space_solution = red_space_solution + sign_factor * &
+                                         sqrt(trust_radius**2 - current_norm**2) * &
+                                         red_space_hess_right_eigvecs(:, min_idx)
+
+                    ! construct full space solution
+                    call dgemv("N", n_param, n_red, 1.0_rp, red_space_basis, n_param, &
+                               red_space_solution, 1_ip, 0.0_rp, solution, 1_ip)
+                    
+                ! trust radius cannot be reached because imaginary part leads to no 
+                ! pole in the solution norm
+                else
+                    call settings%log("Bisection cannot reach trust region due to "// &
+                                      "imaginary part of lowest eigenvalue. This "// &
+                                      "is purely an artifact of using an "// &
+                                      "asymmetric Hessian.", verbosity_warning, .false.)
+                end if
+
+                ! set final level shift to the lowest eigenvalue
+                final_mu = red_space_hess_eigvals(min_idx)%re
+            else
+                ! set level shift either to zero or to a very small shift for which an 
+                ! interior solution is still accepted
+                final_mu = upper_mu
+            end if
+            
+        else
+            ! initialize lower bound for level shift while safe guarding against 
+            ! level-shift of zero for positive-definite Hessian
+            lower_mu = min(-1.0_rp, upper_mu * 2.0_rp)
+            call get_level_shifted_step(lower_mu, .false.)
+            if (error /= 0) return
+            
+            ! find an lower bound for mu where the step falls within the trust region
+            do while (current_norm > trust_radius)
+                lower_mu = lower_mu * 2.0_rp
+                call get_level_shifted_step(lower_mu, .false.)
+                if (error /= 0) return
+                if (lower_mu < -1e15_rp) then
+                    call settings%log("Unable to find lower bound for mu in "// &
+                                      "asymmetric bisection.", verbosity_error, .true.)
+                    error = 1
+                    return
+                end if
+            end do
+            
+            ! perform direct bisection on the shift parameter mu
+            iter = 0
+            do while (abs(lower_mu - upper_mu) > alpha_conv_factor * abs(lower_mu))
+                middle_mu = 0.5_rp * (upper_mu + lower_mu)
+                call get_level_shifted_step(middle_mu, .false.)
+                if (error /= 0) return
+                
+                if (current_norm > trust_radius) then
+                    upper_mu = middle_mu
+                else
+                    lower_mu = middle_mu
+                end if
+                
+                iter = iter + 1
+                if (iter > 100) then
+                    call settings%log("Maximum number of bisection iterations "// &
+                                      "reached.", verbosity_error, .true.)
+                    error = 1
+                    return
+                end if
+            end do
+
+            ! get final solution at the converged shift
+            call get_level_shifted_step(middle_mu, .false.)
+            if (error /= 0) return
+
+            ! set level shift
+            final_mu = middle_mu
+        end if
+
+    contains
+
+        subroutine get_level_shifted_step(mu, singular)
+            !
+            ! this subroutine returns the level-shifted step for a given level shift by 
+            ! solving the linear system, uses LU factorization for non-singular 
+            ! matrices and the Moore-Penrose inverse constructed from SVD for singular 
+            ! matrices
+            !
+            real(rp), intent(in) :: mu
+            logical, intent(in) :: singular
+            
+            real(rp), allocatable :: level_shifted_hess(:, :), work(:), sing_values(:)
+            integer(ip), allocatable :: ipiv(:)
+            integer(ip) :: k, info, rank, lwork
+            character(300) :: msg
+            external :: dgesv
+            
+            ! construct level-shifted Hessian
+            level_shifted_hess = red_space_hess
+            do k = 1, n_red
+                level_shifted_hess(k, k) = level_shifted_hess(k, k) - mu
+            end do
+            
+            ! initialize right-hand side
+            red_space_solution = 0.0_rp
+            red_space_solution(1) = -grad_norm
+            
+            ! solve level-shifted linear system using LU factorization if matrix is 
+            ! non-singular
+            if (.not. singular) then
+                ! solve linear system
+                allocate(ipiv(n_red))
+                call dgesv(n_red, 1_ip, level_shifted_hess, n_red, ipiv, &
+                           red_space_solution, n_red, info)
+                deallocate(level_shifted_hess, ipiv)
+
+                ! check for successful execution
+                if (info /= 0) then
+                    write (msg, '(A, I0)') "Linear solve failed: Error in DGESV, "// &
+                        "info = ", info
+                    call settings%log(msg, verbosity_error, .true.)
+                    error = 1
+                    return
+                end if
+
+            ! solve level-shifted linear system using SVD if matrix is singular
+            else
+                ! query optimal workspace size
+                allocate(sing_values(n_red), work(1))
+                lwork = -1
+                call dgelss(n_red, n_red, 1_ip, level_shifted_hess, n_red, &
+                            red_space_solution, n_red, sing_values, numerical_zero, &
+                            rank, work, lwork, info)
+                lwork = int(work(1))
+                deallocate(work)
+                allocate(work(lwork))
+
+                ! solve linear system
+                call dgelss(n_red, n_red, 1_ip, level_shifted_hess, n_red, &
+                            red_space_solution, n_red, sing_values, numerical_zero, &
+                            rank, work, lwork, info)
+                deallocate(level_shifted_hess, work, sing_values)
+
+                ! check for successful execution
+                if (info /= 0) then
+                    write (msg, '(A, I0)') "Linear solve failed: Error in DGELSS, "// &
+                        "info = ", info
+                    call settings%log(msg, verbosity_error, .true.)
+                    error = 1
+                    return
+                end if
+            end if
+
+            ! construct full space solution
+            call dgemv("N", n_param, n_red, 1.0_rp, red_space_basis, n_param, &
+                       red_space_solution, 1_ip, 0.0_rp, solution, 1_ip)
+
+            ! calculate norm
+            current_norm = dnrm2(n_param, solution, 1_ip)
+
+        end subroutine get_level_shifted_step
+
+    end subroutine bisection_mu
 
     function bracket(obj_func, kappa, lower, upper, settings, error) result(n_kappa)
         !
@@ -1204,11 +1462,18 @@ contains
         real(rp), intent(in) :: matrix(:, :)
         logical, intent(in) :: symm_matrix
         class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
+        complex(rp), intent(out) :: eigvals(:)
+        real(rp), intent(out) :: right_eigvecs(:, :), left_eigvecs(:, :)
         integer(ip), intent(out) :: error
 
+        real(rp), allocatable :: eigvals_re(:)
+
         if (symm_matrix) then
-            call symm_mat_diag(matrix, eigvals, right_eigvecs, settings, error)
+            allocate(eigvals_re(size(eigvals)))
+            call symm_mat_diag(matrix, eigvals_re, right_eigvecs, settings, error)
+            eigvals%re = eigvals_re
+            eigvals%im = 0.0_rp
+            deallocate(eigvals_re)
             left_eigvecs = right_eigvecs
         else
             call general_mat_diag(matrix, eigvals, right_eigvecs, left_eigvecs, &
@@ -1272,11 +1537,12 @@ contains
         !
         real(rp), intent(in) :: matrix(:, :)
         class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
+        complex(rp), intent(out) :: eigvals(:)
+        real(rp), intent(out) :: right_eigvecs(:, :), left_eigvecs(:, :)
         integer(ip), intent(out) :: error
 
         integer(ip) :: n, lwork, info, i
-        real(rp), allocatable :: work(:), temp(:, :), imag_eigvals(:)
+        real(rp), allocatable :: eigvals_re(:), eigvals_im(:), work(:), temp(:, :)
         character(300) :: msg
         external :: dgeev
 
@@ -1291,25 +1557,19 @@ contains
 
         ! query optimal workspace size
         lwork = -1
-        allocate(imag_eigvals(n), work(1))
-        call dgeev("V", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+        allocate(eigvals_re(n), eigvals_im(n), work(1))
+        call dgeev("V", "V", n, temp, n, eigvals_re, eigvals_im, left_eigvecs, n, &
                    right_eigvecs, n, work, lwork, info)
         lwork = int(work(1))
         deallocate(work)
         allocate(work(lwork))
 
         ! perform eigendecomposition
-        call dgeev("V", "V", n, temp, n, eigvals, imag_eigvals, left_eigvecs, n, &
+        call dgeev("V", "V", n, temp, n, eigvals_re, eigvals_im, left_eigvecs, n, &
                    right_eigvecs, n, work, lwork, info)
 
         ! deallocate arrays
-        deallocate(temp, imag_eigvals, work)
-
-        ! scale left eigenvectors such that biorthonormality is fulfilled
-        do i = 1, n
-            left_eigvecs(:, i) = left_eigvecs(:, i) / &
-                                 dot_product(left_eigvecs(:, i), right_eigvecs(:, i))
-        end do
+        deallocate(temp, work)
 
         ! check for successful execution
         if (info /= 0) then
@@ -1317,8 +1577,20 @@ contains
                 "info = ", info
             call settings%log(msg, verbosity_error, .true.)
             error = 1
+            deallocate(eigvals_re, eigvals_im)
             return
         end if
+
+        ! set eigenvalues
+        eigvals%re = eigvals_re
+        eigvals%im = eigvals_im
+        deallocate(eigvals_re, eigvals_im)
+
+        ! scale left eigenvectors such that biorthonormality is fulfilled
+        do i = 1, n
+            left_eigvecs(:, i) = left_eigvecs(:, i) / &
+                                 dot_product(left_eigvecs(:, i), right_eigvecs(:, i))
+        end do
 
     end subroutine general_mat_diag
 
@@ -1391,7 +1663,8 @@ contains
         integer(ip), intent(out) :: error
 
         integer(ip) :: n, min_idx
-        real(rp), allocatable :: eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
+        complex(rp), allocatable :: eigvals(:)
+        real(rp), allocatable :: right_eigvecs(:, :), left_eigvecs(:, :)
 
         ! initialize error flag
         error = 0
@@ -1408,8 +1681,8 @@ contains
         if (error /= 0) return
 
         ! get lowest eigenvalue and corresponding eigenvector
-        min_idx = minloc(eigvals, dim=1)
-        lowest_eigval = eigvals(min_idx)
+        min_idx = minloc(eigvals%re, dim=1)
+        lowest_eigval = eigvals(min_idx)%re
         lowest_eigvec = right_eigvecs(:, min_idx)
 
         ! deallocate eigenvalues and eigenvectors
@@ -2143,19 +2416,20 @@ contains
         integer(ip), intent(out) :: imicro, imicro_jacobi_davidson, error
         logical, intent(out) :: jacobi_davidson_started, max_precision_reached
 
-        real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), aug_hess(:, :), &
-                                 red_space_solution(:), basis_vec(:), h_basis_vec(:), &
-                                 h_solution(:), residual(:), solution_normalized(:), &
+        real(rp), allocatable :: red_space_basis(:, :), h_basis(:, :), &
+                                 red_space_hess(:, :), red_space_solution(:), &
+                                 basis_vec(:), h_basis_vec(:), h_solution(:), &
+                                 residual(:), solution_normalized(:), &
                                  last_solution_normalized(:), row_vec(:), col_vec(:), &
-                                 red_space_hess_eigvals(:), &
                                  red_space_hess_right_eigvecs(:, :), &
-                                 red_space_hess_left_eigvecs(:, :)
+                                 red_space_hess_left_eigvecs(:, :), &
+                                 red_space_hess_eigvals_re(:)
+        complex(rp), allocatable :: red_space_hess_eigvals(:)
         integer(ip) :: n_trial, i, initial_imicro, min_idx
         logical :: accept_step, micro_converged, newton
         real(rp) :: residual_norm, red_factor, initial_residual_norm, new_func, &
                     minres_tol
-        real(rp), parameter :: newton_eigval_thresh = -1e-5_rp, &
-                               solution_overlap_thresh = 0.5_rp, &
+        real(rp), parameter :: solution_overlap_thresh = 0.5_rp, &
                                residual_norm_max_red_factor = 0.8_rp
         real(rp), external :: dnrm2, ddot
         external :: dgemm, dgemv
@@ -2183,10 +2457,9 @@ contains
         end do
 
         ! construct augmented Hessian in reduced space
-        allocate(aug_hess(n_trial + 1, n_trial + 1))
-        aug_hess = 0.0_rp
+        allocate(red_space_hess(n_trial, n_trial))
         call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, red_space_basis, &
-                   n_param, h_basis, n_param, 0.0_rp, aug_hess(2, 2), n_trial + 1)
+                   n_param, h_basis, n_param, 0.0_rp, red_space_hess, n_trial)
 
         ! allocate space for reduced space solution and Hessian linear transformation
         ! of basis vector
@@ -2201,39 +2474,57 @@ contains
 
             jacobi_davidson_started = .false.
             do imicro = 1, settings%n_micro
-                ! do a Newton step if the model is positive definite and the step is 
-                ! within the trust region
-                newton = .false.
-                allocate(red_space_hess_eigvals(n_trial), &
-                         red_space_hess_right_eigvecs(n_trial, n_trial), &
-                         red_space_hess_left_eigvecs(n_trial, n_trial))
-                call mat_diag(aug_hess(2:, 2:), settings%hess_symm, &
+                ! perform eigendecomposition
+                allocate(red_space_hess_right_eigvecs(n_trial, n_trial), &
+                         red_space_hess_left_eigvecs(n_trial, n_trial), &
+                         red_space_hess_eigvals(n_trial))
+                call mat_diag(red_space_hess, settings%hess_symm, &
                               red_space_hess_eigvals, red_space_hess_right_eigvecs, &
                               red_space_hess_left_eigvecs, settings, error)
                 if (error /= 0) return
-                min_idx = minloc(red_space_hess_eigvals, dim=1)
-                if (red_space_hess_eigvals(min_idx) > newton_eigval_thresh) then
-                    call newton_step(grad_norm, red_space_basis, &
-                                     red_space_hess_eigvals, &
-                                     red_space_hess_right_eigvecs, &
-                                     red_space_hess_left_eigvecs, solution, &
-                                     red_space_solution)
+
+                if (string_in("ls", settings%subsystem_solver)) then
+                    ! perform bisection to find the level shift
+                    call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                                      red_space_hess_eigvals, &
+                                      red_space_hess_right_eigvecs, &
+                                      red_space_hess_left_eigvecs, trust_radius, &
+                                      solution, red_space_solution, mu, settings, &
+                                      error)
                     if (error /= 0) return
-                    mu = 0.0_rp
-                    if (dnrm2(n_param, solution, 1_ip) < trust_radius) newton = .true.
+                else
+                    ! do a Newton step if the model is positive definite and the step 
+                    ! is within the trust region
+                    newton = .false.
+                    red_space_hess_eigvals_re = red_space_hess_eigvals%re
+                    min_idx = minloc(red_space_hess_eigvals%re, dim=1)
+                    if (red_space_hess_eigvals(min_idx)%re > newton_eigval_thresh) then
+                        call newton_step(grad_norm, red_space_basis, &
+                                         red_space_hess_eigvals_re, &
+                                         red_space_hess_right_eigvecs, &
+                                         red_space_hess_left_eigvecs, solution, &
+                                         red_space_solution)
+                        if (error /= 0) return
+                        mu = 0.0_rp
+                        if (dnrm2(n_param, solution, 1_ip) < trust_radius) &
+                            newton = .true.
+                    end if
+
+                    ! perform bisection on augmented Hessian to find the level shift
+                    if (.not. newton) then
+                        call bisection_ah(red_space_hess, grad_norm, red_space_basis, &
+                                          red_space_hess_eigvals_re, &
+                                          red_space_hess_right_eigvecs, &
+                                          red_space_hess_left_eigvecs, trust_radius, &
+                                          solution, red_space_solution, mu, settings, &
+                                          error)
+                        if (error /= 0) return
+                    end if
+                    deallocate(red_space_hess_eigvals_re)
                 end if
 
-                ! otherwise perform bisection to find the level shift
-                if (.not. newton) then
-                    call bisection(aug_hess, grad_norm, red_space_basis, &
-                                   red_space_hess_eigvals, &
-                                   red_space_hess_right_eigvecs, &
-                                   red_space_hess_left_eigvecs, trust_radius, &
-                                   solution, red_space_solution, mu, settings, error)
-                    if (error /= 0) return
-                end if
-                deallocate(red_space_hess_eigvals, red_space_hess_right_eigvecs, &
-                           red_space_hess_left_eigvecs)
+                deallocate(red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
+                           red_space_hess_eigvals)
 
                 ! calculate Hessian linear transformation of solution
                 call dgemv("N", n_param, n_trial, 1.0_rp, h_basis, n_param, &
@@ -2269,7 +2560,7 @@ contains
                     micro_converged = .true.
                     exit
                 ! check if Jacobi-Davidson is used and has not been started
-                else if (settings%subsystem_solver == "jacobi-davidson" .and. .not. &
+                else if (string_in("jacobi", settings%subsystem_solver) .and. .not. &
                          jacobi_davidson_started) then
                     ! check residual has not decreased sufficiently or if maximum of 
                     ! Davidson iterations has been reached
@@ -2344,19 +2635,16 @@ contains
                 call add_column(h_basis, h_basis_vec)
 
                 ! construct new augmented Hessian
-                allocate(row_vec(n_trial + 1))
-                row_vec(1) = 0.0_rp
+                allocate(row_vec(n_trial))
                 call dgemv("T", n_param, n_trial , 1.0_rp, red_space_basis, n_param, &
-                           h_basis(:, n_trial ), 1_ip, 0.0_rp, row_vec(2:), 1_ip)
+                           h_basis(:, n_trial), 1_ip, 0.0_rp, row_vec, 1_ip)
                 col_vec = row_vec
                 if (.not. settings%hess_symm) then
                     call dgemv("T", n_param, n_trial, 1.0_rp, h_basis, n_param, &
-                               red_space_basis(:, n_trial ), 1_ip, 0.0_rp, &
-                               col_vec(2:), 1_ip)
+                               red_space_basis(:, n_trial), 1_ip, 0.0_rp, col_vec, 1_ip)
                 end if
-                call extend_matrix(aug_hess, row_vec, col_vec)
-                deallocate(row_vec)
-                deallocate(col_vec)
+                call extend_matrix(red_space_hess, row_vec, col_vec)
+                deallocate(row_vec, col_vec)
 
                 ! reallocate reduced space solution
                 deallocate(red_space_solution)
@@ -2378,8 +2666,8 @@ contains
         end do
 
         ! deallocate quantities from microiterations
-        deallocate(red_space_solution, aug_hess, red_space_basis, h_basis, h_solution, &
-                   residual, basis_vec, h_basis_vec, solution_normalized, &
+        deallocate(red_space_solution, red_space_hess, red_space_basis, h_basis, &
+                   h_solution, residual, basis_vec, h_basis_vec, solution_normalized, &
                    last_solution_normalized)
 
         ! get norm of orbital rotation
@@ -2894,10 +3182,9 @@ contains
         settings%subsystem_solver = string_to_lowercase(settings%subsystem_solver)
 
         ! check that number of random trial vectors is below number of parameters
-        if ((settings%subsystem_solver == "davidson" .or. &
-             settings%subsystem_solver == "jacobi-davidson") .and. &
-            settings%n_random_trial_vectors > n_param/2) then
-            settings%n_random_trial_vectors = n_param/2
+        if ((string_in("davidson", settings%subsystem_solver)) .and. &
+            settings%n_random_trial_vectors > n_param / 2) then
+            settings%n_random_trial_vectors = n_param / 2
             write (msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
                 settings%n_random_trial_vectors, "."
             call settings%log(msg, verbosity_warning)
@@ -2913,27 +3200,30 @@ contains
         end if
 
         ! check for character options
-        if (.not. (settings%subsystem_solver == "davidson" .or. &
-                   settings%subsystem_solver == "jacobi-davidson" .or. &
-                   settings%subsystem_solver == "tcg" .or. &
-                   settings%subsystem_solver == "gltr")) then
+        if (.not. any(settings%subsystem_solver == subsystem_solvers)) then
             call settings%log("Subsystem solver option unknown. Possible values "// &
-                              "are ""davidson"", ""jacobi-davidson"", ""tcg"" "// &
-                              "(truncated conjugate gradient), and ""gltr"" "// &
-                              "(generalized Lanczos trust region).", verbosity_error, &
-                              .true.)
+                              "are ""davidson_ls"" (generalized Davidson for "// &
+                              "linear systems), ""davidson_ah"" (Davidson for "// &
+                              "augmented Hessian), ""jacobi-davidson_ls"" "// &
+                              "(generalized Jacobi-Davidson for linear systems), "// &
+                              """jacobi-davidson_ah"" (Davidson for augmented "// &
+                              "Hessian), ""tcg"" (truncated conjugate gradient), "// &
+                              "and ""gltr"" (generalized Lanczos trust region).", &
+                              verbosity_error, .true.)
             error = 1
             return
         end if
 
         ! check whether non-symmetric Hessian is requested with a solver that cannot 
         ! handle it
-        if (.not. settings%hess_symm .and. (settings%subsystem_solver == "tcg" .or. &
-                                            settings%subsystem_solver == "gltr")) then
-            call settings%log("Non-symmetric Hessian not supported with "// &
-                              "truncated conjugate gradient or generalized "// &
-                              "Lanczos trust region solvers.", verbosity_error, &
-                              .true.)
+        if (.not. settings%hess_symm .and. &
+            (string_in("ah", settings%subsystem_solver) .or. &
+             settings%subsystem_solver == "tcg" .or. &
+             settings%subsystem_solver == "gltr")) then
+            call settings%log("Non-symmetric Hessian not supported with augmented "// &
+                              "Hessian, truncated conjugate gradient, or "// &
+                              "generalized Lanczos trust region solvers.", &
+                              verbosity_error, .true.)
             error = 1
             return
         end if
@@ -3021,6 +3311,16 @@ contains
         end do
     
     end function string_to_lowercase
+
+    logical function string_in(substr, str) 
+        !
+        ! this function checks whether a string is contained in another string
+        !
+        character(*), intent(in) :: substr, str
+
+        string_in = index(str, substr) > 0
+
+    end function string_in
 
     subroutine gltr_first_pass(func, grad_norm, h_diag, hess_x_funptr, trust_radius, &
                                residual, solution, eigenvec, lanczos_diag, &

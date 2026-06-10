@@ -607,25 +607,25 @@ contains
 
     end function test_newton_step
 
-    logical(c_bool) function test_bisection() bind(C)
+    logical(c_bool) function test_bisection_ah() bind(C)
         !
-        ! this function tests the bisection subroutine
+        ! this function tests the augmented Hessian bisection subroutine
         !
-        use opentrustregion, only: solver_settings_type, bisection
+        use opentrustregion, only: solver_settings_type, bisection_ah
 
         type(solver_settings_type) :: settings
         integer(ip), parameter :: lwork = 12
         real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
-                    aug_hess(4, 4), red_space_hess_eigvals(3), &
-                    red_space_hess_imag_eigvals(3), red_space_hess_left_eigvecs(3, 3), &
+                    red_space_hess(3, 3), red_space_hess_eigvals(3), &
+                    red_space_hess_left_eigvecs(3, 3), &
                     red_space_hess_right_eigvecs(3, 3), solution(6), &
-                    red_space_solution(3), trust_radius, mu, work(lwork), temp(3, 3)
+                    red_space_solution(3), trust_radius, mu, work(lwork)
         integer(ip) :: i, j, error, info
 
         external :: dsyev
 
         ! assume tests pass
-        test_bisection = .true.
+        test_bisection_ah = .true.
 
         ! setup settings object
         call setup_settings(settings)
@@ -657,18 +657,12 @@ contains
             red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
         end do
 
-        ! define augmented Hessian
-        aug_hess = 0.0_rp
-        do i = 1, 3
-            do j = 1, 3
-                aug_hess(i + 1, j + 1) = &
-                    dot_product(red_space_basis(:, i), &
-                                matmul(hess, red_space_basis(:, j)))
-            end do
-        end do
+        ! define reduced space Hessian
+        red_space_hess = matmul(transpose(red_space_basis), matmul(hess, &
+                                                                   red_space_basis))
 
         ! diagonalize Hessian
-        red_space_hess_right_eigvecs = aug_hess(2:, 2:)
+        red_space_hess_right_eigvecs = red_space_hess
         call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
                    red_space_hess_eigvals, work, 9, info)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
@@ -676,89 +670,44 @@ contains
         ! perform bisection, check whether error has occured and determine whether 
         ! resulting solution is correct in reduced and full space and respects target 
         ! trust radius
-        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                       trust_radius, solution, red_space_solution, mu, settings, error)
+        call bisection_ah(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_bisection failed: Produced error for symmetric "// &
-                "Hessian."
-            test_bisection = .false.
+            write (stderr, *) "test_bisection_ah failed: Produced error."
+            test_bisection_ah = .false.
         end if
         if (abs(norm2(solution) - trust_radius) > tol) then
-            write (stderr, *) "test_bisection failed: Solution does not respect "// &
-                "trust radius for symmetric Hessian."
-            test_bisection = .false.
+            write (stderr, *) "test_bisection_ah failed: Solution does not respect "// &
+                "trust radius."
+            test_bisection_ah = .false.
         end if
-        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
-                         - mu * red_space_solution) + grad) > tol) then
-            write (stderr, *) "test_bisection failed: Step does not satisfy "// &
-                "level-shifted Newton equation for symmetric Hessian."
-            test_bisection = .false.
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                         mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection_ah failed: Step does not satisfy "// &
+                "level-shifted Newton equation."
+            test_bisection_ah = .false.
         end if
         if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write (stderr, *) "test_bisection failed: Full space solution not "// &
+            write (stderr, *) "test_bisection_ah failed: Full space solution not "// &
                               "correct for symmetric Hessian."
-            test_bisection = .false.
-        end if
-
-        ! make Hessian non-symmetric
-        aug_hess(2, 3) = aug_hess(2, 3) + 0.5_rp
-        settings%hess_symm = .false.
-
-        ! diagonalize non-symmetric Hessian
-        temp = aug_hess(2:, 2:)
-        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
-                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
-                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
-
-        ! biorthonormalize eigenvectors
-        do i = 1, 3
-            red_space_hess_left_eigvecs(:, i) = &
-                red_space_hess_left_eigvecs(:, i) / &
-                dot_product(red_space_hess_left_eigvecs(:, i), &
-                            red_space_hess_right_eigvecs(:, i))
-        end do
-
-        ! perform bisection, check whether error has occured and determine whether 
-        ! resulting solution is correct in reduced and full space and respects target 
-        ! trust radius
-        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                       trust_radius, solution, red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write (stderr, *) "test_bisection failed: Produced error for "// &
-                "asymmetric Hessian."
-            test_bisection = .false.
-        end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
-            write (stderr, *) "test_bisection failed: Solution does not respect "// &
-                "trust radius for asymmetric Hessian."
-            test_bisection = .false.
-        end if
-        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
-                         - mu * red_space_solution) + grad) > tol) then
-            write (stderr, *) "test_bisection failed: Step does not satisfy "// &
-                "level-shifted Newton equation for asymmetric Hessian."
-            test_bisection = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write (stderr, *) "test_bisection failed: Full space solution not "// &
-                              "correct for asymmetric Hessian."
-            test_bisection = .false.
+            test_bisection_ah = .false.
         end if
         
         ! construct custom augmented Hessian with negative eigenvalue and no coupling 
         ! to the gradient
-        aug_hess = 0.0_rp
-        aug_hess(2, 2) = 1.0_rp   ! Mode 1 (coupled to gradient)
-        aug_hess(3, 3) = 2.0_rp   ! Mode 2 (positive curvature)
-        aug_hess(2, 3) = 0.5_rp   ! coupling between mode 1 and 2
-        aug_hess(3, 2) = 0.5_rp
-        aug_hess(4, 4) = -2.0_rp  ! Mode 3 (lowest eigenvalue, isolated from gradient)
+        red_space_hess = 0.0_rp
+        red_space_hess(1, 1) = 1.0_rp   ! Mode 1 (coupled to gradient)
+        red_space_hess(2, 2) = 2.0_rp   ! Mode 2 (positive curvature)
+        red_space_hess(1, 2) = 0.5_rp   ! coupling between mode 1 and 2
+        red_space_hess(2, 1) = 0.5_rp
+        red_space_hess(3, 3) = -2.0_rp  ! Mode 3 (lowest eigenvalue, isolated from 
+                                        ! gradient)
         settings%hess_symm = .true.
         
         ! diagonalize artificial Hessian
-        red_space_hess_right_eigvecs = aug_hess(2:, 2:)
+        red_space_hess_right_eigvecs = red_space_hess
         call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
                    red_space_hess_eigvals, work, 9, info)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
@@ -766,87 +715,35 @@ contains
         ! perform bisection, check whether error has occured and determine whether 
         ! resulting solution respects target trust radius, contains lowest eigenvector 
         ! component and has level shift equal to lowest eigenvalue
-        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                       trust_radius, solution, red_space_solution, mu, settings, error)
+        call bisection_ah(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_bisection failed: Produced error for symmetric "// &
-                "Hessian and hard case."
-            test_bisection = .false.
+            write (stderr, *) "test_bisection_ah failed: Produced error for hard case."
+            test_bisection_ah = .false.
         end if
         if (abs(norm2(solution) - trust_radius) > tol) then
-            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
-                "respect trust radius for symmetric Hessian."
-            test_bisection = .false.
+            write (stderr, *) "test_bisection_ah failed: Hard case solution does "// &
+                "not respect trust radius."
+            test_bisection_ah = .false.
         end if
         if (abs(mu - red_space_hess_eigvals(1)) > tol) then
-            write (stderr, *) "test_bisection failed: Level shift does not equal "// &
-                "the most negative eigenvalue for symmetric Hessian and hard case."
-            test_bisection = .false.
+            write (stderr, *) "test_bisection_ah failed: Level shift does not "// &
+                "equal the most negative eigenvalue and hard case."
+            test_bisection_ah = .false.
         end if
-        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
-                         - mu * red_space_solution) + grad) > tol) then
-            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
-                "contain the level-shifted Newton component for symmetric Hessian."
-            test_bisection = .false.
-        end if
-        if (abs(dot_product(red_space_solution, red_space_hess_right_eigvecs(:, 1))) < &
-            tol) then
-            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
-                "contain a component of the lowest eigenvector for symmetric Hessian."
-            test_bisection = .false.
-        end if
-
-        ! make Hessian non-symmetric
-        aug_hess(2, 3) = aug_hess(2, 3) + 0.5_rp
-        settings%hess_symm = .false.
-
-        ! diagonalize non-symmetric Hessian
-        temp = aug_hess(2:, 2:)
-        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
-                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
-                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
-
-        ! biorthonormalize eigenvectors
-        do i = 1, 3
-            red_space_hess_left_eigvecs(:, i) = &
-                red_space_hess_left_eigvecs(:, i) / &
-                dot_product(red_space_hess_left_eigvecs(:, i), &
-                            red_space_hess_right_eigvecs(:, i))
-        end do
-
-        ! perform bisection, check whether error has occured and determine whether 
-        ! resulting solution respects target trust radius, contains lowest eigenvector 
-        ! component and has level shift equal to lowest eigenvalue
-        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                       trust_radius, solution, red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write (stderr, *) "test_bisection failed: Produced error for "// &
-                "asymmetric Hessian and hard case."
-            test_bisection = .false.
-        end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
-            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
-                "respect trust radius for asymmetric Hessian."
-            test_bisection = .false.
-        end if
-        if (abs(mu - minval(red_space_hess_eigvals)) > tol) then
-            write (stderr, *) "test_bisection failed: Level shift does not equal "// &
-                "the most negative eigenvalue for asymmetric Hessian and hard case."
-            test_bisection = .false.
-        end if
-        if (norm2(matmul(red_space_basis, matmul(aug_hess(2:, 2:), red_space_solution) &
-                         - mu * red_space_solution) + grad) > tol) then
-            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
-                "contain the level-shifted Newton component for asymmetric Hessian."
-            test_bisection = .false.
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                         mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection_ah failed: Hard case solution does "// &
+                "not contain the level-shifted Newton component."
+            test_bisection_ah = .false.
         end if
         if (abs(dot_product(red_space_solution, red_space_hess_right_eigvecs(:, 1))) < &
             tol) then
-            write (stderr, *) "test_bisection failed: Hard case solution does not "// &
-                "contain a component of the lowest eigenvector for asymmetric Hessian."
-            test_bisection = .false.
+            write (stderr, *) "test_bisection_ah failed: Hard case solution does "// &
+                "not contain a component of the lowest eigenvector."
+            test_bisection_ah = .false.
         end if
 
         ! point in quadratic region near minimum
@@ -856,62 +753,374 @@ contains
         call hartmann6d_gradient(vars, grad)
         grad_norm = norm2(grad)
         call hartmann6d_hessian(vars)
-        aug_hess = 0.0_rp
-        do i = 1, 3
-            do j = 1, 3
-                aug_hess(i + 1, j + 1) = &
-                    dot_product(red_space_basis(:, i), &
-                                matmul(hess, red_space_basis(:, j)))
-            end do
-        end do
+        red_space_hess = matmul(transpose(red_space_basis), matmul(hess, &
+                                                                   red_space_basis))
 
         ! diagonalize Hessian
-        red_space_hess_right_eigvecs = aug_hess(2:, 2:)
+        red_space_hess_right_eigvecs = red_space_hess
         call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
                    red_space_hess_eigvals, work, 9, info)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection and determine whether routine correctly throws error since
         ! minimum is closer than target trust radius and no level shift is necessary
-        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_left_eigvecs, red_space_hess_right_eigvecs, &
-                       trust_radius, solution, red_space_solution, mu, settings, error)
+        call bisection_ah(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_left_eigvecs, &
+                          red_space_hess_right_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
         if (error == 0) then
-            write (stderr, *) "test_bisection failed: Failed to produce error for "// &
-                              "symmetric Hessian."
-            test_bisection = .false.
+            write (stderr, *) "test_bisection_ah failed: Failed to produce error."
+            test_bisection_ah = .false.
+        end if
+
+    end function test_bisection_ah
+
+    logical(c_bool) function test_bisection_mu() bind(C)
+        !
+        ! this function tests the level-shift bisection subroutine
+        !
+        use opentrustregion, only: solver_settings_type, bisection_mu
+
+        type(solver_settings_type) :: settings
+        integer(ip), parameter :: lwork = 12
+        real(rp) :: red_space_basis(6, 3), vars(6), grad(6), grad_norm, &
+                    red_space_hess(3, 3), red_space_hess_left_eigvecs(3, 3), &
+                    red_space_hess_right_eigvecs(3, 3), solution(6), &
+                    red_space_solution(3), trust_radius, mu, work(lwork), temp(3, 3), &
+                    red_space_hess_eigvals_re(3), red_space_hess_eigvals_im(3)
+        complex(rp) :: red_space_hess_eigvals(3)
+        integer(ip) :: i, j, error, info
+
+        external :: dsyev
+
+        ! assume tests pass
+        test_bisection_mu = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! choose target trust radius
+        trust_radius = 1.0_rp
+
+        ! point with strong negative curvature
+        vars = [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
+
+        ! calculate gradient and Hessian
+        call hartmann6d_gradient(vars, grad)
+        grad_norm = norm2(grad)
+        call hartmann6d_hessian(vars)
+
+        ! defined a reduced space basis
+        red_space_basis(:, 1) = grad / grad_norm
+        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+
+        ! orthonormalize reduced space basis
+        do i = 2, 3
+            do j = 1, i - 1
+                ! subtract projection onto previous vectors
+                red_space_basis(:, i) = red_space_basis(:, i) - &
+                    dot_product(red_space_basis(:, i), red_space_basis(:, j)) * &
+                    red_space_basis(:, j)
+            end do
+            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
+        end do
+
+        ! define reduced space Hessian
+        red_space_hess = matmul(transpose(red_space_basis), matmul(hess, &
+                                                                   red_space_basis))
+
+        ! diagonalize Hessian
+        red_space_hess_right_eigvecs = red_space_hess
+        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
+                   red_space_hess_eigvals_re, work, 9, info)
+        red_space_hess_eigvals%re = red_space_hess_eigvals_re
+        red_space_hess_eigvals%im = 0.0_rp
+        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
+
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution is correct in reduced and full space and respects target 
+        ! trust radius
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection_mu failed: Produced error for "// &
+                "symmetric, indefinite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Solution does not respect "// &
+                "trust radius for symmetric, indefinite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) &
+                         - mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
+                "level-shifted Newton equation for symmetric, indefinite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+            write (stderr, *) "test_bisection_mu failed: Full space solution not "// &
+                              "correct for symmetric, indefinite Hessian."
+            test_bisection_mu = .false.
         end if
 
         ! make Hessian non-symmetric
-        aug_hess(2, 3) = aug_hess(2, 3) + 0.5_rp
-        settings%hess_symm = .false.
+        red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
 
         ! diagonalize non-symmetric Hessian
-        temp = aug_hess(2:, 2:)
-        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
-                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
+        temp = red_space_hess
+        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals_re, &
+                   red_space_hess_eigvals_im, red_space_hess_left_eigvecs, 3_ip, &
                    red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
+        red_space_hess_eigvals%re = red_space_hess_eigvals_re
+        red_space_hess_eigvals%im = red_space_hess_eigvals_im
 
-        ! biorthonormalize eigenvectors
-        do i = 1, 3
-            red_space_hess_left_eigvecs(:, i) = &
-                red_space_hess_left_eigvecs(:, i) / &
-                dot_product(red_space_hess_left_eigvecs(:, i), &
-                            red_space_hess_right_eigvecs(:, i))
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution is correct in reduced and full space and respects target 
+        ! trust radius
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection_mu failed: Produced error for "// &
+                "asymmetric, indefinite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Solution does not respect "// &
+                "trust radius for asymmetric, indefinite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                         mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
+                "level-shifted Newton equation for asymmetric, indefinite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+            write (stderr, *) "test_bisection_mu failed: Full space solution not "// &
+                              "correct for asymmetric, indefinite Hessian."
+            test_bisection_mu = .false.
+        end if
+        
+        ! construct custom augmented Hessian with negative eigenvalue and no coupling 
+        ! to the gradient
+        red_space_hess = 0.0_rp
+        red_space_hess(1, 1) = 1.0_rp   ! Mode 1 (coupled to gradient)
+        red_space_hess(2, 2) = 2.0_rp   ! Mode 2 (positive curvature)
+        red_space_hess(1, 2) = 0.5_rp   ! coupling between mode 1 and 2
+        red_space_hess(2, 1) = 0.5_rp
+        red_space_hess(3, 3) = -2.0_rp  ! Mode 3 (lowest eigenvalue, isolated from 
+                                        ! gradient)
+        
+        ! diagonalize artificial Hessian
+        red_space_hess_right_eigvecs = red_space_hess
+        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
+                   red_space_hess_eigvals_re, work, 9, info)
+        red_space_hess_eigvals%re = red_space_hess_eigvals_re
+        red_space_hess_eigvals%im = 0.0_rp
+        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
+
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution respects target trust radius, contains lowest eigenvector 
+        ! component and has level shift equal to lowest eigenvalue
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection_mu failed: Produced error for "// &
+                "symmetric Hessian and hard case."
+            test_bisection_mu = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Hard case solution does "// &
+                "not respect trust radius for symmetric Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(mu - red_space_hess_eigvals(1)) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Level shift does not equal "// &
+                "the most negative eigenvalue for symmetric Hessian and hard case."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                         mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Hard case solution does "// &
+                "not contain the level-shifted Newton component for symmetric Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(dot_product(red_space_solution, red_space_hess_right_eigvecs(:, 1))) < &
+            tol) then
+            write (stderr, *) "test_bisection_mu failed: Hard case solution does "// &
+                "not contain a component of the lowest eigenvector for symmetric "// &
+                "Hessian."
+            test_bisection_mu = .false.
+        end if
+
+        ! make Hessian non-symmetric
+        red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
+
+        ! diagonalize non-symmetric Hessian
+        temp = red_space_hess
+        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals_re, &
+                   red_space_hess_eigvals_im, red_space_hess_left_eigvecs, 3_ip, &
+                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
+        red_space_hess_eigvals%re = red_space_hess_eigvals_re
+        red_space_hess_eigvals%im = red_space_hess_eigvals_im
+
+        ! perform bisection, check whether error has occured and determine whether 
+        ! resulting solution respects target trust radius, contains lowest eigenvector 
+        ! component and has level shift equal to lowest eigenvalue
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection_mu failed: Produced error for "// &
+                "asymmetric Hessian and hard case."
+            test_bisection_mu = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Hard case solution does "// &
+                "not respect trust radius for asymmetric Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(mu - minval(red_space_hess_eigvals%re)) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Level shift does not "// &
+                "equal the most negative eigenvalue for asymmetric Hessian and "// &
+                "hard case."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                         mu * red_space_solution) + grad) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Hard case solution does "// &
+                "not contain the level-shifted Newton component for asymmetric Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(dot_product(red_space_solution, red_space_hess_right_eigvecs(:, 1))) < &
+            tol) then
+            write (stderr, *) "test_bisection_mu failed: Hard case solution does "// &
+                "not contain a component of the lowest eigenvector for asymmetric "// &
+                "Hessian."
+            test_bisection_mu = .false.
+        end if
+
+        ! point in quadratic region near minimum
+        vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+
+        ! calculate gradient and Hessian to define reduced Hessian
+        call hartmann6d_gradient(vars, grad)
+        grad_norm = norm2(grad)
+        call hartmann6d_hessian(vars)
+        red_space_hess = matmul(transpose(red_space_basis), matmul(hess, &
+                                                                   red_space_basis))
+
+        ! defined a reduced space basis
+        red_space_basis(:, 1) = grad / grad_norm
+        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+
+        ! orthonormalize reduced space basis
+        do i = 2, 3
+            do j = 1, i - 1
+                ! subtract projection onto previous vectors
+                red_space_basis(:, i) = red_space_basis(:, i) - &
+                    dot_product(red_space_basis(:, i), red_space_basis(:, j)) * &
+                    red_space_basis(:, j)
+            end do
+            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
         end do
+
+        ! diagonalize Hessian
+        red_space_hess_right_eigvecs = red_space_hess
+        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
+                   red_space_hess_eigvals_re, work, 9, info)
+        red_space_hess_eigvals%re = red_space_hess_eigvals_re
+        red_space_hess_eigvals%im = 0.0_rp
+        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection and determine whether routine correctly throws error since
         ! minimum is closer than target trust radius and no level shift is necessary
-        call bisection(aug_hess, grad_norm, red_space_basis, red_space_hess_eigvals, &
-                       red_space_hess_left_eigvecs, red_space_hess_right_eigvecs, &
-                       trust_radius, solution, red_space_solution, mu, settings, error)
-        if (error == 0) then
-            write (stderr, *) "test_bisection failed: Failed to produce error for "// &
-                              "asymmetric Hessian."
-            test_bisection = .false.
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection_mu failed: Produced error for "// &
+                              "symmetric Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(solution) > trust_radius) then
+            write (stderr, *) "test_bisection_mu failed: Solution does not respect "// &
+                "trust radius for symmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(mu) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Level shift does not "// &
+                "vanish for symmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(matmul(red_space_basis, &
+                         matmul(red_space_hess, red_space_solution)) + grad) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
+                "Newton equation for symmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+            write (stderr, *) "test_bisection_mu failed: Full space solution not "// &
+                "correct for symmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
         end if
 
-    end function test_bisection
+        ! make Hessian non-symmetric
+        red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
+
+        ! diagonalize non-symmetric Hessian
+        temp = red_space_hess
+        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals_re, &
+                   red_space_hess_eigvals_im, red_space_hess_left_eigvecs, 3_ip, &
+                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
+        red_space_hess_eigvals%re = red_space_hess_eigvals_re
+        red_space_hess_eigvals%im = red_space_hess_eigvals_im
+
+        ! perform bisection and determine whether routine correctly throws error since
+        ! minimum is closer than target trust radius and no level shift is necessary
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_bisection_mu failed: Produced error for "// &
+                              "asymmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(solution) > trust_radius) then
+            write (stderr, *) "test_bisection_mu failed: Solution does not respect "// &
+                "trust radius for asymmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (abs(mu) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Level shift does not "// &
+                "vanish for asymmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (norm2(matmul(red_space_basis, &
+                         matmul(red_space_hess, red_space_solution)) + grad) > tol) then
+            write (stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
+                "Newton equation for asymmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+            write (stderr, *) "test_bisection_mu failed: Full space solution not "// &
+                "correct for asymmetric, positive-definite Hessian."
+            test_bisection_mu = .false.
+        end if
+
+    end function test_bisection_mu
 
     logical(c_bool) function test_bracket() bind(C)
         !
@@ -1183,8 +1392,9 @@ contains
         use opentrustregion, only: solver_settings_type, general_mat_diag
 
         type(solver_settings_type) :: settings
-        real(rp) :: matrix(3, 3), eigvals(3), right_eigvecs(3, 3), left_eigvecs(3, 3), &
-                    diag(3, 3), eye(3, 3)
+        real(rp) :: matrix(3, 3), right_eigvecs(3, 3), left_eigvecs(3, 3), diag(3, 3), &
+                    eye(3, 3)
+        complex(rp) :: eigvals(3)
         integer(ip) :: error, i
 
         ! assume tests pass
@@ -1204,7 +1414,7 @@ contains
         diag = 0.0_rp
         eye  = 0.0_rp
         do i = 1, 3
-            diag(i, i) = eigvals(i)
+            diag(i, i) = eigvals(i)%re
             eye(i, i)  = 1.0_rp
         end do
         if (error /= 0) then
@@ -2167,11 +2377,11 @@ contains
         ! solver
         !
         use opentrustregion, only: solver_settings_type, solver_sanity_check, &
-                                   project_warning_msg
+                                   project_warning_msg, kw_len, subsystem_solvers
 
         type(solver_settings_type) :: settings
         real(rp) :: grad(3)
-        integer(ip) :: error
+        integer(ip) :: error, i
 
         ! assume tests pass
         test_solver_sanity_check = .true.
@@ -2229,27 +2439,15 @@ contains
         end if
 
         ! check if subsystem solver is correctly checked
-        settings%subsystem_solver = "davidson"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error /= 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
-                "davidson subsystem solver."
-            test_solver_sanity_check = .false.
-        end if
-        settings%subsystem_solver = "jacobi-davidson"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error /= 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
-                "jacobi-davidson subsystem solver."
-            test_solver_sanity_check = .false.
-        end if
-        settings%subsystem_solver = "tcg"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error /= 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
-                "tcg subsystem solver."
-            test_solver_sanity_check = .false.
-        end if
+        do i = 1, size(subsystem_solvers)
+            settings%subsystem_solver = subsystem_solvers(i)
+            call solver_sanity_check(settings, 3_ip, grad, error)
+            if (error /= 0) then
+                write(stderr, *) "test_solver_sanity_check failed: Error thrown "// &
+                    "for " // trim(subsystem_solvers(i)) // " subsystem solver."
+                test_solver_sanity_check = .false.
+            end if
+        end do
         settings%subsystem_solver = "unknown"
         call solver_sanity_check(settings, 3_ip, grad, error)
         if (error == 0) then
@@ -2260,26 +2458,23 @@ contains
 
         ! check if Hessian symmetry is correctly handled
         settings%hess_symm = .false.
-        settings%subsystem_solver = "tcg"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for non-symmetric Hessian with TCG solver."
-            test_solver_sanity_check = .false.
-        end if
-        settings%subsystem_solver = "gltr"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for non-symmetric Hessian with GLTR solver."
-            test_solver_sanity_check = .false.
-        end if
+        do i = 1, size(subsystem_solvers)
+            if (index(subsystem_solvers(i), "ls") > 0) cycle
+            settings%subsystem_solver = subsystem_solvers(i)
+            call solver_sanity_check(settings, 3_ip, grad, error)
+            if (error == 0) then
+                write(stderr, *) "test_solver_sanity_check failed: Error not "// &
+                    "thrown for non-symmetric Hessian with " // &
+                    trim(subsystem_solvers(i)) // " solver."
+                test_solver_sanity_check = .false.
+            end if
+        end do
 
         ! reset log message
         log_message = ""
 
         ! check if preconditioner and projector are correctly checked
-        settings%subsystem_solver = "davidson"
+        settings%subsystem_solver = "davidson_ls"
         settings%project => mock_project
         call solver_sanity_check(settings, 3_ip, grad, error)
         if (adjustl(log_message) /= project_warning_msg) then
@@ -2358,20 +2553,10 @@ contains
         !
         ! this function tests the level-shifted Davidson subroutine
         !
-        use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
-                                   level_shifted_davidson, trust_radius_shrink_ratio, &
-                                   trust_radius_expand_ratio, &
-                                   trust_radius_shrink_factor, &
-                                   trust_radius_expand_factor
+        use opentrustregion, only: solver_settings_type, kw_len, subsystem_solvers
 
-        integer(ip), parameter :: n_param = 6
-        real(rp) :: func, grad_norm, trust_radius, mu, ratio, solution_norm
-        real(rp), dimension(n_param) :: grad, h_diag, solution
-        integer(ip) :: i, imicro, imicro_jacobi_davidson, error
-        procedure(obj_func_type), pointer :: obj_func_funptr
-        procedure(hess_x_type), pointer :: hess_x_funptr
         type(solver_settings_type) :: settings
-        logical :: jacobi_davidson_started, max_precision_reached
+        integer(ip) :: i
 
         ! assume tests pass
         test_level_shifted_davidson = .true.
@@ -2379,146 +2564,132 @@ contains
         ! setup settings object
         call setup_settings(settings)
 
-        ! initialize variables
-        trust_radius = 0.4_rp
-        obj_func_funptr => obj_func
-        hess_x_funptr => hess_x_fun
+        do i = 1, size(subsystem_solvers)
+            if (index(subsystem_solvers(i), "davidson") == 0) cycle
+            settings%subsystem_solver = subsystem_solvers(i)
+            call run_level_shifted_davidson_test("near minimum", subsystem_solvers(i))
+            call run_level_shifted_davidson_test("near saddle point", &
+                                                 subsystem_solvers(i))
+        end do
 
-        ! start in quadratic region near minimum
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        grad_norm = norm2(grad)
-        call hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
+        contains
 
-        ! run level-shifted Davidson, check if error has occured, whether the level 
-        ! shift vanishes and whether the solution stays within trust region and 
-        ! describes the Newton step
-        call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
-                                    obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, solution_norm, mu, imicro, &
-                                    imicro_jacobi_davidson, jacobi_davidson_started, &
-                                    max_precision_reached, error)
-        if (error /= 0) then
-            write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
-                "near minimum."
-            test_level_shifted_davidson = .false.
-        end if
-        if (abs(mu) > tol) then
-            write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
-                "not zero near minimum."
-            test_level_shifted_davidson = .false.
-        end if
-        if (sum(abs(grad + hartmann6d_hess_x(solution))) > &
-            settings%local_red_factor * grad_norm) then
-            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not describe Newton step near minimum."
-            test_level_shifted_davidson = .false.
-        end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
-             / trust_radius_shrink_factor) .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. solution_norm > trust_radius) .or. &
-            (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius &
-            / trust_radius_expand_factor)) then
-            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not stay within trust region near minimum."
-            test_level_shifted_davidson = .false.
-        end if
+        subroutine run_level_shifted_davidson_test(region_str, solver_name)
+            !
+            ! this subroutine runs a level-shifted Davidson test for a given solver
+            !
+            use opentrustregion, only: obj_func_type, hess_x_type, &
+                                       solver_settings_type, level_shifted_davidson, &
+                                       trust_radius_shrink_ratio, &
+                                       trust_radius_expand_ratio, &
+                                       trust_radius_shrink_factor, &
+                                       trust_radius_expand_factor
 
-        ! start near saddle point
-        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        grad_norm = norm2(grad)
-        call hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
-        trust_radius = 0.4_rp
+            character(*), intent(in) :: region_str, solver_name
 
-        ! run level-shifted Davidson, check if error has occured, whether the level 
-        ! shift is negative and whether the solution lies at the trust region boundary 
-        ! and describes a level-shifted Newton step
-        call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
-                                    obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, solution_norm, mu, imicro, &
-                                    imicro_jacobi_davidson, jacobi_davidson_started, &
-                                    max_precision_reached, error)
-        if (error /= 0) then
-            write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
-                "near saddle point."
-            test_level_shifted_davidson = .false.
-        end if
-        if (mu >= 0.0_rp) then
-            write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
-                "not negative near saddle point."
-            test_level_shifted_davidson = .false.
-        end if
-        if (sum(abs(grad + hartmann6d_hess_x(solution) - mu * solution)) > &
-            settings%global_red_factor * grad_norm) then
-            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not describe level-shifted Newton step near saddle point."
-            test_level_shifted_davidson = .false.
-        end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
-             .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius) < tol) .or. &
-            (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
-            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not lie at trust region boundary near saddle point."
-            test_level_shifted_davidson = .false.
-        end if
+            integer(ip), parameter :: n_param = 6
+            real(rp) :: func, grad_norm, trust_radius, mu, ratio, solution_norm
+            real(rp), dimension(n_param) :: grad, h_diag, solution
+            integer(ip) :: i, imicro, imicro_jacobi_davidson, error
+            procedure(obj_func_type), pointer :: obj_func_funptr
+            procedure(hess_x_type), pointer :: hess_x_funptr
+            logical :: jacobi_davidson_started, max_precision_reached
 
-        ! test Jacobi-Davidson near saddle point
-        settings%subsystem_solver = "jacobi-davidson"
-        trust_radius = 0.4_rp
+            ! initialize variables
+            trust_radius = 0.4_rp
+            obj_func_funptr => obj_func
+            hess_x_funptr => hess_x_fun
 
-        ! run level-shifted Jacobi-Davidson, check if error has occured, whether the 
-        ! level shift is negative and whether the solution lies at the trust region 
-        ! boundary and describes a level-shifted Newton step
-        call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
-                                    obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, solution_norm, mu, imicro, &
-                                    imicro_jacobi_davidson, jacobi_davidson_started, &
-                                    max_precision_reached, error)
-        if (error /= 0) then
-            write (stderr, *) "test_level_shifted_davidson failed: Produced error "// &
-                "near saddle point with Jacobi-Davidson solver."
-            test_level_shifted_davidson = .false.
-        end if
-        if (mu >= 0.0_rp) then
-            write (stderr, *) "test_level_shifted_davidson failed: Level shift is "// &
-                "not negative near saddle point with Jacobi-Davidson solver."
-            test_level_shifted_davidson = .false.
-        end if
-        if (sum(abs(grad + hartmann6d_hess_x(solution) - mu * solution)) > &
-            settings%global_red_factor * grad_norm) then
-            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not describe level-shifted Newton step near saddle point with "// &
-                "Jacobi-Davidson solver."
-            test_level_shifted_davidson = .false.
-        end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
-             .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius) < tol) .or. &
-            (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
-            write (stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not lie at trust region boundary near saddle point with "// &
-                "Jacobi-Davidson solver."
-            test_level_shifted_davidson = .false.
-        end if
+            if (region_str == "near minimum") then
+                curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+            else if (region_str == "near saddle point") then
+                curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
+            end if
+
+            func = hartmann6d_func(curr_vars)
+            call hartmann6d_gradient(curr_vars, grad)
+            grad_norm = norm2(grad)
+            call hartmann6d_hessian(curr_vars)
+            h_diag = [(hess(i, i), i=1, size(h_diag))]
+
+            ! run level-shifted Davidson
+            call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+                                        obj_func_funptr, hess_x_funptr, settings, &
+                                        trust_radius, solution, solution_norm, mu, &
+                                        imicro, imicro_jacobi_davidson, &
+                                        jacobi_davidson_started, &
+                                        max_precision_reached, error)
+
+            if (error /= 0) then
+                write (stderr, *) "test_level_shifted_davidson failed: Produced "// &
+                    "error " // trim(region_str) // " with " // trim(solver_name) // &
+                    " solver."
+                test_level_shifted_davidson = .false.
+            end if
+            if (region_str == "near minimum") then
+                if (abs(mu) > tol) then
+                    write (stderr, *) "test_level_shifted_davidson failed: Level "// &
+                        "shift is not zero near minimum with " // trim(solver_name) // &
+                        " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+                if (sum(abs(grad + hartmann6d_hess_x(solution))) > &
+                    settings%local_red_factor * grad_norm) then
+                    write (stderr, *) "test_level_shifted_davidson failed: "// &
+                        "Solution does not describe Newton step near minimum with " // &
+                        trim(solver_name) // " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+            else if (region_str == "near saddle point") then
+                if (mu >= 0.0_rp) then
+                    write (stderr, *) "test_level_shifted_davidson failed: Level "// &
+                        "shift is not negative near saddle point with " // &
+                        trim(solver_name) // " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+                if (sum(abs(grad + hartmann6d_hess_x(solution) - mu * solution)) > &
+                    settings%global_red_factor * grad_norm) then
+                    write (stderr, *) "test_level_shifted_davidson failed: "// &
+                        "Solution does not describe level-shifted Newton step near "// &
+                        "saddle point with "// trim(solver_name) // " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+            end if
+
+            ratio = (hartmann6d_func(curr_vars + solution) - func) / &
+                    dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+
+            if (region_str == "near minimum") then
+                if ((ratio < trust_radius_shrink_ratio .and. &
+                     solution_norm > trust_radius / trust_radius_shrink_factor) .or. &
+                    (trust_radius_shrink_ratio > ratio .and. &
+                     ratio > trust_radius_expand_ratio .and. &
+                     solution_norm > trust_radius) .or. &
+                    (ratio > trust_radius_expand_ratio .and. &
+                     solution_norm > trust_radius / trust_radius_expand_factor)) then
+                    write (stderr, *) "test_level_shifted_davidson failed: "// &
+                        "Solution does not stay within trust region near minimum " // &
+                        "with " // trim(solver_name) // " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+            else if (region_str == "near saddle point") then
+                if ((trust_radius_shrink_ratio > ratio .and. &
+                     abs(solution_norm - trust_radius / trust_radius_shrink_factor) > &
+                     tol) .or. &
+                    (trust_radius_shrink_ratio > ratio .and. &
+                     ratio > trust_radius_expand_ratio .and. &
+                     abs(solution_norm - trust_radius) < tol) .or. &
+                    (ratio > trust_radius_expand_ratio .and. &
+                     abs(solution_norm - trust_radius / trust_radius_expand_factor) < &
+                        tol)) then
+                    write (stderr, *) "test_level_shifted_davidson failed: "// &
+                        "Solution does not lie at trust region boundary near " // &
+                        "saddle point with " // trim(solver_name) // " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+            end if
+
+        end subroutine run_level_shifted_davidson_test
 
     end function test_level_shifted_davidson
 
@@ -2910,7 +3081,7 @@ contains
         ! assume tests pass
         test_string_to_lowercase = .true.
 
-        ! test transfoer to lowercase
+        ! test transfer to lowercase
         if (string_to_lowercase(input) /= expect) then
             write (stderr, *) "test_string_to_lowercase failed: String not "// &
                 "correctly transferred to lowercase."
@@ -2918,5 +3089,31 @@ contains
         end if
 
     end function test_string_to_lowercase
+
+    logical(c_bool) function test_string_in() bind(C)
+        !
+        ! this function tests the function that checks whether a string is contained in 
+        ! another string
+        !
+        use opentrustregion, only: string_in
+
+        character(*), parameter :: input  = 'OpenTrustRegion123!'
+
+        ! assume tests pass
+        test_string_in = .true.
+
+        ! test if substring is in string
+        if (.not. string_in("Trust", input)) then
+            write (stderr, *) "test_string_in failed: Substring not correctly "// &
+                "detected in string."
+            test_string_in = .false.
+        end if
+        if (string_in("trust", input)) then
+            write (stderr, *) "test_string_in failed: Substring detected in string "// &
+                "even though it is not present."
+            test_string_in = .false.
+        end if
+
+    end function test_string_in
 
 end module opentrustregion_unit_tests
