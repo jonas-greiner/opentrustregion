@@ -88,7 +88,7 @@ module otr_oao
     end interface
 
     type :: oao_type
-        class(oao_settings_type), allocatable :: settings
+        type(oao_settings_type) :: settings
         integer(ip) :: n_ao, n_param, n_particle
         real(rp), allocatable :: dm_ao(:, :, :), s_sqrt(:, :), s_inv_sqrt(:, :), &
                                  dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
@@ -101,7 +101,7 @@ module otr_oao
     end type oao_type
 
     ! global variables
-    class(oao_type), allocatable :: oao_object
+    type(oao_type), allocatable, target :: oao_object
 
     ! create function pointers to ensure that routines comply with interface
     procedure(obj_func_type), pointer :: obj_func_oao_ptr => obj_func_oao
@@ -136,12 +136,6 @@ module otr_oao
 
         ! initialize error flag
         error = 0
-
-        ! allocate objects
-        if (.not. allocated(oao_object)) then
-            allocate(oao_type :: oao_object)
-            allocate(oao_settings_type :: oao_object%settings)
-        end if
 
         ! call common setup
         call oao_factory_common(reshape(dm_ao, [n_ao, n_ao, 1]), ao_overlap, &
@@ -179,10 +173,6 @@ module otr_oao
         ! initialize error flag
         error = 0
 
-        ! allocate objects
-        allocate(oao_type :: oao_object)
-        allocate(oao_settings_type :: oao_object%settings)
-
         ! call common setup
         call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
 
@@ -199,14 +189,21 @@ module otr_oao
 
     subroutine oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
         !
-        ! this function returns a modified OAO orbital updating function
+        ! this function performs common OAO initialization operations
         !
         real(rp), intent(in) :: dm_ao(:, :, :), ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
-        class(oao_settings_type), intent(in) :: settings
+        class(oao_settings_type), intent(inout) :: settings
 
         logical :: initialized
+
+        ! perform sanity check
+        call oao_sanity_check(settings, n_ao, error)
+        if (error /= 0) return
+
+        ! allocate objects
+        if (.not. allocated(oao_object)) allocate(oao_object)
 
         ! determine whether object has been initialized
         initialized = oao_object%settings%initialized
@@ -255,6 +252,29 @@ module otr_oao
             oao_object%n_param = n_particle * oao_object%n_param
 
     end subroutine oao_factory_common
+
+    subroutine oao_sanity_check(settings, n_ao, error)
+        !
+        ! this subroutine performs a sanity check for OAO input parameters
+        !
+        use opentrustregion, only: verbosity_error, string_to_lowercase
+
+        class(oao_settings_type), intent(inout) :: settings
+        integer(ip), intent(in) :: n_ao
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! check that number of AOs is positive
+        if (n_ao < 1) then
+            call settings%log("Number of AOs should be larger than 0.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+    end subroutine oao_sanity_check
 
     function obj_func_oao(kappa, error) result(energy)
         !

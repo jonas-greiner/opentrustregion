@@ -33,6 +33,7 @@ except AttributeError:
 
 try:
     from pyopentrustregion.extensions.arh.tests import (
+        ARHTests,
         ARHCInterfaceTests,
         ARHPyInterfaceTests,
     )

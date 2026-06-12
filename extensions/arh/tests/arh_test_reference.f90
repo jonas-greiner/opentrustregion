@@ -6,29 +6,30 @@
 
 module otr_arh_test_reference
 
-    use opentrustregion, only: ip, rp, stderr
+    use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
     use otr_oao_test_reference, only: n_particle, n_ao, ref_oao_settings_type, &
                                       ref_oao_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
                                            c_associated
 
     implicit none
 
     ! derived types for ARH settings
     type, extends(ref_oao_settings_type) :: ref_arh_settings_type
-        logical :: symm_arh
+        character(kw_len, c_char) :: arh_type
     end type
 
     type, bind(C) :: ref_arh_settings_type_c
-        logical(c_bool) :: restricted, symm_arh
+        logical(c_bool) :: restricted
         integer(c_ip) :: verbose
+        character(c_char) :: arh_type(kw_len + 1)
     end type
 
     ! general reference parameters
     type(ref_arh_settings_type), parameter :: ref_arh_settings = &
         ref_arh_settings_type(ref_oao_settings_type = ref_oao_settings, &
-                              symm_arh = .false.)
+                              arh_type = "symmetric")
 
     interface assignment(=)
         module procedure assign_ref_to_arh
@@ -256,7 +257,7 @@ contains
         lhs%oao_settings_type = rhs%ref_oao_settings_type
 
         ! set reference values
-        lhs%symm_arh = rhs%symm_arh
+        lhs%arh_type = rhs%arh_type
 
     end subroutine assign_ref_to_arh
 
@@ -289,8 +290,8 @@ contains
         type(ref_arh_settings_type), intent(in) :: rhs
 
         lhs%restricted = logical(rhs%restricted, kind=c_bool)
-        lhs%symm_arh = logical(rhs%symm_arh, kind=c_bool)
         lhs%verbose = int(rhs%verbose, kind=c_ip)
+        lhs%arh_type = character_to_c(rhs%arh_type)
 
     end subroutine assign_ref_to_ref_c
 
@@ -306,7 +307,7 @@ contains
         type(ref_arh_settings_type), intent(in) :: rhs
 
         equal_arh_to_ref = lhs%oao_settings_type == rhs%ref_oao_settings_type .and. &
-                           (lhs%symm_arh .eqv. rhs%symm_arh)
+                           (lhs%arh_type == rhs%arh_type)
 
     end function equal_arh_to_ref
 
@@ -353,7 +354,7 @@ contains
         type(arh_settings_type), intent(in) :: lhs, rhs
         
         equal_arh = lhs%oao_settings_type == rhs%oao_settings_type .and. &
-                    (lhs%symm_arh .eqv. rhs%symm_arh)
+                    (lhs%arh_type == rhs%arh_type)
 
     end function equal_arh
 

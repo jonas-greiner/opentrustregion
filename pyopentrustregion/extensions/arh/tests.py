@@ -35,6 +35,10 @@ if NUMPY_AVAILABLE:
 
 # define all tests in alphabetical order
 fortran_tests = {
+    "arh_tests": [
+        "get_response_contribution_closed_shell",
+        "get_response_contribution_open_shell",
+    ],
     "arh_c_interface_tests": [
         "arh_factory_c_wrapper",
         "assign_arh_c_f",
@@ -45,6 +49,20 @@ fortran_tests = {
         "update_orbs_arh_c_wrapper",
     ],
 }
+
+
+@add_tests
+class ARHTests(unittest.TestCase):
+    """
+    this class contains unit tests for ARH
+    """
+
+    tests = fortran_tests["arh_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running unit tests for ARH...")
+        return super().setUpClass()
 
 
 @add_tests

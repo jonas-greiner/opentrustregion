@@ -237,6 +237,7 @@ if (BUILD_TESTS)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
             extensions/arh/tests/arh_test_reference.f90
+            extensions/arh/tests/arh_unit_tests.f90
             extensions/arh/tests/arh_c_interface_unit_tests.f90
             extensions/arh/tests/arh_mock.f90
             extensions/arh/tests/arh_c_interface_mock.f90

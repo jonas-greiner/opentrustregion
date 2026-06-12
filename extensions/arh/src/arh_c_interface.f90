@@ -6,7 +6,7 @@
 
 module otr_arh_c_interface
 
-    use opentrustregion, only: ip, rp, update_orbs_type, hess_x_type, &
+    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type, &
                                project_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
     use otr_oao_c_interface, only: n_particle, n_ao
@@ -15,7 +15,7 @@ module otr_arh_c_interface
                        update_dm_jk_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
                                            c_funloc, c_f_procpointer, c_associated, &
-                                           c_null_funptr
+                                           c_char, c_null_funptr
 
     implicit none
 
@@ -41,8 +41,9 @@ module otr_arh_c_interface
     ! derived type for ARH settings
     type, bind(C) :: arh_settings_type_c
         type(c_funptr) :: logger
-        logical(c_bool) :: initialized, restricted, symm_arh
+        logical(c_bool) :: initialized, restricted
         integer(c_ip) :: verbose
+        character(c_char) :: arh_type(kw_len + 1)
     end type
 
     procedure(standard_arh_factory_closed_shell), pointer :: arh_factory_closed_shell &
@@ -299,7 +300,8 @@ contains
         ! this subroutine converts ARH settings from C to Fortran
         !
         use otr_arh, only: arh_settings_type
-        use c_interface, only: logger_before_wrapping, logger_f_wrapper
+        use c_interface, only: logger_before_wrapping, logger_f_wrapper, &
+                               character_from_c
 
         type(arh_settings_type), intent(out) :: settings
         type(arh_settings_type_c), intent(in) :: settings_c
@@ -316,10 +318,12 @@ contains
 
             ! convert logicals
             settings%restricted = logical(settings_c%restricted)
-            settings%symm_arh = logical(settings_c%symm_arh)
 
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
+
+            ! convert characters
+            settings%arh_type = character_from_c(settings_c%arh_type)
 
             ! set settings to initialized
             settings%initialized = .true.
@@ -332,6 +336,7 @@ contains
         ! this subroutine converts ARH settings from Fortran to C
         !
         use otr_arh, only: arh_settings_type
+        use c_interface, only: character_to_c
 
         type(arh_settings_type_c), intent(out) :: settings_c
         type(arh_settings_type), intent(in) :: settings
@@ -342,10 +347,12 @@ contains
 
             ! convert logicals
             settings_c%restricted = logical(settings%restricted, kind=c_bool)
-            settings_c%symm_arh = logical(settings%symm_arh, kind=c_bool)
 
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)
+
+            ! convert characters
+            settings_c%arh_type = character_to_c(settings%arh_type)
 
             ! set settings to initialized
             settings_c%initialized = .true._c_bool

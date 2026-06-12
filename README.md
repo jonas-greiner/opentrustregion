@@ -735,7 +735,10 @@ arh_deconstructor(dm_ao)
 The ARH factory function can be fine-tuned using the following settings:
 
 - **`restricted`** (boolean): Controls whether a spin-restricted formalism is used.
-- **`symm_arh`** (boolean): Controls whether a symmetric version of the ARH formalism is used.
+- **`arh_type`** (string): Specifies which ARH type to use. Options include:
+  - `"standard"`: standard ARH method,
+  - `"symmetric"`: simple symmetrized version of ARH,
+  - `"multisecant_psb"`: symmetric version of ARH which fulfills all multisecant conditions.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
 
 ### Subspace Gradient-Enhanced Kriging Extension

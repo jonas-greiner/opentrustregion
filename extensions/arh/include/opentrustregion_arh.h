@@ -37,8 +37,8 @@ typedef struct {
     logger_fp logger;
     c_bool initialized;
     c_bool restricted;
-    c_bool symm_arh;
     c_int verbose;
+    char arh_type[OTR_KW_LEN + 1];
 } arh_settings_type;
 
 // Fortran-callable init routine for ARH settings

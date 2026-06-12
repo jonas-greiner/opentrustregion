@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, Structure, byref
+from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure, byref
 from dataclasses import dataclass
 from inspect import signature
 from typing import TYPE_CHECKING
@@ -15,6 +15,7 @@ from pyopentrustregion.python_interface import (
     lib,
     c_int,
     c_real,
+    kw_len,
     obj_func_interface_type,
     update_orbs_interface_type,
     project_interface_type,
@@ -85,8 +86,8 @@ class ARHSettingsC(Structure):
         ("logger", c_void_p),
         ("initialized", c_bool),
         ("restricted", c_bool),
-        ("symm_arh", c_bool),
         ("verbose", c_int),
+        ("arh_type", c_char * (kw_len + 1)),
     ]
 
 
