@@ -175,8 +175,10 @@ The optimization process can be fine-tuned using the following settings:
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`line_search`** (boolean): Determines whether a line search is performed after every macro iteration.
 - **`subsystem_solver`** (string): Specifies which subsystem solver to use. Options include:
-  - `"davidson"`: standard Davidson method,
-  - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
+  - `"davidson_ls"`: generalized Davidson method applied to linear system,
+  - `"jacobi-davidson_ls"`: generalized Davidson method applied to linear system with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
+  - `"davidson_ah"`: Davidson method applied diagonalization of augmented Hessian,
+  - `"jacobi-davidson_ah"`: Davidson method applied diagonalization of augmented Hessian with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
   - `"tcg"`: truncated conjugate gradient method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations.
