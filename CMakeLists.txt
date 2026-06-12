@@ -14,7 +14,7 @@ endif()
 # set flags for build types
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
     set(CMAKE_Fortran_FLAGS_DEBUG "-g -Wall -Wextra -fcheck=all -fbacktrace")
-    set(CMAKE_Fortran_FLAGS_RELEASE "-g -Wall -Wextra -fcheck=all -fbacktrace")
+    set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -march=native")
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
     set(CMAKE_Fortran_FLAGS_DEBUG "-g -warn all -traceback")
     set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -xHost")
