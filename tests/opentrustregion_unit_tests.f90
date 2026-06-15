@@ -228,6 +228,25 @@ contains
 
     end subroutine mock_approx_hess_x
 
+    subroutine mock_init_trial_space(trial_space, error)
+        !
+        ! this subroutine is a test subroutine for the trial space initialization 
+        ! subroutine
+        !
+        real(rp), intent(out), target :: trial_space(:, :)
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: i
+
+        trial_space = 0.0_rp
+        do i = 1, size(trial_space, 2)
+            trial_space(i, i) = 1.0_rp
+        end do
+
+        error = 0
+
+    end subroutine mock_init_trial_space
+
     subroutine logger(message)
         !
         ! this subroutine is a mock logging subroutine
@@ -363,6 +382,7 @@ contains
         ! this function tests the stability check subroutine
         !
         use opentrustregion, only: hess_x_type, stability_settings_type, stability_check
+        use test_reference, only: n_trial_vectors
 
         real(rp) :: vars(6), h_diag(6), direction(6), eigval_vec(6)
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -400,6 +420,37 @@ contains
                 "not return zero vector for minimum."
             test_stability_check = .false.
         end if
+
+        ! initialize settings
+        call settings%init(error)
+
+        ! set initial trial space
+        settings%n_trial_vectors = n_trial_vectors
+        settings%init_trial_space => mock_init_trial_space
+
+        ! run stability, check if error has occured check and determine whether minimum 
+        ! is stable and the returned direction vanishes
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        if (error /= 0) then
+            write (stderr, *) "test_stability_check failed: Produced error with "// &
+                "custom trial space initialization."
+            test_stability_check = .false.
+        end if
+        if (.not. stable) then
+            write (stderr, *) "test_stability_check failed: Stability check with"// &
+                "custom trial space initialization incorrectly classifies "// &
+                "stability of minimum."
+            test_stability_check = .false.
+        end if
+        if (all(abs(direction) > tol)) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "custom trial space initialization does not return zero vector for "// &
+                "minimum."
+            test_stability_check = .false.
+        end if
+
+        ! initialize settings
+        call settings%init(error)
 
         ! set approximate Hessian linear transformation
         settings%approx_hess_x => mock_approx_hess_x
@@ -460,6 +511,45 @@ contains
                 "eigenvalue for saddle point."
             test_stability_check = .false.
         end if
+
+        ! initialize settings
+        call settings%init(error)
+
+        ! set initial trial space
+        settings%n_trial_vectors = n_trial_vectors
+        settings%init_trial_space => mock_init_trial_space
+
+        ! run stability check, check if error has occured and determine whether saddle 
+        ! point is unstable and the returned direction is correct
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        if (error /= 0) then
+            write (stderr, *) "test_stability_check failed: Produced error with "// &
+                "custom trial space initialization."
+            test_stability_check = .false.
+        end if
+        if (stable) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "custom trial space initialization incorrectly classifies "// &
+                "stability of saddle point."
+            test_stability_check = .false.
+        end if
+        call hess_x_funptr(direction, eigval_vec, error)
+        eigval_vec = eigval_vec / direction
+        if (maxval(eigval_vec) - minval(eigval_vec) > tol) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "custom trial space initialization does not return eigenvector "// &
+                "direction for saddle point."
+            test_stability_check = .false.
+        end if
+        if (sum(eigval_vec) / 6 > 0.0_rp) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "custom trial space initialization does not return eigenvector "// &
+                "direction corresponding to negative eigenvalue for saddle point."
+            test_stability_check = .false.
+        end if
+
+        ! initialize settings
+        call settings%init(error)
 
         ! set approximate Hessian linear transformation
         settings%approx_hess_x => mock_approx_hess_x
@@ -1638,6 +1728,54 @@ contains
 
     end function test_generate_random_trial_vectors
 
+    logical(c_bool) function test_orthogonalize_trial_vectors() bind(C)
+        !
+        ! this function tests the subroutine which orthogonalizes trial vectors
+        !
+        use opentrustregion, only: stability_settings_type, orthogonalize_trial_vectors
+
+        type(stability_settings_type) :: settings
+        real(rp), allocatable :: red_space_basis(:, :)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_orthogonalize_trial_vectors = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! allocate reduced space basis with 3 vectors, where the third vector is 
+        ! linearly dependent
+        allocate(red_space_basis(4, 3))
+        red_space_basis(:, 1) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
+        red_space_basis(:, 2) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
+        red_space_basis(:, 3) = [1.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
+
+        ! orthogonalize trial vectors
+        call orthogonalize_trial_vectors(red_space_basis, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_orthogonalize_trial_vectors failed: Produced error."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (size(red_space_basis, 2) /= 2) then
+            write (stderr, *) "test_orthogonalize_trial_vectors failed: Linearly "// &
+                "dependent vector was not removed."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (any(abs(norm2(red_space_basis, dim=1) - 1.0_rp) > tol)) then
+            write (stderr, *) "test_orthogonalize_trial_vectors failed: Vectors "// &
+                "are not normalized."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (abs(dot_product(red_space_basis(:, 1), red_space_basis(:, 2))) > tol) then
+            write (stderr, *) "test_orthogonalize_trial_vectors failed: Vectors "// &
+                "are not orthogonal."
+            test_orthogonalize_trial_vectors = .false.
+            end if
+        deallocate(red_space_basis)
+
+    end function test_orthogonalize_trial_vectors
+
     logical(c_bool) function test_gram_schmidt() bind(C)
         !
         ! this function tests the Gram-Schmidt subroutine which orthonormalizes a 
@@ -1767,6 +1905,91 @@ contains
         end if
 
     end function test_gram_schmidt
+
+    logical(c_bool) function test_default_init_trial_space() bind(C)
+        !
+        ! this function tests the default trial space initialization subroutine
+        !
+        use opentrustregion, only: default_init_trial_space
+        use test_reference, only: n_param
+
+        real(rp), target :: trial_space(n_param, 1)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_default_init_trial_space = .true.
+
+        ! initialize trial space
+        trial_space = 0.0_rp
+        call default_init_trial_space(trial_space, error)
+        if (error /= 0) then
+            write (stderr, *) "test_default_init_trial_space failed: Function "// &
+                "raised error."
+            test_default_init_trial_space = .false.
+        end if
+        if (sum(abs(trial_space)) < tol) then
+            write (stderr, *) "test_default_init_trial_space failed: Trial space "// &
+                "not correctly initialized."
+            test_default_init_trial_space = .false.
+        end if
+
+    end function test_default_init_trial_space
+
+    logical(c_bool) function test_weinstein_conv_check() bind(C)
+        !
+        ! this function tests the Weinstein bound convergence check
+        !
+        use opentrustregion, only: weinstein_conv_check, stability_thresh
+
+        real(rp) :: residual(2), eigval
+        integer(ip) :: error
+        logical :: converged
+
+        ! assume tests pass
+        test_weinstein_conv_check = .true.
+
+        ! eigenvalue below stability threshold should converge regardless of residual
+        eigval = stability_thresh - 0.1_rp
+        residual = [1.0_rp, 1.0_rp]
+        converged = weinstein_conv_check(residual, eigval, error)
+        if (error /= 0) then
+            write (stderr, *) "test_weinstein_conv_check failed: Produced error."
+            test_weinstein_conv_check = .false.
+        end if
+        if (.not. converged) then
+            write (stderr, *) "test_weinstein_conv_check failed: Should converge "// &
+                "for negative eigenvalue."
+            test_weinstein_conv_check = .false.
+        end if
+
+        ! eigenvalue above stability threshold, but Weinstein bound satisfied
+        eigval = stability_thresh + 1.0_rp
+        residual = [0.5_rp, 0.5_rp]
+        converged = weinstein_conv_check(residual, eigval, error)
+        if (error /= 0) then
+            write (stderr, *) "test_weinstein_conv_check failed: Produced error."
+            test_weinstein_conv_check = .false.
+        end if
+        if (.not. converged) then
+            write (stderr, *) "test_weinstein_conv_check failed: Should converge "// &
+                "when Weinstein bound is satisfied."
+            test_weinstein_conv_check = .false.
+        end if
+
+        ! eigenvalue above stability threshold, and Weinstein bound not satisfied
+        residual = [1.0_rp, 1.0_rp]
+        converged = weinstein_conv_check(residual, eigval, error)
+        if (error /= 0) then
+            write (stderr, *) "test_weinstein_conv_check failed: Produced error."
+            test_weinstein_conv_check = .false.
+        end if
+        if (converged) then
+            write (stderr, *) "test_weinstein_conv_check failed: Should not "// &
+                "converge when Weinstein bound is not satisfied."
+            test_weinstein_conv_check = .false.
+        end if
+
+    end function test_weinstein_conv_check
 
     logical(c_bool) function test_init_solver_settings() bind(C)
         !

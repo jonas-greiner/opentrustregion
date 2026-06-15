@@ -11,7 +11,8 @@ module c_interface
                                default_solver_settings, default_stability_settings, &
                                update_orbs_type, hess_x_type, obj_func_type, &
                                precond_type, project_type, modify_step_type, &
-                               conv_check_type, logger_type
+                               conv_check_type, init_trial_space_type, &
+                               conv_check_stability_type, logger_type
     use, intrinsic :: iso_c_binding, only: c_double, c_int64_t, c_int32_t, c_bool, &
                                            c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_char, &
@@ -41,6 +42,10 @@ module c_interface
     procedure(conv_check_c_type), pointer :: conv_check_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: stability_hess_x_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: approx_hess_x_before_wrapping => null()
+    procedure(init_trial_space_c_type), pointer :: init_trial_space_before_wrapping => &
+        null()
+    procedure(conv_check_stability_c_type), pointer :: &
+        conv_check_stability_before_wrapping => null()
     procedure(logger_c_type), pointer :: logger_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
@@ -117,6 +122,27 @@ module c_interface
     end interface
 
     abstract interface
+        function init_trial_space_c_type(trial_space_c) result(error) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(out), target :: trial_space_c(*)
+            integer(c_ip) :: error
+        end function init_trial_space_c_type
+    end interface
+
+    abstract interface
+        function conv_check_stability_c_type(residual_c, eigval_c, converged) &
+            result(error) bind(C)
+            import :: c_bool, c_rp, c_ip
+
+            real(c_rp), intent(in), target :: residual_c(*)
+            real(c_rp), intent(in) :: eigval_c
+            logical(c_bool), intent(out) :: converged
+            integer(c_ip) :: error
+        end function conv_check_stability_c_type
+    end interface
+
+    abstract interface
         subroutine logger_c_type(message) bind(C)
             import :: c_char
 
@@ -126,11 +152,12 @@ module c_interface
 
     ! derived type for stability check settings
     type, bind(C) :: stability_settings_type_c
-        type(c_funptr) :: precond, project, approx_hess_x, logger
+        type(c_funptr) :: precond, project, approx_hess_x, init_trial_space, &
+                          conv_check, logger
         logical(c_bool) :: hess_symm, initialized
         real(c_rp) :: conv_tol
-        integer(c_ip) :: n_random_trial_vectors, n_iter, jacobi_davidson_start, seed, &
-                         verbose
+        integer(c_ip) :: n_random_trial_vectors, n_trial_vectors, n_iter, &
+                         jacobi_davidson_start, seed, verbose
         character(c_char) :: diag_solver(kw_len + 1)
     end type
 
@@ -165,6 +192,10 @@ module c_interface
                                        stability_hess_x_f_wrapper
     procedure(hess_x_type), pointer :: approx_hess_x_f_wrapper_ptr => &
                                        approx_hess_x_f_wrapper
+    procedure(init_trial_space_type), pointer :: init_trial_space_f_wrapper_ptr => &
+                                                 init_trial_space_f_wrapper
+    procedure(conv_check_stability_type), pointer :: &
+        conv_check_stability_f_wrapper_ptr => conv_check_stability_f_wrapper
     procedure(logger_type), pointer :: logger_f_wrapper_ptr => logger_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
@@ -582,6 +613,70 @@ contains
 
     end subroutine approx_hess_x_f_wrapper
 
+    subroutine init_trial_space_f_wrapper(trial_space, error)
+        !
+        ! this subroutine exposes a C-implemented trial space initialization function 
+        ! to Fortran
+        !
+        real(rp), intent(out), target :: trial_space(:, :)
+        integer(ip), intent(out) :: error
+
+        real(c_rp), pointer :: trial_space_c(:, :)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            trial_space_c => trial_space
+        else
+            allocate(trial_space_c(size(trial_space, 1), size(trial_space, 2)))
+            trial_space_c = real(trial_space, kind=c_rp)
+        end if
+
+        ! call init_trial_space C function
+        error_c = init_trial_space_before_wrapping(trial_space_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            trial_space = real(trial_space_c, kind=rp)
+            deallocate(trial_space_c)
+        end if
+
+    end subroutine init_trial_space_f_wrapper
+
+    function conv_check_stability_f_wrapper(residual, eigval, error) result(converged)
+        !
+        ! this function exposes a C-implemented convergence check function to Fortran
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: eigval
+        integer(ip), intent(out) :: error
+        logical :: converged
+
+        real(c_rp), pointer :: residual_c(:)
+        real(c_rp) :: eigval_c
+        logical(c_bool) :: converged_c
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            residual_c => residual
+        else
+            allocate(residual_c(size(residual)))
+            residual_c = real(residual, kind=c_rp)
+        end if
+        eigval_c = real(eigval, kind=c_rp)
+
+        ! call conv_check C function
+        error_c = conv_check_stability_before_wrapping(residual_c, eigval_c, &
+                                                       converged_c)
+
+        ! convert arguments to Fortran kind
+        converged = logical(converged_c)
+        error = int(error_c, kind=ip)
+
+    end function conv_check_stability_f_wrapper
+
     subroutine logger_f_wrapper(message)
         !
         ! this subroutine exposes a C-implemented logger function to Fortran
@@ -747,6 +842,20 @@ contains
             else
                 settings%approx_hess_x => null()
             end if
+            if (c_associated(settings_c%init_trial_space)) then
+                call c_f_procpointer(cptr=settings_c%init_trial_space, &
+                                     fptr=init_trial_space_before_wrapping)
+                settings%init_trial_space => init_trial_space_f_wrapper
+            else
+                settings%init_trial_space => null()
+            end if
+            if (c_associated(settings_c%conv_check)) then
+                call c_f_procpointer(cptr=settings_c%conv_check, &
+                                     fptr=conv_check_stability_before_wrapping)
+                settings%conv_check => conv_check_stability_f_wrapper
+            else
+                settings%conv_check => null()
+            end if
             if (c_associated(settings_c%logger)) then
                 call c_f_procpointer(cptr=settings_c%logger, &
                                      fptr=logger_before_wrapping)
@@ -764,6 +873,7 @@ contains
             ! convert integers
             settings%n_random_trial_vectors = int(settings_c%n_random_trial_vectors, &
                                                   kind=ip)
+            settings%n_trial_vectors = int(settings_c%n_trial_vectors, kind=ip)
             settings%n_iter = int(settings_c%n_iter, kind=ip)
             settings%jacobi_davidson_start = int(settings_c%jacobi_davidson_start, &
                                                  kind=ip)
@@ -844,6 +954,8 @@ contains
             settings_c%precond = c_null_funptr
             settings_c%project = c_null_funptr
             settings_c%approx_hess_x = c_null_funptr
+            settings_c%init_trial_space = c_null_funptr
+            settings_c%conv_check = c_null_funptr
             settings_c%logger = c_null_funptr
 
             ! convert logicals
@@ -855,6 +967,7 @@ contains
             ! convert integers
             settings_c%n_random_trial_vectors = int(settings%n_random_trial_vectors, &
                                                     kind=c_ip)
+            settings_c%n_trial_vectors = int(settings%n_trial_vectors, kind=c_ip)
             settings_c%n_iter = int(settings%n_iter, kind=c_ip)
             settings_c%jacobi_davidson_start = int(settings%jacobi_davidson_start, &
                                                    kind=c_ip)

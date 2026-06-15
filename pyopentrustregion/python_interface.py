@@ -105,7 +105,11 @@ precond_interface_type = CFUNCTYPE(
 )
 project_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 modify_step_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
+init_trial_space_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 conv_check_interface_type = CFUNCTYPE(c_int, POINTER(c_bool))
+conv_check_stability_interface_type = CFUNCTYPE(
+    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_bool)
+)
 logger_interface_type = CFUNCTYPE(None, c_char_p)
 
 
@@ -277,6 +281,54 @@ class ConvCheckInterface:
 
 
 @dataclass
+class InitTrialSpaceInterface:
+    """
+    this class provides the interface to the trial space initialization function
+    """
+
+    init_trial_space: Callable[[np.ndarray], None]
+    n_trial_vectors: int
+    n_param: int
+
+    def __call__(self, trial_space_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        trial_space = np.ctypeslib.as_array(
+            trial_space_ptr, shape=(self.n_trial_vectors, self.n_param)
+        )
+
+        # call trial space initialization function
+        try:
+            self.init_trial_space(trial_space)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+
+@dataclass
+class ConvCheckStabilityInterface:
+    """
+    this class provides the interface to the stability check convergence check function
+    """
+
+    conv_check: Callable[[np.ndarray, float], bool]
+    n_param: int
+
+    def __call__(self, residual_ptr, eigval_ptr, conv_ptr) -> int:
+        # convert pointers to numpy arrays and float
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+        eigval = eigval_ptr[0]
+
+        # call convergence check
+        try:
+            conv_ptr[0] = self.conv_check(residual, eigval)
+        except RuntimeError:
+            return 1
+
+        return 0
+
+
+@dataclass
 class LoggerInterface:
     """
     this class provides the interface to the logging function
@@ -295,11 +347,14 @@ class StabilitySettingsC(Structure):
         ("precond", c_void_p),
         ("project", c_void_p),
         ("approx_hess_x", c_void_p),
+        ("init_trial_space", c_void_p),
+        ("conv_check", c_void_p),
         ("logger", c_void_p),
         ("hess_symm", c_bool),
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("n_random_trial_vectors", c_int),
+        ("n_trial_vectors", c_int),
         ("n_iter", c_int),
         ("jacobi_davidson_start", c_int),
         ("seed", c_int),
@@ -453,11 +508,16 @@ class StabilitySettings(Settings):
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
     approx_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
+    init_trial_space: Optional[Callable[[np.ndarray], None]]
+    conv_check: Optional[Callable[[np.ndarray, float], bool]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
     project_interface: Any
     approx_hess_x_interface: Any
+    init_trial_space_interface: Any
+    conv_check_interface: Any
     logger_interface: Any
+    n_trial_vectors: int
 
     def set_optional_callbacks(self, n_param: int):
         """
@@ -474,6 +534,21 @@ class StabilitySettings(Settings):
             self.approx_hess_x,
             HessXInterface,
             hess_x_interface_type,
+            n_param,
+        )
+        self.set_optional_callback(
+            "init_trial_space",
+            self.init_trial_space,
+            InitTrialSpaceInterface,
+            init_trial_space_interface_type,
+            self.n_trial_vectors,
+            n_param,
+        )
+        self.set_optional_callback(
+            "conv_check",
+            self.conv_check,
+            ConvCheckStabilityInterface,
+            conv_check_stability_interface_type,
             n_param,
         )
         self.set_optional_callback(

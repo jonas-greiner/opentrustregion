@@ -15,19 +15,24 @@ module test_reference
 
     ! tolerance for real comparisons
     real(rp), parameter :: tol = 1e-10_rp
-    real(c_rp), parameter :: tol_c = real(tol, kind=c_rp)
+    real(c_rp), protected, bind(C, name="test_tol") :: tol_c = real(tol, kind=c_rp)
 
     ! number of parameters
     integer(ip), parameter :: n_param = 3_ip
     integer(c_ip), protected, bind(C, name="test_n_param") :: &
         n_param_c = int(n_param, kind=c_ip)
 
+    ! number of trial vectors
+    integer(ip), parameter :: n_trial_vectors = 2_ip
+    integer(c_ip), protected, bind(C, name="test_n_trial_vectors") :: &
+        n_trial_vectors_c = int(n_trial_vectors, kind=c_ip)
+
     ! derived types for solver settings
     type ref_settings_type
         logical :: stability, line_search, hess_symm
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_random_trial_vectors, n_macro, n_micro, &
-                       jacobi_davidson_start, seed, verbose, n_iter
+                       jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
         character(kw_len, c_char) :: subsystem_solver, diag_solver
     end type
 
@@ -35,7 +40,7 @@ module test_reference
         logical(c_bool) :: stability, line_search, hess_symm
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
-                         jacobi_davidson_start, seed, verbose, n_iter
+                         jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
         character(c_char) :: subsystem_solver(kw_len + 1), diag_solver(kw_len + 1)
     end type
 
@@ -46,7 +51,7 @@ module test_reference
                           start_trust_radius = 0.2_rp, global_red_factor = 1e-2_rp, &
                           local_red_factor = 1e-3_rp, n_random_trial_vectors = 5, &
                           n_macro = 300, n_micro = 200, jacobi_davidson_start = 10, &
-                          seed = 33, verbose = 3, n_iter = 50, &
+                          seed = 33, verbose = 3, n_trial_vectors = 2, n_iter = 50, &
                           subsystem_solver = "tcg", diag_solver = "jacobi-davidson")
 
     interface assignment(=)
@@ -784,6 +789,107 @@ contains
 
     end function test_modify_step_c_funptr
 
+    function test_init_trial_space_funptr(init_trial_space_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided trial space initialization function pointer
+        !
+        use opentrustregion, only: init_trial_space_type
+
+        procedure(init_trial_space_type), intent(in), pointer :: init_trial_space_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        real(rp), allocatable :: trial_space(:, :)
+        integer(ip) :: error, i
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(init_trial_space_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Trial space "// &
+                "initialization function not associated with value."
+            return
+        end if
+
+        ! allocate arrays
+        allocate(trial_space(n_param, n_trial_vectors))
+
+        ! call trial space initialization function
+        call init_trial_space_funptr(trial_space, error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check returned trial space
+        if (any(abs(trial_space - spread([(real(i, rp), i = 1, n_trial_vectors)], 1, &
+                                         n_param)) > tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Returned trial space"// &
+                message//" wrong."
+            test_passed = .false.
+        end if
+
+    end function test_init_trial_space_funptr
+
+    function test_init_trial_space_c_funptr(init_trial_space_c_funptr, test_name, &
+                                            message) result(test_passed)
+        !
+        ! this function tests a provided trial space initialization C function pointer
+        !
+        use c_interface, only: init_trial_space_c_type
+
+        type(c_funptr), intent(in) :: init_trial_space_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        procedure(init_trial_space_c_type), pointer :: init_trial_space_funptr
+        real(c_rp), allocatable :: trial_space(:, :)
+        integer(ip) :: error, i
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(init_trial_space_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Trial space "// &
+                "initialization function not associated with value."
+            return
+        end if
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=init_trial_space_c_funptr, &
+                             fptr=init_trial_space_funptr)
+
+        ! allocate arrays
+        allocate(trial_space(n_param, n_trial_vectors))
+
+        ! call trial space initialization function
+        error = init_trial_space_funptr(trial_space)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check returned trial space
+        if (any(abs(trial_space - spread([(real(i, c_rp), i = 1, n_trial_vectors)], 1, &
+                                         n_param)) > tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Returned trial space"// &
+                message//" wrong."
+            test_passed = .false.
+        end if
+
+    end function test_init_trial_space_c_funptr
+
     function test_conv_check_funptr(conv_check_funptr, test_name, message) &
         result(test_passed)
         !
@@ -875,6 +981,122 @@ contains
         end if
 
     end function test_conv_check_c_funptr
+
+    function test_conv_check_stability_funptr(conv_check_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided stability check convergence check function 
+        ! pointer
+        !
+        use opentrustregion, only: conv_check_stability_type
+
+        procedure(conv_check_stability_type), intent(in), pointer :: conv_check_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        real(rp), allocatable :: residual(:)
+        real(rp) :: eigval
+        logical :: converged
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(conv_check_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Convergence check "// &
+                "function not associated with value."
+            return
+        end if
+
+        ! allocate arrays
+        allocate(residual(n_param))
+
+        ! initialize residual
+        residual = 1.0_rp
+
+        ! initialize eigenvalue
+        eigval = sum(residual)
+
+        ! call convergence check function
+        converged = conv_check_funptr(residual, eigval, error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check convergence logical
+        if (.not. converged) then
+            write (stderr, *) "test_"//test_name//" failed: Convergence logical "// &
+                "returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+    end function test_conv_check_stability_funptr
+
+    function test_conv_check_stability_c_funptr(conv_check_c_funptr, test_name, &
+                                                message) result(test_passed)
+        !
+        ! this function tests a provided stability check convergence check C function 
+        ! pointer
+        !
+        use c_interface, only: conv_check_stability_c_type
+
+        type(c_funptr), intent(in) :: conv_check_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+        
+        procedure(conv_check_stability_c_type), pointer :: conv_check_funptr
+        real(c_rp), allocatable :: residual(:)
+        real(c_rp) :: eigval
+        logical(c_bool) :: converged
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(conv_check_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Convergence check "// &
+                "function not associated with value."
+            return
+        end if
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=conv_check_c_funptr, fptr=conv_check_funptr)
+
+        ! allocate arrays
+        allocate(residual(n_param))
+
+        ! initialize residual
+        residual = 1.0_c_rp
+
+        ! initialize eigenvalue
+        eigval = sum(residual)
+
+        ! call convergence check function
+        error = conv_check_funptr(residual, eigval, converged)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check convergence logical
+        if (.not. converged) then
+            write (stderr, *) "test_"//test_name//" failed: Convergence logical "// &
+                "returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+    end function test_conv_check_stability_c_funptr
 
     function test_mock_solver_funptr(settings, test_name, message) result(test_passed)
         ! 
@@ -1018,6 +1240,17 @@ contains
             test_hess_x_funptr(settings%approx_hess_x, test_name, " by"//message// &
                                " approximate Hessian linear transformation subroutine")
 
+        ! test passed trial space initialization subroutine
+        test_passed = test_passed .and. &
+            test_init_trial_space_funptr(settings%init_trial_space, test_name, " by"// &
+                                         message//" trial space initialization "// &
+                                         "subroutine")
+
+        ! test passed convergence check subroutine
+        test_passed = test_passed .and. &
+            test_conv_check_stability_funptr(settings%conv_check, test_name, " by"// &
+                                             message//" convergence check subroutine")
+
         ! test passed logging function
         if (.not. associated(settings%logger)) then
             test_passed = .false.
@@ -1060,6 +1293,18 @@ contains
         test_passed = test_passed .and. &
             test_hess_x_c_funptr(settings_c%approx_hess_x, test_name, " by"//message// &
                                  "approximate Hessian linear transformation function")
+
+        ! test passed trial space initialization function
+        test_passed = test_passed .and. &
+            test_init_trial_space_c_funptr(settings_c%init_trial_space, test_name, &
+                                           " by"//message//" trial space "// &
+                                           "initialization function")
+
+        ! test passed convergence check function
+        test_passed = test_passed .and. &
+            test_conv_check_stability_c_funptr(settings_c%conv_check, test_name, &
+                                               " by"//message//" convergence check "// &
+                                               "function")
 
         ! get Fortran pointer to passed logging function and call it
         if (.not. c_associated(settings_c%logger)) then
@@ -1200,6 +1445,16 @@ contains
             write (stderr, *) test_name//" failed: Approximate Hessian linear "// &
                 "transformation function associated."
         end if
+        if (associated(settings%init_trial_space)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Trial space initialization "// &
+                "function associated."
+        end if
+        if (associated(settings%conv_check)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Convergence check function "// &
+                "associated."
+        end if
         if (associated(settings%logger)) then
             test_passed = .false.
             write (stderr, *) test_name//" failed: Logger function associated."
@@ -1235,6 +1490,16 @@ contains
             test_passed = .false.
             write (stderr, *) test_name//" failed: Approximate Hessian linear "// &
                 "transformation function associated."
+        end if
+        if (c_associated(settings_c%init_trial_space)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Trial space initialization "// &
+                "function associated."
+        end if
+        if (c_associated(settings_c%conv_check)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Convergence check function "// &
+                "associated."
         end if
         if (c_associated(settings_c%logger)) then
             test_passed = .false.
@@ -1307,12 +1572,15 @@ contains
         lhs%precond => null()
         lhs%project => null()
         lhs%approx_hess_x => null()
+        lhs%init_trial_space => null()
+        lhs%conv_check => null()
         lhs%logger => null()
 
         ! set reference values
         lhs%hess_symm = rhs%hess_symm
         lhs%conv_tol = rhs%conv_tol
         lhs%n_random_trial_vectors = rhs%n_random_trial_vectors
+        lhs%n_trial_vectors = rhs%n_trial_vectors
         lhs%n_iter = rhs%n_iter
         lhs%jacobi_davidson_start = rhs%jacobi_davidson_start
         lhs%seed = rhs%seed
@@ -1383,6 +1651,7 @@ contains
         lhs%jacobi_davidson_start = int(rhs%jacobi_davidson_start, kind=c_ip)
         lhs%seed = int(rhs%seed, kind=c_ip)
         lhs%verbose = int(rhs%verbose, kind=c_ip)
+        lhs%n_trial_vectors = int(rhs%n_trial_vectors, kind=c_ip)
         lhs%n_iter = int(rhs%n_iter, kind=c_ip)
         lhs%subsystem_solver = character_to_c(rhs%subsystem_solver)
         lhs%diag_solver = character_to_c(rhs%diag_solver)
@@ -1442,6 +1711,7 @@ contains
         equal_stability_to_ref = (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
+            lhs%n_trial_vectors == rhs%n_trial_vectors .and. &
             lhs%n_iter == rhs%n_iter .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
@@ -1578,6 +1848,7 @@ contains
         equal_stability = (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
+            lhs%n_trial_vectors == rhs%n_trial_vectors .and. &
             lhs%n_iter == rhs%n_iter .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &

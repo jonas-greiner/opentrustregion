@@ -137,6 +137,40 @@ contains
         
     end function mock_conv_check
 
+    function mock_init_trial_space(trial_space) result(error) bind(C)
+        !
+        ! this function is a test function for the trial space initialization function
+        !
+        use test_reference, only: n_trial_vectors
+
+        real(c_rp), intent(out), target :: trial_space(*)
+        integer(c_ip) :: i, error
+
+        do i = 1, n_trial_vectors
+            trial_space((i - 1) * n_param + 1:i * n_param) = real(i, kind=c_rp)
+        end do
+
+        error = 0
+        
+    end function mock_init_trial_space
+
+    function mock_conv_check_stability(residual, eigval, converged) result(error) &
+        bind(C)
+        !
+        ! this function is a test function for the stability check convergence check 
+        ! function
+        !
+        real(c_rp), intent(in), target :: residual(*)
+        real(c_rp), intent(in) :: eigval
+        logical(c_bool), intent(out) :: converged
+        integer(c_ip) :: error
+
+        converged = abs(sum(residual(:n_param)) - eigval) < tol_c
+
+        error = 0
+        
+    end function mock_conv_check_stability
+
     subroutine mock_logger(message_c) bind(C)
         !
         ! this function is a test function for the C logging function
@@ -178,6 +212,8 @@ contains
         settings%precond = c_funloc(mock_precond)
         settings%project = c_funloc(mock_project)
         settings%approx_hess_x = c_funloc(mock_hess_x)
+        settings%init_trial_space = c_funloc(mock_init_trial_space)
+        settings%conv_check = c_funloc(mock_conv_check_stability)
         settings%logger = c_funloc(mock_logger)
 
     end subroutine stability_set_mock
@@ -544,6 +580,56 @@ contains
                                                           "approx_hess_x_f_wrapper", "")
 
     end function test_approx_hess_x_f_wrapper
+
+    logical(c_bool) function test_init_trial_space_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the trial space initialization 
+        ! function
+        !
+        use opentrustregion, only: init_trial_space_type
+        use c_interface, only: init_trial_space_before_wrapping, &
+                               init_trial_space_f_wrapper
+        use test_reference, only: test_init_trial_space_funptr
+
+        procedure(init_trial_space_type), pointer :: init_trial_space_funptr
+
+        ! inject mock function
+        init_trial_space_before_wrapping => mock_init_trial_space
+
+        ! get pointer to subroutine
+        init_trial_space_funptr => init_trial_space_f_wrapper
+
+        ! test trial space initialization wrapper
+        test_init_trial_space_f_wrapper = &
+            test_init_trial_space_funptr(init_trial_space_funptr, &
+                                         "init_trial_space_f_wrapper", "")
+
+    end function test_init_trial_space_f_wrapper
+
+    logical(c_bool) function test_conv_check_stability_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the stability check convergence 
+        ! check function
+        !
+        use opentrustregion, only: conv_check_stability_type
+        use c_interface, only: conv_check_stability_before_wrapping, &
+                               conv_check_stability_f_wrapper
+        use test_reference, only: test_conv_check_stability_funptr
+
+        procedure(conv_check_stability_type), pointer :: conv_check_funptr
+
+        ! inject mock function
+        conv_check_stability_before_wrapping => mock_conv_check_stability
+
+        ! get pointer to subroutine
+        conv_check_funptr => conv_check_stability_f_wrapper
+
+        ! test convergence check wrapper
+        test_conv_check_stability_f_wrapper = &
+            test_conv_check_stability_funptr(conv_check_funptr, &
+                                             "conv_check_stability_f_wrapper", "")
+
+    end function test_conv_check_stability_f_wrapper
 
     logical(c_bool) function test_logger_f_wrapper() bind(C)
         !

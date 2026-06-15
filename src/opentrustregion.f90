@@ -35,14 +35,14 @@ module opentrustregion
                               error_obj_func = 1100, error_update_orbs = 1200, &
                               error_hess_x = 1300, error_precond = 1400, &
                               error_conv_check = 1500, error_project = 1600, &
-                              error_modify_step = 1700
+                              error_modify_step = 1700, error_init_trial_space = 1800
 
     ! define useful parameters
     real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
                            precond_factor = 1e-1_rp, hess_symm_thres = 1e-12_rp, &
                            residual_norm_floor = 1e-12_rp, &
                            level_shift_local_thres = 1e-12_rp, &
-                           newton_eigval_thresh = -1e-5_rp
+                           newton_eigval_thresh = -1e-5_rp, stability_thresh = -1e-2_rp
 
     ! define verbosity levels
     integer(ip), parameter :: verbosity_silent = 0, verbosity_error = 1, &
@@ -141,6 +141,26 @@ module opentrustregion
     end interface
 
     abstract interface
+        subroutine init_trial_space_type(trial_space, error)
+            import :: rp, ip
+
+            real(rp), intent(out), target :: trial_space(:, :)
+            integer(ip), intent(out) :: error
+        end subroutine init_trial_space_type
+    end interface
+
+    abstract interface
+        function conv_check_stability_type(residual, eigval, error) result(converged)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: residual(:)
+            real(rp), intent(in) :: eigval
+            integer(ip), intent(out) :: error
+            logical :: converged
+        end function conv_check_stability_type
+    end interface
+
+    abstract interface
         subroutine logger_type(message)
             character(*), intent(in) :: message
         end subroutine logger_type
@@ -174,9 +194,11 @@ module opentrustregion
     end type
 
     type, extends(optimizer_settings_type) :: stability_settings_type
-        integer(ip) :: n_iter
+        integer(ip) :: n_trial_vectors, n_iter
         character(kw_len) :: diag_solver
         procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
+        procedure(init_trial_space_type), pointer, nopass :: init_trial_space => null()
+        procedure(conv_check_stability_type), pointer, nopass :: conv_check => null()
     contains
         procedure :: init => init_stability_settings
     end type
@@ -197,11 +219,13 @@ module opentrustregion
     ! default settings
     type(stability_settings_type), parameter :: default_stability_settings = &
         stability_settings_type(precond = null(), project = null(), &
-                                approx_hess_x = null(), logger = null(), &
+                                approx_hess_x = null(), init_trial_space = null(), &
+                                conv_check = null(), logger = null(), &
                                 hess_symm = .true., initialized = .true., &
                                 conv_tol = 1e-8_rp, n_random_trial_vectors = 20, &
-                                n_iter = 100, jacobi_davidson_start = 50, seed = 42, &
-                                verbose = 0, diag_solver = "davidson")
+                                n_trial_vectors = 0, n_iter = 100, &
+                                jacobi_davidson_start = 50, seed = 42, verbose = 0, &
+                                diag_solver = "davidson")
     type(solver_settings_type), parameter :: default_solver_settings = &
         solver_settings_type(precond = null(), project = null(), modify_step = null(), &
                              conv_check = null(), stability_hess_x = null(), &
@@ -361,16 +385,24 @@ contains
                 call add_error_origin(error, error_conv_check, settings)
                 if (error /= 0) return
             else
-                conv_check_passed = .false.
+                conv_check_passed = grad_rms < settings%conv_tol
             end if
-            if (grad_rms < settings%conv_tol .or. max_precision_reached .or. &
-                conv_check_passed) then
+            if (conv_check_passed .or. max_precision_reached) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
+                    if (settings%stability_settings%n_trial_vectors == 0 .and. .not. &
+                        associated(settings%stability_settings%init_trial_space)) then
+                        settings%stability_settings%n_trial_vectors = 1
+                        settings%stability_settings%init_trial_space => &
+                            default_init_trial_space
+                    end if
                     if (associated(settings%stability_hess_x)) then
                         stability_hess_x_funptr => settings%stability_hess_x
                     else
                         stability_hess_x_funptr => hess_x_funptr
+                    end if
+                    if (.not. associated(settings%stability_settings%conv_check)) then
+                        settings%stability_settings%conv_check => weinstein_conv_check
                     end if
                     call stability_check(h_diag, stability_hess_x_funptr, stable, &
                                          error, settings%stability_settings, &
@@ -528,9 +560,9 @@ contains
                                  basis_vec(:), h_basis_vec(:), red_space_basis(:, :), &
                                  h_basis(:, :), red_space_hess(:, :), &
                                  red_space_solution(:), row_vec(:), col_vec(:)
-        real(rp) :: eigval, minres_tol, stability_rms
+        real(rp) :: eigval, minres_tol
         character(300) :: msg
-        real(rp), parameter :: stability_thresh = -1e-2_rp
+        logical :: conv_check_passed
         real(rp), external :: dnrm2, ddot
         external :: dgemm, dgemv
 
@@ -554,23 +586,33 @@ contains
 
         ! perform sanity check
         call stability_sanity_check(settings, n_param, error)
-        call add_error_origin(error, error_solver, settings)
+        call add_error_origin(error, error_stability_check, settings)
         if (error /= 0) return
 
         ! generate trial vectors
-        allocate(red_space_basis(n_param, 1 + settings%n_random_trial_vectors))
-        red_space_basis(:, 1) = 0.0_rp
-        red_space_basis(minloc(h_diag), 1) = 1.0_rp
-        if (associated(settings%project)) then
-            call settings%project(red_space_basis(:, 1), error)
-            call add_error_origin(error, error_project, settings)
+        if (associated(settings%init_trial_space)) then
+        allocate(red_space_basis(n_param, settings%n_trial_vectors))
+            call settings%init_trial_space(red_space_basis, error)
+            call add_error_origin(error, error_init_trial_space, settings)
             if (error /= 0) return
-            red_space_basis(:, 1) = red_space_basis(:, 1) / &
-                                    dnrm2(n_param, red_space_basis(:, 1), 1_ip)
+            call orthogonalize_trial_vectors(red_space_basis, settings, error)
+            call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
+        else
+            allocate(red_space_basis(n_param, 1 + settings%n_random_trial_vectors))
+            red_space_basis(:, 1) = 0.0_rp
+            red_space_basis(minloc(h_diag), 1) = 1.0_rp
+            if (associated(settings%project)) then
+                call settings%project(red_space_basis(:, 1), error)
+                call add_error_origin(error, error_project, settings)
+                if (error /= 0) return
+                red_space_basis(:, 1) = red_space_basis(:, 1) / &
+                                        dnrm2(n_param, red_space_basis(:, 1), 1_ip)
+            end if
+            call generate_random_trial_vectors(red_space_basis, settings, error)
+            call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
         end if
-        call generate_random_trial_vectors(red_space_basis, settings, error)
-        call add_error_origin(error, error_stability_check, settings)
-        if (error /= 0) return
 
         ! number of trial vectors
         n_trial = size(red_space_basis, 2)
@@ -623,9 +665,16 @@ contains
             residual = h_solution - eigval*solution
 
             ! check convergence
-            stability_rms = dnrm2(n_param, residual, 1_ip) / &
-                sqrt(real(n_param, kind=rp))
-            if (stability_rms < settings%conv_tol) exit
+            if (associated(settings%conv_check)) then
+                conv_check_passed = settings%conv_check(residual, eigval, error)
+                call add_error_origin(error, error_conv_check, settings)
+                if (error /= 0) return
+            else
+                conv_check_passed = dnrm2(n_param, residual, 1_ip) / &
+                                          sqrt(real(n_param, kind=rp)) < &
+                                    settings%conv_tol
+            end if
+            if (conv_check_passed) exit
 
             if (settings%diag_solver == "davidson" .or. iter <= &
                 settings%jacobi_davidson_start) then
@@ -708,7 +757,7 @@ contains
         end do
 
         ! check if stability check has converged
-        if (stability_rms >= settings%conv_tol) &
+        if (.not. conv_check_passed) &
             call settings%log("Stability check has not converged in the given "// &
                               "number of iterations.", verbosity_error, .true.)
 
@@ -1800,6 +1849,56 @@ contains
 
     end subroutine generate_random_trial_vectors
 
+    subroutine orthogonalize_trial_vectors(red_space_basis, settings, error)
+        !
+        ! this subroutine orthogonalizes the trial vectors using Gram-Schmidt and 
+        ! removes linearly dependent vectors
+        !
+        real(rp), intent(inout), allocatable :: red_space_basis(:, :)
+        type(stability_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: i, num_valid
+        real(rp), allocatable :: tmp_red_space_basis(:, :)
+
+        ! initialize error flag
+        error = 0
+
+        ! orthonormalize vectors while removing linearly dependent and vanishing vectors
+        num_valid = 0
+        do i = 1, size(red_space_basis, 2)
+            if (associated(settings%project)) then
+                call settings%project(red_space_basis(:, i), error)
+                call add_error_origin(error, error_project, settings)
+                if (error /= 0) return
+            end if
+            call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :num_valid), &
+                              settings, error, silent_on_error=.true.)
+            if (error == 2) then
+                call settings%log("Provided trial vector is linearly dependent "// &
+                                  "and is being removed.", verbosity_warning, .false.)
+                error = 0
+                cycle
+            end if
+            if (error /= 0) return
+            num_valid = num_valid + 1
+            if (num_valid /= i) then
+                red_space_basis(:, num_valid) = red_space_basis(:, i)
+            end if
+        end do
+        if (num_valid < size(red_space_basis, 2)) then
+            if (num_valid == 0) then
+                call settings%log("All trial vectors are vanishing.", verbosity_error, &
+                                  .true.)
+                error = 1
+                return
+            end if
+            tmp_red_space_basis = red_space_basis(:, :num_valid)
+            call move_alloc(tmp_red_space_basis, red_space_basis)
+        end if
+
+    end subroutine orthogonalize_trial_vectors
+
     subroutine gram_schmidt(vector, space, settings, error, lin_trans_vector, &
                             lin_trans_space, silent_on_error)
         !
@@ -1833,9 +1932,14 @@ contains
         n_vectors = size(space, 2)
 
         if (dnrm2(n_param, vector, 1_ip) < zero_thres) then
-            call settings%log(gram_schmidt_zero_vector_error_msg, verbosity_error, &
-                              .true.)
-            error = 1
+            error = 2
+            if (.not. present(silent_on_error)) then
+                call settings%log(gram_schmidt_zero_vector_error_msg, verbosity_error, &
+                                  .true.)
+            else if (.not. silent_on_error) then
+                call settings%log(gram_schmidt_zero_vector_error_msg, verbosity_error, &
+                                  .true.)
+            end if
             return
         else if (n_vectors > n_param - 1) then
             call settings%log(gram_schmidt_too_many_vectors_error_msg, &
@@ -1877,16 +1981,45 @@ contains
             iter = iter + 1
             if (iter > 100) then
                 call settings%log("Maximum number of Gram-Schmidt iterations "// &
-                                    "reached.", verbosity_error, .true.)
+                                  "reached.", verbosity_error, .true.)
                 error = 1
                 return
             end if
         end do
 
-        ! allocate array for orthogonalities
+        ! deallocate arrays
         deallocate(orth)
 
     end subroutine gram_schmidt
+
+    subroutine default_init_trial_space(trial_space, error)
+        !
+        ! this subroutine initializes the trial space with a single random trial vector
+        !
+        real(rp), intent(out), target :: trial_space(:, :)
+        integer(ip), intent(out) :: error
+
+        error = 0
+        call random_number(trial_space(:, 1))
+
+    end subroutine default_init_trial_space
+
+    function weinstein_conv_check(residual, eigval, error) result(converged)
+        !
+        ! this function checks whether the Weinstein bound is satisfied
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: eigval
+        integer(ip), intent(out) :: error
+        logical :: converged
+
+        real(rp), external :: dnrm2
+
+        error = 0
+        converged = eigval < stability_thresh .or. &
+                    dnrm2(size(residual), residual, 1_ip) < eigval - stability_thresh
+
+    end function weinstein_conv_check
 
     subroutine init_solver_settings(self, error)
         !
@@ -3249,8 +3382,23 @@ contains
         ! convert strings to lowercase
         settings%diag_solver = string_to_lowercase(settings%diag_solver)
 
+        ! check whether initial trial space function is passed
+        if (associated(settings%init_trial_space)) then
+            if (settings%n_trial_vectors <= 0) then
+                call settings%log("Number of trial vectors should be larger than "// &
+                                  "zero when trial space initialization function "// &
+                                  "is passed.", verbosity_error, .true.)
+                error = 1
+                return
+            end if
+        else if (settings%n_trial_vectors > 0) then
+            call settings%log("Number of trial vectors is only used when trial "// &
+                              "space initialization function is passed, otherwise "// &
+                              "initial trial space is given by lowest Hessian "// &
+                              "diagonal direction and the set number of random "// &
+                              "trial vectors.", verbosity_warning, .false.)
         ! check that number of random trial vectors is below number of parameters
-        if (settings%n_random_trial_vectors > n_param/2) then
+        else if (settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
             write (msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
                 settings%n_random_trial_vectors, "."

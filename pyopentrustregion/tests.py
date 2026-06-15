@@ -108,6 +108,7 @@ fortran_tests = {
         "bisection_ah",
         "bisection_mu",
         "bracket",
+        "default_init_trial_space",
         "extend_matrix",
         "general_mat_diag",
         "general_mat_min_eig",
@@ -125,6 +126,7 @@ fortran_tests = {
         "print_message",
         "minres",
         "newton_step",
+        "orthogonalize_trial_vectors",
         "orthogonal_projection",
         "print_results",
         "solver",
@@ -137,6 +139,7 @@ fortran_tests = {
         "symm_mat_diag",
         "symm_mat_min_eig",
         "truncated_conjugate_gradient",
+        "weinstein_conv_check",
     ],
     "c_interface_tests": [
         "approx_hess_x_f_wrapper",
@@ -147,9 +150,11 @@ fortran_tests = {
         "character_from_c",
         "character_to_c",
         "conv_check_f_wrapper",
+        "conv_check_stability_f_wrapper",
         "hess_x_f_wrapper",
         "init_solver_settings_c",
         "init_stability_settings_c",
+        "init_trial_space_f_wrapper",
         "logger_f_wrapper",
         "modify_step_f_wrapper",
         "obj_func_f_wrapper",
@@ -187,8 +192,14 @@ def add_tests(cls):
     return cls
 
 
+# tolerance
+tol = c_real.in_dll(lib, "test_tol").value
+
 # number of parameters
 n_param = c_int.in_dll(lib, "test_n_param").value
+
+# number of trial vectors
+n_trial_vectors = c_int.in_dll(lib, "test_n_trial_vectors").value
 
 
 @add_tests
@@ -280,7 +291,15 @@ class PyInterfaceTests(unittest.TestCase):
         for field_info in settings.c_struct._fields_:
             field_name, field_type = field_info[:2]
             if field_type == c_void_p:
-                setattr(settings, field_name, getattr(self, "mock_" + field_name))
+                if isinstance(settings, StabilitySettings):
+                    attr = getattr(
+                        self,
+                        "mock_" + field_name + "_stability",
+                        getattr(self, "mock_" + field_name),
+                    )
+                else:
+                    attr = getattr(self, "mock_" + field_name)
+                setattr(settings, field_name, attr)
             elif field_name == "initialized":
                 continue
             elif issubclass(field_type, Structure):
@@ -370,6 +389,19 @@ class PyInterfaceTests(unittest.TestCase):
 
     mock_approx_hess_x = mock_hess_x
     mock_stability_hess_x = mock_hess_x
+
+    def mock_init_trial_space(self, trial_space):
+        """
+        this function is a mock function for the trial space initialization function
+        """
+        trial_space[:] = np.arange(1, len(trial_space) + 1).reshape(-1, 1)
+
+    def mock_conv_check_stability(self, residual, eigval):
+        """
+        this function is a mock function for the stability check convergence check
+        function
+        """
+        return abs(np.sum(residual) - eigval) < tol
 
     def mock_logger(self, message):
         """
