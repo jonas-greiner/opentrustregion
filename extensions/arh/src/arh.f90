@@ -531,7 +531,6 @@ module otr_arh
         ! this function computes the response contribution to the ARH Hessian for the 
         ! closed-shell case
         !
-        use opentrustregion, only: numerical_zero
         use otr_oao, only: project
 
         real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
@@ -649,7 +648,6 @@ module otr_arh
         ! this function computes the response contribution to the ARH Hessian for the 
         ! open-shell case
         !
-        use opentrustregion, only: numerical_zero
         use otr_oao, only: project
 
         real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
