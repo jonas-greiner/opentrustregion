@@ -259,8 +259,8 @@ class QNPyInterfaceTests(unittest.TestCase):
         # check if deconstructor was called correctly
         if not c_bool.in_dll(lib, "test_update_orbs_qn_deconstructor_interface").value:
             print(
-                " test_update_orbs_qn_deconstructor_py_interface failed: Called "
-                "logging deconstructor wrong."
+                " test_update_orbs_qn_deconstructor_py_interface failed: Deconstructor "
+                "called wrong."
             )
             test_passed = False
 

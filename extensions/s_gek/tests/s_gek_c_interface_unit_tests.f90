@@ -277,8 +277,11 @@ contains
         ! call S-GEK orbital updating deconstructor C wrapper
         call update_orbs_s_gek_deconstructor_c_wrapper()
 
-        ! check if test has passed
-        test_update_orbs_s_gek_deconstructor_c_wrapper = test_passed
+        if (.not. test_passed) then
+            test_update_orbs_s_gek_deconstructor_c_wrapper = .false.
+            write(stderr, *) "test_update_orbs_s_gek_deconstructor_c_wrapper "// &
+                "failed: Deconstructor called wrong."
+        end if
 
     end function test_update_orbs_s_gek_deconstructor_c_wrapper
 

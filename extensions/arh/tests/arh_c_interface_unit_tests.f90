@@ -104,9 +104,6 @@ contains
                                         update_orbs_arh_c_funptr, &
                                         project_arh_c_funptr, settings_c)
 
-        ! deallocate 2D density matrix
-        deallocate(dm_ao_2d_c)
-
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
             test_arh_factory_c_wrapper = .false.
@@ -131,6 +128,14 @@ contains
             test_update_orbs_c_funptr(update_orbs_arh_c_funptr, &
                                       "arh_factory_c_wrapper", &
                                       " by returned orbital updating function")
+
+        ! check if density matrix was updated
+        if (any(abs(dm_ao_2d_c - 2.0_c_rp) > tol)) then
+            test_passed = .false.
+            write(stderr, *) "test_arh_factory_c_wrapper failed: Density matrix "// &
+                "not updated correctly by returned orbital updating function."
+        end if
+        deallocate(dm_ao_2d_c)
 
         ! test returned projection function
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
@@ -261,6 +266,37 @@ contains
         end if
 
     end function test_init_arh_settings_c
+
+    logical(c_bool) function test_arh_deconstructor_c_wrapper() bind(C)
+        !
+        ! this function tests the C wrapper for the ARH deconstructor
+        !
+        use otr_arh_c_interface, only: arh_deconstructor, arh_deconstructor_c_wrapper
+        use otr_arh_mock, only: mock_arh_deconstructor, test_passed
+
+        ! assume tests pass
+        test_arh_deconstructor_c_wrapper = .true.
+
+        ! inject mock functions
+        arh_deconstructor => mock_arh_deconstructor
+
+        ! initialize test logical
+        test_passed = .false.
+
+        ! call ARH orbital updating deconstructor C wrapper
+        call arh_deconstructor_c_wrapper()
+
+        ! check if test has passed
+        test_arh_deconstructor_c_wrapper = test_passed
+
+        ! check if test has passed
+        if (.not. test_passed) then
+            test_arh_deconstructor_c_wrapper = .false.
+            write(stderr, *) "test_arh_deconstructor_c_wrapper failed: "// &
+                "Deconstructor called wrong."
+        end if
+
+    end function test_arh_deconstructor_c_wrapper
 
     logical(c_bool) function test_assign_arh_f_c() bind(C)
         !

@@ -558,7 +558,7 @@ The routine `arh_factory` constructs and returns ARH versions of energy, orbital
 
 #### Required Arguments
 
-- **`dm_ao`** (real array): Represents the starting AO density matrix with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations.
+- **`dm_ao`** (real array): Represents the starting AO density matrix and is updated throughout the calculation with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations.
 - **`ao_overlap`** (real array): Represents the AO overlap matrix with dimension (`n_ao`, `n_ao`).
 - **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell)
 - **`n_ao`** (integer): Specifies the number of AOs.
@@ -596,7 +596,8 @@ procedure(obj_func_type), pointer :: obj_func_arh_funptr
 procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
 procedure(precond_type), pointer :: precond_arh_funptr
 integer(ip) :: n_particle, n_ao, n_param, error
-real(rp), allocatable :: dm_ao(:, :), ao_overlap(:, :)
+real(rp), allocatable, target :: dm_ao(:, :)
+real(rp), allocatable :: ao_overlap(:, :)
 
 ! set callback function pointers to existing implementations
 get_energy_funptr => get_energy
@@ -627,8 +628,8 @@ n_param = n_ao * (n_ao - 1) / 2
 ! call solver
 call solver(obj_func_arh_funptr, update_orbs_arh_funptr, n_param, error, settings)
 
-! deallocate ARH objects and get final density matrix
-call arh_deconstructor(dm_ao, error)
+! deallocate ARH objects
+call arh_deconstructor()
 ```
 
 ---
@@ -681,8 +682,8 @@ n_param = n_ao * (n_ao - 1) / 2
 // call solver
 error = solver(obj_func_arh_funptr, update_orbs_arh_funptr, n_param, settings);
 
-// deallocate ARH objects and get final density matrix
-error = arh_deconstructor(dm_ao);
+// deallocate ARH objects
+arh_deconstructor();
 ```
 
 ---
@@ -722,8 +723,8 @@ n_param = n_ao * (n_ao - 1) / 2
 # call solver
 solver(obj_func_arh, update_orbs_arh, n_param, settings)
 
-# deallocate ARH objects and get final density matrix
-arh_deconstructor(dm_ao)
+# deallocate ARH objects
+arh_deconstructor()
 ```
 
 ---

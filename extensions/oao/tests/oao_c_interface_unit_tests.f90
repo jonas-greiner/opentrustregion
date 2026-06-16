@@ -135,6 +135,26 @@ contains
 
     end function mock_get_response_3d
 
+    function mock_update_orbs_oao(kappa, func, grad, h_diag, hess_x_c_funptr) &
+        result(error) bind(C)
+        !
+        ! this subroutine is a test subroutine for the orbital update C function
+        !
+        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
+        use otr_oao_c_interface, only: dm_ao_3d_c
+
+        real(c_rp), intent(in), target :: kappa(*)
+        real(c_rp), intent(out) :: func
+        real(c_rp), intent(out), target :: grad(*), h_diag(*)
+        type(c_funptr), intent(out) :: hess_x_c_funptr
+        integer(c_ip) :: error
+
+        error = mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr)
+
+        dm_ao_3d_c = 2.0_rp
+
+    end function mock_update_orbs_oao
+
     logical(c_bool) function test_oao_factory_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the OAO factory
@@ -189,9 +209,6 @@ contains
                                         update_orbs_oao_c_funptr, &
                                         project_oao_c_funptr, settings_c)
 
-        ! deallocate 2D density matrix
-        deallocate(dm_ao_2d_c)
-
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
             test_oao_factory_c_wrapper = .false.
@@ -216,6 +233,14 @@ contains
             test_update_orbs_c_funptr(update_orbs_oao_c_funptr, &
                                       "oao_factory_c_wrapper", &
                                       " by returned orbital updating function")
+
+        ! check if density matrix was updated
+        if (any(abs(dm_ao_2d_c - 2.0_c_rp) > tol)) then
+            test_passed = .false.
+            write(stderr, *) "test_oao_factory_c_wrapper failed: Density matrix "// &
+                "not updated correctly by returned orbital updating function."
+        end if
+        deallocate(dm_ao_2d_c)
 
         ! test returned projection function
         test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. &
@@ -495,68 +520,30 @@ contains
         !
         ! this function tests the C wrapper for the OAO deconstructor
         !
-        use otr_oao_c_interface, only: oao_deconstructor_closed_shell, &
-                                       oao_deconstructor_open_shell, &
-                                       oao_deconstructor_c_wrapper, &
-                                       n_particle_global => n_particle, &
-                                       n_ao_global => n_ao
-        use otr_oao_mock, only: mock_oao_deconstructor_closed_shell, &
-                                mock_oao_deconstructor_open_shell
-
-        real(c_rp), allocatable :: dm_ao_2d_c(:, :), dm_ao_3d_c(:, :, :)
-        integer(c_ip) :: error_c
+        use otr_oao_c_interface, only: oao_deconstructor, oao_deconstructor_c_wrapper
+        use otr_oao_mock, only: mock_oao_deconstructor, test_passed
 
         ! assume tests pass
         test_oao_deconstructor_c_wrapper = .true.
 
-        ! set global number of particles and AOs for assumed size arrays
-        n_particle_global = 1
-        n_ao_global = n_ao
-
         ! inject mock functions
-        oao_deconstructor_closed_shell => mock_oao_deconstructor_closed_shell
-        oao_deconstructor_open_shell => mock_oao_deconstructor_open_shell
+        oao_deconstructor => mock_oao_deconstructor
 
-        ! allocate 2D density matrix
-        allocate(dm_ao_2d_c(n_ao, n_ao))
-
-        ! call OAO orbital updating deconstructor C wrapper
-        error_c = oao_deconstructor_c_wrapper(dm_ao_2d_c)
-
-        ! check if error is as expected
-        if (error_c /= 0) then
-            test_oao_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_oao_deconstructor_c_wrapper failed: Returned error."
-        end if
-
-        ! check if 2D density matrix is as expected
-        if (any(abs(dm_ao_2d_c - 1.0_c_rp) > tol_c)) then
-            test_oao_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_oao_deconstructor_c_wrapper failed: Returned AO "// &
-                "density matrix for closed-shell case wrong."
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao_2d_c)
-
-        ! set global number of particles
-        n_particle_global = n_particle
-
-        ! allocate 3D density matrix
-        allocate(dm_ao_3d_c(n_ao, n_ao, n_particle))
+        ! initialize test logical
+        test_passed = .false.
 
         ! call OAO orbital updating deconstructor C wrapper
-        error_c = oao_deconstructor_c_wrapper(dm_ao_3d_c)
+        call oao_deconstructor_c_wrapper()
 
-        ! check if 3D density matrix is as expected
-        if (any(abs(dm_ao_3d_c - 1.0_c_rp) > tol_c)) then
+        ! check if test has passed
+        test_oao_deconstructor_c_wrapper = test_passed
+
+        ! check if test has passed
+        if (.not. test_passed) then
             test_oao_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_oao_deconstructor_c_wrapper failed: Returned AO "// &
-                "density matrix for open-shell case wrong."
+            write(stderr, *) "test_oao_deconstructor_c_wrapper failed: "// &
+                "Deconstructor called wrong."
         end if
-
-        ! deallocate arrays
-        deallocate(dm_ao_3d_c)
 
     end function test_oao_deconstructor_c_wrapper
 

@@ -12,6 +12,7 @@ module otr_arh_c_interface
     use otr_oao_c_interface, only: n_particle, n_ao
     use otr_arh, only: standard_arh_factory_closed_shell => arh_factory_closed_shell, &
                        standard_arh_factory_open_shell => arh_factory_open_shell, &
+                       standard_arh_deconstructor => arh_deconstructor, &
                        update_dm_jk_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
                                            c_funloc, c_f_procpointer, c_associated, &
@@ -50,6 +51,8 @@ module otr_arh_c_interface
         => standard_arh_factory_closed_shell
     procedure(standard_arh_factory_open_shell), pointer :: arh_factory_open_shell &
         => standard_arh_factory_open_shell
+    procedure(standard_arh_deconstructor), pointer :: arh_deconstructor => &
+        standard_arh_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_dm_jk_type), pointer :: update_dm_jk_f_wrapper_ptr => &
@@ -79,7 +82,7 @@ contains
         use otr_arh, only: arh_settings_type
         use otr_oao, only: get_energy_2d_type, get_energy_3d_type, update_dm_2d_type, &
                            obj_func_type
-        use otr_oao_c_interface, only: get_energy_before_wrapping, &
+        use otr_oao_c_interface, only: dm_ao_3d_c, get_energy_before_wrapping, &
                                        update_dm_before_wrapping, &
                                        get_energy_2d_f_wrapper, &
                                        update_dm_2d_f_wrapper, &
@@ -124,6 +127,7 @@ contains
             end if
             call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
         else
+            call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, [n_ao, n_ao, n_particle])
             if (n_particle == 1) then
                 allocate(dm_ao_2d(n_ao, n_ao))
                 dm_ao_2d = reshape(real(dm_ao_c(:n_ao_c ** 2), kind=rp), [n_ao, n_ao])
@@ -254,6 +258,8 @@ contains
         ! variables to C variables
         !
         use otr_common_c_interface, only: update_orbs_c_wrapper_impl
+        use otr_oao_c_interface, only: dm_ao_3d_c
+        use otr_oao, only: oao_object
 
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
@@ -265,6 +271,8 @@ contains
                                              hess_x_arh_before_wrapping, &
                                              hess_x_arh_c_wrapper, kappa_c, func_c, &
                                              grad_c, h_diag_c, hess_x_c_funptr)
+
+        if (rp /= c_rp) dm_ao_3d_c = real(oao_object%dm_ao, kind=c_rp)
 
     end function update_orbs_arh_c_wrapper
 
@@ -294,6 +302,14 @@ contains
         settings_c = default_arh_settings
 
     end subroutine init_arh_settings_c
+
+    subroutine arh_deconstructor_c_wrapper() bind(C, name="arh_deconstructor")
+        !
+        ! this subroutine deallocates the ARH objects
+        !
+        call arh_deconstructor()
+
+    end subroutine arh_deconstructor_c_wrapper
 
     subroutine assign_arh_f_c(settings, settings_c)
         !

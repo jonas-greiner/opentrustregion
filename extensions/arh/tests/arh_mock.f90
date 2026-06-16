@@ -7,7 +7,8 @@
 module otr_arh_mock
 
     use opentrustregion, only: rp, ip, stderr
-    use otr_arh, only: arh_factory_closed_shell, arh_factory_open_shell
+    use otr_arh, only: arh_factory_closed_shell, arh_factory_open_shell, &
+                       arh_deconstructor
     use test_reference, only: tol
     use otr_arh_test_reference, only: ref_arh_settings
 
@@ -20,6 +21,8 @@ module otr_arh_mock
         => mock_arh_factory_closed_shell
     procedure(arh_factory_open_shell), pointer :: mock_arh_factory_open_shell_ptr => &
         mock_arh_factory_open_shell
+    procedure(arh_deconstructor), pointer :: mock_arh_deconstructor_ptr => &
+        mock_arh_deconstructor
 
 contains
 
@@ -38,10 +41,11 @@ contains
         use otr_arh, only: arh_settings_type
         use otr_oao_test_reference, only: test_get_energy_2d_funptr, &
                                           test_update_dm_2d_funptr, operator(/=)
-        use otr_oao_mock, only: mock_obj_func_oao, mock_project_oao
-        use otr_common_mock, only: mock_update_orbs
+        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
+                                dm_ao_3d
 
-        real(rp), intent(in) :: dm_ao(:, :), ao_overlap(:, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_2d_type), intent(in), pointer :: &
             get_energy_funptr
@@ -112,6 +116,7 @@ contains
         obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
         project_arh_funptr => mock_project_oao
+        dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
 
     end subroutine mock_arh_factory_closed_shell
 
@@ -130,10 +135,11 @@ contains
         use otr_arh, only: update_dm_jk_type, arh_settings_type
         use otr_oao_test_reference, only: test_get_energy_3d_funptr, operator(/=)
         use otr_arh_test_reference, only: test_update_dm_jk_funptr
-        use otr_oao_mock, only: mock_obj_func_oao, mock_project_oao
-        use otr_common_mock, only: mock_update_orbs
+        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
+                                dm_ao_3d
 
-        real(rp), intent(in) :: dm_ao(:, :, :), ao_overlap(:, :)
+        real(rp), intent(inout), target :: dm_ao(:, :, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy_funptr
         procedure(update_dm_jk_type), intent(in), pointer :: update_dm_jk_funptr
@@ -204,7 +210,16 @@ contains
         obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
         project_arh_funptr => mock_project_oao
+        dm_ao_3d => dm_ao
 
     end subroutine mock_arh_factory_open_shell
+
+    subroutine mock_arh_deconstructor()
+        !
+        ! this subroutine is a test function for the ARH deconstructor
+        !
+        test_passed = .true.
+
+    end subroutine mock_arh_deconstructor
 
 end module otr_arh_mock

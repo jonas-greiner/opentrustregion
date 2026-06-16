@@ -77,6 +77,11 @@ c_int arh_factory(
     arh_settings_type *settings_c
 );
 
+/**
+ * Fortran-callable ARH deconstructor.
+ */
+void arh_deconstructor();
+
 #ifdef __cplusplus
 }
 #endif

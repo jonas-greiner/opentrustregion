@@ -26,7 +26,7 @@ from pyopentrustregion.tests import (
     PyInterfaceTests,
 )
 from pyopentrustregion.python_interface import c_real, c_int
-from pyopentrustregion.extensions.arh import ARHSettings, arh_factory
+from pyopentrustregion.extensions.arh import ARHSettings, arh_factory, arh_deconstructor
 from pyopentrustregion.extensions.oao.tests import n_ao, OAOPyInterfaceTests
 
 if NUMPY_AVAILABLE:
@@ -40,6 +40,7 @@ fortran_tests = {
         "get_response_contribution_open_shell",
     ],
     "arh_c_interface_tests": [
+        "arh_deconstructor_c_wrapper",
         "arh_factory_c_wrapper",
         "assign_arh_c_f",
         "assign_arh_f_c",
@@ -221,6 +222,14 @@ class ARHPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        # check if density matrix was updated
+        if not np.allclose(dm_ao, np.full(2 * (n_ao,), 2.0, dtype=np.float64)):
+            print(
+                " test_arh_factory_py_interface failed: Density matrix not updated "
+                "correctly."
+            )
+            test_passed = False
+
         # check results
         if func != 3.0:
             print(
@@ -304,6 +313,32 @@ class ARHPyInterfaceTests(unittest.TestCase):
             "test_arh_factory_py_interface failed",
         )
         print(" test_arh_factory_py_interface PASSED")
+
+    # replace original library with mock library
+    @patch(
+        "pyopentrustregion.python_interface.lib.arh_deconstructor",
+        lib.mock_arh_deconstructor,
+    )
+    def test_arh_deconstructor_py_interface(self):
+        """
+        this function tests the ARH deconstructor python interface
+        """
+        # initialize test flag
+        test_passed = True
+
+        # call ARH deconstructor python interface
+        arh_deconstructor()
+
+        # check if deconstructor was called correctly
+        if not c_bool.in_dll(lib, "test_arh_deconstructor_interface").value:
+            print(
+                " test_arh_deconstructor_py_interface failed: Deconstructor called "
+                "wrong."
+            )
+            test_passed = False
+
+        self.assertTrue(test_passed, "test_arh_deconstructor_py_interface failed")
+        print(" test_arh_deconstructor_py_interface PASSED")
 
     @patch.object(ARHSettings, "init_c_struct", lib.mock_init_arh_settings)
     def test_arh_settings(self):

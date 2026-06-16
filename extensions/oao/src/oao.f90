@@ -90,8 +90,9 @@ module otr_oao
     type :: oao_type
         type(oao_settings_type) :: settings
         integer(ip) :: n_ao, n_param, n_particle
-        real(rp), allocatable :: dm_ao(:, :, :), s_sqrt(:, :), s_inv_sqrt(:, :), &
-                                 dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
+        real(rp), pointer :: dm_ao(:, :, :)
+        real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
+                                 fock_oo(:, :, :), fock_vv(:, :, :)
         procedure(get_energy_3d_type), pointer, nopass :: get_energy => null()
         procedure(update_dm_3d_type), pointer, nopass :: update_dm => null()
         procedure(get_response_3d_type), pointer, nopass :: get_response => null()
@@ -109,11 +110,6 @@ module otr_oao
     procedure(hess_x_type), pointer :: hess_x_oao_ptr => hess_x_oao
     procedure(project_type), pointer :: project_oao_ptr => project_oao
 
-    ! define module procedures for different spin cases
-    interface oao_deconstructor
-        module procedure oao_deconstructor_closed_shell, oao_deconstructor_open_shell
-    end interface oao_deconstructor
-
     contains
 
     subroutine oao_factory_closed_shell(dm_ao, ao_overlap, n_particle, n_ao, &
@@ -124,7 +120,8 @@ module otr_oao
         ! this function returns a modified OAO orbital updating function for the 
         ! closed-shell case
         !
-        real(rp), intent(in) :: dm_ao(:, :), ao_overlap(:, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_2d_type), intent(in), pointer :: get_energy
         procedure(update_dm_2d_type), intent(in), pointer :: update_dm
@@ -134,12 +131,16 @@ module otr_oao
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
+        real(rp), pointer :: dm_ao_3d(:, :, :)
+
         ! initialize error flag
         error = 0
 
         ! call common setup
-        call oao_factory_common(reshape(dm_ao, [n_ao, n_ao, 1]), ao_overlap, &
-                                n_particle, n_ao, error, settings)
+        dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
+        call oao_factory_common(dm_ao_3d, ao_overlap, n_particle, n_ao, error, settings)
+        if (error /= 0) return
+        nullify(dm_ao_3d)
 
         ! set pointers to functions
         oao_object%get_energy_2d => get_energy
@@ -160,7 +161,8 @@ module otr_oao
         ! this function returns a modified OAO orbital updating function for the 
         ! open-shell case
         !
-        real(rp), intent(in) :: dm_ao(:, :, :), ao_overlap(:, :)
+        real(rp), intent(inout), target :: dm_ao(:, :, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy
         procedure(update_dm_3d_type), intent(in), pointer :: update_dm
@@ -175,6 +177,7 @@ module otr_oao
 
         ! call common setup
         call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
+        if (error /= 0) return
 
         ! set pointers to functions
         oao_object%get_energy => get_energy
@@ -191,7 +194,8 @@ module otr_oao
         !
         ! this function performs common OAO initialization operations
         !
-        real(rp), intent(in) :: dm_ao(:, :, :), ao_overlap(:, :)
+        real(rp), intent(in), target :: dm_ao(:, :, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
         class(oao_settings_type), intent(inout) :: settings
@@ -217,7 +221,7 @@ module otr_oao
                                     (oao_object%n_particle /= n_particle .or. &
                                      oao_object%n_ao /= n_ao))) then
             ! deallocate arrays if they are already allocated
-            if (allocated(oao_object%dm_ao)) deallocate(oao_object%dm_ao)
+            oao_object%dm_ao => dm_ao
             if (allocated(oao_object%s_sqrt)) deallocate(oao_object%s_sqrt)
             if (allocated(oao_object%s_inv_sqrt)) deallocate(oao_object%s_inv_sqrt)
             if (allocated(oao_object%dm_oao)) deallocate(oao_object%dm_oao)
@@ -231,7 +235,7 @@ module otr_oao
             oao_object%n_ao = n_ao
             
             ! starting density matrix
-            oao_object%dm_ao = dm_ao
+            oao_object%dm_ao => dm_ao
 
             ! get square root and inverse square root of AO overlap matrix
             call compute_sqrt_and_inv_sqrt(ao_overlap, oao_object%s_sqrt, &
@@ -506,63 +510,13 @@ module otr_oao
 
     end subroutine init_oao_settings
 
-    subroutine oao_deconstructor_closed_shell(dm_ao, error)
+    subroutine oao_deconstructor()
         !
-        ! this subroutine deallocates the OAO objects for the closed-shell case
+        ! this subroutine deallocates the OAO objects
         !
-        use opentrustregion, only: verbosity_error
+        if (allocated(oao_object)) deallocate(oao_object)
 
-        real(rp), intent(out) :: dm_ao(:, :)
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! get final density matrix in AO basis
-        if (.not. allocated(oao_object%dm_ao)) then
-            call oao_object%settings%log("AO density matrix is not allocated. The "// &
-                                         "OAO deconstructor should only be run "// &
-                                         "after both the OAO factory and the OTR "// &
-                                         "solver have been called.", verbosity_error, &
-                                         .true.)
-            error = 1
-            return
-        end if
-        dm_ao = oao_object%dm_ao(:, :, 1)
-
-        ! deallocate object and all of its arrays
-        deallocate(oao_object)
-
-    end subroutine oao_deconstructor_closed_shell
-
-    subroutine oao_deconstructor_open_shell(dm_ao, error)
-        !
-        ! this subroutine deallocates the OAO objects for the open-shell case
-        !
-        use opentrustregion, only: verbosity_error
-
-        real(rp), intent(out) :: dm_ao(:, :, :)
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! get final density matrix in AO basis
-        if (.not. allocated(oao_object%dm_ao)) then
-            call oao_object%settings%log("AO density matrix is not allocated. The "// &
-                                         "OAO deconstructor should only be run "// &
-                                         "after both the OAO factory and the OTR "// &
-                                         "solver have been called.", verbosity_error, &
-                                         .true.)
-            error = 1
-            return
-        end if
-        dm_ao = oao_object%dm_ao
-
-        ! deallocate all allocated arrays
-        deallocate(oao_object)
-
-    end subroutine oao_deconstructor_open_shell
+    end subroutine oao_deconstructor
 
     subroutine rotate_dm_ao(kappa, n_particle, n_ao, restricted, rot_dm_ao, error, &
                             rot_dm_oao)

@@ -290,3 +290,20 @@ def arh_factory(
         ),
         ProjectPyInterface(project_funptr=project_arh_funptr),
     )
+
+
+def arh_deconstructor():
+    if not hasattr(lib, "arh_deconstructor"):
+        raise RuntimeError(
+            "Please reinstall the package with: "
+            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
+        )
+
+    # define result and argument types
+    lib.arh_deconstructor.restype = None
+    lib.arh_deconstructor.argtypes = []
+
+    # call Fortran function
+    lib.arh_deconstructor()
+
+    return

@@ -331,7 +331,7 @@ def oao_factory(
     )
 
 
-def oao_deconstructor(dm_ao: np.ndarray):
+def oao_deconstructor():
     if not hasattr(lib, "oao_deconstructor"):
         raise RuntimeError(
             "Please reinstall the package with: "
@@ -339,13 +339,10 @@ def oao_deconstructor(dm_ao: np.ndarray):
         )
 
     # define result and argument types
-    lib.oao_deconstructor.restype = c_int
-    lib.oao_deconstructor.argtypes = [POINTER((c_real))]
+    lib.oao_deconstructor.restype = None
+    lib.oao_deconstructor.argtypes = []
 
     # call Fortran function
-    error = lib.oao_deconstructor(dm_ao.ctypes.data_as(POINTER(c_real)))
-
-    if error:
-        raise RuntimeError("OpenTrustRegion OAO deconstructor produced error.")
+    lib.oao_deconstructor()
 
     return

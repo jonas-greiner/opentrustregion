@@ -89,7 +89,8 @@ module otr_arh
         use otr_oao, only: get_energy_2d_type, update_dm_2d_type, obj_func_oao, &
                            project_oao
 
-        real(rp), intent(in) :: dm_ao(:, :), ao_overlap(:, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_2d_type), intent(in), pointer :: get_energy
         procedure(update_dm_2d_type), intent(in), pointer :: update_dm
@@ -99,13 +100,16 @@ module otr_arh
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
 
+        real(rp), pointer :: dm_ao_3d(:, :, :)
+
         ! initialize error flag
         error = 0
 
         ! call common setup
-        call arh_factory_common(reshape(dm_ao, [n_ao, n_ao, 1]), ao_overlap, &
-                                n_particle, n_ao, error, settings)
+        dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
+        call arh_factory_common(dm_ao_3d, ao_overlap, n_particle, n_ao, error, settings)
         if (error /= 0) return
+        nullify(dm_ao_3d)
 
         ! set pointers to functions
         arh_object%get_energy_2d => get_energy
@@ -128,7 +132,8 @@ module otr_arh
         !
         use otr_oao, only: get_energy_3d_type, obj_func_oao, project_oao
 
-        real(rp), intent(in) :: dm_ao(:, :, :), ao_overlap(:, :)
+        real(rp), intent(inout), target :: dm_ao(:, :, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy
         procedure(update_dm_jk_type), intent(in), pointer :: update_dm_jk
@@ -522,6 +527,17 @@ module otr_arh
         end select
 
     end subroutine init_arh_settings
+
+    subroutine arh_deconstructor()
+        !
+        ! this subroutine deallocates the ARH objects
+        !
+        use otr_oao, only: oao_deconstructor
+
+        if (allocated(arh_object)) deallocate(arh_object)
+        call oao_deconstructor()
+
+    end subroutine arh_deconstructor
 
     function get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
                                                     metric_eigvals, metric_eigvecs, &

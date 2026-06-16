@@ -12,12 +12,9 @@ module otr_oao_c_interface
                            hess_x_c_type, project_c_type
     use otr_oao, only: standard_oao_factory_closed_shell => oao_factory_closed_shell, &
                        standard_oao_factory_open_shell => oao_factory_open_shell, &
-                       standard_oao_deconstructor_closed_shell => &
-                       oao_deconstructor_closed_shell, &
-                       standard_oao_deconstructor_open_shell => &
-                       oao_deconstructor_open_shell, get_energy_2d_type, &
-                       get_energy_3d_type, update_dm_2d_type, update_dm_3d_type, &
-                       get_response_2d_type, get_response_3d_type
+                       standard_oao_deconstructor => oao_deconstructor, &
+                       get_energy_2d_type, get_energy_3d_type, update_dm_2d_type, &
+                       update_dm_3d_type, get_response_2d_type, get_response_3d_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
                                            c_funloc, c_f_procpointer, c_associated, &
                                            c_null_funptr
@@ -76,15 +73,14 @@ module otr_oao_c_interface
 
     ! global variables
     integer(ip) :: n_particle, n_ao
+    real(c_rp), pointer :: dm_ao_3d_c(:, :, :)
 
     procedure(standard_oao_factory_closed_shell), pointer :: oao_factory_closed_shell &
         => standard_oao_factory_closed_shell
-    procedure(standard_oao_factory_open_shell), pointer :: oao_factory_open_shell &
-        => standard_oao_factory_open_shell
-    procedure(standard_oao_deconstructor_closed_shell), pointer :: &
-        oao_deconstructor_closed_shell => standard_oao_deconstructor_closed_shell
-    procedure(standard_oao_deconstructor_open_shell), pointer :: &
-        oao_deconstructor_open_shell => standard_oao_deconstructor_open_shell
+    procedure(standard_oao_factory_open_shell), pointer :: oao_factory_open_shell => &
+        standard_oao_factory_open_shell
+    procedure(standard_oao_deconstructor), pointer :: oao_deconstructor => &
+        standard_oao_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
     procedure(get_energy_2d_type), pointer :: get_energy_2d_f_wrapper_ptr => &
@@ -163,6 +159,7 @@ contains
             end if
             call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
         else
+            call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, [n_ao, n_ao, n_particle])
             if (n_particle == 1) then
                 allocate(dm_ao_2d(n_ao, n_ao))
                 dm_ao_2d = reshape(real(dm_ao_c(:n_ao_c ** 2), kind=rp), [n_ao, n_ao])
@@ -434,6 +431,7 @@ contains
         ! variables to C variables
         !
         use otr_common_c_interface, only: update_orbs_c_wrapper_impl
+        use otr_oao, only: oao_object
 
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
@@ -445,6 +443,8 @@ contains
                                              hess_x_oao_before_wrapping, &
                                              hess_x_oao_c_wrapper, kappa_c, func_c, &
                                              grad_c, h_diag_c, hess_x_c_funptr)
+
+        if (rp /= c_rp) dm_ao_3d_c = real(oao_object%dm_ao, kind=c_rp)
 
     end function update_orbs_oao_c_wrapper
 
@@ -508,53 +508,13 @@ contains
 
     end subroutine init_oao_settings_c
 
-    function oao_deconstructor_c_wrapper(dm_ao_c) result(error_c) &
-        bind(C, name="oao_deconstructor")
+    subroutine oao_deconstructor_c_wrapper() bind(C, name="oao_deconstructor")
         !
         ! this subroutine deallocates the OAO objects
         !
-        real(c_rp), intent(out), target :: dm_ao_c(*)
-        integer(c_ip) :: error_c
+        call oao_deconstructor()
 
-        real(rp), pointer :: dm_ao_2d(:, :), dm_ao_3d(:, :, :)
-        integer(ip) :: error
-
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            if (n_particle == 1) then
-                call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_2d, [n_ao, n_ao])
-            else
-                call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d, [n_ao, n_ao, n_particle])
-            end if
-        else
-            if (n_particle == 1) then
-                allocate(dm_ao_2d(n_ao, n_ao))
-            else
-                allocate(dm_ao_3d(n_ao, n_ao, n_particle))
-            end if
-        end if
-
-        ! call deconstructor Fortran function
-        if (n_particle == 1) then
-            call oao_deconstructor_closed_shell(dm_ao_2d, error)
-        else
-            call oao_deconstructor_open_shell(dm_ao_3d, error)
-        end if
-
-        ! convert arguments to C kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            if (n_particle == 1) then
-                dm_ao_c(:n_ao ** 2) = reshape(real(dm_ao_2d, kind=c_rp), [n_ao ** 2])
-                deallocate(dm_ao_2d)
-            else
-                dm_ao_c(:(n_ao ** 2 * n_particle)) = &
-                    reshape(real(dm_ao_3d, kind=c_rp), [n_ao ** 2 * n_particle])
-                deallocate(dm_ao_3d)
-            end if
-        end if
-
-    end function oao_deconstructor_c_wrapper
+    end subroutine oao_deconstructor_c_wrapper
 
     subroutine assign_oao_f_c(settings, settings_c)
         !

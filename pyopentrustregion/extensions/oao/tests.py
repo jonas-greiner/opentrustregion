@@ -216,6 +216,14 @@ class OAOPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        # check if density matrix was updated
+        if not np.allclose(dm_ao, np.full(2 * (n_ao,), 2.0, dtype=np.float64)):
+            print(
+                " test_oao_factory_py_interface failed: Density matrix not updated "
+                "correctly."
+            )
+            test_passed = False
+
         # check results
         if func != 3.0:
             print(
@@ -300,76 +308,30 @@ class OAOPyInterfaceTests(unittest.TestCase):
         )
         print(" test_oao_factory_py_interface PASSED")
 
+    # replace original library with mock library
+    @patch(
+        "pyopentrustregion.python_interface.lib.oao_deconstructor",
+        lib.mock_oao_deconstructor,
+    )
     def test_oao_deconstructor_py_interface(self):
         """
         this function tests the OAO deconstructor python interface
         """
+        # initialize test flag
+        test_passed = True
 
-        @patch(
-            "pyopentrustregion.python_interface.lib.oao_deconstructor",
-            lib.mock_oao_deconstructor_2d,
-        )
-        def test_oao_deconstructor_py_interface_2d():
-            """
-            this function tests the OAO deconstructor python interface for 2D density
-            matrices
-            """
-            # initialize density matrix
-            dm_ao = np.empty(2 * (n_ao,), dtype=np.float64)
+        # call OAO deconstructor python interface
+        oao_deconstructor()
 
-            # call OAO deconstructor python interface
-            oao_deconstructor(dm_ao)
+        # check if deconstructor was called correctly
+        if not c_bool.in_dll(lib, "test_oao_deconstructor_interface").value:
+            print(
+                " test_oao_deconstructor_py_interface failed: Deconstructor called "
+                "wrong."
+            )
+            test_passed = False
 
-            # check results
-            if not np.allclose(dm_ao, np.full(2 * (n_ao,), 1.0, dtype=np.float64)):
-                print(
-                    " test_oao_deconstructor_py_interface failed: Returned AO density "
-                    "matrix wrong for 2D density matrices."
-                )
-                return False
-
-            return True
-
-        @patch(
-            "pyopentrustregion.python_interface.lib.oao_deconstructor",
-            lib.mock_oao_deconstructor_3d,
-        )
-        def test_oao_deconstructor_py_interface_3d():
-            """
-            this function tests the OAO deconstructor python interface for 3D density
-            matrices
-            """
-            # number of particles
-            n_particle = 2
-
-            # initialize density matrix
-            dm_ao = np.empty((n_particle, n_ao, n_ao), dtype=np.float64)
-
-            # call OAO deconstructor python interface
-            oao_deconstructor(dm_ao)
-
-            # check results
-            if not np.allclose(
-                dm_ao, np.full((n_particle, n_ao, n_ao), 1.0, dtype=np.float64)
-            ):
-                print(
-                    " test_oao_deconstructor_py_interface failed: Returned AO density "
-                    "matrix wrong for 3D density matrices."
-                )
-                return False
-
-            return True
-
-        # run test for 2D density matrices
-        test_passed_2d = test_oao_deconstructor_py_interface_2d()
-
-        # run test for 3D density matrices
-        test_passed_3d = test_oao_deconstructor_py_interface_3d()
-
-        self.assertTrue(
-            test_passed_2d and test_passed_3d,
-            "test_oao_deconstructor_py_interface failed",
-        )
+        self.assertTrue(test_passed, "test_oao_deconstructor_py_interface failed")
         print(" test_oao_deconstructor_py_interface PASSED")
 
     @patch.object(OAOSettings, "init_c_struct", lib.mock_init_oao_settings)

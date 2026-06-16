@@ -82,11 +82,8 @@ c_int oao_factory(
 
 /**
  * Fortran-callable OAO deconstructor.
- *
- * @param dm_ao_c    Flattened AO density matrix (size n_ao^2).
- * @return           Integer error code.
  */
-c_int oao_deconstructor(c_real* dm_ao_c);
+void oao_deconstructor();
 
 #ifdef __cplusplus
 }

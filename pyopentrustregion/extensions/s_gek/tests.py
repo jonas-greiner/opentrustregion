@@ -259,8 +259,8 @@ class SGEKPyInterfaceTests(unittest.TestCase):
             lib, "test_update_orbs_s_gek_deconstructor_interface"
         ).value:
             print(
-                " test_update_orbs_s_gek_deconstructor_py_interface failed: Called "
-                "logging deconstructor wrong."
+                " test_update_orbs_s_gek_deconstructor_py_interface failed: "
+                "Deconstructor called wrong."
             )
             test_passed = False
 

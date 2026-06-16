@@ -9,19 +9,23 @@ module otr_arh_c_interface_mock
     use opentrustregion, only: stderr
     use c_interface, only: c_rp, c_ip
     use otr_arh_test_reference, only: ref_arh_settings
-    use otr_arh_c_interface, only: arh_factory_c_wrapper, init_arh_settings_c
+    use otr_arh_c_interface, only: arh_factory_c_wrapper, init_arh_settings_c, &
+                                   arh_deconstructor_c_wrapper
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
-                                           c_funloc, c_null_char
+                                           c_funloc, c_null_char, c_f_pointer, c_loc
 
     implicit none
 
-    logical(c_bool), bind(C) :: test_arh_factory_interface = .true._c_bool
+    logical(c_bool), bind(C) :: test_arh_factory_interface = .true._c_bool, &
+                                test_arh_deconstructor_interface = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
     procedure(arh_factory_c_wrapper), pointer :: mock_arh_factory_c_wrapper_ptr => &
         mock_arh_factory_c_wrapper
     procedure(init_arh_settings_c), pointer :: mock_init_arh_settings_c_ptr => &
         mock_init_arh_settings_c
+     procedure(arh_deconstructor_c_wrapper), pointer :: &
+        mock_arh_deconstructor_c_wrapper_ptr => mock_arh_deconstructor_c_wrapper
 
 contains
 
@@ -38,13 +42,14 @@ contains
         use otr_arh_c_interface, only: arh_settings_type_c
         use c_interface, only: obj_func_c_type, update_orbs_c_type, project_c_type, &
                                logger_c_type
+        use otr_oao_c_interface, only: dm_ao_3d_c
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: test_get_energy_2d_c_funptr, &
                                           test_get_energy_3d_c_funptr, &
                                           test_update_dm_2d_c_funptr
         use otr_arh_test_reference, only: test_update_dm_jk_c_funptr, operator(/=)
-        use c_interface_unit_tests, only: mock_obj_func, mock_update_orbs, &
-                                          mock_project
+        use c_interface_unit_tests, only: mock_obj_func, mock_project
+        use otr_oao_c_interface_unit_tests, only: mock_update_orbs_oao
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
@@ -59,6 +64,10 @@ contains
         procedure(obj_func_c_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_c_type), pointer :: update_orbs_arh_funptr
         procedure(project_c_type), pointer :: project_arh_funptr
+
+        ! set global pointer to density matrix so that it can be accessed in the mock 
+        ! orbital updating function
+        call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, [n_ao_c, n_ao_c, n_particle_c])
 
         ! closed-shell case
         if (n_particle_c == 1) then
@@ -140,7 +149,7 @@ contains
 
         ! set function pointers to mock to ARH mock functions
         obj_func_arh_c_funptr = c_funloc(mock_obj_func)
-        update_orbs_arh_c_funptr = c_funloc(mock_update_orbs)
+        update_orbs_arh_c_funptr = c_funloc(mock_update_orbs_oao)
         project_arh_c_funptr = c_funloc(mock_project)
 
         ! set return arguments
@@ -163,5 +172,13 @@ contains
         settings = ref_arh_settings
 
     end subroutine mock_init_arh_settings_c
+
+    subroutine mock_arh_deconstructor_c_wrapper() bind(C, name="mock_arh_deconstructor")
+        !
+        ! this subroutine is a mock routine for the C ARH deconstructor subroutine
+        !
+        test_arh_deconstructor_interface = .true._c_bool
+
+    end subroutine mock_arh_deconstructor_c_wrapper
 
 end module otr_arh_c_interface_mock

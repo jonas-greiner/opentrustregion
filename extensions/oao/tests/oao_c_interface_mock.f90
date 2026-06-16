@@ -13,11 +13,12 @@ module otr_oao_c_interface_mock
     use otr_oao_test_reference, only: ref_oao_settings, n_particle, n_ao
     use test_reference, only: n_param
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
-                                           c_funloc, c_null_char
+                                           c_funloc, c_null_char, c_f_pointer, c_loc
 
     implicit none
 
-    logical(c_bool), bind(C) :: test_oao_factory_interface = .true._c_bool
+    logical(c_bool), bind(C) :: test_oao_factory_interface = .true._c_bool, &
+                                test_oao_deconstructor_interface = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
     procedure(oao_factory_c_wrapper), pointer :: mock_oao_factory_c_wrapper_ptr => &
@@ -25,9 +26,7 @@ module otr_oao_c_interface_mock
     procedure(init_oao_settings_c), pointer :: mock_init_oao_settings_c_ptr => &
         mock_init_oao_settings_c
     procedure(oao_deconstructor_c_wrapper), pointer :: &
-        mock_oao_deconstructor_2d_c_wrapper_ptr => &
-        mock_oao_deconstructor_2d_c_wrapper, &
-        mock_oao_deconstructor_3d_c_wrapper_ptr => mock_oao_deconstructor_3d_c_wrapper
+        mock_oao_deconstructor_c_wrapper_ptr => mock_oao_deconstructor_c_wrapper
 
 contains
 
@@ -44,12 +43,14 @@ contains
         use otr_oao_c_interface, only: oao_settings_type_c
         use c_interface, only: obj_func_c_type, update_orbs_c_type, project_c_type, &
                                logger_c_type
+        use otr_oao_c_interface, only: dm_ao_3d_c
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: test_get_energy_2d_c_funptr, &
                                           test_get_energy_3d_c_funptr, &
                                           test_update_dm_2d_c_funptr, &
                                           test_update_dm_3d_c_funptr, operator(/=)
-        use c_interface_unit_tests, only: mock_obj_func, mock_update_orbs, mock_project
+        use c_interface_unit_tests, only: mock_obj_func, mock_project
+        use otr_oao_c_interface_unit_tests, only: mock_update_orbs_oao
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
@@ -64,6 +65,10 @@ contains
         procedure(obj_func_c_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_c_type), pointer :: update_orbs_oao_funptr
         procedure(project_c_type), pointer :: project_oao_funptr
+
+        ! set global pointer to density matrix so that it can be accessed in the mock 
+        ! orbital updating function
+        call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, [n_ao_c, n_ao_c, n_particle_c])
 
         ! closed-shell case
         if (n_particle_c == 1) then
@@ -114,7 +119,7 @@ contains
 
             ! set function pointers to mock to OAO mock functions
             obj_func_oao_c_funptr = c_funloc(mock_obj_func)
-            update_orbs_oao_c_funptr = c_funloc(mock_update_orbs)
+            update_orbs_oao_c_funptr = c_funloc(mock_update_orbs_oao)
             project_oao_c_funptr = c_funloc(mock_project)
 
         ! open-shell case
@@ -169,36 +174,12 @@ contains
 
     end subroutine mock_init_oao_settings_c
 
-    function mock_oao_deconstructor_2d_c_wrapper(dm_ao_c) result(error_c) &
-        bind(C, name="mock_oao_deconstructor_2d")
+    subroutine mock_oao_deconstructor_c_wrapper() bind(C, name="mock_oao_deconstructor")
         !
-        ! this subroutine is a mock routine for the C OAO deconstructor subroutine for 
-        ! 2D density matrices
+        ! this subroutine is a mock routine for the C OAO deconstructor subroutine
         !
-        real(c_rp), intent(out), target :: dm_ao_c(*)
+        test_oao_deconstructor_interface = .true._c_bool
 
-        integer(c_ip) :: error_c
-
-        ! set return arguments
-        dm_ao_c(:n_ao ** 2) = 1.0_c_rp
-        error_c = 0
-
-    end function mock_oao_deconstructor_2d_c_wrapper
-
-    function mock_oao_deconstructor_3d_c_wrapper(dm_ao_c) result(error_c) &
-        bind(C, name="mock_oao_deconstructor_3d")
-        !
-        ! this subroutine is a mock routine for the C OAO deconstructor subroutine for 
-        ! 3D density matrices
-        !
-        real(c_rp), intent(out), target :: dm_ao_c(*)
-
-        integer(c_ip) :: error_c
-
-        ! set return arguments
-        dm_ao_c(:n_ao ** 2 * n_particle) = 1.0_c_rp
-        error_c = 0
-
-    end function mock_oao_deconstructor_3d_c_wrapper
+    end subroutine mock_oao_deconstructor_c_wrapper
 
 end module otr_oao_c_interface_mock
