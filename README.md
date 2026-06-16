@@ -310,12 +310,15 @@ The stability check can be fine-tuned using the following settings:
 
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for stability check using non-redundant parameters. When this is used, all other passed routines (`hess_x` and `precond`) must be self-projecting.
+- **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion based on the provided residual vector and current eigenvalue estimate. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`init_trial_space`** (subroutine): Returns an initial trial space which does not need to be orthonormalized or projected and is written in-place to the provided matrix. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`diag_solver`** (string): Specifies which diagonalization solver to use. Options include:
   - `"davidson"`: standard Davidson method,
   - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations.
 - **`conv_tol`** (real): Convergence criterion for the residual norm.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.
+- **`n_trial_vectors`** (integer): Number of trial vectors used to start the Davidson iterations using `init_trial_space` callback subroutine.
 - **`n_iter`** (integer): Maximum number of Davidson iterations.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
@@ -348,6 +351,7 @@ The library uses structured integer return codes to indicate whether a function 
 | `15`               | `conv_check`        |
 | `16`               | `project`           |
 | `17`               | `modify_step`       |
+| `18`               | `init_trial_step`   |
 
 ### Error Codes (`EE`)
 

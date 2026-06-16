@@ -70,6 +70,16 @@ typedef modify_step_fn* modify_step_fp;
 typedef c_int conv_check_fn(c_bool* converged);
 typedef conv_check_fn* conv_check_fp;
 
+/* Trial space initialization callback */
+typedef c_int init_trial_space_fn(c_real* trial_space);
+typedef init_trial_space_fn* init_trial_space_fp;
+
+/* Stability check convergence check callback */
+typedef c_int conv_check_stability_fn(
+    const c_real* residual, const c_real* eigval, c_bool* converged
+);
+typedef conv_check_stability_fn* conv_check_stability_fp;
+
 /* Logger callback */
 typedef void logger_fn(const char* message);
 typedef logger_fn* logger_fp;
@@ -116,6 +126,8 @@ void init_solver_settings(solver_settings_type* settings);
 typedef struct {
     precond_fp precond;
     hess_x_fp approx_hess_x;
+    init_trial_space_fp init_trial_space;
+    conv_check_stability_fp conv_check_stability;
     logger_fp logger;
 
     c_bool hess_symm;
@@ -124,6 +136,7 @@ typedef struct {
     c_real conv_tol;
 
     c_int n_random_trial_vectors;
+    c_int n_trial_vectors;
     c_int n_iter;
     c_int jacobi_davidson_start;
     c_int seed;
