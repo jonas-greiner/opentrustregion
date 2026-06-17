@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import sys
+import traceback
 import numpy as np
 from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, Structure
 from dataclasses import dataclass
@@ -98,6 +100,7 @@ class GetEnergyInterface:
         try:
             energy_ptr[0] = self.get_energy(dm_ao)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -132,6 +135,7 @@ class GetResponseInterface:
         try:
             self.get_response(dm_ao, response)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -168,6 +172,7 @@ class UpdateDMInterface:
         try:
             energy_ptr[0], get_response = self.update_dm(dm_ao, fock)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         # attach the response interface to the object so that it persists in Python

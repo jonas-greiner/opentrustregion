@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import sys
+import traceback
 import numpy as np
 from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure, byref
 from dataclasses import dataclass
@@ -162,6 +164,7 @@ class UpdateDMJKInterface:
                 dm_ao, fock, coulomb, exchange
             )
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         # attach the response interface to the object so that it persists in Python

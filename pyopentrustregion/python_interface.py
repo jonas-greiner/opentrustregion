@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 import numpy as np
 from importlib import resources
 from ctypes import (
@@ -130,6 +131,7 @@ class ObjFuncInterface:
         try:
             func_ptr[0] = self.obj_func(kappa)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -153,6 +155,7 @@ class HessXInterface:
         try:
             self.hess_x(x, hx)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -182,6 +185,7 @@ class UpdateOrbsInterface:
         try:
             func_ptr[0], hess_x = self.update_orbs(kappa, grad, h_diag)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         # attach the response interface to the object so that it persists in Python
@@ -213,6 +217,7 @@ class PrecondInterface:
         try:
             self.precond(residual, mu, precond_residual)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -235,6 +240,7 @@ class ProjectInterface:
         try:
             self.project(vector)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -257,6 +263,7 @@ class ModifyStepInterface:
         try:
             self.modify_step(kappa)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -275,6 +282,7 @@ class ConvCheckInterface:
         try:
             conv_ptr[0] = self.conv_check()
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -300,6 +308,7 @@ class InitTrialSpaceInterface:
         try:
             self.init_trial_space(trial_space)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -323,6 +332,7 @@ class ConvCheckStabilityInterface:
         try:
             conv_ptr[0] = self.conv_check(residual, eigval)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0

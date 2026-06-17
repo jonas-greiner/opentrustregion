@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import sys
+import traceback
 import numpy as np
 from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, Structure
 from dataclasses import dataclass
@@ -94,6 +96,7 @@ class ChangeReferenceInterface:
         try:
             self.change_reference(new_ref, kappa_list, local_grad_list, grad_list)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0

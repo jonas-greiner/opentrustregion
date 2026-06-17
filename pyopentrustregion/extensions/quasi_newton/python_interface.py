@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import sys
+import traceback
 import numpy as np
 from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, c_char, Structure
 from dataclasses import dataclass
@@ -87,6 +89,7 @@ class TransportInterface:
         try:
             self.transport(geodesic, tangent_vector)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
@@ -110,6 +113,7 @@ class InitHessInterface:
         try:
             self.init_hess(vector)
         except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
             return 1
 
         return 0
