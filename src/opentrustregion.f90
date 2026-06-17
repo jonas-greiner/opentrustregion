@@ -2363,9 +2363,8 @@ contains
             ! check if maximum number of iterations has been reached
             else if (iteration == max_iterations) then
                 call settings%log("MINRES: The iteration limit was reached.", &
-                                  verbosity_error, .true.)
-                error = 1
-                return
+                                  verbosity_warning)
+                exit
             ! these tests ensure convergence is still achieved when r_tol 
             ! approaches machine precision
             else if (vec_norm > 0.0_rp .and. a_norm > 0.0_rp .and. &
