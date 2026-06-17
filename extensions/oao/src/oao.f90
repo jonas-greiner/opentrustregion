@@ -342,7 +342,7 @@ module otr_oao
 
             ! rotate density matrix
             call rotate_dm_ao(kappa, n_particle, n_ao, oao_object%settings%restricted, &
-                            oao_object%dm_ao, error, oao_object%dm_oao)
+                              oao_object%dm_ao, error, oao_object%dm_oao)
             if (error /= 0) return
 
             ! get energy, Fock matrix, and response function

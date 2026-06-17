@@ -139,7 +139,7 @@ fortran_tests = {
         "symm_mat_diag",
         "symm_mat_min_eig",
         "truncated_conjugate_gradient",
-        "weinstein_conv_check",
+        "default_stability_conv_check",
     ],
     "c_interface_tests": [
         "approx_hess_x_f_wrapper",
