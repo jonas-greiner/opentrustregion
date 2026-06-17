@@ -42,7 +42,9 @@ module opentrustregion
                            precond_factor = 1e-1_rp, hess_symm_thres = 1e-12_rp, &
                            residual_norm_floor = 1e-12_rp, &
                            level_shift_local_thres = 1e-12_rp, &
-                           newton_eigval_thresh = -1e-5_rp, stability_thresh = -1e-2_rp
+                           newton_eigval_thresh = -1e-5_rp, &
+                           stability_thresh = -1e-2_rp, &
+                           stability_max_lower_contrib = 1e-2_rp
 
     ! define verbosity levels
     integer(ip), parameter :: verbosity_silent = 0, verbosity_error = 1, &
@@ -402,7 +404,8 @@ contains
                         stability_hess_x_funptr => hess_x_funptr
                     end if
                     if (.not. associated(settings%stability_settings%conv_check)) then
-                        settings%stability_settings%conv_check => weinstein_conv_check
+                        settings%stability_settings%conv_check => &
+                            default_stability_conv_check
                     end if
                     call stability_check(h_diag, stability_hess_x_funptr, stable, &
                                          error, settings%stability_settings, &
@@ -2000,13 +2003,14 @@ contains
         integer(ip), intent(out) :: error
 
         error = 0
-        call random_number(trial_space(:, 1))
+        call random_number(trial_space)
 
     end subroutine default_init_trial_space
 
-    function weinstein_conv_check(residual, eigval, error) result(converged)
+    function default_stability_conv_check(residual, eigval, error) result(converged)
         !
-        ! this function checks whether the Weinstein bound is satisfied
+        ! this function will return convergence once a certain maximum contribution by 
+        ! a hidden state is reached
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: eigval
@@ -2017,9 +2021,10 @@ contains
 
         error = 0
         converged = eigval < stability_thresh .or. &
-                    dnrm2(size(residual), residual, 1_ip) < eigval - stability_thresh
+                    dnrm2(size(residual), residual, 1_ip) < &
+                    stability_max_lower_contrib * (eigval - stability_thresh)
 
-    end function weinstein_conv_check
+    end function default_stability_conv_check
 
     subroutine init_solver_settings(self, error)
         !

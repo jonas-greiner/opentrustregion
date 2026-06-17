@@ -1935,61 +1935,65 @@ contains
 
     end function test_default_init_trial_space
 
-    logical(c_bool) function test_weinstein_conv_check() bind(C)
+    logical(c_bool) function test_default_stability_conv_check() bind(C)
         !
-        ! this function tests the Weinstein bound convergence check
+        ! this function tests the default stability convergence check
         !
-        use opentrustregion, only: weinstein_conv_check, stability_thresh
+        use opentrustregion, only: default_stability_conv_check, stability_thresh, &
+                                   stability_max_lower_contrib
 
         real(rp) :: residual(2), eigval
         integer(ip) :: error
         logical :: converged
 
         ! assume tests pass
-        test_weinstein_conv_check = .true.
+        test_default_stability_conv_check = .true.
 
         ! eigenvalue below stability threshold should converge regardless of residual
         eigval = stability_thresh - 0.1_rp
-        residual = [1.0_rp, 1.0_rp]
-        converged = weinstein_conv_check(residual, eigval, error)
+        residual = [1.0_rp, 1.0_rp] * stability_max_lower_contrib
+        converged = default_stability_conv_check(residual, eigval, error)
         if (error /= 0) then
-            write (stderr, *) "test_weinstein_conv_check failed: Produced error."
-            test_weinstein_conv_check = .false.
+            write (stderr, *) "test_default_stability_conv_check failed: Produced "// &
+                "error."
+            test_default_stability_conv_check = .false.
         end if
         if (.not. converged) then
-            write (stderr, *) "test_weinstein_conv_check failed: Should converge "// &
-                "for negative eigenvalue."
-            test_weinstein_conv_check = .false.
+            write (stderr, *) "test_default_stability_conv_check failed: Should "// &
+                "converge for negative eigenvalue."
+            test_default_stability_conv_check = .false.
         end if
 
-        ! eigenvalue above stability threshold, but Weinstein bound satisfied
+        ! eigenvalue above stability threshold, but bound satisfied
         eigval = stability_thresh + 1.0_rp
-        residual = [0.5_rp, 0.5_rp]
-        converged = weinstein_conv_check(residual, eigval, error)
+        residual = [0.5_rp, 0.5_rp] * stability_max_lower_contrib
+        converged = default_stability_conv_check(residual, eigval, error)
         if (error /= 0) then
-            write (stderr, *) "test_weinstein_conv_check failed: Produced error."
-            test_weinstein_conv_check = .false.
+            write (stderr, *) "test_default_stability_conv_check failed: Produced "// &
+                "error."
+            test_default_stability_conv_check = .false.
         end if
         if (.not. converged) then
-            write (stderr, *) "test_weinstein_conv_check failed: Should converge "// &
-                "when Weinstein bound is satisfied."
-            test_weinstein_conv_check = .false.
+            write (stderr, *) "test_default_stability_conv_check failed: Should "// &
+                "converge when bound is satisfied."
+            test_default_stability_conv_check = .false.
         end if
 
-        ! eigenvalue above stability threshold, and Weinstein bound not satisfied
-        residual = [1.0_rp, 1.0_rp]
-        converged = weinstein_conv_check(residual, eigval, error)
+        ! eigenvalue above stability threshold, and bound not satisfied
+        residual = [1.0_rp, 1.0_rp] * stability_max_lower_contrib
+        converged = default_stability_conv_check(residual, eigval, error)
         if (error /= 0) then
-            write (stderr, *) "test_weinstein_conv_check failed: Produced error."
-            test_weinstein_conv_check = .false.
+            write (stderr, *) "test_default_stability_conv_check failed: Produced "// &
+                "error."
+            test_default_stability_conv_check = .false.
         end if
         if (converged) then
-            write (stderr, *) "test_weinstein_conv_check failed: Should not "// &
-                "converge when Weinstein bound is not satisfied."
-            test_weinstein_conv_check = .false.
+            write (stderr, *) "test_default_stability_conv_check failed: Should "// &
+                "not converge when bound is not satisfied."
+            test_default_stability_conv_check = .false.
         end if
 
-    end function test_weinstein_conv_check
+    end function test_default_stability_conv_check
 
     logical(c_bool) function test_init_solver_settings() bind(C)
         !
