@@ -91,7 +91,7 @@ module otr_oao
         type(oao_settings_type) :: settings
         integer(ip) :: n_ao, n_param, n_particle
         real(rp) :: energy = 0.0_rp
-        real(rp), pointer :: dm_ao(:, :, :)
+        real(rp), pointer, contiguous :: dm_ao(:, :, :)
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
                                  fock_oo(:, :, :), fock_vv(:, :, :), grad(:), &
                                  h_diag(:)
@@ -327,6 +327,9 @@ module otr_oao
         integer(ip) :: n_ao, n_particle
         real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :)
         external :: dgemm
+
+        ! initialize error flag
+        error = 0
 
         ! check if orbitals are actually rotated
         if ((sum(abs(kappa)) > 0.0_rp) .or. &

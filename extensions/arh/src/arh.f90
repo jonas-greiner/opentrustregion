@@ -45,10 +45,10 @@ module otr_arh
     type :: arh_type
         type(arh_settings_type) :: settings
         integer(ip), pointer :: n_ao => null(), n_param => null(), n_particle => null()
-        real(rp), pointer :: dm_ao(:, :, :) => null(), s_inv_sqrt(:, :) => null(), &
-                             dm_oao(:, :, :) => null(), fock_oo(:, :, :) => null(), &
-                             fock_vv(:, :, :) => null(), energy => null(), &
-                             grad(:) => null(), h_diag(:) => null()
+        real(rp), pointer, contiguous :: dm_ao(:, :, :) => null()
+        real(rp), pointer :: s_inv_sqrt(:, :) => null(), dm_oao(:, :, :) => null(), &
+                             fock_oo(:, :, :) => null(), fock_vv(:, :, :) => null(), &
+                             energy => null(), grad(:) => null(), h_diag(:) => null()
         real(rp), allocatable :: fock_oao(:, :, :), same_v_oao(:, :, :), &
                                  opposite_v_oao(:, :, :), metric_eigvals(:, :), &
                                  metric_eigvecs(:, :, :), dm_list(:, :, :, :), &
@@ -251,6 +251,9 @@ module otr_arh
         procedure(get_response_2d_type), pointer :: get_response_2d_funptr
 
         external :: dgemm
+
+        ! initialize error flag
+        error = 0
 
         ! check if orbitals are actually rotated
         if ((sum(abs(kappa)) > 0.0_rp) .or. &

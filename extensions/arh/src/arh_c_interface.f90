@@ -100,7 +100,8 @@ contains
                                        update_orbs_arh_c_funptr, project_arh_c_funptr
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: dm_ao_2d(:, :), dm_ao_3d(:, :, :), ao_overlap(:, :)
+        real(rp), pointer, contiguous :: dm_ao_2d(:, :)
+        real(rp), pointer :: dm_ao_3d(:, :, :), ao_overlap(:, :)
         procedure(get_energy_2d_type), pointer :: get_energy_2d_funptr
         procedure(get_energy_3d_type), pointer :: get_energy_3d_funptr
         procedure(update_dm_2d_type), pointer :: update_dm_funptr
