@@ -144,8 +144,10 @@ module otr_s_gek
         hess_x_funptr => hess_x_s_gek_funptr
 
         ! add new step
-        call s_gek_object%add(kappa, func, grad, h_diag, error)
-        if (error /= 0) return
+        if (sum(abs(kappa)) > 0.0_rp) then
+            call s_gek_object%add(kappa, func, grad, h_diag, error)
+            if (error /= 0) return
+        end if
         
     end subroutine update_orbs_s_gek
 

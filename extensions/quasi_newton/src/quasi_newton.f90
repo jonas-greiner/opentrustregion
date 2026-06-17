@@ -172,8 +172,10 @@ module otr_qn
         hess_x_funptr => hess_x_qn_funptr
 
         ! add new step
-        call update_object%add(kappa, grad, error)
-        if (error /= 0) return
+        if (sum(abs(kappa)) > 0.0_rp) then
+            call update_object%add(kappa, grad, error)
+            if (error /= 0) return
+        end if
         
     end subroutine update_orbs_qn
 

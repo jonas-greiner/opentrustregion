@@ -8,8 +8,8 @@ module otr_arh
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
                                hess_x_type, project_type
-    use otr_oao, only: oao_settings_type, default_oao_settings, oao_object, &
-                       get_energy_3d_type, get_energy_2d_type, update_dm_2d_type
+    use otr_oao, only: oao_settings_type, default_oao_settings, get_energy_3d_type, &
+                       get_energy_2d_type, update_dm_2d_type
 
     implicit none
 
@@ -47,7 +47,8 @@ module otr_arh
         integer(ip), pointer :: n_ao => null(), n_param => null(), n_particle => null()
         real(rp), pointer :: dm_ao(:, :, :) => null(), s_inv_sqrt(:, :) => null(), &
                              dm_oao(:, :, :) => null(), fock_oo(:, :, :) => null(), &
-                             fock_vv(:, :, :) => null()
+                             fock_vv(:, :, :) => null(), energy => null(), &
+                             grad(:) => null(), h_diag(:) => null()
         real(rp), allocatable :: fock_oao(:, :, :), same_v_oao(:, :, :), &
                                  opposite_v_oao(:, :, :), metric_eigvals(:, :), &
                                  metric_eigvecs(:, :, :), dm_list(:, :, :, :), &
@@ -194,6 +195,9 @@ module otr_arh
         arh_object%dm_oao => oao_object%dm_oao
         arh_object%fock_oo => oao_object%fock_oo
         arh_object%fock_vv => oao_object%fock_vv
+        arh_object%energy => oao_object%energy
+        if (allocated(oao_object%grad)) arh_object%grad => oao_object%grad
+        if (allocated(oao_object%h_diag)) arh_object%h_diag => oao_object%h_diag
 
     end subroutine arh_factory_common
 
@@ -232,9 +236,9 @@ module otr_arh
         ! in the OAO basis and the Hessian linear transformation on the basis of 
         ! augmented Roothaan-Hall for the closed-shell case
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion, only: hess_x_type, numerical_zero
         use otr_oao, only: get_response_2d_type, rotate_dm_ao, &
-                           symmetric_transformation, calculate_grad_h_diag
+                           symmetric_transformation, oao_object, calculate_grad_h_diag
 
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
@@ -248,66 +252,88 @@ module otr_arh
 
         external :: dgemm
 
-        ! number of AOs
-        n_ao = arh_object%n_ao
+        ! check if orbitals are actually rotated
+        if ((sum(abs(kappa)) > 0.0_rp) .or. &
+            (abs(arh_object%energy) <= numerical_zero) .or. &
+            (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
+                    .and. (allocated(arh_object%dm_list))))) then
+            ! number of AOs
+            n_ao = arh_object%n_ao
 
-        ! number of particles
-        n_particle = arh_object%n_particle
+            ! number of particles
+            n_particle = arh_object%n_particle
 
-        ! update list of density and Fock matrices
-        if (allocated(arh_object%dm_list)) then
-            call append(arh_object%dm_list, arh_object%dm_oao)
-            call append(arh_object%fock_list, arh_object%fock_oao)
-        else
-            allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%fock_list(n_ao, n_ao, n_particle, 0))
-        end if
+            ! update list of density and Fock matrices
+            if (allocated(arh_object%dm_list)) then
+                call append(arh_object%dm_list, arh_object%dm_oao)
+                call append(arh_object%fock_list, arh_object%fock_oao)
+            else
+                allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
+                         arh_object%fock_list(n_ao, n_ao, n_particle, 0))
+            end if
 
-        ! rotate density matrix
-        call rotate_dm_ao(kappa, n_particle, n_ao, &
-                          arh_object%settings%restricted, arh_object%dm_ao, error, &
-                          arh_object%dm_oao)
-        if (error /= 0) return
+            ! rotate density matrix
+            call rotate_dm_ao(kappa, n_particle, n_ao, &
+                            arh_object%settings%restricted, arh_object%dm_ao, error, &
+                            arh_object%dm_oao)
+            if (error /= 0) return
 
-        ! get energyand Fock matrix
-        allocate(fock_ao(n_ao, n_ao, n_particle))
-        call arh_object%update_dm_2d(arh_object%dm_ao(:, :, 1), func, &
-                                     fock_ao(:, :, 1), get_response_2d_funptr, error)
-        if (error /= 0) then
+            ! get energy and Fock matrix
+            allocate(fock_ao(n_ao, n_ao, n_particle))
+            call arh_object%update_dm_2d(arh_object%dm_ao(:, :, 1), arh_object%energy, &
+                                         fock_ao(:, :, 1), get_response_2d_funptr, &
+                                         error)
+            if (error /= 0) then
+                deallocate(fock_ao)
+                return
+            end if
+
+            ! transform Fock matrix to OAO basis
+            arh_object%fock_oao = &
+                symmetric_transformation(arh_object%s_inv_sqrt, fock_ao)
             deallocate(fock_ao)
-            return
+
+            ! calculate gradient and Hessian diagonal
+            if (.not. associated(arh_object%grad)) then
+                if (.not. allocated(oao_object%grad)) &
+                    allocate(oao_object%grad(arh_object%n_param))
+                arh_object%grad => oao_object%grad
+            end if
+            if (.not. associated(arh_object%h_diag)) then
+                if (.not. allocated(oao_object%h_diag)) &
+                    allocate(oao_object%h_diag(arh_object%n_param))
+                arh_object%h_diag => oao_object%h_diag
+            end if
+            call calculate_grad_h_diag(arh_object%dm_oao, arh_object%fock_oao, &
+                                       n_particle, n_ao, &
+                                       arh_object%settings%restricted, &
+                                       arh_object%grad, arh_object%h_diag, &
+                                       arh_object%fock_oo, arh_object%fock_vv)
+
+            ! construct and diagonalize ARH metric
+            call get_arh_metric(arh_object%dm_list, arh_object%dm_oao, &
+                                arh_object%metric_eigvals, arh_object%metric_eigvecs, &
+                                arh_object%settings, error)
+            if (error /= 0) return
+
+            ! prepare differences for response part of ARH Hessian
+            n_list = size(arh_object%dm_list, 4)
+            if (allocated(arh_object%dm_diff)) deallocate(arh_object%dm_diff, &
+                                                        arh_object%fock_diff)
+            allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
+                    arh_object%fock_diff(n_ao, n_ao, n_particle, n_list))
+            do i = 1, n_list
+                arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
+                                                arh_object%dm_oao
+                arh_object%fock_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
+                                                arh_object%fock_oao
+            end do
         end if
 
-        ! transform Fock matrix to OAO basis
-        arh_object%fock_oao = &
-            symmetric_transformation(arh_object%s_inv_sqrt, fock_ao)
-        deallocate(fock_ao)
-
-        ! calculate gradient and Hessian diagonal
-        call calculate_grad_h_diag(arh_object%dm_oao, arh_object%fock_oao, n_particle, &
-                                   n_ao, arh_object%settings%restricted, grad, h_diag, &
-                                   arh_object%fock_oo, arh_object%fock_vv)
-
-        ! construct and diagonalize ARH metric
-        call get_arh_metric(arh_object%dm_list, arh_object%dm_oao, &
-                            arh_object%metric_eigvals, arh_object%metric_eigvecs, &
-                            arh_object%settings, error)
-        if (error /= 0) return
-
-        ! prepare differences for response part of ARH Hessian
-        n_list = size(arh_object%dm_list, 4)
-        if (allocated(arh_object%dm_diff)) deallocate(arh_object%dm_diff, &
-                                                      arh_object%fock_diff)
-        allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
-                 arh_object%fock_diff(n_ao, n_ao, n_particle, n_list))
-        do i = 1, n_list
-            arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
-                                             arh_object%dm_oao
-            arh_object%fock_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
-                                               arh_object%fock_oao
-        end do
-
-        ! define pointer to ARH Hessian linear transformation function
+        ! set outputs
+        func = arh_object%energy
+        grad = arh_object%grad
+        h_diag = arh_object%h_diag
         hess_x_funptr => hess_x_arh
         
     end subroutine update_orbs_arh_closed_shell

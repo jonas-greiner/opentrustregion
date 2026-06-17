@@ -90,9 +90,11 @@ module otr_oao
     type :: oao_type
         type(oao_settings_type) :: settings
         integer(ip) :: n_ao, n_param, n_particle
+        real(rp) :: energy = 0.0_rp
         real(rp), pointer :: dm_ao(:, :, :)
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
-                                 fock_oo(:, :, :), fock_vv(:, :, :)
+                                 fock_oo(:, :, :), fock_vv(:, :, :), grad(:), &
+                                 h_diag(:)
         procedure(get_energy_3d_type), pointer, nopass :: get_energy => null()
         procedure(update_dm_3d_type), pointer, nopass :: update_dm => null()
         procedure(get_response_3d_type), pointer, nopass :: get_response => null()
@@ -314,7 +316,7 @@ module otr_oao
         ! this function defines the energy, gradient, and Hessian diagonal evaluation 
         ! and the Hessian linear transformation in the OAO basis
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion, only: hess_x_type, numerical_zero
 
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
@@ -326,43 +328,58 @@ module otr_oao
         real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :)
         external :: dgemm
 
-        ! number of AOs
-        n_ao = oao_object%n_ao
+        ! check if orbitals are actually rotated
+        if ((sum(abs(kappa)) > 0.0_rp) .or. &
+            (abs(oao_object%energy) <= numerical_zero) .or. &
+            (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
+                    .and. (associated(oao_object%get_response_2d) .or. &
+                           associated(oao_object%get_response))))) then
+            ! number of AOs
+            n_ao = oao_object%n_ao
 
-        ! number of particles
-        n_particle = oao_object%n_particle
+            ! number of particles
+            n_particle = oao_object%n_particle
 
-        ! rotate density matrix
-        call rotate_dm_ao(kappa, n_particle, n_ao, oao_object%settings%restricted, &
-                          oao_object%dm_ao, error, oao_object%dm_oao)
-        if (error /= 0) return
+            ! rotate density matrix
+            call rotate_dm_ao(kappa, n_particle, n_ao, oao_object%settings%restricted, &
+                            oao_object%dm_ao, error, oao_object%dm_oao)
+            if (error /= 0) return
 
-        ! get energy, Fock matrix, and response function
-        allocate(fock_ao(n_ao, n_ao, n_particle))
-        if (associated(oao_object%update_dm)) then
-            call oao_object%update_dm(oao_object%dm_ao, func, fock_ao, &
-                                      oao_object%get_response, error)
-        else
-            call oao_object%update_dm_2d(oao_object%dm_ao(:, :, 1), func, &
-                                         fock_ao(:, :, 1), oao_object%get_response_2d, &
-                                         error)
-        end if
-        if (error /= 0) then
+            ! get energy, Fock matrix, and response function
+            allocate(fock_ao(n_ao, n_ao, n_particle))
+            if (associated(oao_object%update_dm)) then
+                call oao_object%update_dm(oao_object%dm_ao, oao_object%energy, &
+                                          fock_ao, oao_object%get_response, error)
+            else
+                call oao_object%update_dm_2d(oao_object%dm_ao(:, :, 1), &
+                                             oao_object%energy, fock_ao(:, :, 1), &
+                                             oao_object%get_response_2d, error)
+            end if
+            if (error /= 0) then
+                deallocate(fock_ao)
+                return
+            end if
+
+            ! transform Fock matrix to OAO basis
+            fock_oao = symmetric_transformation(oao_object%s_inv_sqrt, fock_ao)
             deallocate(fock_ao)
-            return
+
+            ! calculate gradient and Hessian diagonal
+            if (.not. allocated(oao_object%grad)) &
+                allocate(oao_object%grad(oao_object%n_param))
+            if (.not. allocated(oao_object%h_diag)) &
+                allocate(oao_object%h_diag(oao_object%n_param))
+            call calculate_grad_h_diag(oao_object%dm_oao, fock_oao, n_particle, n_ao, &
+                                       oao_object%settings%restricted, &
+                                       oao_object%grad, oao_object%h_diag, &
+                                       oao_object%fock_oo, oao_object%fock_vv)
+            deallocate(fock_oao)
         end if
 
-        ! transform Fock matrix to OAO basis
-        fock_oao = symmetric_transformation(oao_object%s_inv_sqrt, fock_ao)
-        deallocate(fock_ao)
-
-        ! calculate gradient and Hessian diagonal
-        call calculate_grad_h_diag(oao_object%dm_oao, fock_oao, n_particle, n_ao, &
-                                   oao_object%settings%restricted, grad, h_diag, &
-                                   oao_object%fock_oo, oao_object%fock_vv)
-        deallocate(fock_oao)
-
-        ! define pointer to OAO Hessian linear transformation function
+        ! set outputs
+        func = oao_object%energy
+        grad = oao_object%grad
+        h_diag = oao_object%h_diag
         hess_x_funptr => hess_x_oao
         
     end subroutine update_orbs_oao
