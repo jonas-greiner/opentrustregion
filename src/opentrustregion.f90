@@ -761,9 +761,11 @@ contains
         end do
 
         ! check if stability check has converged
-        if (.not. conv_check_passed) &
+        if (.not. conv_check_passed) then
+            error = 1
             call settings%log("Stability check has not converged in the given "// &
                               "number of iterations.", verbosity_error, .true.)
+        end if
 
         ! determine if saddle point
         stable = eigval > stability_thresh
