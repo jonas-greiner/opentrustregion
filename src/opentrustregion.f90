@@ -249,6 +249,7 @@ module opentrustregion
 
     ! define global variables
     integer(ip) :: tot_orb_update = 0, tot_hess_x = 0
+    real(rp), allocatable :: approx_min_eigvec(:)
 
 contains
 
@@ -271,6 +272,7 @@ contains
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr, stability_hess_x_funptr
+        type(stability_settings_type) :: approx_hess_x_stability_settings
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
@@ -393,26 +395,68 @@ contains
             if (conv_check_passed .or. max_precision_reached) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
-                    if (settings%stability_settings%n_trial_vectors == 0 .and. .not. &
-                        associated(settings%stability_settings%init_trial_space)) then
-                        settings%stability_settings%n_trial_vectors = 1
-                        settings%stability_settings%init_trial_space => &
-                            default_init_trial_space
-                    end if
+                    ! set real Hessian if approximate Hessian is used for optimization
                     if (associated(settings%stability_hess_x)) then
                         stability_hess_x_funptr => settings%stability_hess_x
+                        ! only set approximate Hessian for Jacobi-Davidson correction 
+                        ! equations if it is symmetric
+                        if (settings%hess_symm) &
+                            settings%stability_settings%approx_hess_x => hess_x_funptr
                     else
                         stability_hess_x_funptr => hess_x_funptr
                     end if
-                    if (.not. associated(settings%stability_settings%conv_check)) then
+                    ! inherit preconditioning and projection functions from solver if 
+                    ! not provided for stability check
+                    if (.not. associated(settings%stability_settings%precond)) &
+                        settings%stability_settings%precond => settings%precond
+                    if (.not. associated(settings%stability_settings%project)) &
+                        settings%stability_settings%project => settings%project
+                    if (.not. associated(settings%stability_settings%logger)) &
+                        settings%stability_settings%logger => settings%logger
+                    ! set default trial space and convergence check if not explicitly 
+                    ! set
+                    if (settings%stability_settings%n_trial_vectors == 0 .and. &
+                        (.not. &
+                         associated(settings%stability_settings%init_trial_space))) then
+                        ! set default if approximate Hessian is not available
+                        settings%stability_settings%n_random_trial_vectors = 1
+                        ! check if approximate Hessian is available
+                        if (associated(settings%stability_hess_x)) then
+                            ! generate approximate minimum eigenvector and add to trial 
+                            ! space
+                            allocate(approx_min_eigvec(n_param))
+                            call approx_hess_x_stability_settings%init(error)
+                            if (error /= 0) return
+                            approx_hess_x_stability_settings%verbose = 0
+                            approx_hess_x_stability_settings%n_iter = 1000
+                            approx_hess_x_stability_settings%hess_symm = &
+                                settings%hess_symm
+                            approx_hess_x_stability_settings%precond => &
+                                settings%stability_settings%precond
+                            approx_hess_x_stability_settings%project => &
+                                settings%stability_settings%project
+                            approx_hess_x_stability_settings%logger => &
+                                settings%stability_settings%logger
+                            call stability_check(h_diag, hess_x_funptr, stable, error, &
+                                                 approx_hess_x_stability_settings, &
+                                                 kappa=approx_min_eigvec)
+                            if (error == 0) then
+                                settings%stability_settings%n_trial_vectors = 2
+                                settings%stability_settings%init_trial_space => &
+                                    default_init_trial_space
+                            end if
+                        end if
+                    end if
+                    if (.not. associated(settings%stability_settings%conv_check)) &
                         settings%stability_settings%conv_check => &
                             default_stability_conv_check
-                    end if
+                    ! perform stability check
                     call stability_check(h_diag, stability_hess_x_funptr, stable, &
                                          error, settings%stability_settings, &
                                          kappa=kappa)
                     call add_error_origin(error, error_stability_check, settings)
                     if (error /= 0) return
+                    if (allocated(approx_min_eigvec)) deallocate(approx_min_eigvec)
                     if (.not. stable) then
                         ! logarithmic line search
                         do i = 1, stability_n_points
@@ -2000,13 +2044,18 @@ contains
 
     subroutine default_init_trial_space(trial_space, error)
         !
-        ! this subroutine initializes the trial space with a single random trial vector
+        ! this subroutine initializes the trial space with an approximate minimum 
+        ! eigenvector and a random trial vector
         !
         real(rp), intent(out), target :: trial_space(:, :)
         integer(ip), intent(out) :: error
 
+        real(rp), external :: dnrm2
+
         error = 0
-        call random_number(trial_space)
+        trial_space(:, 1) = approx_min_eigvec
+        call random_number(trial_space(:, 2))
+        trial_space(:, 2) = 2.0_rp * trial_space(:, 2) - 1.0_rp
 
     end subroutine default_init_trial_space
 
