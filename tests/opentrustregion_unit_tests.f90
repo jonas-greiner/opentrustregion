@@ -1931,16 +1931,18 @@ contains
         !
         ! this function tests the default trial space initialization subroutine
         !
-        use opentrustregion, only: default_init_trial_space
-        use test_reference, only: n_param
+        use opentrustregion, only: default_init_trial_space, approx_min_eigvec
 
-        real(rp), target :: trial_space(n_param, 1)
+        integer(ip), parameter :: n_param = 6
+        real(rp) :: trial_space(n_param, 2), eigval_vec(n_param)
         integer(ip) :: error
-
+        
         ! assume tests pass
         test_default_init_trial_space = .true.
 
-        ! initialize trial space
+        ! initialize trial space, check for error, and check if trial space is correct
+        allocate(approx_min_eigvec(n_param))
+        approx_min_eigvec = 1.0_rp
         trial_space = 0.0_rp
         call default_init_trial_space(trial_space, error)
         if (error /= 0) then
@@ -1948,11 +1950,17 @@ contains
                 "raised error."
             test_default_init_trial_space = .false.
         end if
-        if (sum(abs(trial_space)) < tol) then
-            write (stderr, *) "test_default_init_trial_space failed: Trial space "// &
-                "not correctly initialized."
+        if (any(trial_space(:, 1) - 1.0_rp > tol)) then
+            write (stderr, *) "test_default_init_trial_space failed: Did not "// &
+                "return approximate eigenvector direction as first trial vector."
             test_default_init_trial_space = .false.
         end if
+        if (sum(abs(trial_space(:, 2))) < tol) then
+            write (stderr, *) "test_default_init_trial_space failed: Did not "// &
+                "return random vector as second trial vector."
+            test_default_init_trial_space = .false.
+        end if
+        deallocate(approx_min_eigvec)
 
     end function test_default_init_trial_space
 
