@@ -269,8 +269,8 @@ module otr_arh
 
             ! update list of density and Fock matrices
             if (allocated(arh_object%dm_list)) then
-                call append(arh_object%dm_list, arh_object%dm_oao)
-                call append(arh_object%fock_list, arh_object%fock_oao)
+                call prepend(arh_object%dm_list, arh_object%dm_oao)
+                call prepend(arh_object%fock_list, arh_object%fock_oao)
             else
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
                          arh_object%fock_list(n_ao, n_ao, n_particle, 0))
@@ -278,8 +278,8 @@ module otr_arh
 
             ! rotate density matrix
             call rotate_dm_ao(kappa, n_particle, n_ao, &
-                            arh_object%settings%restricted, arh_object%dm_ao, error, &
-                            arh_object%dm_oao)
+                              arh_object%settings%restricted, arh_object%dm_ao, error, &
+                              arh_object%dm_oao)
             if (error /= 0) return
 
             ! get energy and Fock matrix
@@ -349,9 +349,9 @@ module otr_arh
         ! in the OAO basis and the Hessian linear transformation on the basis of 
         ! augmented Roothaan-Hall for the open-shell case
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion, only: hess_x_type, numerical_zero
         use otr_oao, only: get_response_3d_type, rotate_dm_ao, &
-                           symmetric_transformation, calculate_grad_h_diag
+                           symmetric_transformation, oao_object, calculate_grad_h_diag
 
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
@@ -366,83 +366,108 @@ module otr_arh
                                  
         external :: dgemm
 
-        ! number of AOs
-        n_ao = arh_object%n_ao
+        ! initialize error flag
+        error = 0
 
-        ! number of particles
-        n_particle = arh_object%n_particle
+        ! check if orbitals are actually rotated
+        if ((sum(abs(kappa)) > 0.0_rp) .or. &
+            (abs(arh_object%energy) <= numerical_zero) .or. &
+            (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
+                    .and. (allocated(arh_object%dm_list))))) then
+            ! number of AOs
+            n_ao = arh_object%n_ao
 
-        ! update list of density and potential matrices
-        if (allocated(arh_object%dm_list)) then
-            call append(arh_object%dm_list, arh_object%dm_oao)
-            call append(arh_object%v_same_spin_list, arh_object%v_same_spin_oao)
-            call append(arh_object%v_opposite_spin_list, arh_object%v_opposite_spin_oao)
-        else
-            allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0))
+            ! number of particles
+            n_particle = arh_object%n_particle
+
+            ! update list of density and potential matrices
+            if (allocated(arh_object%dm_list)) then
+                call prepend(arh_object%dm_list, arh_object%dm_oao)
+                call prepend(arh_object%v_same_spin_list, arh_object%v_same_spin_oao)
+                call prepend(arh_object%v_opposite_spin_list, &
+                             arh_object%v_opposite_spin_oao)
+            else
+                allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
+                         arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
+                         arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0))
+            end if
+
+            ! rotate density matrix
+            call rotate_dm_ao(kappa, n_particle, n_ao, arh_object%settings%restricted, &
+                              arh_object%dm_ao, error, arh_object%dm_oao)
+            if (error /= 0) return
+
+            ! get energy, Fock matrix, and same and opposite spin potentials
+            allocate(fock_ao(n_ao, n_ao, n_particle), &
+                     v_same_spin_ao(n_ao, n_ao, n_particle), &
+                     v_opposite_spin_ao(n_ao, n_ao, n_particle))
+            call arh_object%update_dm_spin(arh_object%dm_ao, arh_object%energy, &
+                                           fock_ao, v_same_spin_ao, &
+                                           v_opposite_spin_ao, get_response_3d_funptr, &
+                                           error)
+            if (error /= 0) then
+                deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao)
+                return
+            end if
+
+            ! transform Fock matrix to OAO basis
+            fock_oao = symmetric_transformation(arh_object%s_inv_sqrt, fock_ao)
+            deallocate(fock_ao)
+
+            ! transform same and opposite spin potentials to OAO basis
+            arh_object%v_same_spin_oao = &
+                symmetric_transformation(arh_object%s_inv_sqrt, v_same_spin_ao)
+            arh_object%v_opposite_spin_oao = &
+                symmetric_transformation(arh_object%s_inv_sqrt, v_opposite_spin_ao)
+            deallocate(v_same_spin_ao, v_opposite_spin_ao)
+
+            ! calculate gradient and Hessian diagonal
+            if (.not. associated(arh_object%grad)) then
+                if (.not. allocated(oao_object%grad)) &
+                    allocate(oao_object%grad(arh_object%n_param))
+                arh_object%grad => oao_object%grad
+            end if
+            if (.not. associated(arh_object%h_diag)) then
+                if (.not. allocated(oao_object%h_diag)) &
+                    allocate(oao_object%h_diag(arh_object%n_param))
+                arh_object%h_diag => oao_object%h_diag
+            end if
+            call calculate_grad_h_diag(arh_object%dm_oao, fock_oao, n_particle, n_ao, &
+                                       arh_object%settings%restricted, &
+                                       arh_object%grad, arh_object%h_diag, &
+                                       arh_object%fock_oo, arh_object%fock_vv)
+            deallocate(fock_oao)
+
+            ! construct and diagonalize ARH metric
+            call get_arh_metric(arh_object%dm_list, arh_object%dm_oao, &
+                                arh_object%metric_eigvals, arh_object%metric_eigvecs, &
+                                arh_object%settings, error)
+            if (error /= 0) return
+
+            ! prepare differences for response part of ARH Hessian
+            n_list = size(arh_object%dm_list, 4)
+            if (allocated(arh_object%dm_diff)) &
+                deallocate(arh_object%dm_diff, arh_object%v_same_spin_diff, &
+                           arh_object%v_opposite_spin_diff)
+            allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
+                     arh_object%v_same_spin_diff(n_ao, n_ao, n_particle, n_list), &
+                     arh_object%v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list))
+            do i = 1, n_list
+                arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
+                                                 arh_object%dm_oao
+                arh_object%v_same_spin_diff(:, :, :, i) = &
+                    arh_object%v_same_spin_list(:, :, :, i) - &
+                    arh_object%v_same_spin_oao
+                arh_object%v_opposite_spin_diff(:, :, :, i) = &
+                    arh_object%v_opposite_spin_list(:, :, :, i) - &
+                    arh_object%v_opposite_spin_oao
+            end do
         end if
 
-        ! rotate density matrix
-        call rotate_dm_ao(kappa, n_particle, n_ao, arh_object%settings%restricted, &
-                          arh_object%dm_ao, error, arh_object%dm_oao)
-        if (error /= 0) return
-
-        ! get energy, Fock matrix, and same and opposite spin potentials
-        allocate(fock_ao(n_ao, n_ao, n_particle), &
-                 v_same_spin_ao(n_ao, n_ao, n_particle), &
-                 v_opposite_spin_ao(n_ao, n_ao, n_particle))
-        call arh_object%update_dm_spin(arh_object%dm_ao, func, fock_ao, &
-                                       v_same_spin_ao, v_opposite_spin_ao, &
-                                       get_response_3d_funptr, error)
-        if (error /= 0) then
-            deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao)
-            return
-        end if
-
-        ! transform Fock matrix to OAO basis
-        fock_oao = symmetric_transformation(arh_object%s_inv_sqrt, fock_ao)
-        deallocate(fock_ao)
-
-        ! transform same and opposite spin potentials to OAO basis
-        arh_object%v_same_spin_oao = symmetric_transformation(arh_object%s_inv_sqrt, &
-                                                              v_same_spin_ao)
-        arh_object%v_opposite_spin_oao = &
-            symmetric_transformation(arh_object%s_inv_sqrt, v_opposite_spin_ao)
-        deallocate(v_same_spin_ao, v_opposite_spin_ao)
-
-        ! calculate gradient and Hessian diagonal
-        call calculate_grad_h_diag(arh_object%dm_oao, fock_oao, n_particle, n_ao, &
-                                   arh_object%settings%restricted, grad, h_diag, &
-                                   arh_object%fock_oo, arh_object%fock_vv)
-        deallocate(fock_oao)
-
-        ! construct and diagonalize ARH metric
-        call get_arh_metric(arh_object%dm_list, arh_object%dm_oao, &
-                            arh_object%metric_eigvals, arh_object%metric_eigvecs, &
-                            arh_object%settings, error)
-        if (error /= 0) return
-
-        ! prepare differences for response part of ARH Hessian
-        n_list = size(arh_object%dm_list, 4)
-        if (allocated(arh_object%dm_diff)) deallocate(arh_object%dm_diff, &
-                                                      arh_object%v_same_spin_diff, &
-                                                      arh_object%v_opposite_spin_diff)
-        allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
-                 arh_object%v_same_spin_diff(n_ao, n_ao, n_particle, n_list), &
-                 arh_object%v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list))
-        do i = 1, n_list
-            arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
-                                             arh_object%dm_oao
-            arh_object%v_same_spin_diff(:, :, :, i) = &
-                arh_object%v_same_spin_list(:, :, :, i) - &
-                arh_object%v_same_spin_oao
-            arh_object%v_opposite_spin_diff(:, :, :, i) = &
-                arh_object%v_opposite_spin_list(:, :, :, i) - &
-                arh_object%v_opposite_spin_oao
-        end do
-
-        ! define pointer to ARH Hessian linear transformation function
+        ! set outputs
+        func = arh_object%energy
+        grad = arh_object%grad
+        h_diag = arh_object%h_diag
         hess_x_funptr => hess_x_arh
         
     end subroutine update_orbs_arh_open_shell
@@ -933,9 +958,9 @@ module otr_arh
 
     end subroutine get_arh_metric
 
-    subroutine append(list, new_array)
+    subroutine prepend(list, new_array)
         !
-        ! this subroutine appends an array to a list of arrays of equal dimension
+        ! this subroutine prepends an array to a list of arrays of equal dimension
         !
         real(rp), intent(inout), allocatable :: list(:, :, :, :)
         real(rp), intent(in) :: new_array(:, :, :)
@@ -948,11 +973,11 @@ module otr_arh
         n3 = size(new_array, 3)
 
         allocate(temp(n1, n2, n3, size(list, 4) + 1))
-        temp(:, :, :, :size(list, 4)) = list
-        temp(:, :, :, size(list, 4) + 1) = new_array
+        temp(:, :, :, 1) = new_array
+        temp(:, :, :, 2:size(list, 4) + 1) = list
         deallocate(list)
         list = temp
 
-    end subroutine append
+    end subroutine prepend
 
 end module otr_arh
