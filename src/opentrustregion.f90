@@ -66,10 +66,11 @@ module opentrustregion
             "previously orthonormalized vectors.", &
         project_warning_msg = &
             "Custom projection is provided. To optimize performance, OTR assumes "// &
-            "that all other provided routines (update_orbs, hess_x, precond) are "// &
-            "already projected onto the relevant orbital rotation subspace. If "// &
-            "these routines are not self-projecting, redundant rotations may "// &
-            "contaminate the trial space and cause convergence issues."
+            "that all other provided routines (update_orbs, hess_x, precond, "// &
+            "stability_hess_x, approx_hess_x) are already projected onto the "// &
+            "relevant orbital rotation subspace. If these routines are not "// &
+            "self-projecting, redundant rotations may contaminate the trial space "// &
+            "and cause convergence issues."
 
     ! interfaces for callback functions
     abstract interface
