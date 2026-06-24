@@ -453,7 +453,7 @@ contains
                     ! perform stability check
                     call stability_check(h_diag, stability_hess_x_funptr, stable, &
                                          error, settings%stability_settings, &
-                                         kappa=kappa)
+                                         kappa=kappa, min_eigval=min_eigval)
                     call add_error_origin(error, error_stability_check, settings)
                     if (error /= 0) return
                     if (allocated(approx_min_eigvec)) deallocate(approx_min_eigvec)
