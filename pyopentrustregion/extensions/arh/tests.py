@@ -46,7 +46,7 @@ fortran_tests = {
         "assign_arh_f_c",
         "hess_x_arh_c_wrapper",
         "init_arh_settings_c",
-        "update_dm_jk_f_wrapper",
+        "update_dm_spin_f_wrapper",
         "update_orbs_arh_c_wrapper",
     ],
 }
@@ -135,13 +135,13 @@ class ARHPyInterfaceTests(unittest.TestCase):
     mock_update_dm = OAOPyInterfaceTests.mock_update_dm
     mock_get_response = OAOPyInterfaceTests.mock_get_response
 
-    def mock_update_dm_jk(self, dm_ao, fock, coulomb, exchange):
+    def mock_update_dm_spin(self, dm_ao, fock, v_same_spin, v_opposite_spin):
         """
         this function is a mock function for the density matrix updating function
         """
         fock[:] = 2 * dm_ao
-        coulomb[:] = 3 * dm_ao
-        exchange[:] = 4 * dm_ao
+        v_same_spin[:] = 3 * dm_ao
+        v_opposite_spin[:] = 4 * dm_ao
 
         return np.sum(dm_ao), self.mock_get_response
 
@@ -152,7 +152,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
     def test_arh_factory_py_interface(self):
         """
         this function tests the ARH factory python interface (only tests if dm_ao,
-        mock_get_energy and mock_update_dm_jk are passed correctly for the open-shell
+        mock_get_energy and mock_update_dm_spin are passed correctly for the open-shell
         case since everything else is the same in the closed-shell case)
         """
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
@@ -304,7 +304,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             n_particle,
             n_ao,
             self.mock_get_energy,
-            self.mock_update_dm_jk,
+            self.mock_update_dm_spin,
             settings,
         )
 

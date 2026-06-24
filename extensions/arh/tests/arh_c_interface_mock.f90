@@ -47,7 +47,7 @@ contains
         use otr_oao_test_reference, only: test_get_energy_2d_c_funptr, &
                                           test_get_energy_3d_c_funptr, &
                                           test_update_dm_2d_c_funptr
-        use otr_arh_test_reference, only: test_update_dm_jk_c_funptr, operator(/=)
+        use otr_arh_test_reference, only: test_update_dm_spin_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_obj_func, mock_project
         use otr_oao_c_interface_unit_tests, only: mock_update_orbs_oao
 
@@ -133,11 +133,11 @@ contains
 
             ! test passed density matrix updating function
             test_arh_factory_interface = test_arh_factory_interface .and. &
-                test_update_dm_jk_c_funptr(update_dm_c_funptr, &
-                                           "arh_factory_py_interface", " by given "// &
-                                           "density matrix updating function with "// &
-                                           "separate Coulomb and exchange matrix "// &
-                                           "contributions")
+                test_update_dm_spin_c_funptr(update_dm_c_funptr, &
+                                             "arh_factory_py_interface", " by "// &
+                                             "given density matrix updating "// &
+                                             "function with separate same- and "// &
+                                             "opposite-spin potential contributions")
 
         ! number of particles is not correct
         else

@@ -11,42 +11,42 @@ module otr_arh_c_interface_unit_tests
     use test_reference, only: tol, tol_c, n_param
     use otr_oao_test_reference, only: n_particle, n_ao, n_ao_c
     use otr_arh_test_reference, only: ref_arh_settings
-    use otr_arh_c_interface, only: update_dm_jk_c_type
+    use otr_arh_c_interface, only: update_dm_spin_c_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_funloc, c_associated
 
     implicit none
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_dm_jk_c_type), pointer :: mock_update_dm_jk_ptr => &
-                                               mock_update_dm_jk
+    procedure(update_dm_spin_c_type), pointer :: mock_update_dm_spin_ptr => &
+                                                 mock_update_dm_spin
 
 contains
 
-    function mock_update_dm_jk(dm_ao, energy, fock, coulomb, exchange, &
-                               get_response_c_funptr) result(error) bind(C)
+    function mock_update_dm_spin(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
+                                 get_response_c_funptr) result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the density matrix updating C 
-        ! function with separate Coulomb and exchange matrix contributions
+        ! function with separate same- and opposite-spin potential contributions
         !
         use otr_oao_c_interface_unit_tests, only: mock_get_response_3d
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
-        real(c_rp), intent(out), target :: fock(*), coulomb(*), exchange(*)
+        real(c_rp), intent(out), target :: fock(*), v_same_spin(*), v_opposite_spin(*)
         type(c_funptr), intent(out) :: get_response_c_funptr
         integer(c_ip) :: error
 
         energy = sum(dm_ao(:n_ao ** 2 * n_particle))
 
         fock(:n_ao ** 2 * n_particle) = 2 * dm_ao(:n_ao ** 2 * n_particle)
-        coulomb(:n_ao ** 2 * n_particle) = 3 * dm_ao(:n_ao ** 2 * n_particle)
-        exchange(:n_ao ** 2 * n_particle) = 4 * dm_ao(:n_ao ** 2 * n_particle)
+        v_same_spin(:n_ao ** 2 * n_particle) = 3 * dm_ao(:n_ao ** 2 * n_particle)
+        v_opposite_spin(:n_ao ** 2 * n_particle) = 4 * dm_ao(:n_ao ** 2 * n_particle)
 
         get_response_c_funptr = c_funloc(mock_get_response_3d)
 
         error = 0_c_ip
 
-    end function mock_update_dm_jk
+    end function mock_update_dm_spin
 
     logical(c_bool) function test_arh_factory_c_wrapper() bind(C)
         !
@@ -154,7 +154,7 @@ contains
 
         ! get C function pointers to Fortran functions
         get_energy_c_funptr = c_funloc(mock_get_energy_3d)
-        update_dm_c_funptr = c_funloc(mock_update_dm_jk)
+        update_dm_c_funptr = c_funloc(mock_update_dm_spin)
 
         ! call ARH orbital updating factory C wrapper for open-shell case
         error_c = arh_factory_c_wrapper(dm_ao_3d_c, ao_overlap_c, n_particle_c, &
@@ -172,29 +172,30 @@ contains
 
     end function test_arh_factory_c_wrapper
 
-    logical(c_bool) function test_update_dm_jk_f_wrapper() bind(C)
+    logical(c_bool) function test_update_dm_spin_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the density matrix updating C 
-        ! function with separate Coulomb and exchange matrix contributions
+        ! function with same- and opposite-spin potential contributions
         !
-        use otr_arh, only: update_dm_jk_type
-        use otr_arh_c_interface, only: update_dm_jk_before_wrapping, &
-                                       update_dm_jk_f_wrapper
-        use otr_arh_test_reference, only: test_update_dm_jk_funptr
+        use otr_arh, only: update_dm_spin_type
+        use otr_arh_c_interface, only: update_dm_spin_before_wrapping, &
+                                       update_dm_spin_f_wrapper
+        use otr_arh_test_reference, only: test_update_dm_spin_funptr
 
-        procedure(update_dm_jk_type), pointer :: update_dm_jk_funptr
+        procedure(update_dm_spin_type), pointer :: update_dm_spin_funptr
 
         ! inject mock subroutine
-        update_dm_jk_before_wrapping => mock_update_dm_jk
+        update_dm_spin_before_wrapping => mock_update_dm_spin
 
         ! get pointer to subroutine
-        update_dm_jk_funptr => update_dm_jk_f_wrapper
+        update_dm_spin_funptr => update_dm_spin_f_wrapper
 
         ! test density matrix updating wrapper
-        test_update_dm_jk_f_wrapper = &
-            test_update_dm_jk_funptr(update_dm_jk_funptr, "update_dm_jk_f_wrapper", "")
+        test_update_dm_spin_f_wrapper = &
+            test_update_dm_spin_funptr(update_dm_spin_funptr, &
+                                       "update_dm_spin_f_wrapper", "")
         
-    end function test_update_dm_jk_f_wrapper
+    end function test_update_dm_spin_f_wrapper
 
     logical(c_bool) function test_update_orbs_arh_c_wrapper() bind(C)
         !

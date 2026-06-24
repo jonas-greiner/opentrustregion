@@ -570,8 +570,8 @@ The routine `arh_factory` constructs and returns ARH versions of energy, orbital
   Accepts an AO density matrix and returns:
   - Energy value (real)
   - Fock matrix (real array, written in-place)
-  - Coulomb matrix (real array, written in-place, only for open-shell calculations)
-  - Exchange matrix (real array, written in-place, only for open-shell calculations)
+  - Same-spin potential (real array, written in-place, only for open-shell calculations)
+  - Opposite-spin potential (real array, written in-place, only for open-shell calculations)
   - An integer error code (0 for success, positive integers < 100 for errors)
 - **`obj_func_arh`** (subroutine): Returned ARH objective function as defined for the `solver` subroutine.
 - **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.

@@ -279,22 +279,32 @@ contains
             end do
         end do
 
+        ! generate corresponding spin-resolved potential matrix differences
         do n = 1, n_particle
-            ! generate corresponding spin-resolved potential matrix differences
             do k = 1, n_diff
                 do j = 1, n_ao
                     do i = 1, j
                         same_v_diff(i, j, n, k) = sum(same_hess(i, j, :, :) * &
                                                       dm_diff(:, :, n, k))
                         same_v_diff(j, i, n, k) = same_v_diff(i, j, n, k)
-                        opposite_v_diff(i, j, n, k) = sum(opposite_hess(i, j, :, :) * &
-                                                          dm_diff(:, :, n, k))
-                        opposite_v_diff(j, i, n, k) = opposite_v_diff(i, j, n, k)
                     end do
                 end do
             end do
-
-            ! compute and diagonalize metric
+        end do
+        do k = 1, n_diff
+            do j = 1, n_ao
+                do i = 1, j
+                    opposite_v_diff(i, j, 1, k) = sum(opposite_hess(i, j, :, :) * &
+                                                      dm_diff(:, :, 2, k))
+                    opposite_v_diff(i, j, 2, k) = sum(opposite_hess(i, j, :, :) * &
+                                                      dm_diff(:, :, 1, k))
+                    opposite_v_diff(j, i, :, k) = opposite_v_diff(i, j, :, k)
+                end do
+            end do
+        end do
+        
+        ! compute and diagonalize metric
+        do n = 1, n_particle
             metric_eigvecs(:, :, n) = 0.0_rp
             do j = 1, n_diff
                 do i = 1, n_diff
@@ -357,11 +367,8 @@ contains
                 dm_target(:, :, n) = dm_target(:, :, n) + coeff(j) * dm_diff(:, :, n, j)
                 v_target(:, :, n) = v_target(:, :, n) + coeff(j) * &
                                     same_v_diff(:, :, n, j)
-                do i = 1, n_particle
-                    if (i == n) cycle
-                    v_target(:, :, n) = v_target(:, :, n) + coeff(j) * &
-                                        opposite_v_diff(:, :, i, j)
-                end do
+                v_target(:, :, n) = v_target(:, :, n) + coeff(j) * &
+                                        opposite_v_diff(:, :, n, j)
             end do
 
             ! construct corresponding trial vector

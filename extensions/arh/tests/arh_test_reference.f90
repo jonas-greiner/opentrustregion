@@ -51,23 +51,23 @@ module otr_arh_test_reference
 
 contains
 
-    function test_update_dm_jk_funptr(update_dm_funptr, test_name, message) &
+    function test_update_dm_spin_funptr(update_dm_funptr, test_name, message) &
         result(test_passed)
         !
-        ! this function tests a provided density matrix function pointer with Coulomb 
-        ! and exchange contributions
+        ! this function tests a provided density matrix function pointer with same- and 
+        ! opposite-spin potential contributions
         !
-        use otr_arh, only: update_dm_jk_type
+        use otr_arh, only: update_dm_spin_type
         use otr_oao, only: get_response_3d_type
         use test_reference, only: tol
         use otr_oao_test_reference, only: test_get_response_3d_funptr
 
-        procedure(update_dm_jk_type), intent(in), pointer :: update_dm_funptr
+        procedure(update_dm_spin_type), intent(in), pointer :: update_dm_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
-        real(rp), allocatable :: dm_ao(:, :, :), fock(:, :, :), coulomb(:, :, :), &
-                                 exchange(:, :, :)
+        real(rp), allocatable :: dm_ao(:, :, :), fock(:, :, :), v_same_spin(:, :, :), &
+                                 v_opposite_spin(:, :, :)
         real(rp) :: energy
         procedure(get_response_3d_type), pointer :: get_response_funptr
         integer(ip) :: error
@@ -79,20 +79,21 @@ contains
         if (.not. associated(update_dm_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function with Coulomb and exchange contributions not "// &
-                "associated with value."
+                "updating function with same- and opposite-spin potential "// &
+                "contributions not associated with value."
             return
         end if
 
         ! allocate arrays
         allocate(dm_ao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
-                 coulomb(n_ao, n_ao, n_particle), exchange(n_ao, n_ao, n_particle))
+                 v_same_spin(n_ao, n_ao, n_particle), &
+                 v_opposite_spin(n_ao, n_ao, n_particle))
 
         ! initialize density matrix
         dm_ao = 1.0_rp
 
         ! call density matrix updating subroutine
-        call update_dm_funptr(dm_ao, energy, fock, coulomb, exchange, &
+        call update_dm_funptr(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
                               get_response_funptr, error)
 
         ! check for error
@@ -116,47 +117,47 @@ contains
             test_passed = .false.
         end if
 
-        ! check Coulomb matrix
-        if (any(abs(coulomb - 3.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Coulomb matrix returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! check exchange matrix
-        if (any(abs(exchange - 4.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Exchange matrix "// &
+        ! check same-spin potential
+        if (any(abs(v_same_spin - 3.0_rp) > tol)) then
+            write (stderr, *) "test_"//test_name//" failed: Same-spin potential "// &
                 "returned"//message//" wrong."
             test_passed = .false.
         end if
 
+        ! check opposite-spin potential
+        if (any(abs(v_opposite_spin - 4.0_rp) > tol)) then
+            write (stderr, *) "test_"//test_name//" failed: Opposite-spin "// &
+                "potential returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
         ! deallocate arrays
-        deallocate(dm_ao, fock, coulomb, exchange)
+        deallocate(dm_ao, fock, v_same_spin, v_opposite_spin)
 
         ! test returned response function
         test_passed = test_passed .and. &
             test_get_response_3d_funptr(get_response_funptr, test_name, " by "// &
                                         "response function returned"//message)
 
-    end function test_update_dm_jk_funptr
+    end function test_update_dm_spin_funptr
 
-    function test_update_dm_jk_c_funptr(update_dm_jk_c_funptr, test_name, message) &
+    function test_update_dm_spin_c_funptr(update_dm_spin_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided density matrix updating C function pointer
-        ! with Coulomb and exchange contributions
+        ! with same- and opposite-spin potential contributions
         !
-        use otr_arh_c_interface, only: update_dm_jk_c_type
+        use otr_arh_c_interface, only: update_dm_spin_c_type
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: test_get_response_3d_c_funptr
 
-        type(c_funptr), intent(in) :: update_dm_jk_c_funptr
+        type(c_funptr), intent(in) :: update_dm_spin_c_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
-        procedure(update_dm_jk_c_type), pointer :: update_dm_jk_funptr
-        real(c_rp), allocatable :: dm_ao(:, :, :), fock(:, :, :), coulomb(:, :, :), &
-                                   exchange(:, :, :)
+        procedure(update_dm_spin_c_type), pointer :: update_dm_spin_funptr
+        real(c_rp), allocatable :: dm_ao(:, :, :), fock(:, :, :), &
+                                   v_same_spin(:, :, :), v_opposite_spin(:, :, :)
         real(c_rp) :: energy
         type(c_funptr) :: get_response_c_funptr
         integer(c_ip) :: error
@@ -165,27 +166,28 @@ contains
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. c_associated(update_dm_jk_c_funptr)) then
+        if (.not. c_associated(update_dm_spin_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function with Coulomb and exchange contributions not "// &
-                "associated with value."
+                "updating function with same- and opposite-spin potential "// &
+                "contributions not associated with value."
             return
         end if
 
         ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=update_dm_jk_c_funptr, fptr=update_dm_jk_funptr)
+        call c_f_procpointer(cptr=update_dm_spin_c_funptr, fptr=update_dm_spin_funptr)
 
         ! allocate arrays
         allocate(dm_ao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
-                 coulomb(n_ao, n_ao, n_particle), exchange(n_ao, n_ao, n_particle))
+                 v_same_spin(n_ao, n_ao, n_particle), &
+                 v_opposite_spin(n_ao, n_ao, n_particle))
 
         ! initialize density matrix
         dm_ao = 1.0_c_rp
 
         ! call density matrix updating function
-        error = update_dm_jk_funptr(dm_ao, energy, fock, coulomb, exchange, &
-                                    get_response_c_funptr)
+        error = update_dm_spin_funptr(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
+                                      get_response_c_funptr)
 
         ! check for error
         if (error /= 0) then
@@ -208,29 +210,29 @@ contains
             test_passed = .false.
         end if
 
-        ! check Coulomb matrix
-        if (any(abs(coulomb - 3.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Coulomb matrix returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! check exchange matrix
-        if (any(abs(exchange - 4.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Exchange matrix "// &
+        ! check same-spin potential
+        if (any(abs(v_same_spin - 3.0_c_rp) > tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Same-spin potential "// &
                 "returned"//message//" wrong."
             test_passed = .false.
         end if
 
+        ! check opposite-spin potential
+        if (any(abs(v_opposite_spin - 4.0_c_rp) > tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Opposite-spin "// &
+                "potential returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
         ! deallocate arrays
-        deallocate(dm_ao, fock, coulomb, exchange)
+        deallocate(dm_ao, fock, v_same_spin, v_opposite_spin)
 
         ! test returned response function
         test_passed = test_passed .and. &
             test_get_response_3d_c_funptr(get_response_c_funptr, test_name, " by "// &
                                           "response function returned"//message)
 
-    end function test_update_dm_jk_c_funptr
+    end function test_update_dm_spin_c_funptr
 
     subroutine get_reference_arh_values(ref_settings_out) bind(C)
         !

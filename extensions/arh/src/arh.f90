@@ -28,18 +28,18 @@ module otr_arh
             [character(len=kw_len) :: "standard", "symmetric", "multisecant_psb"]
 
     abstract interface
-        subroutine update_dm_jk_type(dm, energy, fock, coulomb, exchange, &
-                                     get_response_funptr, error)
+        subroutine update_dm_spin_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
+                                       get_response_funptr, error)
             use otr_oao, only: get_response_3d_type
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), target :: fock(:, :, :), coulomb(:, :, :), &
-                                             exchange(:, :, :)
+            real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
+                                             v_opposite_spin(:, :, :)
             procedure(get_response_3d_type), intent(out), pointer :: get_response_funptr
             integer(ip), intent(out) :: error
-        end subroutine update_dm_jk_type
+        end subroutine update_dm_spin_type
     end interface
 
     type :: arh_type
@@ -49,15 +49,16 @@ module otr_arh
         real(rp), pointer :: s_inv_sqrt(:, :) => null(), dm_oao(:, :, :) => null(), &
                              fock_oo(:, :, :) => null(), fock_vv(:, :, :) => null(), &
                              energy => null(), grad(:) => null(), h_diag(:) => null()
-        real(rp), allocatable :: fock_oao(:, :, :), same_v_oao(:, :, :), &
-                                 opposite_v_oao(:, :, :), metric_eigvals(:, :), &
+        real(rp), allocatable :: fock_oao(:, :, :), v_same_spin_oao(:, :, :), &
+                                 v_opposite_spin_oao(:, :, :), metric_eigvals(:, :), &
                                  metric_eigvecs(:, :, :), dm_list(:, :, :, :), &
-                                 fock_list(:, :, :, :), same_v_list(:, :, :, :), &
-                                 opposite_v_list(:, :, :, :), dm_diff(:, :, :, :), &
-                                 fock_diff(:, :, :, :), same_v_diff(:, :, :, :), &
-                                 opposite_v_diff(:, :, :, :)
+                                 fock_list(:, :, :, :), v_same_spin_list(:, :, :, :), &
+                                 v_opposite_spin_list(:, :, :, :), &
+                                 dm_diff(:, :, :, :), fock_diff(:, :, :, :), &
+                                 v_same_spin_diff(:, :, :, :), &
+                                 v_opposite_spin_diff(:, :, :, :)
         procedure(get_energy_3d_type), pointer, nopass :: get_energy => null()
-        procedure(update_dm_jk_type), pointer, nopass :: update_dm_jk => null()
+        procedure(update_dm_spin_type), pointer, nopass :: update_dm_spin => null()
         procedure(get_energy_2d_type), pointer, nopass :: get_energy_2d => null()
         procedure(update_dm_2d_type), pointer, nopass :: update_dm_2d => null()
     end type arh_type
@@ -124,7 +125,7 @@ module otr_arh
     end subroutine arh_factory_closed_shell
 
     subroutine arh_factory_open_shell(dm_ao, ao_overlap, n_particle, n_ao, get_energy, &
-                                      update_dm_jk, obj_func_arh_funptr, &
+                                      update_dm_spin, obj_func_arh_funptr, &
                                       update_orbs_arh_funptr, project_arh_funptr, &
                                       error, settings)
         !
@@ -137,7 +138,7 @@ module otr_arh
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy
-        procedure(update_dm_jk_type), intent(in), pointer :: update_dm_jk
+        procedure(update_dm_spin_type), intent(in), pointer :: update_dm_spin
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
@@ -153,7 +154,7 @@ module otr_arh
 
         ! set pointers to functions
         arh_object%get_energy => get_energy
-        arh_object%update_dm_jk => update_dm_jk
+        arh_object%update_dm_spin => update_dm_spin
 
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_oao
@@ -360,8 +361,7 @@ module otr_arh
 
         integer(ip) :: n_ao, n_particle, i, n_list
         real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :), &
-                                 coulomb_ao(:, :, :), exchange_ao(:, :, :), &
-                                 same_v_ao(:, :, :), opposite_v_ao(:, :, :)
+                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :)
         procedure(get_response_3d_type), pointer :: get_response_3d_funptr
                                  
         external :: dgemm
@@ -375,12 +375,12 @@ module otr_arh
         ! update list of density and potential matrices
         if (allocated(arh_object%dm_list)) then
             call append(arh_object%dm_list, arh_object%dm_oao)
-            call append(arh_object%same_v_list, arh_object%same_v_oao)
-            call append(arh_object%opposite_v_list, arh_object%opposite_v_oao)
+            call append(arh_object%v_same_spin_list, arh_object%v_same_spin_oao)
+            call append(arh_object%v_opposite_spin_list, arh_object%v_opposite_spin_oao)
         else
             allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%same_v_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%opposite_v_list(n_ao, n_ao, n_particle, 0))
+                     arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
+                     arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0))
         end if
 
         ! rotate density matrix
@@ -389,12 +389,14 @@ module otr_arh
         if (error /= 0) return
 
         ! get energy, Fock matrix, and same and opposite spin potentials
-        allocate(fock_ao(n_ao, n_ao, n_particle), coulomb_ao(n_ao, n_ao, n_particle), &
-                 exchange_ao(n_ao, n_ao, n_particle))
-        call arh_object%update_dm_jk(arh_object%dm_ao, func, fock_ao, coulomb_ao, &
-                                     exchange_ao, get_response_3d_funptr, error)
+        allocate(fock_ao(n_ao, n_ao, n_particle), &
+                 v_same_spin_ao(n_ao, n_ao, n_particle), &
+                 v_opposite_spin_ao(n_ao, n_ao, n_particle))
+        call arh_object%update_dm_spin(arh_object%dm_ao, func, fock_ao, &
+                                       v_same_spin_ao, v_opposite_spin_ao, &
+                                       get_response_3d_funptr, error)
         if (error /= 0) then
-            deallocate(fock_ao, coulomb_ao, exchange_ao)
+            deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao)
             return
         end if
 
@@ -402,19 +404,12 @@ module otr_arh
         fock_oao = symmetric_transformation(arh_object%s_inv_sqrt, fock_ao)
         deallocate(fock_ao)
 
-        ! get same and opposite spin potentials
-        allocate(same_v_ao(n_ao, n_ao, n_particle), &
-                 opposite_v_ao(n_ao, n_ao, n_particle))
-        same_v_ao = coulomb_ao - exchange_ao
-        opposite_v_ao = coulomb_ao
-        deallocate(coulomb_ao, exchange_ao)
-
         ! transform same and opposite spin potentials to OAO basis
-        arh_object%same_v_oao = symmetric_transformation(arh_object%s_inv_sqrt, &
-                                                         same_v_ao)
-        arh_object%opposite_v_oao = symmetric_transformation(arh_object%s_inv_sqrt, &
-                                                             opposite_v_ao)
-        deallocate(same_v_ao, opposite_v_ao)
+        arh_object%v_same_spin_oao = symmetric_transformation(arh_object%s_inv_sqrt, &
+                                                              v_same_spin_ao)
+        arh_object%v_opposite_spin_oao = &
+            symmetric_transformation(arh_object%s_inv_sqrt, v_opposite_spin_ao)
+        deallocate(v_same_spin_ao, v_opposite_spin_ao)
 
         ! calculate gradient and Hessian diagonal
         call calculate_grad_h_diag(arh_object%dm_oao, fock_oao, n_particle, n_ao, &
@@ -431,18 +426,20 @@ module otr_arh
         ! prepare differences for response part of ARH Hessian
         n_list = size(arh_object%dm_list, 4)
         if (allocated(arh_object%dm_diff)) deallocate(arh_object%dm_diff, &
-                                                      arh_object%same_v_diff, &
-                                                      arh_object%opposite_v_diff)
+                                                      arh_object%v_same_spin_diff, &
+                                                      arh_object%v_opposite_spin_diff)
         allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
-                 arh_object%same_v_diff(n_ao, n_ao, n_particle, n_list), &
-                 arh_object%opposite_v_diff(n_ao, n_ao, n_particle, n_list))
+                 arh_object%v_same_spin_diff(n_ao, n_ao, n_particle, n_list), &
+                 arh_object%v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list))
         do i = 1, n_list
             arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
                                              arh_object%dm_oao
-            arh_object%same_v_diff(:, :, :, i) = arh_object%same_v_list(:, :, :, i) - &
-                                                 arh_object%same_v_oao
-            arh_object%opposite_v_diff(:, :, :, i) = &
-                arh_object%opposite_v_list(:, :, :, i) - arh_object%opposite_v_oao
+            arh_object%v_same_spin_diff(:, :, :, i) = &
+                arh_object%v_same_spin_list(:, :, :, i) - &
+                arh_object%v_same_spin_oao
+            arh_object%v_opposite_spin_diff(:, :, :, i) = &
+                arh_object%v_opposite_spin_list(:, :, :, i) - &
+                arh_object%v_opposite_spin_oao
         end do
 
         ! define pointer to ARH Hessian linear transformation function
@@ -516,8 +513,8 @@ module otr_arh
             hess_x_full = hess_x_full + &
                 get_response_contribution_open_shell(arh_object%dm_oao, x_full, &
                                                      arh_object%dm_diff, &
-                                                     arh_object%same_v_diff, &
-                                                     arh_object%opposite_v_diff, &
+                                                     arh_object%v_same_spin_diff, &
+                                                     arh_object%v_opposite_spin_diff, &
                                                      arh_object%metric_eigvals, &
                                                      arh_object%metric_eigvecs, n_ao, &
                                                      n_particle, arh_object%settings)
@@ -685,10 +682,12 @@ module otr_arh
         
     end function get_response_contribution_closed_shell
 
-    function get_response_contribution_open_shell(dm_oao, x, dm_diff, same_v_diff, &
-                                                  opposite_v_diff, metric_eigvals, &
-                                                  metric_eigvecs, n_ao,  n_particle, &
-                                                  settings) result(response)
+    function get_response_contribution_open_shell(dm_oao, x, dm_diff, &
+                                                  v_same_spin_diff, &
+                                                  v_opposite_spin_diff, &
+                                                  metric_eigvals, metric_eigvecs, &
+                                                  n_ao,  n_particle, settings) &
+        result(response)
         !
         ! this function computes the response contribution to the ARH Hessian for the 
         ! open-shell case
@@ -696,7 +695,8 @@ module otr_arh
         use otr_oao, only: project
 
         real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
-                                same_v_diff(:, :, :, :), opposite_v_diff(:, :, :, :), &
+                                v_same_spin_diff(:, :, :, :), &
+                                v_opposite_spin_diff(:, :, :, :), &
                                 metric_eigvals(:, :), metric_eigvecs(:, :, :)
         integer(ip), intent(in) :: n_ao, n_particle
         real(rp) :: response(n_ao, n_ao, n_particle)
@@ -769,12 +769,12 @@ module otr_arh
                     ! get traces of potential differences with current displacement
                     do i = 1, n_diff
                         same_y_delta_dm(i) = ddot(n_ao * n_ao, &
-                                                  same_v_diff(:, :, j, i), 1, &
+                                                  v_same_spin_diff(:, :, j, i), 1, &
                                                   delta_dm(:, :, j), 1)
                         do k = 1, n_particle
                             if (k == j) cycle
                             opposite_y_delta_dm(i, k) = &
-                                ddot(n_ao * n_ao, opposite_v_diff(:, :, j, i), 1, &
+                                ddot(n_ao * n_ao, v_opposite_spin_diff(:, :, k, i), 1, &
                                      delta_dm(:, :, k), 1)
                         end do
                     end do
@@ -799,11 +799,11 @@ module otr_arh
                 y_t_s_delta_dm = 0.0_rp
                 do i = 1, n_diff
                     y_t_s_delta_dm = y_t_s_delta_dm + t_s_delta_dm(i, j) * &
-                                     same_v_diff(:, :, j, i)
+                                     v_same_spin_diff(:, :, j, i)
                     do k = 1, n_particle
                         if (k == j) cycle
                         y_t_s_delta_dm = y_t_s_delta_dm + t_s_delta_dm(i, k) * &
-                                         opposite_v_diff(:, :, k, i)
+                                         v_opposite_spin_diff(:, :, j, i)
                     end do
                 end do
                 response(:, :, j) = factor * y_t_s_delta_dm

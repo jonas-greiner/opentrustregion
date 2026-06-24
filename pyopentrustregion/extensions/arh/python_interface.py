@@ -60,7 +60,7 @@ def is_update_dm(func: Any) -> TypeGuard[UpdateDMType]:
         return False
 
 
-def is_update_dm_jk(func: Any) -> TypeGuard[UpdateDMJKType]:
+def is_update_dm_spin(func: Any) -> TypeGuard[UpdateDMJKType]:
     try:
         sig = signature(func)
         return len(sig.parameters) == 4
@@ -71,7 +71,7 @@ def is_update_dm_jk(func: Any) -> TypeGuard[UpdateDMJKType]:
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-update_dm_jk_interface_type = CFUNCTYPE(
+update_dm_spin_interface_type = CFUNCTYPE(
     c_int,
     POINTER(c_real),
     POINTER(c_real),
@@ -116,11 +116,11 @@ auto_bind_fields(ARHSettings)
 @dataclass
 class UpdateDMJKInterface:
     """
-    this class provides the interface density matrix updating function with Coulomb and
-    exchange contributions
+    this class provides the interface density matrix updating function with same- and
+    opposite-spin contributions
     """
 
-    update_dm_jk: Callable[
+    update_dm_spin: Callable[
         [np.ndarray, np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ]
@@ -134,16 +134,18 @@ class UpdateDMJKInterface:
         dm_ao_ptr,
         energy_ptr,
         fock_ptr,
-        coulomb_ptr,
-        exchange_ptr,
+        v_same_spin_ptr,
+        v_opposite_spin_ptr,
         get_response_funptr,
     ) -> int:
         # convert matrix pointers to numpy arrays
         if self.closed_shell:
             dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=2 * (self.n_ao,))
             fock = np.ctypeslib.as_array(fock_ptr, shape=2 * (self.n_ao,))
-            coulomb = np.ctypeslib.as_array(coulomb_ptr, shape=2 * (self.n_ao,))
-            exchange = np.ctypeslib.as_array(exchange_ptr, shape=2 * (self.n_ao,))
+            v_same_spin = np.ctypeslib.as_array(v_same_spin_ptr, shape=2 * (self.n_ao,))
+            v_opposite_spin = np.ctypeslib.as_array(
+                v_opposite_spin_ptr, shape=2 * (self.n_ao)
+            )
         else:
             dm_ao = np.ctypeslib.as_array(
                 dm_ao_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
@@ -151,17 +153,17 @@ class UpdateDMJKInterface:
             fock = np.ctypeslib.as_array(
                 fock_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
             )
-            coulomb = np.ctypeslib.as_array(
-                coulomb_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
+            v_same_spin = np.ctypeslib.as_array(
+                v_same_spin_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
             )
-            exchange = np.ctypeslib.as_array(
-                exchange_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
+            v_opposite_spin = np.ctypeslib.as_array(
+                v_opposite_spin_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
             )
 
         # get energy, Fock matrix, and response function
         try:
-            energy_ptr[0], get_response = self.update_dm_jk(
-                dm_ao, fock, coulomb, exchange
+            energy_ptr[0], get_response = self.update_dm_spin(
+                dm_ao, fock, v_same_spin, v_opposite_spin
             )
         except RuntimeError:
             traceback.print_exc(file=sys.stderr)
@@ -224,8 +226,8 @@ def arh_factory(
         update_dm_interface = update_dm_interface_type(
             UpdateDMInterface(update_dm, n_ao, n_particle, closed_shell)
         )
-    elif is_update_dm_jk(update_dm):
-        update_dm_jk_interface = update_dm_jk_interface_type(
+    elif is_update_dm_spin(update_dm):
+        update_dm_spin_interface = update_dm_spin_interface_type(
             UpdateDMJKInterface(update_dm, n_ao, n_particle, closed_shell)
         )
 
@@ -250,7 +252,7 @@ def arh_factory(
         c_int,
         c_int,
         get_energy_interface_type,
-        update_dm_interface_type if closed_shell else update_dm_jk_interface_type,
+        update_dm_interface_type if closed_shell else update_dm_spin_interface_type,
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
         POINTER(project_interface_type),
@@ -267,7 +269,7 @@ def arh_factory(
         n_particle,
         n_ao,
         get_energy_interface,
-        update_dm_interface if closed_shell else update_dm_jk_interface,
+        update_dm_interface if closed_shell else update_dm_spin_interface,
         byref(obj_func_arh_funptr),
         byref(update_orbs_arh_funptr),
         byref(project_arh_funptr),
@@ -287,7 +289,7 @@ def arh_factory(
             saved_objects={
                 "get_energy_interface": get_energy_interface,
                 "update_dm_interface": (
-                    update_dm_interface if closed_shell else update_dm_jk_interface
+                    update_dm_interface if closed_shell else update_dm_spin_interface
                 ),
             },
         ),

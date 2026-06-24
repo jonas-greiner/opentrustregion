@@ -121,7 +121,7 @@ contains
     end subroutine mock_arh_factory_closed_shell
 
     subroutine mock_arh_factory_open_shell(dm_ao, ao_overlap, n_particle, n_ao, &
-                                           get_energy_funptr, update_dm_jk_funptr, &
+                                           get_energy_funptr, update_dm_spin_funptr, &
                                            obj_func_arh_funptr, &
                                            update_orbs_arh_funptr, project_arh_funptr, &
                                            error, settings)          
@@ -132,9 +132,9 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
                                    project_type
         use otr_oao, only: get_energy_3d_type
-        use otr_arh, only: update_dm_jk_type, arh_settings_type
+        use otr_arh, only: update_dm_spin_type, arh_settings_type
         use otr_oao_test_reference, only: test_get_energy_3d_funptr, operator(/=)
-        use otr_arh_test_reference, only: test_update_dm_jk_funptr
+        use otr_arh_test_reference, only: test_update_dm_spin_funptr
         use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
                                 dm_ao_3d
 
@@ -142,7 +142,7 @@ contains
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy_funptr
-        procedure(update_dm_jk_type), intent(in), pointer :: update_dm_jk_funptr
+        procedure(update_dm_spin_type), intent(in), pointer :: update_dm_spin_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
@@ -185,9 +185,10 @@ contains
 
         ! test passed density matrix updating function
         test_passed = test_passed .and. &
-            test_update_dm_jk_funptr(update_dm_jk_funptr, "arh_factory_c_wrapper", &
-                                     " by given density matrix updating function "// &
-                                     "with separate Coulomb and exchange contributions")
+            test_update_dm_spin_funptr(update_dm_spin_funptr, "arh_factory_c_wrapper", &
+                                       " by given density matrix updating function "// &
+                                       "with same- and opposite-spin potential "// &
+                                       "contributions")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
