@@ -268,7 +268,7 @@ contains
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:), precond_kappa(:)
         logical :: max_precision_reached, macro_converged, stable, &
                    jacobi_davidson_started, conv_check_passed
-        integer(ip) :: imacro, imicro, imicro_jacobi_davidson, i
+        integer(ip) :: imacro, imicro, imicro_jacobi_davidson
         character(300) :: msg
         integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr, stability_hess_x_funptr
