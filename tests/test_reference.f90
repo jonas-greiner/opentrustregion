@@ -38,7 +38,8 @@ module test_reference
 
     type, bind(C) :: ref_settings_type_c
         logical(c_bool) :: stability, line_search, hess_symm
-        real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
+        real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, &
+                      local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
                          jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
         character(c_char) :: subsystem_solver(kw_len + 1), diag_solver(kw_len + 1)
