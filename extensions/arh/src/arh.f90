@@ -323,14 +323,14 @@ module otr_arh
             ! prepare differences for response part of ARH Hessian
             n_list = size(arh_object%dm_list, 4)
             if (allocated(arh_object%dm_diff)) deallocate(arh_object%dm_diff, &
-                                                        arh_object%fock_diff)
+                                                          arh_object%fock_diff)
             allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
-                    arh_object%fock_diff(n_ao, n_ao, n_particle, n_list))
+                     arh_object%fock_diff(n_ao, n_ao, n_particle, n_list))
             do i = 1, n_list
                 arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
-                                                arh_object%dm_oao
+                                                 arh_object%dm_oao
                 arh_object%fock_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
-                                                arh_object%fock_oao
+                                                   arh_object%fock_oao
             end do
         end if
 
