@@ -146,7 +146,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
     def test_oao_factory_py_interface(self):
         """
         this function tests the OAO factory python interface (only tests if dm_ao,
-        mock_get_energy and mock_update_dm_jk are passed correctly for the open-shell
+        mock_get_energy and mock_update_dm_spin are passed correctly for the open-shell
         case since everything else is the same in the closed-shell case)
         """
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
