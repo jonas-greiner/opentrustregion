@@ -3356,12 +3356,13 @@ contains
         ! handle it
         if (.not. settings%hess_symm .and. &
             (string_in("ah", settings%subsystem_solver) .or. &
+             string_in("jacobi-davidson", settings%subsystem_solver) .or. &
              settings%subsystem_solver == "tcg" .or. &
              settings%subsystem_solver == "gltr")) then
             call settings%log("Non-symmetric Hessian not supported with augmented "// &
-                              "Hessian, truncated conjugate gradient, or "// &
-                              "generalized Lanczos trust region solvers.", &
-                              verbosity_error, .true.)
+                              "Hessian, Jacobi-Davidson, truncated conjugate "// &
+                              "gradient, or generalized Lanczos trust region "// &
+                              "solvers.", verbosity_error, .true.)
             error = 1
             return
         end if
@@ -3416,6 +3417,16 @@ contains
             call settings%log("Diagonalization solver option unknown. Possible "// &
                               "values are ""davidson"" and ""jacobi-davidson""", &
                               verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check whether non-symmetric Hessian is requested with a solver that cannot 
+        ! handle it
+        if (.not. settings%hess_symm .and. settings%diag_solver == "jacobi-davidson") &
+            then
+            call settings%log("Non-symmetric Hessian not supported with "// &
+                              "Jacobi-Davidson solver.", verbosity_error, .true.)
             error = 1
             return
         end if
