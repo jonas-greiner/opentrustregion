@@ -314,12 +314,6 @@ module otr_arh
                                        arh_object%grad, arh_object%h_diag, &
                                        arh_object%fock_oo, arh_object%fock_vv)
 
-            ! construct and diagonalize ARH metric
-            call get_arh_metric(arh_object%dm_list, arh_object%dm_oao, &
-                                arh_object%metric_eigvals, arh_object%metric_eigvecs, &
-                                arh_object%settings, error)
-            if (error /= 0) return
-
             ! prepare differences for response part of ARH Hessian
             n_list = size(arh_object%dm_list, 4)
             if (allocated(arh_object%dm_diff)) deallocate(arh_object%dm_diff, &
@@ -332,6 +326,11 @@ module otr_arh
                 arh_object%fock_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
                                                    arh_object%fock_oao
             end do
+
+            ! construct and diagonalize ARH metric
+            call get_arh_metric(arh_object%dm_diff, arh_object%metric_eigvals, &
+                                arh_object%metric_eigvecs, arh_object%settings, error)
+            if (error /= 0) return
         end if
 
         ! set outputs
@@ -438,12 +437,6 @@ module otr_arh
                                        arh_object%fock_oo, arh_object%fock_vv)
             deallocate(fock_oao)
 
-            ! construct and diagonalize ARH metric
-            call get_arh_metric(arh_object%dm_list, arh_object%dm_oao, &
-                                arh_object%metric_eigvals, arh_object%metric_eigvecs, &
-                                arh_object%settings, error)
-            if (error /= 0) return
-
             ! prepare differences for response part of ARH Hessian
             n_list = size(arh_object%dm_list, 4)
             if (allocated(arh_object%dm_diff)) &
@@ -462,6 +455,11 @@ module otr_arh
                     arh_object%v_opposite_spin_list(:, :, :, i) - &
                     arh_object%v_opposite_spin_oao
             end do
+
+            ! construct and diagonalize ARH metric
+            call get_arh_metric(arh_object%dm_diff, arh_object%metric_eigvals, &
+                                arh_object%metric_eigvecs, arh_object%settings, error)
+            if (error /= 0) return
         end if
 
         ! set outputs
@@ -913,22 +911,22 @@ module otr_arh
 
     end function multiply_with_inverse_metric
 
-    subroutine get_arh_metric(dm_list, dm_oao, eigvals, eigvecs, settings, error)
+    subroutine get_arh_metric(dm_diff, eigvals, eigvecs, settings, error)
         !
         ! this function calculates the augmented Roothaan-Hall metric
         !
         use opentrustregion, only: symm_mat_diag
 
-        real(rp), intent(in) :: dm_list(:, :, :, :), dm_oao(:, :, :)
+        real(rp), intent(in) :: dm_diff(:, :, :, :)
         real(rp), intent(out), allocatable :: eigvals(:, :), eigvecs(:, :, :)
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_particle, n_dm, i, j, k
-        real(rp), allocatable :: metric(:, :), delta_i(:, :), delta_j(:, :)
+        real(rp), allocatable :: metric(:, :)
 
-        n_particle = size(dm_list, 3)
-        n_dm = size(dm_list, 4)
+        n_particle = size(dm_diff, 3)
+        n_dm = size(dm_diff, 4)
 
         if (allocated(arh_object%metric_eigvals)) deallocate(arh_object%metric_eigvals)
         if (allocated(arh_object%metric_eigvecs)) deallocate(arh_object%metric_eigvecs)
@@ -938,11 +936,10 @@ module otr_arh
         do k = 1, n_particle
             ! generate ARH metric
             do j = 1, n_dm
-                delta_j = dm_list(:, :, k, j) - dm_oao(:, :, k)
                 do i = 1, j
-                    delta_i = dm_list(:, :, k, i) - dm_oao(:, :, k)
-                    ! compute Tr(delta_i * delta_j)
-                    metric(i, j) = sum(delta_j * transpose(delta_i))
+                    ! compute Tr(dm_diff_i * dm_diff_j)
+                    metric(i, j) = sum(dm_diff(:, :, k, j) * &
+                                   transpose(dm_diff(:, :, k, i)))
                     metric(j, i) = metric(i, j)
                 end do
             end do
@@ -951,9 +948,6 @@ module otr_arh
                                              settings, error)
             if (error /= 0) exit
         end do
-
-        if (allocated(delta_i)) deallocate(delta_i)
-        if (allocated(delta_j)) deallocate(delta_j)
         deallocate(metric)
 
     end subroutine get_arh_metric
