@@ -73,7 +73,7 @@ contains
     end subroutine mock_solver
 
     subroutine mock_stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                                    kappa)
+                                    kappa, min_eigval)
         !
         ! this subroutine is a mock routine for the stability check to test the C 
         ! interface
@@ -86,7 +86,7 @@ contains
         logical, intent(out) :: stable
         integer(ip), intent(out) :: error
         type(stability_settings_type), intent(inout) :: settings
-        real(rp), intent(out), optional :: kappa(:)
+        real(rp), intent(out), optional :: kappa(:), min_eigval
 
         ! initialize logical
         test_passed = .true.
@@ -106,6 +106,7 @@ contains
         ! set output quantities
         stable = .false.
         if (present(kappa)) kappa = 1.0_rp
+        if (present(min_eigval)) min_eigval = -1.0_rp
         error = 0
 
         ! check optional function pointers

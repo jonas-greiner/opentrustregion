@@ -250,8 +250,9 @@ contains
     end function solver_c_wrapper
 
     function stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, &
-                                       stable_c, settings_c, kappa_c_ptr) &                    
-        result(error_c) bind(C, name="stability_check")
+                                       stable_c, settings_c, kappa_c_ptr, &
+                                       min_eigval_c_ptr) result(error_c) &                    
+        bind(C, name="stability_check")
         !
         ! this function exposes a Fortran-implemented stability check subroutine to C
         !
@@ -263,10 +264,11 @@ contains
         logical(c_bool), intent(out) :: stable_c
         type(stability_settings_type_c), intent(inout) :: settings_c
         type(c_ptr), intent(in), value :: kappa_c_ptr
+        type(c_ptr), intent(in), value :: min_eigval_c_ptr
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:)
-        real(c_rp), pointer :: kappa_ptr_c(:)
+        real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:), min_eigval_ptr
+        real(c_rp), pointer :: kappa_ptr_c(:), min_eigval_ptr_c
         logical :: stable
         integer(ip) :: error
         procedure(hess_x_f_wrapper), pointer :: hess_x
@@ -286,12 +288,19 @@ contains
             allocate(h_diag_ptr(n_param_c))
             h_diag_ptr = real(h_diag_c(:n_param_c), kind=rp)
         end if
+        allocate(kappa_ptr(n_param_c), min_eigval_ptr)
         if (c_associated(kappa_c_ptr)) then
             if (rp == c_rp) then
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr, shape=[n_param_c])
             else
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
-                allocate(kappa_ptr(n_param_c))
+            end if
+        end if
+        if (c_associated(min_eigval_c_ptr)) then
+            if (rp == c_rp) then
+                call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr)
+            else
+                call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr_c)
             end if
         end if
 
@@ -299,19 +308,15 @@ contains
         settings = settings_c
 
         ! call stability check
-        if (c_associated(kappa_c_ptr)) then
-            call stability_check(h_diag_ptr, hess_x, stable, error, settings, &
-                                 kappa=kappa_ptr)
-            if (rp /= c_rp) then
-                kappa_ptr_c = kappa_ptr
-                deallocate(kappa_ptr)
-            end if
-        else
-            call stability_check(h_diag_ptr, hess_x, stable, error, settings)
-        end if
-        if (rp /= c_rp) deallocate(h_diag_ptr)
+        call stability_check(h_diag_ptr, hess_x, stable, error, settings, &
+                                kappa=kappa_ptr, min_eigval=min_eigval_ptr)
 
         ! convert return arguments to C kind
+        if (rp /= c_rp) then
+            kappa_ptr_c = real(kappa_ptr, kind=c_rp)
+            min_eigval_ptr_c = real(min_eigval_ptr, kind=c_rp)
+            deallocate(kappa_ptr, h_diag_ptr, min_eigval_ptr)
+        end if
         stable_c = logical(stable, kind=c_bool)
         error_c = int(error, kind=c_ip)
 

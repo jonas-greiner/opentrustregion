@@ -384,7 +384,7 @@ contains
         use opentrustregion, only: hess_x_type, stability_settings_type, stability_check
         use test_reference, only: n_trial_vectors
 
-        real(rp) :: vars(6), h_diag(6), direction(6), eigval_vec(6)
+        real(rp) :: vars(6), h_diag(6), direction(6), min_eigval, eigval_vec(6)
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable
         integer(ip) :: error, i
@@ -404,8 +404,9 @@ contains
         call settings%init(error)
 
         ! run stability, check if error has occured check and determine whether minimum 
-        ! is stable and the returned direction vanishes
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        ! is stable and returned direction and eigenvalue are correct
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -415,9 +416,15 @@ contains
                 "incorrectly classifies stability of minimum."
             test_stability_check = .false.
         end if
-        if (all(abs(direction) > tol)) then
+        if (min_eigval <= 0.0_rp) then
+            write (stderr, *) "test_stability_check failed: Stability check "// &
+                "does not return correct eigenvalue for minimum."
+            test_stability_check = .false.
+        end if
+        call hess_x_funptr(direction, eigval_vec, error)
+        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
             write (stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return zero vector for minimum."
+                "not return correct eigenvector direction for minimum."
             test_stability_check = .false.
         end if
 
@@ -430,22 +437,30 @@ contains
 
         ! run stability, check if error has occured check and determine whether minimum 
         ! is stable and the returned direction vanishes
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error with "// &
                 "custom trial space initialization."
             test_stability_check = .false.
         end if
         if (.not. stable) then
-            write (stderr, *) "test_stability_check failed: Stability check with"// &
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
                 "custom trial space initialization incorrectly classifies "// &
                 "stability of minimum."
             test_stability_check = .false.
         end if
-        if (all(abs(direction) > tol)) then
+        if (min_eigval <= 0.0_rp) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization does not return zero vector for "// &
-                "minimum."
+                "custom trial space initialization does not return correct "// &
+                "eigenvalue for minimum."
+            test_stability_check = .false.
+        end if
+        call hess_x_funptr(direction, eigval_vec, error)
+        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "custom trial space initialization does not return correct "// &
+                "eigenvector direction for minimum."
             test_stability_check = .false.
         end if
 
@@ -457,7 +472,8 @@ contains
 
         ! run stability, check if error has occured check and determine whether minimum 
         ! is stable and the returned direction vanishes
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error with "// &
                 "approximate Hessian linear transformation."
@@ -469,10 +485,17 @@ contains
                 "stability of minimum."
             test_stability_check = .false.
         end if
-        if (all(abs(direction) > tol)) then
+        if (min_eigval <= 0.0_rp) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation does not return zero "// &
-                "vector for minimum."
+                "approximate Hessian linear transformation does not return correct "// &
+                "eigenvalue for minimum."
+            test_stability_check = .false.
+        end if
+        call hess_x_funptr(direction, eigval_vec, error)
+        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "approximate Hessian linear transformation does not return correct "// &
+                "eigenvector direction for minimum."
             test_stability_check = .false.
         end if
 
@@ -488,7 +511,8 @@ contains
 
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error."
             test_stability_check = .false.
@@ -498,17 +522,15 @@ contains
                 "incorrectly classifies stability of saddle point."
             test_stability_check = .false.
         end if
-        call hess_x_funptr(direction, eigval_vec, error)
-        eigval_vec = eigval_vec / direction
-        if (maxval(eigval_vec) - minval(eigval_vec) > tol) then
-            write (stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return eigenvector direction for saddle point."
+        if (min_eigval >= 0.0_rp) then
+            write (stderr, *) "test_stability_check failed: Stability check "// &
+                "does not return correct eigenvalue for saddle point."
             test_stability_check = .false.
         end if
-        if (sum(eigval_vec) / 6 > 0.0_rp) then
+        call hess_x_funptr(direction, eigval_vec, error)
+        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
             write (stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return eigenvector direction corresponding to negative " // &
-                "eigenvalue for saddle point."
+                "not return correct eigenvector direction for saddle point."
             test_stability_check = .false.
         end if
 
@@ -521,7 +543,8 @@ contains
 
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error with "// &
                 "custom trial space initialization."
@@ -533,18 +556,17 @@ contains
                 "stability of saddle point."
             test_stability_check = .false.
         end if
-        call hess_x_funptr(direction, eigval_vec, error)
-        eigval_vec = eigval_vec / direction
-        if (maxval(eigval_vec) - minval(eigval_vec) > tol) then
+        if (min_eigval >= 0.0_rp) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization does not return eigenvector "// &
-                "direction for saddle point."
+                "custom trial space initialization does not return correct "// &
+                "eigenvalue for saddle point."
             test_stability_check = .false.
         end if
-        if (sum(eigval_vec) / 6 > 0.0_rp) then
+        call hess_x_funptr(direction, eigval_vec, error)
+        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization does not return eigenvector "// &
-                "direction corresponding to negative eigenvalue for saddle point."
+                "custom trial space initialization does not return correct "// &
+                "eigenvector direction for saddle point."
             test_stability_check = .false.
         end if
 
@@ -556,7 +578,8 @@ contains
 
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, direction)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error with "// &
                 "approximate Hessian linear transformation."
@@ -568,19 +591,17 @@ contains
                 "stability of saddle point."
             test_stability_check = .false.
         end if
-        call hess_x_funptr(direction, eigval_vec, error)
-        eigval_vec = eigval_vec / direction
-        if (maxval(eigval_vec) - minval(eigval_vec) > tol) then
+        if (min_eigval >= 0.0_rp) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation does not return "// &
-                "eigenvector direction for saddle point."
+                "approximate Hessian linear transformation does not return correct "// &
+                "eigenvalue for saddle point."
             test_stability_check = .false.
         end if
-        if (sum(eigval_vec) / 6 > 0.0_rp) then
+        call hess_x_funptr(direction, eigval_vec, error)
+        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation does not return "// &
-                "eigenvector direction corresponding to negative eigenvalue for " // &
-                "saddle point."
+                "approximate Hessian linear transformation does not return correct "// &
+                "eigenvector direction for saddle point."
             test_stability_check = .false.
         end if
 

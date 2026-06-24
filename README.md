@@ -304,6 +304,7 @@ stable = stability_check(h_diag, hess_x, n_param, settings, kappa=kappa)
 - Stability settings are initialized via the `StabilitySettings` class, which returns an object with default values; individual settings (here, `conv_tol`) can then be overridden.
 - The `stable` output receives the result of the stability check and errors can be caught in pythonic fashion in the form of a `RuntimeException`.
 - The descent direction `kappa` is optional and is only returned if provided.
+- The minimum eigenvalue `min_eigval` is optional and is only returned if provided.
 
 ### Optional Settings
 The stability check can be fine-tuned using the following settings:

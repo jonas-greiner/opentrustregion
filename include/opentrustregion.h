@@ -177,15 +177,17 @@ c_int solver(
  * @param stable            Pointer to bool that receives stability result
  * @param settings          Struct of stability solver settings
  * @param kappa_ptr         Pointer to orbital rotation vector
+ * @param min_eigval_ptr    Pointer to minimum eigenvalue
  * @return                  Integer error code from Fortran
  */
 c_int stability_check(
-    const void* h_diag_ptr,
+    const c_real* h_diag_ptr,
     hess_x_fp hess_x_ptr,
     c_int n_param,
     c_bool* stable,
     stability_settings_type *settings,
-    const void* kappa_ptr
+    c_real* kappa_ptr, 
+    c_real* min_eigval_ptr
 );
 
 #ifdef __cplusplus

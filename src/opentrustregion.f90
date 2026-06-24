@@ -263,8 +263,8 @@ contains
         integer(ip), intent(out) :: error
         type(solver_settings_type), intent(inout) :: settings
 
-        real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, new_func, n_kappa, &
-                    kappa_norm, lambda
+        real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, n_kappa, kappa_norm, &
+                    lambda, grad_kappa, min_eigval
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:), precond_kappa(:)
         logical :: max_precision_reached, macro_converged, stable, &
                    jacobi_davidson_started, conv_check_passed
@@ -458,26 +458,15 @@ contains
                     if (error /= 0) return
                     if (allocated(approx_min_eigvec)) deallocate(approx_min_eigvec)
                     if (.not. stable) then
-                        ! logarithmic line search
-                        do i = 1, stability_n_points
-                            n_kappa = 10.0_rp**(-(i - 1) / &
-                                                real(stability_n_points - 1, rp) * &
-                                                10.0_rp)
-                            new_func = obj_func(n_kappa*kappa, error)
-                            call add_error_origin(error, error_obj_func, settings)
-                            if (error /= 0) return
-                            if (new_func < func) then
-                                kappa = n_kappa*kappa
-                                exit
-                            end if
-                        end do
-                        if (new_func >= func) then
-                            call settings%log("Line search was unable to find "// &
-                                              "lower objective function along "// &
-                                              "unstable mode.", verbosity_error, .true.)
-                            error = error_solver + 1
-                            return
-                        else if (imacro == 1) then
+                        ! move far enough so that gradient is increased by one order of 
+                        ! magnitude
+                        grad_kappa = ddot(n_param, kappa, 1_ip, grad, 1_ip)
+                        n_kappa = (-grad_kappa + sign(1.0_rp, grad_kappa) * &
+                                   sqrt(grad_kappa**2 + real(n_param, kind=rp) * &
+                                        ((10 * settings%conv_tol)**2 - grad_rms**2))) &
+                                   / min_eigval
+                        kappa = n_kappa * kappa
+                        if (imacro == 1) then
                             call settings%log("Started at saddle point. The "// &
                                               "algorithm will continue by moving "// &
                                               "along eigenvector direction "// &
@@ -591,7 +580,8 @@ contains
 
     end subroutine solver
 
-    subroutine stability_check(h_diag, hess_x_funptr, stable, error, settings, kappa)
+    subroutine stability_check(h_diag, hess_x_funptr, stable, error, settings, kappa, &
+                               min_eigval)
         !
         ! this subroutine performs a stability check
         !
@@ -600,7 +590,7 @@ contains
         logical, intent(out) :: stable
         integer(ip), intent(out) :: error
         type(stability_settings_type), intent(inout) :: settings
-        real(rp), intent(out), optional :: kappa(:)
+        real(rp), intent(out), optional :: kappa(:), min_eigval
 
         procedure(hess_x_type), pointer :: approx_hess_x_funptr
         integer(ip) :: n_param, n_trial, i, iter
@@ -811,13 +801,13 @@ contains
                               "number of iterations.", verbosity_error, .true.)
         end if
 
+        ! return lowest eigenvector and eigenvalue
+        if (present(kappa)) kappa = solution
+        if (present(min_eigval)) min_eigval = eigval
+
         ! determine if saddle point
         stable = eigval > stability_thresh
-        
-        if (stable) then
-            if (present(kappa)) kappa = 0.0_rp
-        else
-            if (present(kappa)) kappa = solution
+        if (.not. stable) then
             write (msg, '(A, F0.4)') "Solution not stable. Lowest eigenvalue: ", eigval
             call settings%log(msg, verbosity_error, .true.)
         end if

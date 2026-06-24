@@ -459,7 +459,7 @@ class PyInterfaceTests(unittest.TestCase):
         self.test_logger = True
 
         # call stability check python interface with optional arguments
-        stable = stability_check(
+        stable, min_eigval = stability_check(
             h_diag, self.mock_hess_x, n_param, settings, kappa=kappa
         )
 
@@ -483,12 +483,19 @@ class PyInterfaceTests(unittest.TestCase):
             print(
                 " test_stability_check_py_interface failed: Returned direction wrong."
             )
+        wrong_min_eigval = not np.isclose(min_eigval, -1.0)
+        if wrong_min_eigval:
+            print(
+                " test_stability_check_py_interface failed: Returned minimum eigenvalue "
+                "wrong."
+            )
 
         self.assertTrue(
             c_bool.in_dll(lib, "test_stability_check_interface").value
             and self.test_logger
             and not stable
-            and not wrong_direction,
+            and not wrong_direction
+            and not wrong_min_eigval,
             "test_stability_check_py_interface failed",
         )
         print(" test_stability_check_py_interface PASSED")

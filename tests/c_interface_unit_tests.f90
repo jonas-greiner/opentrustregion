@@ -282,9 +282,10 @@ contains
         type(c_funptr) :: hess_x_c_funptr
         real(c_rp), allocatable :: h_diag(:)
         real(c_rp), allocatable, target :: kappa(:)
+        real(c_rp), target :: min_eigval
         type(stability_settings_type_c) :: settings
         logical(c_bool) :: stable
-        type(c_ptr) :: kappa_c_ptr
+        type(c_ptr) :: kappa_c_ptr, min_eigval_c_ptr
         integer(c_ip) :: error
 
         ! assume tests pass
@@ -306,10 +307,11 @@ contains
 
         ! unassociate returned direction pointer
         kappa_c_ptr = c_null_ptr
+        min_eigval_c_ptr = c_null_ptr
 
         ! call stability check first without initialized returned direction
         error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
-                                          settings, kappa_c_ptr)
+                                          settings, kappa_c_ptr, min_eigval_c_ptr)
 
         ! check if test has passed
         test_stability_check_c_wrapper = test_passed
@@ -337,13 +339,14 @@ contains
         ! associate returned direction with value
         allocate(kappa(n_param))
         kappa_c_ptr = c_loc(kappa)
+        min_eigval_c_ptr = c_loc(min_eigval)
 
         ! initialize logger logical
         test_logger = .true.
 
         ! call stability check with initilized returned direction
         error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
-                                          settings, kappa_c_ptr)
+                                          settings, kappa_c_ptr, min_eigval_c_ptr)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -363,6 +366,12 @@ contains
             test_stability_check_c_wrapper = .false.
             write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                 "direction wrong."
+        end if
+
+        if (abs(min_eigval - (-1.0_c_rp)) > tol_c) then
+            test_stability_check_c_wrapper = .false.
+            write (stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
+                "minimum eigenvalue wrong."
         end if
 
         if (error /= 0) then

@@ -676,7 +676,7 @@ def stability_check(
     n_param: int,
     settings: StabilitySettings,
     kappa: Optional[np.ndarray] = None,
-) -> bool:
+) -> Tuple[bool, float]:
     # define interfaces for callback functions
     hess_x_interface = hess_x_interface_type(HessXInterface(hess_x, n_param))
 
@@ -693,11 +693,13 @@ def stability_check(
         c_int,
         POINTER(c_bool),
         POINTER(StabilitySettingsC),
-        c_void_p,
+        POINTER(c_real),
+        POINTER(c_real),
     ]
 
     # initialize return variables
     stable = c_bool(False)
+    min_eigval = c_real(float("nan"))
 
     # call Fortran function
     error = lib.stability_check(
@@ -706,10 +708,11 @@ def stability_check(
         n_param,
         byref(stable),
         byref(settings.settings_c),
-        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else kappa,
+        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
+        byref(min_eigval),
     )
 
     if error:
         raise RuntimeError("OpenTrustRegion stability check produced error.")
 
-    return bool(stable)
+    return stable.value, min_eigval.value
