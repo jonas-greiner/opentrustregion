@@ -50,13 +50,14 @@ module otr_arh
                              fock_oo(:, :, :) => null(), fock_vv(:, :, :) => null(), &
                              energy => null(), grad(:) => null(), h_diag(:) => null()
         real(rp), allocatable :: fock_oao(:, :, :), v_same_spin_oao(:, :, :), &
-                                 v_opposite_spin_oao(:, :, :), metric_eigvals(:, :), &
-                                 metric_eigvecs(:, :, :), dm_list(:, :, :, :), &
-                                 fock_list(:, :, :, :), v_same_spin_list(:, :, :, :), &
+                                 v_opposite_spin_oao(:, :, :), metric_chol(:, :, :), &
+                                 dm_list(:, :, :, :), fock_list(:, :, :, :), &
+                                 v_same_spin_list(:, :, :, :), &
                                  v_opposite_spin_list(:, :, :, :), &
                                  dm_diff(:, :, :, :), fock_diff(:, :, :, :), &
                                  v_same_spin_diff(:, :, :, :), &
                                  v_opposite_spin_diff(:, :, :, :)
+        integer(ip), allocatable :: metric_rank(:), metric_piv(:, :)
         procedure(get_energy_3d_type), pointer, nopass :: get_energy => null()
         procedure(update_dm_spin_type), pointer, nopass :: update_dm_spin => null()
         procedure(get_energy_2d_type), pointer, nopass :: get_energy_2d => null()
@@ -328,8 +329,9 @@ module otr_arh
             end do
 
             ! construct and diagonalize ARH metric
-            call get_arh_metric(arh_object%dm_diff, arh_object%metric_eigvals, &
-                                arh_object%metric_eigvecs, arh_object%settings, error)
+            call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
+                                arh_object%metric_rank, arh_object%metric_piv, &
+                                arh_object%settings, error)
             if (error /= 0) return
         end if
 
@@ -457,8 +459,9 @@ module otr_arh
             end do
 
             ! construct and diagonalize ARH metric
-            call get_arh_metric(arh_object%dm_diff, arh_object%metric_eigvals, &
-                                arh_object%metric_eigvecs, arh_object%settings, error)
+            call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
+                                arh_object%metric_rank, arh_object%metric_piv, &
+                                arh_object%settings, error)
             if (error /= 0) return
         end if
 
@@ -528,18 +531,19 @@ module otr_arh
                 get_response_contribution_closed_shell(arh_object%dm_oao, x_full, &
                                                        arh_object%dm_diff, &
                                                        arh_object%fock_diff, &
-                                                       arh_object%metric_eigvals, &
-                                                       arh_object%metric_eigvecs, &
-                                                       n_ao, n_particle, &
-                                                       arh_object%settings)
+                                                       arh_object%metric_chol, &
+                                                       arh_object%metric_rank, &
+                                                       arh_object%metric_piv, n_ao, &
+                                                       n_particle, arh_object%settings)
         else
             hess_x_full = hess_x_full + &
                 get_response_contribution_open_shell(arh_object%dm_oao, x_full, &
                                                      arh_object%dm_diff, &
                                                      arh_object%v_same_spin_diff, &
                                                      arh_object%v_opposite_spin_diff, &
-                                                     arh_object%metric_eigvals, &
-                                                     arh_object%metric_eigvecs, n_ao, &
+                                                     arh_object%metric_chol, &
+                                                     arh_object%metric_rank, &
+                                                     arh_object%metric_piv, n_ao, &
                                                      n_particle, arh_object%settings)
         end if
         if (error /= 0) return
@@ -589,9 +593,9 @@ module otr_arh
     end subroutine arh_deconstructor
 
     function get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
-                                                    metric_eigvals, metric_eigvecs, &
-                                                    n_ao, n_particle, settings) &
-                                                    result(response)
+                                                    metric_chol, metric_rank, &
+                                                    metric_piv, n_ao, n_particle, &
+                                                    settings) result(response)
         !
         ! this function computes the response contribution to the ARH Hessian for the 
         ! closed-shell case
@@ -599,8 +603,8 @@ module otr_arh
         use otr_oao, only: project
 
         real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
-                                fock_diff(:, :, :, :), metric_eigvals(:, :), &
-                                metric_eigvecs(:, :, :)
+                                fock_diff(:, :, :, :), metric_chol(:, :, :)
+        integer(ip), intent(in) :: metric_rank(:), metric_piv(:, :)
         integer(ip), intent(in) :: n_ao, n_particle
         real(rp) :: response(n_ao, n_ao, n_particle)
         type(arh_settings_type), intent(in) :: settings
@@ -649,14 +653,14 @@ module otr_arh
             ! matrix differences and current displacement
             allocate(t_s_delta_dm(n_diff))
             t_s_delta_dm = &
-                multiply_with_inverse_metric(s_delta_dm, metric_eigvals(:, 1), &
-                                             metric_eigvecs(:, :, 1))
+                multiply_with_inverse_metric(s_delta_dm, metric_chol(:, :, 1), &
+                                             metric_rank(1), metric_piv(:, 1))
             if (settings%arh_type == "symmetric" .or. &
                 settings%arh_type == "multisecant_psb") then
                 allocate(t_y_delta_dm(n_diff))
                 t_y_delta_dm = &
-                    multiply_with_inverse_metric(y_delta_dm, metric_eigvals(:, 1), &
-                                                 metric_eigvecs(:, :, 1))
+                    multiply_with_inverse_metric(y_delta_dm, metric_chol(:, :, 1), &
+                                                 metric_rank(1), metric_piv(:, 1))
             end if
 
             ! contract with Fock matrix differences to get ARH contribution
@@ -678,8 +682,8 @@ module otr_arh
                 allocate(t_sy_t_s_delta_dm(n_diff))
                 t_sy_t_s_delta_dm = &
                     multiply_with_inverse_metric(sy_t_s_delta_dm, &
-                                                 metric_eigvals(:, 1), &
-                                                 metric_eigvecs(:, :, 1))
+                                                 metric_chol(:, :, 1), &
+                                                 metric_rank(1), metric_piv(:, 1))
             else
                 deallocate(y_t_s_delta_dm)
             end if
@@ -708,9 +712,9 @@ module otr_arh
     function get_response_contribution_open_shell(dm_oao, x, dm_diff, &
                                                   v_same_spin_diff, &
                                                   v_opposite_spin_diff, &
-                                                  metric_eigvals, metric_eigvecs, &
-                                                  n_ao,  n_particle, settings) &
-        result(response)
+                                                  metric_chol, metric_rank, &
+                                                  metric_piv, n_ao, n_particle, &
+                                                  settings) result(response)
         !
         ! this function computes the response contribution to the ARH Hessian for the 
         ! open-shell case
@@ -719,8 +723,8 @@ module otr_arh
 
         real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
                                 v_same_spin_diff(:, :, :, :), &
-                                v_opposite_spin_diff(:, :, :, :), &
-                                metric_eigvals(:, :), metric_eigvecs(:, :, :)
+                                v_opposite_spin_diff(:, :, :, :), metric_chol(:, :, :)
+        integer(ip), intent(in) :: metric_rank(:), metric_piv(:, :)
         integer(ip), intent(in) :: n_ao, n_particle
         real(rp) :: response(n_ao, n_ao, n_particle)
         type(arh_settings_type), intent(in) :: settings
@@ -781,8 +785,8 @@ module otr_arh
             do j = 1, n_particle
                 t_s_delta_dm(:, j) = &
                     multiply_with_inverse_metric(s_delta_dm(:, j), &
-                                                 metric_eigvals(:, j), &
-                                                 metric_eigvecs(:, :, j))
+                                                 metric_chol(:, :, j), metric_rank(j), &
+                                                 metric_piv(:, j))
             end do
 
             ! loop over particles
@@ -807,14 +811,14 @@ module otr_arh
                     t_opposite_y_delta_dm = 0.0_rp
                     t_same_y_delta_dm = &
                         multiply_with_inverse_metric(same_y_delta_dm, &
-                                                     metric_eigvals(:, j), &
-                                                     metric_eigvecs(:, :, j))
+                                                     metric_chol(:, :, j), &
+                                                     metric_rank(j), metric_piv(:, j))
                     do k = 1, n_particle
                         if (k == j) cycle
                         t_opposite_y_delta_dm(:, k) = &
-                            multiply_with_inverse_metric(opposite_y_delta_dm(:, k), &
-                                                         metric_eigvals(:, j), &
-                                                         metric_eigvecs(:, :, j))
+                            multiply_with_inverse_metric( &
+                                opposite_y_delta_dm(:, k), metric_chol(:, :, j), &
+                                metric_rank(j), metric_piv(:, j))
                     end do
                 end if
 
@@ -842,8 +846,8 @@ module otr_arh
                     ! multiply pseudoinverse metric with vector
                     t_sy_t_s_delta_dm = &
                         multiply_with_inverse_metric(sy_t_s_delta_dm, &
-                                                     metric_eigvals(:, j), &
-                                                     metric_eigvecs(:, :, j))
+                                                     metric_chol(:, :, j), &
+                                                     metric_rank(j), metric_piv(:, j))
                 end if
 
                 ! contract with density matrix differences to get symmetric and 
@@ -878,77 +882,122 @@ module otr_arh
 
     end function get_response_contribution_open_shell
 
-    function multiply_with_inverse_metric(vec, metric_eigvals, metric_eigvecs) &
-        result(result_vec)
+    function multiply_with_inverse_metric(vec, chol, rank, piv) result(result_vec)
         !
-        ! this function multiplies a vector with the pseudoinverse of the ARH metric by 
-        ! transforming to the metric eigenbasis, applying the pseudoinverse and then 
-        ! transforming back to the original basis
+        ! this function multiplies a vector with the pseudoinverse of the ARH metric
+        ! using forward and backward substitution over the numerical rank
         !
-        use opentrustregion, only: numerical_zero
-
-        real(rp), intent(in) :: vec(:), metric_eigvals(:), metric_eigvecs(:, :)
+        real(rp), intent(in) :: vec(:), chol(:, :)
+        integer(ip), intent(in) :: rank, piv(:)
         real(rp) :: result_vec(size(vec))
 
-        integer(ip) :: n_diff, i
-        real(rp), allocatable :: temp(:)
+        integer(ip) :: n_dm, i
+        real(rp), allocatable :: perm_vec(:)
+        external :: dtrsv
 
-        n_diff = size(metric_eigvals, 1)
+        n_dm = size(vec, 1)
+        result_vec = 0.0_rp
+        if (rank == 0) return
 
-        allocate(temp(n_diff))
-        call dgemv("T", n_diff, n_diff, 1.0_rp, metric_eigvecs, n_diff, vec, 1, &
-                   0.0_rp, temp, 1)
-        do i = 1, n_diff
-            if (metric_eigvals(i) > numerical_zero) then
-                temp(i) = temp(i) / metric_eigvals(i)
-            else
-                temp(i) = 0.0_rp
-            end if
+        ! forward permutation: perm_vec = P^T * vec
+        allocate(perm_vec(n_dm))
+        do i = 1, n_dm
+            perm_vec(i) = vec(piv(i))
         end do
-        call dgemv("N", n_diff, n_diff, 1.0_rp, metric_eigvecs, n_diff, temp, 1, &
-                   0.0_rp, result_vec, 1)
-        deallocate(temp)
+
+        ! forward substitution: solve R^T * y = perm_vec(1:rank)
+        call dtrsv("U", "T", "N", rank, chol, n_dm, perm_vec, 1)
+
+        ! filter out linear dependencies
+        if (rank < n_dm) perm_vec(rank+1:n_dm) = 0.0_rp
+
+        ! backward substitution: solve R * c = y
+        call dtrsv("U", "N", "N", rank, chol, n_dm, perm_vec, 1)
+
+        ! backward permutation to original basis: result_vec = P * perm_vec
+        do i = 1, n_dm
+            result_vec(piv(i)) = perm_vec(i)
+        end do
+        deallocate(perm_vec)
 
     end function multiply_with_inverse_metric
 
-    subroutine get_arh_metric(dm_diff, eigvals, eigvecs, settings, error)
+    subroutine get_arh_metric(dm_diff, chol, rank, piv, settings, error)
         !
-        ! this function calculates the augmented Roothaan-Hall metric
+        ! this function calculates the augmented Roothaan-Hall metric factorized via a 
+        ! rank-revealing pivoted Cholesky decomposition, since the density matrix 
+        ! differences are saved in reverse order, these earlier density matrix 
+        ! differences are more likely to be removed in case of linear dependencies, 
+        ! which is desirable whenever the surface is not quadratic in the density 
+        ! matrix such as for DFT
         !
-        use opentrustregion, only: symm_mat_diag
+        use opentrustregion, only: numerical_zero, verbosity_error
 
         real(rp), intent(in) :: dm_diff(:, :, :, :)
-        real(rp), intent(out), allocatable :: eigvals(:, :), eigvecs(:, :, :)
+        real(rp), intent(out), allocatable :: chol(:, :, :)
+        integer(ip), intent(out), allocatable :: rank(:), piv(:, :)
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_particle, n_dm, i, j, k
-        real(rp), allocatable :: metric(:, :)
+        integer(ip) :: n_particle, n_dm, i, j, k, info
+        real(rp), allocatable :: metric(:, :), work(:)
+        real(rp) :: tol
+        character(300) :: msg
+        external :: dpstrf
+
+        ! initialize error flag
+        error = 0
 
         n_particle = size(dm_diff, 3)
         n_dm = size(dm_diff, 4)
 
-        if (allocated(arh_object%metric_eigvals)) deallocate(arh_object%metric_eigvals)
-        if (allocated(arh_object%metric_eigvecs)) deallocate(arh_object%metric_eigvecs)
-        allocate(arh_object%metric_eigvals(n_dm, n_particle), &
-                 arh_object%metric_eigvecs(n_dm, n_dm, n_particle), metric(n_dm, n_dm))
+        ! allocate metric arrays
+        allocate(chol(n_dm, n_dm, n_particle), rank(n_particle), &
+                 piv(n_dm, n_particle), metric(n_dm, n_dm), work(2 * n_dm))
 
+        chol = 0.0_rp
+        rank = 0
         do k = 1, n_particle
-            ! generate ARH metric
+            ! initialize tolerance with maximum diagonal element
+            tol = 0.0_rp
+
+            ! generate full Gram matrix
             do j = 1, n_dm
                 do i = 1, j
                     ! compute Tr(dm_diff_i * dm_diff_j)
-                    metric(i, j) = sum(dm_diff(:, :, k, j) * &
-                                   transpose(dm_diff(:, :, k, i)))
+                    metric(i, j) = sum(dm_diff(:, :, k, j) * dm_diff(:, :, k, i))
                     metric(j, i) = metric(i, j)
                 end do
+                tol = max(tol, metric(j, j))
             end do
-            ! diagonalize metric
-            if (n_dm > 0) call symm_mat_diag(metric, eigvals(:, k), eigvecs(:, :, k), &
-                                             settings, error)
-            if (error /= 0) exit
+            
+            if (n_dm > 0) then
+                ! tolerance for linear dependencies
+                tol = n_dm * numerical_zero * tol
+                
+                ! compute pivoted Cholesky with rank according to linear dependency 
+                ! tolerance
+                call dpstrf("U", n_dm, metric, n_dm, piv(:, k), rank(k), tol, work, &
+                            info)
+
+                ! check for successful execution
+                if (info < 0) then
+                    write (msg, '(A, I0)') "Cholesky decomposition failed: Error "// &
+                        "in DPSTRF, info = ", info
+                    call settings%log(msg, verbosity_error, .true.)
+                    error = 1
+                    return
+                end if
+                
+                ! extract upper triangular R matrix up to the validated numerical rank
+                do j = 1, n_dm
+                    do i = 1, min(j, rank(k))
+                        chol(i, j, k) = metric(i, j)
+                    end do
+                end do
+            end if
         end do
-        deallocate(metric)
+        deallocate(metric, work)
 
     end subroutine get_arh_metric
 

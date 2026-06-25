@@ -64,14 +64,16 @@ contains
                     x(n_ao, n_ao, n_particle), y(n_ao, n_ao, n_particle), &
                     hess(n_ao, n_ao, n_ao, n_ao), &
                     fock_diff(n_ao, n_ao, n_particle, n_diff), &
-                    metric_eigvecs(n_diff, n_diff, 1), metric_eigvals(n_diff, 1), &
-                    g_x(n_ao, n_ao, n_particle), g_y(n_ao, n_ao, n_particle), &
-                    coeff(n_diff), dm_target(n_ao, n_ao, n_particle), &
+                    metric_chol(n_diff, n_diff, 1), g_x(n_ao, n_ao, n_particle), &
+                    g_y(n_ao, n_ao, n_particle), coeff(n_diff), &
+                    dm_target(n_ao, n_ao, n_particle), &
                     fock_target(n_ao, n_ao, n_particle), &
                     expected_response(n_ao, n_ao, n_particle), proj_v(n_ao, n_ao), &
                     response(n_ao, n_ao, n_particle), work(lwork)
+        integer(ip) :: metric_rank(1), metric_piv(n_diff, 1)
         integer(ip) :: i, j, k, l, m, info
         type(arh_settings_type) :: settings
+        external :: dpstrf
 
         ! assume tests pass
         test_get_response_contribution_closed_shell = .true.
@@ -113,15 +115,14 @@ contains
             end do
         end do
 
-        ! compute and diagonalize metric
-        metric_eigvecs = 0.0_rp
+        ! compute metric matrix and its pivoted Cholesky factorizations
         do j = 1, n_diff
             do i = 1, n_diff
-                metric_eigvecs(i, j, 1) = sum(dm_diff(:, :, 1, i) * dm_diff(:, :, 1, j))
+                metric_chol(i, j, 1) = sum(dm_diff(:, :, 1, i) * dm_diff(:, :, 1, j))
             end do
         end do
-        call dsyev("V", "U", 2_ip, metric_eigvecs(:, :, 1), 2_ip, &
-                   metric_eigvals(:, 1), work, lwork, info)
+        call dpstrf("U", n_diff, metric_chol(:, :, 1), n_diff, metric_piv(:, 1), &
+                    metric_rank(1), -1.0_rp, work, info)
 
         ! generate two random antisymmetric trial matrices
         call random_number(x)
@@ -133,11 +134,13 @@ contains
         ! operator for symmetrized ARH method
         settings%arh_type = "symmetric"
         g_x = get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
-                                                     metric_eigvals, metric_eigvecs, &
-                                                     n_ao, n_particle, settings)
+                                                     metric_chol, metric_rank, &
+                                                     metric_piv, n_ao, n_particle, &
+                                                     settings)
         g_y = get_response_contribution_closed_shell(dm_oao, y, dm_diff, fock_diff, &
-                                                     metric_eigvals, metric_eigvecs, &
-                                                     n_ao, n_particle, settings)
+                                                     metric_chol, metric_rank, &
+                                                     metric_piv, n_ao, n_particle, &
+                                                     settings)
         if ((sum(y * g_x) - sum(x * g_y)) > tol) then
             write (stderr, *) "test_get_response_contribution_closed_shell failed: "// &
                 "Hessian operator is not symmetric for symmetrized ARH method."
@@ -148,11 +151,13 @@ contains
         ! operator for multisecant PSB method
         settings%arh_type = "multisecant_psb"
         g_x = get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
-                                                     metric_eigvals, metric_eigvecs, &
-                                                     n_ao, n_particle, settings)
+                                                     metric_chol, metric_rank, &
+                                                     metric_piv, n_ao, n_particle, &
+                                                     settings)
         g_y = get_response_contribution_closed_shell(dm_oao, y, dm_diff, fock_diff, &
-                                                     metric_eigvals, metric_eigvecs, &
-                                                     n_ao, n_particle, settings)
+                                                     metric_chol, metric_rank, &
+                                                     metric_piv, n_ao, n_particle, &
+                                                     settings)
         if ((sum(y * g_x) - sum(x * g_y)) > tol) then
             write (stderr, *) "test_get_response_contribution_closed_shell failed: "// &
                 "Hessian operator is not symmetric for multisecant_psb ARH method."
@@ -188,8 +193,9 @@ contains
         settings%arh_type = "standard"
         response = &
             get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
-                                                   metric_eigvals, metric_eigvecs, &
-                                                   n_ao, n_particle, settings)
+                                                   metric_chol, metric_rank, &
+                                                   metric_piv, n_ao, n_particle, &
+                                                   settings)
         if (norm2(response - expected_response) > tol) then
             write (stderr, *) "test_get_response_contribution_closed_shell failed: "// &
                 "Hessian operator does not fulfill multisecant conditions for "// &
@@ -201,8 +207,9 @@ contains
         settings%arh_type = "multisecant_psb"
         response = &
             get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
-                                                   metric_eigvals, metric_eigvecs, &
-                                                   n_ao, n_particle, settings)
+                                                   metric_chol, metric_rank, &
+                                                   metric_piv, n_ao, n_particle, &
+                                                   settings)
         if (norm2(response - expected_response) > tol) then
             write (stderr, *) "test_get_response_contribution_closed_shell failed: "// &
                 "Hessian operator does not fulfill multisecant conditions for "// &
@@ -231,15 +238,16 @@ contains
                     opposite_hess(n_ao, n_ao, n_ao, n_ao), &
                     same_v_diff(n_ao, n_ao, n_particle, n_diff), &
                     opposite_v_diff(n_ao, n_ao, n_particle, n_diff), &
-                    metric_eigvecs(n_diff, n_diff, n_particle), &
-                    metric_eigvals(n_diff, n_particle), &
+                    metric_chol(n_diff, n_diff, n_particle), &
                     g_x(n_ao, n_ao, n_particle), g_y(n_ao, n_ao, n_particle), &
                     coeff(n_diff), dm_target(n_ao, n_ao, n_particle), &
                     v_target(n_ao, n_ao, n_particle), &
                     expected_response(n_ao, n_ao, n_particle), proj_v(n_ao, n_ao), &
                     response(n_ao, n_ao, n_particle), work(lwork)
+        integer(ip) :: metric_rank(n_particle), metric_piv(n_diff, n_particle)
         integer(ip) :: i, j, k, l, m, n, info
         type(arh_settings_type) :: settings
+        external :: dpstrf
 
         ! assume tests pass
         test_get_response_contribution_open_shell = .true.
@@ -303,17 +311,16 @@ contains
             end do
         end do
         
-        ! compute and diagonalize metric
+        ! compute metric matrices and their pivoted Cholesky factorizations
         do n = 1, n_particle
-            metric_eigvecs(:, :, n) = 0.0_rp
             do j = 1, n_diff
                 do i = 1, n_diff
-                    metric_eigvecs(i, j, n) = sum(dm_diff(:, :, n, i) * &
-                                                  dm_diff(:, :, n, j))
+                    metric_chol(i, j, n) = sum(dm_diff(:, :, n, i) * &
+                                               dm_diff(:, :, n, j))
                 end do
             end do
-            call dsyev("V", "U", n_diff, metric_eigvecs(:, :, n), n_diff, &
-                       metric_eigvals(:, n), work, lwork, info)
+            call dpstrf("U", n_diff, metric_chol(:, :, n), n_diff, metric_piv(:, n), &
+                        metric_rank(n), -1.0_rp, work, info)
         end do
 
         ! generate two random antisymmetric trial matrices
@@ -328,13 +335,13 @@ contains
         ! operator for symmetrized ARH method
         settings%arh_type = "symmetric"
         g_x = get_response_contribution_open_shell(dm_oao, x, dm_diff, same_v_diff, &
-                                                   opposite_v_diff, metric_eigvals, &
-                                                   metric_eigvecs, n_ao, n_particle, &
-                                                   settings)
+                                                   opposite_v_diff, metric_chol, &
+                                                   metric_rank, metric_piv, n_ao, &
+                                                   n_particle, settings)
         g_y = get_response_contribution_open_shell(dm_oao, y, dm_diff, same_v_diff, &
-                                                   opposite_v_diff, metric_eigvals, &
-                                                   metric_eigvecs, n_ao, n_particle, &
-                                                   settings)
+                                                   opposite_v_diff, metric_chol, &
+                                                   metric_rank, metric_piv, n_ao, &
+                                                   n_particle, settings)
         if ((sum(y * g_x) - sum(x * g_y)) > tol) then
             write (stderr, *) "test_get_response_contribution_open_shell failed: "// &
                 "Hessian operator is not symmetric for symmetrized ARH method."
@@ -345,13 +352,13 @@ contains
         ! operator for multisecant PSB method
         settings%arh_type = "multisecant_psb"
         g_x = get_response_contribution_open_shell(dm_oao, x, dm_diff, same_v_diff, &
-                                                 opposite_v_diff, metric_eigvals, &
-                                                 metric_eigvecs, n_ao, n_particle, &
-                                                 settings)
+                                                   opposite_v_diff, metric_chol, &
+                                                   metric_rank, metric_piv, n_ao, &
+                                                   n_particle, settings)
         g_y = get_response_contribution_open_shell(dm_oao, y, dm_diff, same_v_diff, &
-                                                 opposite_v_diff, metric_eigvals, &
-                                                 metric_eigvecs, n_ao, n_particle, &
-                                                 settings)
+                                                   opposite_v_diff, metric_chol, &
+                                                   metric_rank, metric_piv, n_ao, &
+                                                   n_particle, settings)
         if ((sum(y * g_x) - sum(x * g_y)) > tol) then
             write (stderr, *) "test_get_response_contribution_open_shell failed: "// &
                 "Hessian operator is not symmetric for multisecant_PSB ARH method."
@@ -391,9 +398,9 @@ contains
         settings%arh_type = "standard"
         response = &
             get_response_contribution_open_shell(dm_oao, x, dm_diff, same_v_diff, &
-                                                 opposite_v_diff, metric_eigvals, &
-                                                 metric_eigvecs, n_ao, n_particle, &
-                                                 settings)
+                                                 opposite_v_diff, metric_chol, &
+                                                 metric_rank, metric_piv, n_ao, &
+                                                 n_particle, settings)
         if (norm2(response - expected_response) > tol) then
             write (stderr, *) "test_get_response_contribution_open_shell failed: "// &
                 "Hessian operator does not fulfill multisecant conditions for "// &
@@ -405,9 +412,9 @@ contains
         settings%arh_type = "multisecant_psb"
         response = &
             get_response_contribution_open_shell(dm_oao, x, dm_diff, same_v_diff, &
-                                                 opposite_v_diff, metric_eigvals, &
-                                                 metric_eigvecs, n_ao, n_particle, &
-                                                 settings)
+                                                 opposite_v_diff, metric_chol, &
+                                                 metric_rank, metric_piv, n_ao, &
+                                                 n_particle, settings)
         if (norm2(response - expected_response) > tol) then
             write (stderr, *) "test_get_response_contribution_open_shell failed: "// &
                 "Hessian operator does not fulfill multisecant conditions for "// &
