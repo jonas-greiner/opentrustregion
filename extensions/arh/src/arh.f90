@@ -57,7 +57,7 @@ module otr_arh
                                  dm_diff(:, :, :, :), fock_diff(:, :, :, :), &
                                  v_same_spin_diff(:, :, :, :), &
                                  v_opposite_spin_diff(:, :, :, :)
-        integer(ip), allocatable :: metric_rank(:), metric_piv(:, :)
+        integer(ip), allocatable :: metric_rank(:), metric_map(:, :)
         procedure(get_energy_3d_type), pointer, nopass :: get_energy => null()
         procedure(update_dm_spin_type), pointer, nopass :: update_dm_spin => null()
         procedure(get_energy_2d_type), pointer, nopass :: get_energy_2d => null()
@@ -330,8 +330,7 @@ module otr_arh
 
             ! construct and diagonalize ARH metric
             call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
-                                arh_object%metric_rank, arh_object%metric_piv, &
-                                arh_object%settings, error)
+                                arh_object%metric_rank, arh_object%metric_map)
             if (error /= 0) return
         end if
 
@@ -460,8 +459,7 @@ module otr_arh
 
             ! construct and diagonalize ARH metric
             call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
-                                arh_object%metric_rank, arh_object%metric_piv, &
-                                arh_object%settings, error)
+                                arh_object%metric_rank, arh_object%metric_map)
             if (error /= 0) return
         end if
 
@@ -533,7 +531,7 @@ module otr_arh
                                                        arh_object%fock_diff, &
                                                        arh_object%metric_chol, &
                                                        arh_object%metric_rank, &
-                                                       arh_object%metric_piv, n_ao, &
+                                                       arh_object%metric_map, n_ao, &
                                                        n_particle, arh_object%settings)
         else
             hess_x_full = hess_x_full + &
@@ -543,7 +541,7 @@ module otr_arh
                                                      arh_object%v_opposite_spin_diff, &
                                                      arh_object%metric_chol, &
                                                      arh_object%metric_rank, &
-                                                     arh_object%metric_piv, n_ao, &
+                                                     arh_object%metric_map, n_ao, &
                                                      n_particle, arh_object%settings)
         end if
         if (error /= 0) return
@@ -594,7 +592,7 @@ module otr_arh
 
     function get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
                                                     metric_chol, metric_rank, &
-                                                    metric_piv, n_ao, n_particle, &
+                                                    metric_map, n_ao, n_particle, &
                                                     settings) result(response)
         !
         ! this function computes the response contribution to the ARH Hessian for the 
@@ -604,7 +602,7 @@ module otr_arh
 
         real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
                                 fock_diff(:, :, :, :), metric_chol(:, :, :)
-        integer(ip), intent(in) :: metric_rank(:), metric_piv(:, :)
+        integer(ip), intent(in) :: metric_rank(:), metric_map(:, :)
         integer(ip), intent(in) :: n_ao, n_particle
         real(rp) :: response(n_ao, n_ao, n_particle)
         type(arh_settings_type), intent(in) :: settings
@@ -724,7 +722,7 @@ module otr_arh
         real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
                                 v_same_spin_diff(:, :, :, :), &
                                 v_opposite_spin_diff(:, :, :, :), metric_chol(:, :, :)
-        integer(ip), intent(in) :: metric_rank(:), metric_piv(:, :)
+        integer(ip), intent(in) :: metric_rank(:), metric_map(:, :)
         integer(ip), intent(in) :: n_ao, n_particle
         real(rp) :: response(n_ao, n_ao, n_particle)
         type(arh_settings_type), intent(in) :: settings
@@ -786,7 +784,7 @@ module otr_arh
                 t_s_delta_dm(:, j) = &
                     multiply_with_inverse_metric(s_delta_dm(:, j), &
                                                  metric_chol(:, :, j), metric_rank(j), &
-                                                 metric_piv(:, j))
+                                                 metric_map(:, j))
             end do
 
             ! loop over particles
@@ -812,13 +810,13 @@ module otr_arh
                     t_same_y_delta_dm = &
                         multiply_with_inverse_metric(same_y_delta_dm, &
                                                      metric_chol(:, :, j), &
-                                                     metric_rank(j), metric_piv(:, j))
+                                                     metric_rank(j), metric_map(:, j))
                     do k = 1, n_particle
                         if (k == j) cycle
                         t_opposite_y_delta_dm(:, k) = &
                             multiply_with_inverse_metric( &
                                 opposite_y_delta_dm(:, k), metric_chol(:, :, j), &
-                                metric_rank(j), metric_piv(:, j))
+                                metric_rank(j), metric_map(:, j))
                     end do
                 end if
 
@@ -847,7 +845,7 @@ module otr_arh
                     t_sy_t_s_delta_dm = &
                         multiply_with_inverse_metric(sy_t_s_delta_dm, &
                                                      metric_chol(:, :, j), &
-                                                     metric_rank(j), metric_piv(:, j))
+                                                     metric_rank(j), metric_map(:, j))
                 end if
 
                 ! contract with density matrix differences to get symmetric and 
@@ -882,13 +880,13 @@ module otr_arh
 
     end function get_response_contribution_open_shell
 
-    function multiply_with_inverse_metric(vec, chol, rank, piv) result(result_vec)
+    function multiply_with_inverse_metric(vec, chol, rank, map) result(result_vec)
         !
         ! this function multiplies a vector with the pseudoinverse of the ARH metric
         ! using forward and backward substitution over the numerical rank
         !
         real(rp), intent(in) :: vec(:), chol(:, :)
-        integer(ip), intent(in) :: rank, piv(:)
+        integer(ip), intent(in) :: rank, map(:)
         real(rp) :: result_vec(size(vec))
 
         integer(ip) :: n_dm, i
@@ -902,7 +900,7 @@ module otr_arh
         ! forward permutation: perm_vec = P^T * vec
         allocate(perm_vec(n_dm))
         do i = 1, n_dm
-            perm_vec(i) = vec(piv(i))
+            perm_vec(i) = vec(map(i))
         end do
 
         ! forward substitution: solve R^T * y = perm_vec(1:rank)
@@ -916,44 +914,38 @@ module otr_arh
 
         ! backward permutation to original basis: result_vec = P * perm_vec
         do i = 1, n_dm
-            result_vec(piv(i)) = perm_vec(i)
+            result_vec(map(i)) = perm_vec(i)
         end do
         deallocate(perm_vec)
 
     end function multiply_with_inverse_metric
 
-    subroutine get_arh_metric(dm_diff, chol, rank, piv, settings, error)
+    subroutine get_arh_metric(dm_diff, chol, rank, map)
         !
-        ! this function calculates the augmented Roothaan-Hall metric factorized via a 
-        ! rank-revealing pivoted Cholesky decomposition, since the density matrix 
-        ! differences are saved in reverse order, these earlier density matrix 
-        ! differences are more likely to be removed in case of linear dependencies, 
-        ! which is desirable whenever the surface is not quadratic in the density 
-        ! matrix such as for DFT
+        ! this subroutine calculates the augmented Roothaan-Hall metric factorized via 
+        ! an unpivoted Cholesky decomposition, since the density matrix differences are 
+        ! saved in reverse order, linearly dependent older vectors are skipped while 
+        ! preserving the chronological sequence for the active basis
         !
-        use opentrustregion, only: numerical_zero, verbosity_error
+        use opentrustregion, only: numerical_zero
 
         real(rp), intent(in) :: dm_diff(:, :, :, :)
         real(rp), intent(out), allocatable :: chol(:, :, :)
-        integer(ip), intent(out), allocatable :: rank(:), piv(:, :)
-        type(arh_settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
+        integer(ip), intent(out), allocatable :: rank(:), map(:, :)
 
-        integer(ip) :: n_particle, n_dm, i, j, k, info
+        integer(ip) :: n_particle, n_dm, i, j, k
+        integer(ip) :: n_accepted, n_rejected
+        real(rp) :: raw_diagonal
         real(rp), allocatable :: metric(:, :), work(:)
         real(rp) :: tol
-        character(300) :: msg
-        external :: dpstrf
-
-        ! initialize error flag
-        error = 0
+        external :: dtrsv
 
         n_particle = size(dm_diff, 3)
         n_dm = size(dm_diff, 4)
 
         ! allocate metric arrays
         allocate(chol(n_dm, n_dm, n_particle), rank(n_particle), &
-                 piv(n_dm, n_particle), metric(n_dm, n_dm), work(2 * n_dm))
+                 map(n_dm, n_particle), metric(n_dm, n_dm), work(n_dm))
 
         chol = 0.0_rp
         rank = 0
@@ -975,26 +967,44 @@ module otr_arh
                 ! tolerance for linear dependencies
                 tol = n_dm * numerical_zero * tol
                 
-                ! compute pivoted Cholesky with rank according to linear dependency 
-                ! tolerance
-                call dpstrf("U", n_dm, metric, n_dm, piv(:, k), rank(k), tol, work, &
-                            info)
-
-                ! check for successful execution
-                if (info < 0) then
-                    write (msg, '(A, I0)') "Cholesky decomposition failed: Error "// &
-                        "in DPSTRF, info = ", info
-                    call settings%log(msg, verbosity_error, .true.)
-                    error = 1
-                    return
-                end if
-                
-                ! extract upper triangular R matrix up to the validated numerical rank
-                do j = 1, n_dm
-                    do i = 1, min(j, rank(k))
-                        chol(i, j, k) = metric(i, j)
-                    end do
+                ! loop chronologically through history
+                n_accepted = 0
+                n_rejected = 0
+                do i = 1, n_dm
+                    raw_diagonal = metric(i, i)
+                    
+                    ! project current column onto the accepted columns
+                    if (n_accepted > 0) then
+                        do j = 1, n_accepted
+                            work(j) = metric(map(j, k), i)
+                        end do
+                        
+                        ! solve R_accepted^T * work = T_accepted_vs_current
+                        call dtrsv("U", "T", "N", n_accepted, chol(:, :, k), n_dm, &
+                                   work, 1)
+                        
+                        ! subtract projections to find remaining orthogonal magnitude
+                        raw_diagonal = raw_diagonal - sum(work(1:n_accepted)**2)
+                    end if
+                    
+                    ! check for linear dependency
+                    if (raw_diagonal < tol) then
+                        ! dependency found: store index at the back of map and skip 
+                        ! column
+                        n_rejected = n_rejected + 1
+                        map(n_dm - n_rejected + 1, k) = i
+                    else
+                        ! independent: accept column and append to the active factors
+                        n_accepted = n_accepted + 1
+                        map(n_accepted, k) = i
+                        
+                        if (n_accepted > 1) then
+                            chol(1:n_accepted-1, n_accepted, k) = work(1:n_accepted-1)
+                        end if
+                        chol(n_accepted, n_accepted, k) = sqrt(raw_diagonal)
+                    end if
                 end do
+                rank(k) = n_accepted
             end if
         end do
         deallocate(metric, work)
