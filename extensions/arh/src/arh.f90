@@ -748,6 +748,7 @@ module otr_arh
         end if
 
         ! calculate response contributions
+        response = 0.0_rp
         if (n_diff > 0) then
             ! get current displacement as commutator of trial vector and current 
             ! density matrix
