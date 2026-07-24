@@ -141,7 +141,7 @@ contains
 
     end function test_update_dm_spin_funptr
 
-    function test_update_dm_spin_c_funptr(update_dm_spin_c_funptr, test_name, message) &
+    function test_update_dm_spin_c_funptr(update_dm_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided density matrix updating C function pointer
@@ -151,11 +151,11 @@ contains
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: test_get_response_3d_c_funptr
 
-        type(c_funptr), intent(in) :: update_dm_spin_c_funptr
+        type(c_funptr), intent(in) :: update_dm_c_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
-        procedure(update_dm_spin_c_type), pointer :: update_dm_spin_funptr
+        procedure(update_dm_spin_c_type), pointer :: update_dm_funptr
         real(c_rp), allocatable :: dm_ao(:, :, :), fock(:, :, :), &
                                    v_same_spin(:, :, :), v_opposite_spin(:, :, :)
         real(c_rp) :: energy
@@ -166,7 +166,7 @@ contains
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. c_associated(update_dm_spin_c_funptr)) then
+        if (.not. c_associated(update_dm_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
                 "updating function with same- and opposite-spin potential "// &
@@ -175,7 +175,7 @@ contains
         end if
 
         ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=update_dm_spin_c_funptr, fptr=update_dm_spin_funptr)
+        call c_f_procpointer(cptr=update_dm_c_funptr, fptr=update_dm_funptr)
 
         ! allocate arrays
         allocate(dm_ao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
@@ -186,8 +186,8 @@ contains
         dm_ao = 1.0_c_rp
 
         ! call density matrix updating function
-        error = update_dm_spin_funptr(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
-                                      get_response_c_funptr)
+        error = update_dm_funptr(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
+                                 get_response_c_funptr)
 
         ! check for error
         if (error /= 0) then
