@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     UpdateDMType = Callable[
         [np.ndarray, np.ndarray], Tuple[float, Callable[[np.ndarray, np.ndarray], None]]
     ]
-    UpdateDMJKType = Callable[
+    UpdateDMSpinType = Callable[
         [np.ndarray, np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ]
@@ -60,7 +60,7 @@ def is_update_dm(func: Any) -> TypeGuard[UpdateDMType]:
         return False
 
 
-def is_update_dm_spin(func: Any) -> TypeGuard[UpdateDMJKType]:
+def is_update_dm_spin(func: Any) -> TypeGuard[UpdateDMSpinType]:
     try:
         sig = signature(func)
         return len(sig.parameters) == 4
@@ -114,7 +114,7 @@ auto_bind_fields(ARHSettings)
 
 # define interface factories
 @dataclass
-class UpdateDMJKInterface:
+class UpdateDMSpinInterface:
     """
     this class provides the interface density matrix updating function with same- and
     opposite-spin contributions
@@ -228,7 +228,7 @@ def arh_factory(
         )
     elif is_update_dm_spin(update_dm):
         update_dm_spin_interface = update_dm_spin_interface_type(
-            UpdateDMJKInterface(update_dm, n_ao, n_particle, closed_shell)
+            UpdateDMSpinInterface(update_dm, n_ao, n_particle, closed_shell)
         )
 
     # set interfaces for optional callback functions, these need to be set here since
