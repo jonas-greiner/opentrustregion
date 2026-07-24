@@ -88,15 +88,14 @@ contains
             test_oao_factory_interface = test_oao_factory_interface .and. &
                 test_get_energy_2d_c_funptr(get_energy_c_funptr, &
                                             "oao_factory_py_interface", &
-                                            " by given energy function for "// &
-                                            "closed-shell case")
+                                            " by given energy function")
 
             ! test passed density matrix updating function
             test_oao_factory_interface = test_oao_factory_interface .and. &
                 test_update_dm_2d_c_funptr(update_dm_c_funptr, &
                                            "oao_factory_py_interface", &
                                            " by given density matrix updating "// &
-                                           "function for closed-shell case")
+                                           "function")
 
             ! check if passed number of AOs is correct
             if (n_ao_c /= 3) then
@@ -135,15 +134,13 @@ contains
             test_oao_factory_interface = test_oao_factory_interface .and. &
                 test_get_energy_3d_c_funptr(get_energy_c_funptr, &
                                             "oao_factory_py_interface", &
-                                            " by given energy function for "// &
-                                            "open-shell case")
+                                            " by given energy function")
 
             ! test passed density matrix updating function
             test_oao_factory_interface = test_oao_factory_interface .and. &
                 test_update_dm_3d_c_funptr(update_dm_c_funptr, &
                                            "oao_factory_py_interface", " by given "// &
-                                           "density matrix updating function for "// &
-                                           "open-shell case")
+                                           "density matrix updating function")
 
         ! number of particles is not correct
         else

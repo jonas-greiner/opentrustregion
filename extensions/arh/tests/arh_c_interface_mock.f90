@@ -87,8 +87,7 @@ contains
             test_arh_factory_interface = test_arh_factory_interface .and. &
                 test_get_energy_2d_c_funptr(get_energy_c_funptr, &
                                             "arh_factory_py_interface", &
-                                            " by given energy function for "// &
-                                            "closed-shell case")
+                                            " by given energy function")
 
             ! test passed density matrix updating function
             test_arh_factory_interface = test_arh_factory_interface .and. &
@@ -128,8 +127,7 @@ contains
             test_arh_factory_interface = test_arh_factory_interface .and. &
                 test_get_energy_3d_c_funptr(get_energy_c_funptr, &
                                             "arh_factory_py_interface", &
-                                            " by given energy function for "// &
-                                            "open-shell case")
+                                            " by given energy function")
 
             ! test passed density matrix updating function
             test_arh_factory_interface = test_arh_factory_interface .and. &

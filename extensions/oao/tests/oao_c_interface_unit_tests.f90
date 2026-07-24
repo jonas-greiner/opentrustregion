@@ -298,8 +298,7 @@ contains
 
         ! test energy wrapper
         test_get_energy_f_wrapper = &
-            test_get_energy_2d_funptr(get_energy_2d_funptr, "get_energy_f_wrapper", &
-                                      " for closed-shell case")
+            test_get_energy_2d_funptr(get_energy_2d_funptr, "get_energy_f_wrapper", "")
 
         ! inject mock function
         get_energy_before_wrapping => mock_get_energy_3d
@@ -309,8 +308,7 @@ contains
 
         ! test energy wrapper
         test_get_energy_f_wrapper = test_get_energy_f_wrapper .and. &
-            test_get_energy_3d_funptr(get_energy_3d_funptr, "get_energy_f_wrapper", &
-                                      " for open-shell case")
+            test_get_energy_3d_funptr(get_energy_3d_funptr, "get_energy_f_wrapper", "")
 
     end function test_get_energy_f_wrapper
 
@@ -336,8 +334,7 @@ contains
 
         ! test density matrix updating wrapper
         test_update_dm_f_wrapper = &
-            test_update_dm_2d_funptr(update_dm_2d_funptr, "update_dm_f_wrapper", &
-                                     " for closed-shell case")
+            test_update_dm_2d_funptr(update_dm_2d_funptr, "update_dm_f_wrapper", "")
 
         ! inject mock subroutine
         update_dm_before_wrapping => mock_update_dm_3d
@@ -347,8 +344,7 @@ contains
 
         ! test density matrix updating wrapper
         test_update_dm_f_wrapper = test_update_dm_f_wrapper .and. &
-            test_update_dm_3d_funptr(update_dm_3d_funptr, "update_dm_f_wrapper", &
-                                     " for open-shell case")
+            test_update_dm_3d_funptr(update_dm_3d_funptr, "update_dm_f_wrapper", "")
 
     end function test_update_dm_f_wrapper
 
@@ -375,8 +371,7 @@ contains
         ! test response function wrapper
         test_get_response_f_wrapper = &
             test_get_response_2d_funptr(get_response_2d_funptr, &
-                                        "get_response_f_wrapper", &
-                                        " for closed-shell case")
+                                        "get_response_f_wrapper", "")
 
         ! inject mock subroutine
         get_response_before_wrapping => mock_get_response_3d
@@ -387,8 +382,7 @@ contains
         ! test response function wrapper
         test_get_response_f_wrapper = test_get_response_f_wrapper .and. &
             test_get_response_3d_funptr(get_response_3d_funptr, &
-                                        "get_response_f_wrapper", &
-                                        " for open-shell case")
+                                        "get_response_f_wrapper", "")
 
     end function test_get_response_f_wrapper
 
