@@ -73,9 +73,11 @@ contains
         type(c_funptr), intent(out) :: get_response_c_funptr
         integer(c_ip) :: error
 
-        energy = sum(dm_ao(:n_ao ** 2))
+        integer(ip) :: flat_len = n_ao ** 2
 
-        fock(:n_ao ** 2) = 2 * dm_ao(:n_ao ** 2)
+        energy = sum(dm_ao(:flat_len))
+
+        fock(:flat_len) = 2 * dm_ao(:flat_len)
 
         get_response_c_funptr = c_funloc(mock_get_response_2d)
 
@@ -95,9 +97,11 @@ contains
         type(c_funptr), intent(out) :: get_response_c_funptr
         integer(c_ip) :: error
 
-        energy = sum(dm_ao(:n_ao ** 2 * n_particle))
+        integer(ip) :: flat_len = n_ao ** 2 * n_particle
 
-        fock(:n_ao ** 2 * n_particle) = 2 * dm_ao(:n_ao ** 2 * n_particle)
+        energy = sum(dm_ao(:flat_len))
+
+        fock(:flat_len) = 2 * dm_ao(:flat_len)
 
         get_response_c_funptr = c_funloc(mock_get_response_3d)
 
@@ -114,7 +118,9 @@ contains
         real(c_rp), intent(out), target :: response(*)
         integer(c_ip) :: error
 
-        response(:n_ao ** 2) = 2 * dm_ao(:n_ao ** 2)
+        integer(c_ip) :: flat_len = n_ao ** 2
+
+        response(:flat_len) = 2 * dm_ao(:flat_len)
 
         error = 0_c_ip
 
@@ -129,7 +135,9 @@ contains
         real(c_rp), intent(out), target :: response(*)
         integer(c_ip) :: error
 
-        response(:n_ao ** 2 * n_particle) = 2 * dm_ao(:n_ao ** 2 * n_particle)
+        integer(c_ip) :: flat_len = n_ao ** 2 * n_particle
+
+        response(:flat_len) = 2 * dm_ao(:flat_len)
 
         error = 0_c_ip
 

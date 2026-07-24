@@ -36,11 +36,13 @@ contains
         type(c_funptr), intent(out) :: get_response_c_funptr
         integer(c_ip) :: error
 
-        energy = sum(dm_ao(:n_ao ** 2 * n_particle))
+        integer(c_ip) :: flat_len = n_ao ** 2 * n_particle
 
-        fock(:n_ao ** 2 * n_particle) = 2 * dm_ao(:n_ao ** 2 * n_particle)
-        v_same_spin(:n_ao ** 2 * n_particle) = 3 * dm_ao(:n_ao ** 2 * n_particle)
-        v_opposite_spin(:n_ao ** 2 * n_particle) = 4 * dm_ao(:n_ao ** 2 * n_particle)
+        energy = sum(dm_ao(:flat_len))
+
+        fock(:flat_len) = 2 * dm_ao(:flat_len)
+        v_same_spin(:flat_len) = 3 * dm_ao(:flat_len)
+        v_opposite_spin(:flat_len) = 4 * dm_ao(:flat_len)
 
         get_response_c_funptr = c_funloc(mock_get_response_3d)
 
@@ -131,7 +133,7 @@ contains
 
         ! check if density matrix was updated
         if (any(abs(dm_ao_2d_c - 2.0_c_rp) > tol)) then
-            test_passed = .false.
+            test_arh_factory_c_wrapper = .false.
             write(stderr, *) "test_arh_factory_c_wrapper failed: Density matrix "// &
                 "not updated correctly by returned orbital updating function."
         end if
@@ -166,8 +168,7 @@ contains
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
 
-        ! check if tests for dm_ao_3d_c, get_energy_c_funptr and update_dm_c_funptr have 
-        ! passed
+        ! check if tests have passed
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. test_passed
 
     end function test_arh_factory_c_wrapper
