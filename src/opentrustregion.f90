@@ -2061,7 +2061,7 @@ contains
 
         error = 0
         converged = eigval < stability_thresh .or. &
-                    dnrm2(size(residual), residual, 1_ip) < &
+                    dnrm2(size(residual, kind=ip), residual, 1_ip) < &
                     stability_max_lower_contrib * (eigval - stability_thresh)
 
     end function default_stability_conv_check
