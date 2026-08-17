@@ -138,7 +138,7 @@ contains
         use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
                                 dm_ao_3d
 
-        real(rp), intent(inout), target :: dm_ao(:, :, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy_funptr

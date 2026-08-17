@@ -195,7 +195,7 @@ contains
         test_update_dm_spin_f_wrapper = &
             test_update_dm_spin_funptr(update_dm_spin_funptr, &
                                        "update_dm_spin_f_wrapper", "")
-        
+
     end function test_update_dm_spin_f_wrapper
 
     logical(c_bool) function test_update_orbs_arh_c_wrapper() bind(C)

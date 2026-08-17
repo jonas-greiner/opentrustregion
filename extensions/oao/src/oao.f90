@@ -133,7 +133,7 @@ module otr_oao
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
-        real(rp), pointer :: dm_ao_3d(:, :, :)
+        real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
 
         ! initialize error flag
         error = 0
@@ -163,7 +163,7 @@ module otr_oao
         ! this function returns a modified OAO orbital updating function for the 
         ! open-shell case
         !
-        real(rp), intent(inout), target :: dm_ao(:, :, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy
@@ -196,7 +196,7 @@ module otr_oao
         !
         ! this function performs common OAO initialization operations
         !
-        real(rp), intent(in), target :: dm_ao(:, :, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
@@ -223,7 +223,6 @@ module otr_oao
                                     (oao_object%n_particle /= n_particle .or. &
                                      oao_object%n_ao /= n_ao))) then
             ! deallocate arrays if they are already allocated
-            oao_object%dm_ao => dm_ao
             if (allocated(oao_object%s_sqrt)) deallocate(oao_object%s_sqrt)
             if (allocated(oao_object%s_inv_sqrt)) deallocate(oao_object%s_inv_sqrt)
             if (allocated(oao_object%dm_oao)) deallocate(oao_object%dm_oao)

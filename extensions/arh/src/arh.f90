@@ -103,7 +103,7 @@ module otr_arh
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
 
-        real(rp), pointer :: dm_ao_3d(:, :, :)
+        real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
 
         ! initialize error flag
         error = 0
@@ -135,7 +135,7 @@ module otr_arh
         !
         use otr_oao, only: get_energy_3d_type, obj_func_oao, project_oao
 
-        real(rp), intent(inout), target :: dm_ao(:, :, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy
@@ -170,7 +170,8 @@ module otr_arh
         !
         use otr_oao, only: oao_factory_common, oao_object
 
-        real(rp), intent(in) :: dm_ao(:, :, :), ao_overlap(:, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings

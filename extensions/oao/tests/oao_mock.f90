@@ -15,7 +15,7 @@ module otr_oao_mock
     implicit none
 
     logical :: test_passed
-    real(rp), pointer :: dm_ao_3d(:, :, :)
+    real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
 
     ! create function pointers to ensure that routines comply with interface
     procedure(oao_factory_closed_shell), pointer :: mock_oao_factory_closed_shell_ptr &
@@ -152,7 +152,7 @@ contains
         use otr_oao_test_reference, only: test_get_energy_3d_funptr, &
                                           test_update_dm_3d_funptr
 
-        real(rp), intent(inout), target :: dm_ao(:, :, :)
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(get_energy_3d_type), intent(in), pointer :: get_energy_funptr
