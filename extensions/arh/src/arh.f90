@@ -549,7 +549,13 @@ module otr_arh
         deallocate(x_full)
 
         ! pack Hessian linear transformation
-        hess_x = pack_asymm(hess_x_full, size(hess_x, kind=ip), arh_object%settings%restricted)
+        if (arh_object%settings%restricted) then
+            hess_x = 4.0_rp * pack_asymm(hess_x_full, size(hess_x, kind=ip), &
+                                         arh_object%settings%restricted)
+        else
+            hess_x = 2.0_rp * pack_asymm(hess_x_full, size(hess_x, kind=ip), &
+                                         arh_object%settings%restricted)
+        end if
         deallocate(hess_x_full)
 
     end subroutine hess_x_arh

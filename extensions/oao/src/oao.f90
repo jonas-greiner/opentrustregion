@@ -427,7 +427,7 @@ module otr_oao
         if (oao_object%settings%restricted .and. oao_object%n_particle > 1) &
             x_full = project(x_full, oao_object%dm_oao)
 
-        ! get one electron part
+        ! get static part
         allocate(hess_x_full(n_ao, n_ao, n_particle))
         do i = 1, n_particle
             call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, oao_object%fock_vv(:, :, i) &
@@ -469,8 +469,13 @@ module otr_oao
         if (error /= 0) return
 
         ! pack Hessian linear transformation
-        hess_x = pack_asymm(hess_x_full, oao_object%n_param, &
-                            oao_object%settings%restricted)
+        if (oao_object%settings%restricted) then
+            hess_x = 4.0_rp * pack_asymm(hess_x_full, oao_object%n_param, &
+                                         oao_object%settings%restricted)
+        else
+            hess_x = 2.0_rp * pack_asymm(hess_x_full, oao_object%n_param, &
+                                         oao_object%settings%restricted)
+        end if
         deallocate(hess_x_full)
 
     end subroutine hess_x_oao
@@ -636,7 +641,11 @@ module otr_oao
         deallocate(dm_fock_oao, fock_dm_oao)
 
         ! construct gradient
-        grad_full = fock_ov - fock_vo
+        if (restricted) then
+            grad_full = 4.0_rp * (fock_ov - fock_vo)
+        else
+            grad_full = 2.0_rp * (fock_ov - fock_vo)
+        end if
         deallocate(fock_ov, fock_vo)
 
         ! pack gradient
@@ -647,8 +656,9 @@ module otr_oao
         if (restricted) then
             do j = 1, n_ao
                 do i = 1, j - 1
-                    h_diag(idx) = sum(fock_vv(i, i, :) + fock_vv(j, j, :) - &
-                                      fock_oo(i, i, :) - fock_oo(j, j, :)) / n_particle
+                    h_diag(idx) = 4.0_rp * sum(fock_vv(i, i, :) + fock_vv(j, j, :) - &
+                                               fock_oo(i, i, :) - fock_oo(j, j, :)) / &
+                                  n_particle
                     idx = idx + 1
                 end do
             end do
