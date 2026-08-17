@@ -35,7 +35,6 @@ contains
         !
         use opentrustregion, only: hess_x_type
         use otr_common_mock, only: orig_mock_update_orbs => mock_update_orbs
-        use otr_oao, only: oao_object
 
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func

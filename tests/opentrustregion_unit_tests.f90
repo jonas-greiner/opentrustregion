@@ -2992,7 +2992,7 @@ contains
         !
         ! this function tests the level-shifted Davidson subroutine
         !
-        use opentrustregion, only: solver_settings_type, kw_len, subsystem_solvers
+        use opentrustregion, only: solver_settings_type, subsystem_solvers
 
         type(solver_settings_type) :: settings
         integer(ip) :: i
