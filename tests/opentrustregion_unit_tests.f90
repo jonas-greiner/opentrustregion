@@ -2173,6 +2173,94 @@ contains
 
     end function test_level_shifted_diag_precond
 
+    logical(c_bool) function test_rel_floor_diag_precond() bind(C)
+        !
+        ! this function tests the subroutine that constructs the relative-floor
+        ! absoulte diagonal preconditioner used to define the ellipsoidal trust-region 
+        ! metricfor TCG/GLTR
+        !
+        use opentrustregion, only: solver_settings_type, rel_floor_diag_precond
+
+        real(rp) :: vector(3), h_diag(3), precond_vector(3)
+        type(solver_settings_type) :: settings
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_rel_floor_diag_precond = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! initialize quantities; the first element is far below the relative floor
+        ! (precond_rel_floor_factor * max|h_diag| = 1e-2 * 4 = 0.04) and should get
+        ! floored, the second is negative and should be floored (or not) based on its
+        ! absolute value rather than being shifted away, the third is unaffected
+        vector = [1.0_rp, 1.0_rp, 1.0_rp]
+        h_diag = [0.001_rp, -1.0_rp, 4.0_rp]
+
+        ! call subroutine and check if results match
+        call rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned error "// &
+                "for default preconditioner."
+            test_rel_floor_diag_precond = .false.
+        end if
+        if (any(abs(precond_vector - [25.0_rp, 1.0_rp, 0.25_rp]) > tol)) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned "// &
+                "preconditioned vector not correct for default preconditioner."
+            test_rel_floor_diag_precond = .false.
+        end if
+
+        ! check that the relative floor falls back to the absolute floor when h_diag
+        ! vanishes everywhere, rather than leaving the floor itself at zero
+        h_diag = [0.0_rp, 0.0_rp, 0.0_rp]
+        call rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned error "// &
+                "for vanishing Hessian diagonal."
+            test_rel_floor_diag_precond = .false.
+        end if
+        if (any(abs(precond_vector - 1e10_rp) > tol)) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned "// &
+                "preconditioned vector not correct for vanishing Hessian diagonal."
+            test_rel_floor_diag_precond = .false.
+        end if
+        h_diag = [0.001_rp, -1.0_rp, 4.0_rp]
+
+        ! test custom projector
+        settings%project => mock_project
+
+        ! call subroutine and check if results match
+        call rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned error "// &
+                "for custom projection function."
+            test_rel_floor_diag_precond = .false.
+        end if
+        if (any(abs(precond_vector - [50.0_rp, 2.0_rp, 0.5_rp]) > tol)) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned "// &
+                "preconditioned vector not correct for custom projection function."
+            test_rel_floor_diag_precond = .false.
+        end if
+
+        ! test custom preconditioner
+        settings%precond => mock_precond
+
+        ! call subroutine and check if results match
+        call rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned error "// &
+                "for custom preconditioner."
+            test_rel_floor_diag_precond = .false.
+        end if
+        if (any(abs(precond_vector - 0.0_rp) > tol)) then
+            write (stderr, *) "test_rel_floor_diag_precond failed: Returned "// &
+                "preconditioned vector not correct for custom preconditioner."
+            test_rel_floor_diag_precond = .false.
+        end if
+
+    end function test_rel_floor_diag_precond
+
     logical(c_bool) function test_get_precond_level_shift() bind(C)
         !
         ! this function tests the function that computes the level shift for the 
@@ -2504,7 +2592,7 @@ contains
                                    trust_radius_expand_factor
 
         logical :: accept_step, max_precision_reached
-        real(rp) :: solution(3), trust_radius
+        real(rp) :: solution(3), trust_radius, start_trust_radius
         type(solver_settings_type) :: settings
 
         ! assume tests pass
@@ -2518,8 +2606,8 @@ contains
         ! check if step is rejected and trust radius is correctly reduced if micro 
         ! iterations have not converged
         trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, 1.0_rp, 1.0_rp, .false., &
-                                               settings, trust_radius, &
+        accept_step = accept_trust_region_step(solution, norm2(solution), 1.0_rp, &
+                                               1.0_rp, .false., settings, trust_radius, &
                                                max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
@@ -2531,8 +2619,8 @@ contains
         ! check if step is rejected and trust radius is correctly reduced if ratio is 
         ! negative
         trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, -1.0_rp, 1.0_rp, .true., &
-                                               settings, trust_radius, &
+        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
+                                               1.0_rp, .true., settings, trust_radius, &
                                                max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// & 
@@ -2544,8 +2632,8 @@ contains
         ! individual rotations are too large
         trust_radius = 1.0_rp
         solution(1) = 1.0_rp
-        accept_step = accept_trust_region_step(solution, 1.0_rp, 1.0_rp, .true., &
-                                               settings, trust_radius, &
+        accept_step = accept_trust_region_step(solution, norm2(solution), 1.0_rp, &
+                                               1.0_rp, .true., settings, trust_radius, &
                                                max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
@@ -2558,7 +2646,7 @@ contains
         ! check if step is accepted and trust radius is correctly reduced if ratio is 
         ! too small
         trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, &
+        accept_step = accept_trust_region_step(solution, norm2(solution), &
                                                0.9_rp * trust_radius_shrink_ratio, &
                                                1.0_rp, .true., settings, trust_radius, &
                                                max_precision_reached)
@@ -2572,38 +2660,55 @@ contains
 
         ! check if step is accepted and trust radius is correctly reduced if ratio is 
         ! ok
-        trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, &
+        start_trust_radius = 1.0_rp
+        trust_radius = start_trust_radius
+        accept_step = accept_trust_region_step(solution, norm2(solution), &
                                                0.5_rp * (trust_radius_shrink_ratio + &
                                                trust_radius_expand_ratio), 1.0_rp, &
                                                .true., settings, trust_radius, &
                                                max_precision_reached)
-        if (.not. accept_step .or. abs(trust_radius - 1.0_rp) > tol) then
+        if (.not. accept_step .or. abs(trust_radius - start_trust_radius) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
                 "accepted or trust radius changed when ratio is acceptable."
             test_accept_trust_region_step = .false.
         end if
 
-        ! check if step is accepted and trust radius is correctly expanded if ratio is 
-        ! too large
-        trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, &
+        ! check if step is accepted and trust radius is correctly expanded if ratio is
+        ! too large and the step reaches the trust region boundary
+        start_trust_radius = 0.5_rp
+        trust_radius = start_trust_radius
+        accept_step = accept_trust_region_step(solution, norm2(solution), &
                                                1.1_rp * trust_radius_expand_ratio, &
                                                1.0_rp, .true., settings, trust_radius, &
                                                max_precision_reached)
-        if (.not. accept_step .or. abs(trust_radius - trust_radius_expand_factor) > &
-            tol) then
+        if (.not. accept_step .or. abs(trust_radius - trust_radius_expand_factor * &
+            start_trust_radius) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
                 "accepted or trust radius not correctly expanded when ratio is too "// &
                 "large."
             test_accept_trust_region_step = .false.
         end if
 
+        ! check if step is accepted but trust radius is left unchanged if ratio is too
+        ! large but the step does not reach the trust region boundary
+        start_trust_radius = 1.0_rp
+        trust_radius = start_trust_radius
+        accept_step = accept_trust_region_step(solution, norm2(solution), &
+                                               1.1_rp * trust_radius_expand_ratio, &
+                                               1.0_rp, .true., settings, trust_radius, &
+                                               max_precision_reached)
+        if (.not. accept_step .or. abs(trust_radius - start_trust_radius) > tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
+                "accepted or trust radius incorrectly expanded when ratio is too "// &
+                "large but step does not reach the trust region boundary."
+            test_accept_trust_region_step = .false.
+        end if
+
         ! check if maximum precision is correctly handled for numerically vanishing 
         ! function improvement
         trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, 0.0_rp, 0.0_rp, .true., &
-                                               settings, trust_radius, &
+        accept_step = accept_trust_region_step(solution, norm2(solution), 0.0_rp, &
+                                               0.0_rp, .true., settings, trust_radius, &
                                                max_precision_reached)
         if (.not. max_precision_reached) then
             write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
@@ -2615,8 +2720,8 @@ contains
         ! check if maximum precision is correctly handled for numerically vanishing 
         ! trust radius
         trust_radius = 0.0_rp
-        accept_step = accept_trust_region_step(solution, 1.0_rp, 1.0_rp, .false., &
-                                               settings, trust_radius, &
+        accept_step = accept_trust_region_step(solution, norm2(solution), 1.0_rp, &
+                                               1.0_rp, .false., settings, trust_radius, &
                                                max_precision_reached)
         if (.not. max_precision_reached) then
             write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
@@ -2627,13 +2732,91 @@ contains
 
     end function test_accept_trust_region_step
 
+    logical(c_bool) function test_init_defaults() bind(C)
+        !
+        ! this function tests the subroutine that resolves settings defaults that
+        ! depend on other settings
+        !
+        use opentrustregion, only: solver_settings_type, init_defaults, &
+                                   default_spherical_trust_radius, &
+                                   default_ellipsoidal_trust_radius
+
+        type(solver_settings_type) :: settings
+
+        ! assume tests pass
+        test_init_defaults = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! check that an unset trust region shape resolves to spherical and the
+        ! starting trust radius resolves to the spherical default for a
+        ! Davidson-based subsystem solver
+        settings%subsystem_solver = "davidson_ls"
+        settings%trust_region_shape = "none"
+        settings%start_trust_radius = 0.0_rp
+        call init_defaults(settings)
+        if (settings%trust_region_shape /= "spherical") then
+            write (stderr, *) "test_init_defaults failed: Did not resolve unset "// &
+                "trust region shape to spherical for Davidson-based subsystem solver."
+            test_init_defaults = .false.
+        end if
+        if (abs(settings%start_trust_radius - default_spherical_trust_radius) > tol) &
+            then
+            write (stderr, *) "test_init_defaults failed: Did not resolve unset "// &
+                "starting trust radius to spherical default for Davidson-based "// &
+                "subsystem solver."
+            test_init_defaults = .false.
+        end if
+
+        ! check that an unset trust region shape resolves to ellipsoidal and the
+        ! starting trust radius resolves to the ellipsoidal default for a
+        ! non-Davidson-based subsystem solver
+        settings%subsystem_solver = "tcg"
+        settings%trust_region_shape = "none"
+        settings%start_trust_radius = 0.0_rp
+        call init_defaults(settings)
+        if (settings%trust_region_shape /= "ellipsoidal") then
+            write (stderr, *) "test_init_defaults failed: Did not resolve unset "// &
+                "trust region shape to ellipsoidal for non-Davidson-based "// &
+                "subsystem solver."
+            test_init_defaults = .false.
+        end if
+        if (abs(settings%start_trust_radius - default_ellipsoidal_trust_radius) > &
+            tol) then
+            write (stderr, *) "test_init_defaults failed: Did not resolve unset "// &
+                "starting trust radius to ellipsoidal default for "// &
+                "non-Davidson-based subsystem solver."
+            test_init_defaults = .false.
+        end if
+
+        ! check that an explicitly set trust region shape and starting trust radius
+        ! are left untouched
+        settings%subsystem_solver = "tcg"
+        settings%trust_region_shape = "spherical"
+        settings%start_trust_radius = 0.7_rp
+        call init_defaults(settings)
+        if (settings%trust_region_shape /= "spherical") then
+            write (stderr, *) "test_init_defaults failed: Explicitly set trust "// &
+                "region shape was overwritten."
+            test_init_defaults = .false.
+        end if
+        if (abs(settings%start_trust_radius - 0.7_rp) > tol) then
+            write (stderr, *) "test_init_defaults failed: Explicitly set starting "// &
+                "trust radius was overwritten."
+            test_init_defaults = .false.
+        end if
+
+    end function test_init_defaults
+
     logical(c_bool) function test_solver_sanity_check() bind(C)
         !
         ! this function tests the subroutine which performs a sanity check for the 
         ! solver
         !
         use opentrustregion, only: solver_settings_type, solver_sanity_check, &
-                                   project_warning_msg, kw_len, subsystem_solvers
+                                   project_warning_msg, subsystem_solvers, &
+                                   trust_region_shapes
 
         type(solver_settings_type) :: settings
         real(rp) :: grad(3)
@@ -2644,6 +2827,11 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
+
+        ! set trust region shape to a valid value so that the checks below do not
+        ! trip over the unresolved default; the trust region shape checks themselves
+        ! are further down
+        settings%trust_region_shape = "spherical"
 
         ! check if error is incorrectly thrown for finite and non-negative number of 
         ! parameters
@@ -2711,6 +2899,38 @@ contains
                 "for unknown subsystem solver."
             test_solver_sanity_check = .false.
         end if
+        ! check if trust region shape is correctly checked; use a subsystem solver that 
+        ! supports both shapes so this loop is not confounded by the shape/subsystem 
+        ! solver compatibility check tested further below
+        settings%subsystem_solver = "tcg"
+        do i = 1, size(trust_region_shapes)
+            settings%trust_region_shape = trust_region_shapes(i)
+            call solver_sanity_check(settings, 3_ip, grad, error)
+            if (error /= 0) then
+                write(stderr, *) "test_solver_sanity_check failed: Error thrown "// &
+                    "for " // trim(trust_region_shapes(i)) // " trust region shape."
+                test_solver_sanity_check = .false.
+            end if
+        end do
+        settings%trust_region_shape = "unknown"
+        call solver_sanity_check(settings, 3_ip, grad, error)
+        if (error == 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for unknown trust region shape."
+            test_solver_sanity_check = .false.
+        end if
+
+        ! check that an ellipsoidal trust region is correctly rejected for a
+        ! Davidson-based subsystem solver, which does not support it
+        settings%subsystem_solver = "davidson_ls"
+        settings%trust_region_shape = "ellipsoidal"
+        call solver_sanity_check(settings, 3_ip, grad, error)
+        if (error == 0) then
+            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
+                "for ellipsoidal trust region with Davidson-based subsystem solver."
+            test_solver_sanity_check = .false.
+        end if
+        settings%trust_region_shape = "spherical"
 
         ! check if Hessian symmetry is correctly handled
         settings%hess_symm = .false.
@@ -2918,9 +3138,6 @@ contains
             if (region_str == "near minimum") then
                 if ((ratio < trust_radius_shrink_ratio .and. &
                      solution_norm > trust_radius / trust_radius_shrink_factor) .or. &
-                    (trust_radius_shrink_ratio > ratio .and. &
-                     ratio > trust_radius_expand_ratio .and. &
-                     solution_norm > trust_radius) .or. &
                     (ratio > trust_radius_expand_ratio .and. &
                      solution_norm > trust_radius / trust_radius_expand_factor)) then
                     write (stderr, *) "test_level_shifted_davidson failed: "// &
@@ -2932,11 +3149,8 @@ contains
                 if ((trust_radius_shrink_ratio > ratio .and. &
                      abs(solution_norm - trust_radius / trust_radius_shrink_factor) > &
                      tol) .or. &
-                    (trust_radius_shrink_ratio > ratio .and. &
-                     ratio > trust_radius_expand_ratio .and. &
-                     abs(solution_norm - trust_radius) < tol) .or. &
                     (ratio > trust_radius_expand_ratio .and. &
-                     abs(solution_norm - trust_radius / trust_radius_expand_factor) < &
+                     abs(solution_norm - trust_radius / trust_radius_expand_factor) > &
                         tol)) then
                     write (stderr, *) "test_level_shifted_davidson failed: "// &
                         "Solution does not lie at trust region boundary near " // &
@@ -3010,14 +3224,32 @@ contains
         end if
         if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius / &
              trust_radius_shrink_factor) .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. solution_norm > trust_radius) .or. &
             (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius / &
              trust_radius_expand_factor)) then
             write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not stay within trust region near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
+
+        ! run truncated conjugate gradient with a spherical trust region and check that 
+        ! the returned solution norm equals the true Euclidean norm of the solution
+        settings%trust_region_shape = "spherical"
+        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
+                                          trust_radius, solution, solution_norm, &
+                                          imicro, max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
+                "error near minimum for spherical trust region."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        if (abs(norm2(solution) - solution_norm) > tol) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Returned "// &
+                "solution norm does not match Euclidean solution norm for "// &
+                "spherical trust region."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        settings%trust_region_shape = "ellipsoidal"
 
         ! start near saddle point
         curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
@@ -3049,14 +3281,46 @@ contains
         if ((trust_radius_shrink_ratio > ratio .and. &
              abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
              .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius) < tol) .or. &
             (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) > tol)) then
             write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not lie at trust region boundary near saddle point."
             test_truncated_conjugate_gradient = .false.
         end if
+
+        ! run truncated conjugate gradient with a spherical trust region near the
+        ! saddle point and check that the returned solution norm equals the true
+        ! Euclidean norm of the solution
+        settings%trust_region_shape = "spherical"
+        trust_radius = 0.4_rp
+        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
+                                          trust_radius, solution, solution_norm, &
+                                          imicro, max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
+                "error near saddle point for spherical trust region."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        if (abs(norm2(solution) - solution_norm) > tol) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Returned "// &
+                "solution norm does not match Euclidean solution norm near saddle "// &
+                "point for spherical trust region."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if ((trust_radius_shrink_ratio > ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
+             .or. &
+            (ratio > trust_radius_expand_ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) > tol)) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "does not lie at trust region boundary near saddle point for "// &
+                "spherical trust region."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        settings%trust_region_shape = "ellipsoidal"
 
     end function test_truncated_conjugate_gradient
 
@@ -3069,10 +3333,10 @@ contains
                                    trust_radius_shrink_ratio, &
                                    trust_radius_expand_ratio, &
                                    trust_radius_shrink_factor, &
-                                   trust_radius_expand_factor
+                                   trust_radius_expand_factor, precond_rel_floor_factor
 
         integer(ip), parameter :: n_param = 6
-        real(rp) :: func, grad_norm, trust_radius, lambda, ratio, solution_norm, mu
+        real(rp) :: func, grad_norm, trust_radius, lambda, ratio, solution_norm
         real(rp), dimension(n_param) :: grad, h_diag, solution, residual, precond
         integer(ip) :: i, imicro, error
         procedure(obj_func_type), pointer :: obj_func_funptr
@@ -3129,8 +3393,6 @@ contains
                 dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
         if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
              / trust_radius_shrink_factor) .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. solution_norm > trust_radius) .or. &
             (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius &
             / trust_radius_expand_factor)) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -3167,8 +3429,6 @@ contains
         end if
         if ((ratio < trust_radius_shrink_ratio .and. solution_norm > trust_radius &
              / trust_radius_shrink_factor) .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. solution_norm > trust_radius) .or. &
             (ratio > trust_radius_expand_ratio .and. solution_norm > trust_radius &
             / trust_radius_expand_factor)) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -3176,6 +3436,32 @@ contains
                 "perturbed system."
             test_generalized_lanczos_trust_region = .false.
         end if
+
+        ! run generalized Lanczos trust region with a spherical trust region and check
+        ! that the returned solution norm equals the true Euclidean norm of the
+        ! solution, unlike the default ellipsoidal trust region whose norm is measured
+        ! in the preconditioner metric; GLTR falls back to no preconditioning to
+        ! achieve this, so this also implicitly checks that this fallback still
+        ! produces a valid, converged solution
+        settings%trust_region_shape = "spherical"
+        settings%n_random_trial_vectors = 0
+        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+                                              obj_func_funptr, hess_x_funptr, &
+                                              settings, trust_radius, solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near minimum for spherical trust region."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (abs(norm2(solution) - solution_norm) > tol) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Returned solution norm does not match Euclidean solution norm "// &
+                "for spherical trust region."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        settings%trust_region_shape = "ellipsoidal"
 
         ! start near saddle point
         curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
@@ -3186,8 +3472,8 @@ contains
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         trust_radius = 0.4_rp
 
-        ! run generalized Lanczos trust region without perturbation, check if error has 
-        ! occured, whether the Lagrange multiplier is positive and whether the solution 
+        ! run generalized Lanczos trust region without perturbation, check if error has
+        ! occured, whether the Lagrange multiplier is positive and whether the solution
         ! lies at the trust region boundary and describes a level-shifted Newton step
         settings%n_random_trial_vectors = 0
         call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
@@ -3205,8 +3491,7 @@ contains
                 "Lagrange multiplier is not positive near saddle point."
             test_generalized_lanczos_trust_region = .false.
         end if
-        mu = minval(h_diag) - 1e-1_rp * sum(abs(h_diag)) / size(h_diag)
-        precond = h_diag - mu
+        precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
         residual = grad + hartmann6d_hess_x(solution) + lambda * solution * precond
         if (sqrt(dot_product(residual, residual / precond)) > &
             settings%global_red_factor * grad_norm) then
@@ -3220,17 +3505,50 @@ contains
         if ((trust_radius_shrink_ratio > ratio .and. &
              abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
              .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius) < tol) .or. &
             (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) > tol)) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not lie at trust region boundary near saddle point."
             test_generalized_lanczos_trust_region = .false.
         end if
 
-        ! run generalized Lanczos trust region with perturbation, check if error has 
-        ! occured, whether the Lagrange multiplier is positive and whether the solution 
+        ! run generalized Lanczos trust region with a spherical trust region near the
+        ! saddle point and check that the returned solution norm equals the true
+        ! Euclidean norm of the solution and lies at the trust region boundary
+        settings%trust_region_shape = "spherical"
+        trust_radius = 0.4_rp
+        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+                                              obj_func_funptr, hess_x_funptr, &
+                                              settings, trust_radius, solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near saddle point for spherical trust region."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (abs(norm2(solution) - solution_norm) > tol) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Returned solution norm does not match Euclidean solution norm "// &
+                "near saddle point for spherical trust region."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
+                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
+        if ((trust_radius_shrink_ratio > ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
+             .or. &
+            (ratio > trust_radius_expand_ratio .and. &
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) > tol)) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not lie at trust region boundary near saddle point "// &
+                "for spherical trust region."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        settings%trust_region_shape = "ellipsoidal"
+
+        ! run generalized Lanczos trust region with perturbation, check if error has
+        ! occured, whether the Lagrange multiplier is positive and whether the solution
         ! lies at the trust region boundary and reduces the function value
         settings%n_random_trial_vectors = 1
         call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
@@ -3260,10 +3578,8 @@ contains
         if ((trust_radius_shrink_ratio > ratio .and. &
              abs(solution_norm - trust_radius / trust_radius_shrink_factor) > tol) &
              .or. &
-            (trust_radius_shrink_ratio > ratio .and. ratio > trust_radius_expand_ratio &
-             .and. abs(solution_norm - trust_radius) < tol) .or. &
             (ratio > trust_radius_expand_ratio .and. &
-             abs(solution_norm - trust_radius / trust_radius_expand_factor) < tol)) then
+             abs(solution_norm - trust_radius / trust_radius_expand_factor) > tol)) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not lie at trust region boundary near saddle point "// &
                 "for perturbed system."

@@ -114,6 +114,7 @@ typedef int32_t c_int; /* corresponds to integer(c_ip) */
         c_int verbose;
 
         char subsystem_solver[OTR_KW_LEN + 1];
+        char trust_region_shape[OTR_KW_LEN + 1];
 
         stability_settings_type stability_settings;
     } solver_settings_type;

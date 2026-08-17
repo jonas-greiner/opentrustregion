@@ -170,6 +170,7 @@ module c_interface
         integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
                          jacobi_davidson_start, seed, verbose
         character(c_char) :: subsystem_solver(kw_len + 1)
+        character(c_char) :: trust_region_shape(kw_len + 1)
         type(stability_settings_type_c) :: stability_settings
     end type
 
@@ -805,6 +806,8 @@ contains
 
             ! convert characters
             settings%subsystem_solver = character_from_c(settings_c%subsystem_solver)
+            settings%trust_region_shape = &
+                character_from_c(settings_c%trust_region_shape)
 
             ! convert objects
             settings%stability_settings = settings_c%stability_settings
@@ -935,6 +938,8 @@ contains
 
             ! convert characters
             settings_c%subsystem_solver = character_to_c(settings%subsystem_solver)
+            settings_c%trust_region_shape = &
+                character_to_c(settings%trust_region_shape)
 
             ! convert objects
             settings_c%stability_settings = settings%stability_settings

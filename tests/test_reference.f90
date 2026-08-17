@@ -33,7 +33,7 @@ module test_reference
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_random_trial_vectors, n_macro, n_micro, &
                        jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
-        character(kw_len, c_char) :: subsystem_solver, diag_solver
+        character(kw_len, c_char) :: subsystem_solver, trust_region_shape, diag_solver
     end type
 
     type, bind(C) :: ref_settings_type_c
@@ -42,7 +42,8 @@ module test_reference
                       local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
                          jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
-        character(c_char) :: subsystem_solver(kw_len + 1), diag_solver(kw_len + 1)
+        character(c_char) :: subsystem_solver(kw_len + 1), &
+                             trust_region_shape(kw_len + 1), diag_solver(kw_len + 1)
     end type
 
     ! general reference parameters
@@ -53,7 +54,8 @@ module test_reference
                           local_red_factor = 1e-3_rp, n_random_trial_vectors = 5, &
                           n_macro = 300, n_micro = 200, jacobi_davidson_start = 10, &
                           seed = 33, verbose = 3, n_trial_vectors = 2, n_iter = 50, &
-                          subsystem_solver = "tcg", diag_solver = "jacobi-davidson")
+                          subsystem_solver = "tcg", diag_solver = "jacobi-davidson", &
+                          trust_region_shape = "spherical")
 
     interface assignment(=)
         module procedure assign_ref_to_solver
@@ -1552,6 +1554,7 @@ contains
         lhs%seed = rhs%seed
         lhs%verbose = rhs%verbose
         lhs%subsystem_solver = rhs%subsystem_solver
+        lhs%trust_region_shape = rhs%trust_region_shape
         lhs%stability_settings = rhs
 
         ! set initialization logical
@@ -1655,6 +1658,7 @@ contains
         lhs%n_trial_vectors = int(rhs%n_trial_vectors, kind=c_ip)
         lhs%n_iter = int(rhs%n_iter, kind=c_ip)
         lhs%subsystem_solver = character_to_c(rhs%subsystem_solver)
+        lhs%trust_region_shape = character_to_c(rhs%trust_region_shape)
         lhs%diag_solver = character_to_c(rhs%diag_solver)
 
     end subroutine assign_ref_to_ref_c
@@ -1681,6 +1685,7 @@ contains
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
             lhs%subsystem_solver == rhs%subsystem_solver .and. &
+            lhs%trust_region_shape == rhs%trust_region_shape .and. &
             lhs%stability_settings == rhs
 
     end function equal_solver_to_ref
@@ -1820,6 +1825,7 @@ contains
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
             lhs%subsystem_solver == rhs%subsystem_solver .and. &
+            lhs%trust_region_shape == rhs%trust_region_shape .and. &
             lhs%stability_settings == rhs%stability_settings
 
     end function equal_solver

@@ -396,6 +396,7 @@ class SolverSettingsC(Structure):
         ("seed", c_int),
         ("verbose", c_int),
         ("subsystem_solver", c_char * (kw_len + 1)),
+        ("trust_region_shape", c_char * (kw_len + 1)),
         ("stability_settings", StabilitySettingsC),
     ]
 

@@ -179,10 +179,14 @@ The optimization process can be fine-tuned using the following settings:
   - `"jacobi-davidson_ls"`: generalized Davidson method applied to linear system with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
   - `"davidson_ah"`: Davidson method applied diagonalization of augmented Hessian,
   - `"jacobi-davidson_ah"`: Davidson method applied diagonalization of augmented Hessian with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
-  - `"tcg"`: truncated conjugate gradient method.
+  - `"tcg"`: truncated conjugate gradient method,
+  - `"gltr"`: generalized Lanczos trust region method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations.
 - **`start_trust_radius`** (real): Initial trust radius.
+- **`trust_region_shape`** (string): Only used by the `"tcg"` and `"gltr"` subsystem solvers (the Davidson-family solvers always use a spherical trust region). Options include:
+  - `"ellipsoidal"` (default): the trust region is measured in the norm induced by the diagonal preconditioner, i.e. shaped by the (approximate) Hessian diagonal. This also accelerates convergence of the underlying Krylov iteration.
+  - `"spherical"`: the trust region is a Euclidean sphere. For `"tcg"` this is combined with the preconditioned search direction at no extra cost. For `"gltr"`, obtaining an exact solution to the Euclidean-sphere subproblem requires falling back to no preconditioning at all, so this option sacrifices the preconditioner's acceleration of the Krylov iteration in exchange for a genuinely spherical trust region.
 - **`n_macro`** (integer): Maximum number of macro iterations.
 - **`n_micro`** (integer): Maximum number of micro iterations.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.

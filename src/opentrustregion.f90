@@ -27,8 +27,8 @@ module opentrustregion
                            default_ellipsoidal_trust_radius = 1.0_rp, &
                            trust_radius_shrink_ratio = 0.25_rp, &
                            trust_radius_expand_ratio = 0.75_rp, &
-                           trust_radius_shrink_factor = 0.7_rp, &
-                           trust_radius_expand_factor = 1.2_rp
+                           trust_radius_shrink_factor = 0.5_rp, &
+                           trust_radius_expand_factor = 2.0_rp
 
     ! define error codes
     integer(ip), parameter :: error_solver = 100, error_stability_check = 200, &
@@ -44,7 +44,8 @@ module opentrustregion
                            level_shift_local_thres = 1e-12_rp, &
                            newton_eigval_thresh = -1e-5_rp, &
                            stability_thresh = -1e-2_rp, &
-                           stability_max_lower_contrib = 1e-2_rp
+                           stability_max_lower_contrib = 1e-2_rp, &
+                           precond_rel_floor_factor = 1e-2_rp
 
     ! define verbosity levels
     integer(ip), parameter :: verbosity_silent = 0, verbosity_error = 1, &
@@ -210,7 +211,7 @@ module opentrustregion
         logical :: stability, line_search
         real(rp) :: start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_macro, n_micro
-        character(kw_len) :: subsystem_solver
+        character(kw_len) :: subsystem_solver, trust_region_shape
         type(stability_settings_type) :: stability_settings
         procedure(modify_step_type), pointer, nopass :: modify_step => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
@@ -240,16 +241,18 @@ module opentrustregion
                              n_random_trial_vectors = 1, n_macro = 150, n_micro = 50, &
                              jacobi_davidson_start = 30, seed = 42, verbose = 0, &
                              subsystem_solver = "davidson_ls", &
+                             trust_region_shape = "none", &
                              stability_settings = default_stability_settings)
 
     ! define setting options
     character(kw_len), parameter :: subsystem_solvers(6) = &
             [character(len=kw_len) :: "davidson_ls", "davidson_ah", &
              "jacobi-davidson_ls", "jacobi-davidson_ah", "tcg", "gltr"]
+    character(kw_len), parameter :: trust_region_shapes(2) = &
+            [character(len=kw_len) :: "spherical", "ellipsoidal"]
 
     ! define global variables
     integer(ip) :: tot_orb_update = 0, tot_hess_x = 0
-    real(rp), allocatable :: approx_min_eigvec(:)
 
 contains
 
@@ -299,16 +302,11 @@ contains
         ! initialize random number generator
         call init_rng(settings%seed)
 
-        ! initialize starting trust radius
-        if (settings%start_trust_radius <= 0.0_rp) then
-            if (string_in("davidson", settings%subsystem_solver)) then
-                trust_radius = default_spherical_trust_radius
-            else
-                trust_radius = default_ellipsoidal_trust_radius
-            end if
-        else
-            trust_radius = settings%start_trust_radius
-        end if
+        ! set defaults
+        call init_defaults(settings)
+
+        ! set starting trust radius
+        trust_radius = settings%start_trust_radius
 
         ! print header
         call settings%log(repeat("-", 109), verbosity_info)
@@ -2170,6 +2168,51 @@ contains
         end if
     end function get_precond_level_shift
 
+    subroutine rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
+        !
+        ! this subroutine defines the relative-floor absolute diagonal preconditioner 
+        ! used by TCG and GLTR to define the ellipsoidal trust-region metric; this 
+        ! floors abs(h_diag) relative to its own largest element, which bounds the 
+        ! metric's condition number (cond(abs(h_diag)) <= 1 / precond_rel_floor_factor) 
+        ! regardless of how small or how negative individual diagonal elements are; a 
+        ! stiffly negative direction is treated the same as a stiffly positive one, 
+        ! since either way the model changes fast there and a large step should not be 
+        ! allowed
+        !
+        real(rp), intent(in) :: vector(:), h_diag(:)
+        real(rp), intent(out) :: precond_vector(:)
+        class(optimizer_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        real(rp) :: floor_val
+
+        ! initialize error flag
+        error = 0
+
+        ! check for user-defined preconditioner
+        if (associated(settings%precond)) then
+            call settings%precond(vector, 0.0_rp, precond_vector, error)
+            call add_error_origin(error, error_precond, settings)
+            if (error /= 0) return
+        ! construct relative-floor diagonal preconditioner
+        else
+            ! set floor value while guarding against vanishing diagonal
+            floor_val = max(precond_rel_floor_factor * maxval(abs(h_diag)), &
+                            precond_floor)
+            precond_vector = abs(h_diag)
+            where (precond_vector < floor_val) precond_vector = floor_val
+            precond_vector = vector / precond_vector
+
+            ! ensure basis vector stays in subspace
+            if (associated(settings%project)) then
+                call settings%project(precond_vector, error)
+                call add_error_origin(error, error_project, settings)
+                if (error /= 0) return
+            end if
+        end if
+
+    end subroutine rel_floor_diag_precond
+
     function orthogonal_projection(vector, direction) result(complement)
         !
         ! this function removes a certain direction from a vector
@@ -2835,8 +2878,13 @@ contains
             call add_error_origin(error, error_obj_func, settings)
             if (error /= 0) return
 
-            ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, new_func - func, &
+            ! decide whether to accept step and modify trust radius; the Davidson
+            ! trust region is always Euclidean, so this norm must be computed here
+            ! explicitly rather than reused from solution_norm, which is only set
+            ! once after this loop exits
+            accept_step = accept_trust_region_step(solution, &
+                                                   dnrm2(n_param, solution, 1_ip), &
+                                                   new_func - func, &
                                                    ddot(n_param, solution, 1_ip, &
                                                    grad + 0.5_rp * h_solution, 1_ip), &
                                                    micro_converged, settings, &
@@ -2881,9 +2929,9 @@ contains
         real(rp) :: new_func, pred_func, conv_tol, step_size, trial_solution_dot, &
                     basis_vec_dot, solution_dot, solution_basis_vec_dot, residual_dot, &
                     residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
-                    curvature, lanczos_tridiag_chol_pivot, precond_mu
+                    curvature, lanczos_tridiag_chol_pivot
         integer(ip) :: imicro
-        logical :: accept_step, micro_converged
+        logical :: accept_step, micro_converged, spherical
         real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
@@ -2892,11 +2940,16 @@ contains
         ! initialize number of microiterations
         n_micro = 0
 
+        ! the trust region boundary check below is always expressed as a quadratic
+        ! form in the solution, solution-basis vector and basis vector dot products; 
+        ! for an ellipsoidal trust region these accumulate the preconditioner-metric 
+        ! inner products (cheaply, via the CG recursion), for a spherical one they are
+        ! instead the plain Euclidean inner products computed directly, while
+        ! the search direction itself remains preconditioned either way
+        spherical = settings%trust_region_shape == "spherical"
+
         ! compute the stopping tolerance
         conv_tol = max(settings%local_red_factor * grad_norm, residual_norm_floor)
-
-        ! calculate preconditioner level shift
-        precond_mu = get_precond_level_shift(h_diag)
 
         ! allocate space for vectors
         allocate(residual(n_param), vector(n_param), basis_vec(n_param))
@@ -2937,8 +2990,7 @@ contains
             ! start of microiterations
             do
                 ! obtain the preconditioned residual
-                call level_shifted_diag_precond(residual, precond_mu, h_diag, vector, &
-                                                settings, error)
+                call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
                 call add_error_origin(error, error_precond, settings)
                 if (error /= 0) exit
 
@@ -2970,13 +3022,23 @@ contains
                     end if
 
                     basis_vec = -vector + beta * basis_vec
-                    solution_basis_vec_dot = beta * &
-                                            (solution_basis_vec_dot + step_size * &
-                                             basis_vec_dot)
-                    basis_vec_dot = residual_dot + basis_vec_dot * beta * beta
+                    if (spherical) then
+                        solution_basis_vec_dot = ddot(n_param, solution, 1_ip, &
+                                                      basis_vec, 1_ip)
+                        basis_vec_dot = ddot(n_param, basis_vec, 1_ip, basis_vec, 1_ip)
+                    else
+                        solution_basis_vec_dot = beta * &
+                                                 (solution_basis_vec_dot + step_size * &
+                                                  basis_vec_dot)
+                        basis_vec_dot = residual_dot + basis_vec_dot * beta * beta
+                    end if
                 else
                     basis_vec = -vector
-                    basis_vec_dot = residual_dot
+                    if (spherical) then
+                        basis_vec_dot = ddot(n_param, basis_vec, 1_ip, basis_vec, 1_ip)
+                    else
+                        basis_vec_dot = residual_dot
+                    end if
                 end if
                 residual_dot_old = residual_dot
 
@@ -3064,10 +3126,10 @@ contains
             if (error /= 0) exit
 
             ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, new_func - func, &
-                                                   pred_func - func, micro_converged, &
-                                                   settings, trust_radius, &
-                                                   max_precision_reached)
+            accept_step = accept_trust_region_step(solution, solution_norm, &
+                                                   new_func - func, pred_func - func, &
+                                                   micro_converged, settings, &
+                                                   trust_radius, max_precision_reached)
             if (max_precision_reached) exit
 
         end do
@@ -3255,10 +3317,10 @@ contains
             if (error /= 0) exit
 
             ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, new_func - func, &
-                                                   pred_func - func, micro_converged, &
-                                                   settings, trust_radius, &
-                                                   max_precision_reached)
+            accept_step = accept_trust_region_step(solution, solution_norm, &
+                                                   new_func - func, pred_func - func, &
+                                                   micro_converged, settings, &
+                                                   trust_radius, max_precision_reached)
             if (max_precision_reached) exit
 
             ! restart Lanczos with smaller trust region if step is not accepted
@@ -3273,15 +3335,16 @@ contains
 
     end subroutine generalized_lanczos_trust_region
 
-    logical function accept_trust_region_step(solution, actual_func_diff, &
-                                              pred_func_diff, micro_converged, &
-                                              settings, trust_radius, &
+    logical function accept_trust_region_step(solution, solution_norm, &
+                                              actual_func_diff, pred_func_diff, &
+                                              micro_converged, settings, trust_radius, &
                                               max_precision_reached)
         !
-        ! this function checks whether the trust region step is accepted and modifies 
+        ! this function checks whether the trust region step is accepted and modifies
         ! the trust region accordingly
         !
-        real(rp), intent(in) :: solution(:), actual_func_diff, pred_func_diff
+        real(rp), intent(in) :: solution(:), solution_norm, actual_func_diff, &
+                                pred_func_diff
         logical, intent(in) :: micro_converged
         type(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: trust_radius
@@ -3329,11 +3392,41 @@ contains
             accept_trust_region_step = .true.
         ! check if step is potentially too short
         else
-            trust_radius = trust_radius_expand_factor * trust_radius
+            if (solution_norm >= 0.99_rp * trust_radius) &
+                trust_radius = trust_radius_expand_factor * trust_radius
             accept_trust_region_step = .true.
         end if
 
     end function accept_trust_region_step
+
+    subroutine init_defaults(settings)
+        !
+        ! this subroutine defaults that depend on other settings: the Davidson-based 
+        ! solvers only support a spherical trust region, whereas TCG and GLTR use the
+        ! preconditioner metric to define an ellipsoidal one; the starting trust radius 
+        ! default depends on this resolved shape
+        !
+        type(solver_settings_type), intent(inout) :: settings
+
+        ! resolve trust region shape
+        if (settings%trust_region_shape == "none") then
+            if (string_in("davidson", settings%subsystem_solver)) then
+                settings%trust_region_shape = "spherical"
+            else
+                settings%trust_region_shape = "ellipsoidal"
+            end if
+        end if
+
+        ! resolve starting trust radius
+        if (settings%start_trust_radius <= 0.0_rp) then
+            if (settings%trust_region_shape == "spherical") then
+                settings%start_trust_radius = default_spherical_trust_radius
+            else
+                settings%start_trust_radius = default_ellipsoidal_trust_radius
+            end if
+        end if
+
+    end subroutine init_defaults
 
     subroutine solver_sanity_check(settings, n_param, grad, error)
         !
@@ -3359,6 +3452,7 @@ contains
 
         ! convert strings to lowercase
         settings%subsystem_solver = string_to_lowercase(settings%subsystem_solver)
+        settings%trust_region_shape = string_to_lowercase(settings%trust_region_shape)
 
         ! check that number of random trial vectors is below number of parameters
         if ((string_in("davidson", settings%subsystem_solver)) .and. &
@@ -3389,6 +3483,25 @@ contains
                               "Hessian), ""tcg"" (truncated conjugate gradient), "// &
                               "and ""gltr"" (generalized Lanczos trust region).", &
                               verbosity_error, .true.)
+            error = 1
+            return
+        end if
+        if (.not. any(settings%trust_region_shape == trust_region_shapes)) then
+            call settings%log("Trust region shape option unknown. Possible values "// &
+                              "are ""spherical"" and ""ellipsoidal"".", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that an ellipsoidal trust region has not been explicitly requested for 
+        ! a Davidson-based subsystem solver, which does not support it
+        if (settings%trust_region_shape == "ellipsoidal" .and. &
+            string_in("davidson", settings%subsystem_solver)) then
+            call settings%log("Ellipsoidal trust region is not supported for "// &
+                              "Davidson-based subsystem solvers. Set spherical "// &
+                              "trust region or leave it unset.", verbosity_error, &
+                              .true.)
             error = 1
             return
         end if
@@ -3567,21 +3680,25 @@ contains
                     basis_vec_dot, solution_dot, solution_basis_vec_dot, residual_dot, &
                     residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
                     residual_norm, red_factor, conv_tol, last_red_space_solution, &
-                    curvature, lanczos_tridiag_chol_pivot, precond_mu
-        logical :: negative_curvature, try_warm, use_old
+                    curvature, lanczos_tridiag_chol_pivot
+        logical :: negative_curvature, try_warm, use_old, spherical
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
         error = 0
+
+        ! for a spherical trust region, GLTR falls back to no preconditioning at all,
+        ! which keeps the Lanczos basis Euclidean-orthonormal so the existing
+        ! tridiagonal subproblem solve remains exact; this trades away the
+        ! preconditioner's acceleration of the Krylov search in exchange for a
+        ! genuinely spherical trust region
+        spherical = settings%trust_region_shape == "spherical"
 
         ! save starting residual for use in second pass
         residual_start = residual
 
         ! number of parameters
         n_param = size(residual)
-
-        ! calculate preconditioner level shift
-        precond_mu = get_precond_level_shift(h_diag)
 
         ! initialize micro iteration convergence flag
         micro_converged = .false.
@@ -3660,10 +3777,13 @@ contains
         ! start of microiterations
         do
             ! obtain the preconditioned residual
-            call level_shifted_diag_precond(residual, precond_mu, h_diag, vector, &
-                                            settings, error)
-            call add_error_origin(error, error_precond, settings)
-            if (error /= 0) exit
+            if (spherical) then
+                vector = residual
+            else
+                call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
+                call add_error_origin(error, error_precond, settings)
+                if (error /= 0) exit
+            end if
 
             ! obtain the preconditioned residual dot product
             residual_dot = get_preconditioned_residual_dot(residual, vector, settings, &
@@ -3816,11 +3936,14 @@ contains
                                 solution = solution + (hard_case_step_size / u_norm) * &
                                            eigenvec
                             end if
-                            call level_shifted_diag_precond(residual, precond_mu, &
-                                                            h_diag, vector, settings, &
-                                                            error)
-                            call add_error_origin(error, error_precond, settings)
-                            if (error /= 0) return
+                            if (spherical) then
+                                vector = residual
+                            else
+                                call rel_floor_diag_precond(residual, h_diag, vector, &
+                                                            settings, error)
+                                call add_error_origin(error, error_precond, settings)
+                                if (error /= 0) return
+                            end if
                             micro_converged = .true.
                             exit
                         end if
@@ -4004,21 +4127,21 @@ contains
         
         integer(ip) :: n_param, imicro
         real(rp), allocatable :: vector(:), basis_vec(:), residual(:)
-        real(rp) :: tau, step_size, beta, residual_dot, residual_dot_old, u_norm, &
-                    precond_mu
+        real(rp) :: tau, step_size, beta, residual_dot, residual_dot_old, u_norm
+        logical :: spherical
         real(rp), external :: ddot
 
         ! initialize error flag
         error = 0
+
+        ! for a spherical trust region, GLTR falls back to no preconditioning
+        spherical = settings%trust_region_shape == "spherical"
 
         ! initialize residual
         residual = residual_start
 
         ! number of parameters
         n_param = size(residual_start)
-
-        ! calculate preconditioner level shift
-        precond_mu = get_precond_level_shift(h_diag)
 
         ! initialize tau in case of saved vectors
         tau = tau_start
@@ -4032,10 +4155,13 @@ contains
         ! start second pass loop
         do
             ! obtain the preconditioned residual
-            call level_shifted_diag_precond(residual, precond_mu, h_diag, vector, &
-                                            settings, error)
-            call add_error_origin(error, error_precond, settings)
-            if (error /= 0) exit
+            if (spherical) then
+                vector = residual
+            else
+                call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
+                call add_error_origin(error, error_precond, settings)
+                if (error /= 0) exit
+            end if
 
             ! obtain the scaled norm of the residual
             residual_dot = residual_dot_list(imicro + 1)
