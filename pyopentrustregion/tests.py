@@ -108,7 +108,6 @@ fortran_tests = {
         "bisection_ah",
         "bisection_mu",
         "bracket",
-        "default_init_trial_space",
         "extend_matrix",
         "general_mat_diag",
         "general_mat_min_eig",

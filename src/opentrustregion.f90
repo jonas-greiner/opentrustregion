@@ -273,9 +273,7 @@ contains
                    jacobi_davidson_started, conv_check_passed
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson
         character(300) :: msg
-        integer(ip), parameter :: stability_n_points = 21
         procedure(hess_x_type), pointer :: hess_x_funptr, stability_hess_x_funptr
-        type(stability_settings_type) :: approx_hess_x_stability_settings
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
@@ -411,40 +409,6 @@ contains
                         settings%stability_settings%project => settings%project
                     if (.not. associated(settings%stability_settings%logger)) &
                         settings%stability_settings%logger => settings%logger
-                    ! set default trial space and convergence check if not explicitly 
-                    ! set
-                    if (settings%stability_settings%n_trial_vectors == 0 .and. &
-                        (.not. &
-                         associated(settings%stability_settings%init_trial_space))) then
-                        ! set default if approximate Hessian is not available
-                        settings%stability_settings%n_random_trial_vectors = 1
-                        ! check if approximate Hessian is available
-                        if (associated(settings%stability_hess_x)) then
-                            ! generate approximate minimum eigenvector and add to trial 
-                            ! space
-                            allocate(approx_min_eigvec(n_param))
-                            call approx_hess_x_stability_settings%init(error)
-                            if (error /= 0) return
-                            approx_hess_x_stability_settings%verbose = 0
-                            approx_hess_x_stability_settings%n_iter = 1000
-                            approx_hess_x_stability_settings%hess_symm = &
-                                settings%hess_symm
-                            approx_hess_x_stability_settings%precond => &
-                                settings%stability_settings%precond
-                            approx_hess_x_stability_settings%project => &
-                                settings%stability_settings%project
-                            approx_hess_x_stability_settings%logger => &
-                                settings%stability_settings%logger
-                            call stability_check(h_diag, hess_x_funptr, stable, error, &
-                                                 approx_hess_x_stability_settings, &
-                                                 kappa=approx_min_eigvec)
-                            if (error == 0) then
-                                settings%stability_settings%n_trial_vectors = 2
-                                settings%stability_settings%init_trial_space => &
-                                    default_init_trial_space
-                            end if
-                        end if
-                    end if
                     if (.not. associated(settings%stability_settings%conv_check)) &
                         settings%stability_settings%conv_check => &
                             default_stability_conv_check
@@ -454,7 +418,6 @@ contains
                                          kappa=kappa, min_eigval=min_eigval)
                     call add_error_origin(error, error_stability_check, settings)
                     if (error /= 0) return
-                    if (allocated(approx_min_eigvec)) deallocate(approx_min_eigvec)
                     if (.not. stable) then
                         ! move far enough so that gradient is increased by one order of 
                         ! magnitude
@@ -627,7 +590,7 @@ contains
 
         ! generate trial vectors
         if (associated(settings%init_trial_space)) then
-        allocate(red_space_basis(n_param, settings%n_trial_vectors))
+            allocate(red_space_basis(n_param, settings%n_trial_vectors))
             call settings%init_trial_space(red_space_basis, error)
             call add_error_origin(error, error_init_trial_space, settings)
             if (error /= 0) return
@@ -2029,23 +1992,6 @@ contains
         deallocate(orth)
 
     end subroutine gram_schmidt
-
-    subroutine default_init_trial_space(trial_space, error)
-        !
-        ! this subroutine initializes the trial space with an approximate minimum 
-        ! eigenvector and a random trial vector
-        !
-        real(rp), intent(out), target :: trial_space(:, :)
-        integer(ip), intent(out) :: error
-
-        real(rp), external :: dnrm2
-
-        error = 0
-        trial_space(:, 1) = approx_min_eigvec
-        call random_number(trial_space(:, 2))
-        trial_space(:, 2) = 2.0_rp * trial_space(:, 2) - 1.0_rp
-
-    end subroutine default_init_trial_space
 
     function default_stability_conv_check(residual, eigval, error) result(converged)
         !
