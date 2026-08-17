@@ -548,7 +548,7 @@ module otr_arh
         deallocate(x_full)
 
         ! pack Hessian linear transformation
-        hess_x = pack_asymm(hess_x_full, size(hess_x), arh_object%settings%restricted)
+        hess_x = pack_asymm(hess_x_full, size(hess_x, kind=ip), arh_object%settings%restricted)
         deallocate(hess_x_full)
 
     end subroutine hess_x_arh
@@ -638,73 +638,11 @@ module otr_arh
             ! displacement
             allocate(s_delta_dm(n_diff))
             call dgemv("T", n_ao * n_ao, n_diff, 1.0_rp, dm_diff, n_ao * n_ao, &
-                       delta_dm, 1, 0.0_rp, s_delta_dm, 1)
-            if (settings%arh_type == "symmetric" .or. &
-                settings%arh_type == "multisecant_psb") then
-                allocate(y_delta_dm(n_diff))
+                       delta_dm, 1_ip, 0.0_rp, s_delta_dm, 1_ip)
                 call dgemv("T", n_ao * n_ao, n_diff, 1.0_rp, fock_diff, n_ao * n_ao, &
-                           delta_dm, 1, 0.0_rp, y_delta_dm, 1)
-            end if
-            deallocate(delta_dm)
-
-            ! multiply pseudoinverse metric with traces of density matrix and Fock 
-            ! matrix differences and current displacement
-            allocate(t_s_delta_dm(n_diff))
-            t_s_delta_dm = &
-                multiply_with_inverse_metric(s_delta_dm, metric_chol(:, :, 1), &
-                                             metric_rank(1), metric_piv(:, 1))
-            if (settings%arh_type == "symmetric" .or. &
-                settings%arh_type == "multisecant_psb") then
-                allocate(t_y_delta_dm(n_diff))
-                t_y_delta_dm = &
-                    multiply_with_inverse_metric(y_delta_dm, metric_chol(:, :, 1), &
-                                                 metric_rank(1), metric_piv(:, 1))
-            end if
-
-            ! contract with Fock matrix differences to get ARH contribution
-            allocate(y_t_s_delta_dm(n_ao, n_ao))
-            call dgemv("N", n_ao * n_ao, n_diff, 1.0_rp, fock_diff, n_ao * n_ao, &
-                       t_s_delta_dm, 1, 0.0_rp, y_t_s_delta_dm, 1)
-            deallocate(t_s_delta_dm)
-            response(:, :, 1) = factor * y_t_s_delta_dm
-
-            ! calculate multisecant PSB contribution
-            if (settings%arh_type == "multisecant_psb") then
-                ! get trace of density matrix differences with matrix
-                allocate(sy_t_s_delta_dm(n_diff))
-                call dgemv("T", n_ao * n_ao, n_diff, 1.0_rp, dm_diff, n_ao * n_ao, &
-                           y_t_s_delta_dm, 1, 0.0_rp, sy_t_s_delta_dm, 1)
-                deallocate(y_t_s_delta_dm)
-
-                ! multiply pseudoinverse metric with vector
-                allocate(t_sy_t_s_delta_dm(n_diff))
-                t_sy_t_s_delta_dm = &
-                    multiply_with_inverse_metric(sy_t_s_delta_dm, &
-                                                 metric_chol(:, :, 1), &
-                                                 metric_rank(1), metric_piv(:, 1))
-            else
-                deallocate(y_t_s_delta_dm)
-            end if
-
-            ! contract with density matrix differences to get symmetric and multisecant 
-            ! PSB contributions
-            if (settings%arh_type == "symmetric" .or. &
-                settings%arh_type == "multisecant_psb") then
-                val = t_y_delta_dm
-                deallocate(t_y_delta_dm)
-                if (settings%arh_type == "multisecant_psb") then
-                    val = val - t_sy_t_s_delta_dm
-                    deallocate(t_sy_t_s_delta_dm)
-                end if
-                call dgemv("N", n_ao * n_ao, n_diff, factor, dm_diff, n_ao * n_ao, &
-                           val, 1, 1.0_rp, response(:, :, 1), 1)
-                deallocate(val)
-            end if
-
-            ! add only v-o and o-v contributions of ARH response part
-            response = project(response, dm_oao)
+                           delta_dm, 1_ip, 0.0_rp, y_proj, 1_ip)
         end if
-        
+
     end function get_response_contribution_closed_shell
 
     function get_response_contribution_open_shell(dm_oao, x, dm_diff, &
@@ -774,8 +712,8 @@ module otr_arh
             ! get traces of density matrix differences with current displacement
             do i = 1, n_diff
                 do j = 1, n_particle
-                    s_delta_dm(i, j) = ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1, &
-                                            delta_dm(:, :, j), 1)
+                    s_delta_dm(i, j) = ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1_ip, &
+                                            delta_dm(:, :, j), 1_ip)
                 end do
             end do
 
@@ -795,14 +733,13 @@ module otr_arh
                     ! get traces of potential differences with current displacement
                     do i = 1, n_diff
                         same_y_delta_dm(i) = ddot(n_ao * n_ao, &
-                                                  v_same_spin_diff(:, :, j, i), 1, &
-                                                  delta_dm(:, :, j), 1)
+                                                  v_same_spin_diff(:, :, j, i), 1_ip, &
+                                                  delta_dm(:, :, j), 1_ip)
                         do k = 1, n_particle
                             if (k == j) cycle
                             opposite_y_delta_dm(i, k) = &
-                                ddot(n_ao * n_ao, v_opposite_spin_diff(:, :, k, i), 1, &
-                                     delta_dm(:, :, k), 1)
-                        end do
+                                ddot(n_ao * n_ao, v_opposite_spin_diff(:, :, k, i), &
+                                     1_ip, delta_dm(:, :, k), 1_ip)
                     end do
                 
                     ! multiply pseudoinverse metric with traces of potential 
@@ -834,13 +771,8 @@ module otr_arh
                 end do
                 response(:, :, j) = factor * y_t_s_delta_dm
 
-                ! calculate multisecant PSB contribution
-                if (settings%arh_type == "multisecant_psb") then
-                    ! get trace of density matrix differences with matrix
-                    do i = 1, n_diff
-                        sy_t_s_delta_dm(i) = ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1, &
-                                                  y_t_s_delta_dm, 1)
-                    end do
+                            sy_t_s_delta_dm(i) = ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1, &
+                                                  y_t_s_delta_dm, 1_ip)
 
                     ! multiply pseudoinverse metric with vector
                     t_sy_t_s_delta_dm = &
@@ -905,13 +837,13 @@ module otr_arh
         end do
 
         ! forward substitution: solve R^T * y = perm_vec(1:rank)
-        call dtrsv("U", "T", "N", rank, chol, n_dm, perm_vec, 1)
+        call dtrsv("U", "T", "N", rank, chol, n_dm, perm_vec, 1_ip)
 
         ! filter out linear dependencies
         if (rank < n_dm) perm_vec(rank+1:n_dm) = 0.0_rp
 
         ! backward substitution: solve R * c = y
-        call dtrsv("U", "N", "N", rank, chol, n_dm, perm_vec, 1)
+        call dtrsv("U", "N", "N", rank, chol, n_dm, perm_vec, 1_ip)
 
         ! backward permutation to original basis: result_vec = P * perm_vec
         do i = 1, n_dm
@@ -963,26 +895,26 @@ module otr_arh
                 end do
                 tol = max(tol, metric(j, j))
             end do
-            
+
             if (n_dm > 0) then
                 ! tolerance for linear dependencies
                 tol = n_dm * numerical_zero * tol
-                
+
                 ! loop chronologically through history
                 n_accepted = 0
                 n_rejected = 0
                 do i = 1, n_dm
                     raw_diagonal = metric(i, i)
-                    
+
                     ! project current column onto the accepted columns
                     if (n_accepted > 0) then
                         do j = 1, n_accepted
                             work(j) = metric(map(j, k), i)
                         end do
-                        
+
                         ! solve R_accepted^T * work = T_accepted_vs_current
                         call dtrsv("U", "T", "N", n_accepted, chol(:, :, k), n_dm, &
-                                   work, 1)
+                                   work, 1_ip)
                         
                         ! subtract projections to find remaining orthogonal magnitude
                         raw_diagonal = raw_diagonal - sum(work(1:n_accepted)**2)
@@ -990,7 +922,7 @@ module otr_arh
                     
                     ! check for linear dependency
                     if (raw_diagonal < tol) then
-                        ! dependency found: store index at the back of map and skip 
+                        ! dependency found: store index at the back of map and skip
                         ! column
                         n_rejected = n_rejected + 1
                         map(n_dm - n_rejected + 1, k) = i
@@ -998,7 +930,7 @@ module otr_arh
                         ! independent: accept column and append to the active factors
                         n_accepted = n_accepted + 1
                         map(n_accepted, k) = i
-                        
+
                         if (n_accepted > 1) then
                             chol(1:n_accepted-1, n_accepted, k) = work(1:n_accepted-1)
                         end if

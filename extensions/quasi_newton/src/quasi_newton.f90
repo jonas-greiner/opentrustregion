@@ -318,13 +318,13 @@ module otr_qn
 
         skip = .false.
         n_param = size(kappa)
-        kappa_norm = sqrt(ddot(n_param, kappa, 1, kappa, 1))
+        kappa_norm = sqrt(ddot(n_param, kappa, 1_ip, kappa, 1_ip))
         residual = -kappa
         call init_hess_funptr(residual, error)
         if (error /= 0) return
         residual = residual + grad_diff
-        residual_norm = sqrt(ddot(n_param, residual, 1, residual, 1))
-        curvature = abs(ddot(n_param, kappa, 1, residual, 1))
+        residual_norm = sqrt(ddot(n_param, residual, 1_ip, residual, 1_ip))
+        curvature = abs(ddot(n_param, kappa, 1_ip, residual, 1_ip))
         if (curvature < curvature_threshold * kappa_norm * residual_norm) &
             skip = .true.
         deallocate(residual)
@@ -451,9 +451,9 @@ module otr_qn
 
         skip = .false.
         n_param = size(kappa)
-        kappa_norm = sqrt(ddot(n_param, kappa, 1, kappa, 1))
-        grad_diff_norm = sqrt(ddot(n_param, grad_diff, 1, grad_diff, 1))
-        kappa_grad_dot = ddot(n_param, kappa, 1, grad_diff, 1)
+        kappa_norm = sqrt(ddot(n_param, kappa, 1_ip, kappa, 1_ip))
+        grad_diff_norm = sqrt(ddot(n_param, grad_diff, 1_ip, grad_diff, 1_ip))
+        kappa_grad_dot = ddot(n_param, kappa, 1_ip, grad_diff, 1_ip)
 
         ! avoid zero near-zero curvature to avoid singular compact scaling matrix, 
         ! negative curvature is not a problem since this is handled by the trust region 
@@ -516,11 +516,11 @@ module otr_qn
                 ! Weighted Top-Left: kappa_i^T * h_start * kappa_j
                 ! Using a manual loop or dot_product for weighted sum
                 compact_scal_mat(i, j) = ddot(n_param, bfgs_object%kappa_list(:, i), &
-                                              1, init_hess_x, 1)
+                                              1_ip, init_hess_x, 1_ip)
                 
                 ! L and D parts (do not depend on initial Hessian)
-                kappa_grad_dot = ddot(n_param, bfgs_object%kappa_list(:, i), 1, &
-                                      bfgs_object%grad_diff_list(:, j), 1)
+                kappa_grad_dot = ddot(n_param, bfgs_object%kappa_list(:, i), 1_ip, &
+                                      bfgs_object%grad_diff_list(:, j), 1_ip)
                 if (i > j) then
                     compact_scal_mat(i, j + bfgs_object%n_points) = kappa_grad_dot      
                     compact_scal_mat(j + bfgs_object%n_points, i) = kappa_grad_dot      
@@ -537,9 +537,10 @@ module otr_qn
         allocate(solution(2 * bfgs_object%n_points))
         do i = 1, bfgs_object%n_points
             ! weighted dot product for the top half of RHS
-            solution(i) = ddot(n_param, bfgs_object%kappa_list(:, i), 1, hess_x, 1)
+            solution(i) = ddot(n_param, bfgs_object%kappa_list(:, i), 1_ip, hess_x, &
+                               1_ip)
             solution(i + bfgs_object%n_points) = &
-                ddot(n_param, bfgs_object%grad_diff_list(:, i), 1, x, 1)
+                ddot(n_param, bfgs_object%grad_diff_list(:, i), 1_ip, x, 1_ip)
         end do
         
         ! LU factorize compact scaling matrix
@@ -557,7 +558,7 @@ module otr_qn
         end if
 
         ! solve compact_scal_mat * solution = rhs
-        call dgetrs('N', 2 * bfgs_object%n_points, 1, compact_scal_mat, &
+        call dgetrs('N', 2 * bfgs_object%n_points, 1_ip, compact_scal_mat, &
                     2 * bfgs_object%n_points, ipiv, solution, &
                     2 * bfgs_object%n_points, info)
         deallocate(compact_scal_mat, ipiv)

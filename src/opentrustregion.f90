@@ -4269,7 +4269,8 @@ contains
         real(rp) :: residual_dot
         real(rp), external :: ddot
 
-        residual_dot = ddot(size(residual), residual, 1_ip, precond_residual, 1_ip)
+        residual_dot = ddot(size(residual, kind=ip), residual, 1_ip, precond_residual, &
+                            1_ip)
         if (abs(residual_dot) < numerical_zero) residual_dot = 0.0_rp
         if (residual_dot < 0.0_rp) then
             if (maxval(abs(precond_residual)) < epsilon(1.0_rp) * &

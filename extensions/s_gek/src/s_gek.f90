@@ -345,8 +345,8 @@ module otr_s_gek
                 do i = 2, self%n_space
                     do k = 1, j
                         self%subspace(:, i) = self%subspace(:, i) - &
-                            ddot(self%n_param, self%subspace(:, i), 1, &
-                                 self%subspace(:, k), 1) * self%subspace(:, k)
+                            ddot(self%n_param, self%subspace(:, i), 1_ip, &
+                                 self%subspace(:, k), 1_ip) * self%subspace(:, k)
                     end do
                     ! renormalize and only add vector if it is not linearly dependent
                     norm = dnrm2(self%n_param, self%subspace(:, i), 1_ip)
@@ -670,7 +670,7 @@ module otr_s_gek
         end do
 
         ! solve R x = (y - mu f), i.e. x = R^{-1} (y - mu f)
-        call dposv('U', self%n_covariance, 1, covariance_matrix, self%n_covariance, &
+        call dposv('U', self%n_covariance, 1_ip, covariance_matrix, self%n_covariance, &
                    self%kriging_weights, self%n_covariance, info)
 
         ! check for successful execution

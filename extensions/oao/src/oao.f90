@@ -498,7 +498,7 @@ module otr_oao
         deallocate(vector_full)
 
         ! pack vector
-        vector = pack_asymm(projected_vector_full, size(vector), &
+        vector = pack_asymm(projected_vector_full, size(vector, kind=ip), &
                             oao_object%settings%restricted)
         deallocate(projected_vector_full)
 
@@ -641,7 +641,7 @@ module otr_oao
         deallocate(fock_ov, fock_vo)
 
         ! pack gradient
-        grad = pack_asymm(grad_full, size(grad), restricted)
+        grad = pack_asymm(grad_full, size(grad, kind=ip), restricted)
 
         ! construct Hessian diagonal
         idx = 1

@@ -774,8 +774,8 @@ contains
 
         ! diagonalize Hessian
         red_space_hess_right_eigvecs = red_space_hess
-        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
-                   red_space_hess_eigvals, work, 9, info)
+        call dsyev("V", "U", 3_ip, red_space_hess_right_eigvecs, 3_ip, &
+                   red_space_hess_eigvals, work, 9_ip, info)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection, check whether error has occured and determine whether 
@@ -819,8 +819,8 @@ contains
         
         ! diagonalize artificial Hessian
         red_space_hess_right_eigvecs = red_space_hess
-        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
-                   red_space_hess_eigvals, work, 9, info)
+        call dsyev("V", "U", 3_ip, red_space_hess_right_eigvecs, 3_ip, &
+                   red_space_hess_eigvals, work, 9_ip, info)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection, check whether error has occured and determine whether 
@@ -869,8 +869,8 @@ contains
 
         ! diagonalize Hessian
         red_space_hess_right_eigvecs = red_space_hess
-        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
-                   red_space_hess_eigvals, work, 9, info)
+        call dsyev("V", "U", 3_ip, red_space_hess_right_eigvecs, 3_ip, &
+                   red_space_hess_eigvals, work, 9_ip, info)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection and determine whether routine correctly throws error since
@@ -943,8 +943,8 @@ contains
 
         ! diagonalize Hessian
         red_space_hess_right_eigvecs = red_space_hess
-        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
-                   red_space_hess_eigvals_re, work, 9, info)
+        call dsyev("V", "U", 3_ip, red_space_hess_right_eigvecs, 3_ip, &
+                   red_space_hess_eigvals_re, work, 9_ip, info)
         red_space_hess_eigvals%re = red_space_hess_eigvals_re
         red_space_hess_eigvals%im = 0.0_rp
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
@@ -1030,8 +1030,8 @@ contains
         
         ! diagonalize artificial Hessian
         red_space_hess_right_eigvecs = red_space_hess
-        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
-                   red_space_hess_eigvals_re, work, 9, info)
+        call dsyev("V", "U", 3_ip, red_space_hess_right_eigvecs, 3_ip, &
+                   red_space_hess_eigvals_re, work, 9_ip, info)
         red_space_hess_eigvals%re = red_space_hess_eigvals_re
         red_space_hess_eigvals%im = 0.0_rp
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
@@ -1148,8 +1148,8 @@ contains
 
         ! diagonalize Hessian
         red_space_hess_right_eigvecs = red_space_hess
-        call dsyev("V", "U", 3, red_space_hess_right_eigvecs, 3, &
-                   red_space_hess_eigvals_re, work, 9, info)
+        call dsyev("V", "U", 3_ip, red_space_hess_right_eigvecs, 3_ip, &
+                   red_space_hess_eigvals_re, work, 9_ip, info)
         red_space_hess_eigvals%re = red_space_hess_eigvals_re
         red_space_hess_eigvals%im = 0.0_rp
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
