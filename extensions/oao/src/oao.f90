@@ -421,14 +421,8 @@ module otr_oao
                                    transpose(hess_x_full(:, :, i))
         end do
 
-        ! get commutator of trial vector and current density matrix
-        allocate(dm_response(n_ao, n_ao, n_particle))
-        do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, oao_object%dm_oao(:, :, i), &
-                       n_ao, x_full(:, :, i), n_ao, 0.0_rp, dm_response(:, :, i), n_ao)
-            dm_response(:, :, i) = dm_response(:, :, i) + &
-                                   transpose(dm_response(:, :, i))
-        end do
+        ! get density matrix response to trial vector
+        dm_response = project_symm(x_full, oao_object%dm_oao)
         deallocate(x_full)
 
         ! transform density matrix from OAO basis to AO basis
@@ -447,8 +441,8 @@ module otr_oao
         ! transform Fock response to OAO basis
         fock_response = symmetric_transformation(oao_object%s_inv_sqrt, fock_response)
 
-        ! project function (is this necessary?)
-        hess_x_full = hess_x_full + project(fock_response, oao_object%dm_oao)
+        ! project Fock response onto occupied-virtual and virtual-occupied subspace
+        hess_x_full = hess_x_full + project_asymm(fock_response, oao_object%dm_oao)
         deallocate(fock_response)
         if (error /= 0) return
 
@@ -464,8 +458,9 @@ module otr_oao
 
     subroutine project_oao(vector, error)
         !
-        ! this subroutine projects out the occupied-occupied and virtual-virtual 
-        ! contributions from a vector in-place
+        ! this subroutine discards the redundant occupied-occupied and virtual-virtual 
+        ! rotations from a vector describing an orbital rotation in-place, retaining 
+        ! only its occupied-virtual and virtual-occupied contributions
         !
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
@@ -479,8 +474,8 @@ module otr_oao
         vector_full = unpack_asymm(vector, oao_object%n_particle, &
                                    oao_object%n_ao)
 
-        ! project out o-o and v-v contributions
-        projected_vector_full = project(vector_full, oao_object%dm_oao)
+        ! project vector onto occupied-virtual and virtual-occupied subspace
+        projected_vector_full = project_asymm(vector_full, oao_object%dm_oao)
         deallocate(vector_full)
 
         ! pack vector
@@ -639,10 +634,15 @@ module otr_oao
 
     end subroutine calculate_grad_h_diag
 
-    function project(matrix, dm_oao) result(projected_matrix)
+    function project_asymm(matrix, dm_oao) result(projected_matrix)
         !
-        ! this function only retains occupied-virtual and virtual-occupied 
-        ! contributions to a matrix
+        ! this function projects a matrix onto the occupied-virtual and
+        ! virtual-occupied subspace of the provided density matrix and returns the 
+        ! result in antisymmetric form, discarding the redundant occupied-occupied and
+        ! virtual-virtual contributions; for a symmetric matrix (e.g. a Fock
+        ! response) this antisymmetrizes the retained occupied-virtual block, while
+        ! for an already antisymmetric matrix (e.g. an orbital rotation) it reproduces 
+        ! its occupied-virtual and virtual-occupied contributions unchanged
         !
         real(rp), intent(in) :: matrix(:, :, :), dm_oao(:, :, :)
         real(rp), allocatable :: projected_matrix(:, :, :)
@@ -664,19 +664,50 @@ module otr_oao
             end do
             proj_v = proj_v - dm_oao(:, :, i)
 
-            ! construct virtual-occupied contributions DM(I-D)
+            ! construct occupied-virtual contributions DM(I-D)
             call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, matrix(:, :, i), n_ao, &
                        proj_v, n_ao, 0.0_rp, temp, n_ao)
             call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, i), n_ao, &
                        temp, n_ao, 0.0_rp, projected_matrix(:, :, i), n_ao)
 
-            ! add occupied-virtual contributions (I-D)MD
+            ! antisymmetrize to add the virtual-occupied contributions
             projected_matrix(:, :, i) = projected_matrix(:, :, i) - &
                                         transpose(projected_matrix(:, :, i))
         end do
         deallocate(proj_v, temp)
 
-    end function project
+    end function project_asymm
+
+    function project_symm(x_full, dm_oao) result(projected_matrix)
+        !
+        ! this function projects an antisymmetric orbital-rotation matrix onto the
+        ! occupied-virtual and virtual-occupied subspace of the provided density matrix 
+        ! and returns the result in symmetric form, i.e. the density matrix response to 
+        ! the rotation, discarding the redundant occupied-occupied and virtual-virtual
+        ! contributions
+        !
+        real(rp), intent(in) :: x_full(:, :, :), dm_oao(:, :, :)
+        real(rp), allocatable :: projected_matrix(:, :, :)
+
+        integer(ip) :: n_ao, i
+        real(rp), allocatable :: temp(:, :)
+        external :: dgemm
+
+        ! number of AOs
+        n_ao = size(x_full, 1)
+
+        allocate(projected_matrix(n_ao, n_ao, size(x_full, 3)), temp(n_ao, n_ao))
+        do i = 1, size(x_full, 3)
+            ! construct product of density matrix and trial vector D*X
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, i), n_ao, &
+                       x_full(:, :, i), n_ao, 0.0_rp, temp, n_ao)
+
+            ! symmetrize to get density matrix response
+            projected_matrix(:, :, i) = temp + transpose(temp)
+        end do
+        deallocate(temp)
+
+    end function project_symm
 
     subroutine purify(dm)
         !

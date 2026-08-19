@@ -1870,7 +1870,7 @@ contains
         !
         use otr_arh, only: hess_x_arh, arh_object
         use otr_oao_test_reference, only: n_ao
-        use otr_oao_unit_tests, only: ref_unpack_asymm, get_delta_dm, ref_hess_x, &
+        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_project_symm, ref_hess_x, &
                                       identity_matrix, generate_random_density_matrix, &
                                       generate_random_symm_matrix
         use opentrustregion_unit_tests, only: setup_settings
@@ -1949,7 +1949,7 @@ contains
         allocate(x(n_param))
         call random_number(x)
         x_full = ref_unpack_asymm(x, n_particle, n_ao)
-        delta_dm = get_delta_dm(x_full, dm_oao(:, :, 1:1))
+        delta_dm = ref_project_symm(x_full, dm_oao(:, :, 1:1))
         alpha(1) = sum(dm_diff(:, :, 1, 1) * delta_dm(:, :, 1)) / &
                    sum(dm_diff(:, :, 1, 1)**2)
         allocate(response(n_ao, n_ao, 1))
@@ -2021,7 +2021,7 @@ contains
         allocate(x(n_param))
         call random_number(x)
         x_full = ref_unpack_asymm(x, n_particle, n_ao)
-        delta_dm = get_delta_dm(x_full, dm_oao)
+        delta_dm = ref_project_symm(x_full, dm_oao)
         allocate(response(n_ao, n_ao, n_particle))
         do j = 1, n_particle
             alpha(j) = sum(dm_diff(:, :, j, 1) * delta_dm(:, :, j)) / &

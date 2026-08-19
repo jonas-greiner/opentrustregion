@@ -555,7 +555,8 @@ module otr_arh
         ! this function defines the Hessian linear transformation on the basis of 
         ! augmented Roothaan-Hall and related methods
         !
-        use otr_oao, only: unpack_asymm, project, pack_asymm, symmetric_transformation
+        use otr_oao, only: unpack_asymm, project_asymm, project_symm, pack_asymm, &
+                           symmetric_transformation
 
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
@@ -589,14 +590,8 @@ module otr_arh
                                    transpose(hess_x_full(:, :, i))
         end do
 
-        ! get current displacement as commutator of trial vector and current density 
-        ! matrix
-        allocate(delta_dm(n_ao, n_ao, n_particle))
-        do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, arh_object%dm_oao(:, :, i), &
-                       n_ao, x_full(:, :, i), n_ao, 0.0_rp, delta_dm(:, :, i), n_ao)
-            delta_dm(:, :, i) = delta_dm(:, :, i) + transpose(delta_dm(:, :, i))
-        end do
+        ! get density matrix response to trial vector
+        delta_dm = project_symm(x_full, arh_object%dm_oao)
 
         ! approximate response contributions for linear part
         if (n_particle == 1) then
@@ -669,8 +664,8 @@ module otr_arh
         end if
         deallocate(x_full, delta_dm)
 
-        ! add only v-o and o-v contributions of ARH response part
-        hess_x_full = hess_x_full + project(fock_response, arh_object%dm_oao)
+        ! project Fock response onto occupied-virtual and virtual-occupied subspace
+        hess_x_full = hess_x_full + project_asymm(fock_response, arh_object%dm_oao)
 
         ! pack Hessian linear transformation
         if (arh_object%n_particle == 1) then

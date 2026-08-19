@@ -150,13 +150,13 @@ contains
 
     end function ref_pack_asymm
 
-    function ref_project(matrix, dm_oao) result(projected_matrix)
+    function ref_project_asymm(matrix, dm_oao) result(projected_matrix)
         !
         ! this function retains only the occupied-virtual and virtual-occupied
-        ! contributions to a matrix, reproducing the corresponding OAO routine so that
-        ! tests of routines which project internally do not depend on it
+        ! contributions to a matrix in antisymmetric form, reproducing the
+        ! corresponding OAO routine so that tests of routines which project internally 
+        ! do not depend on it
         !
-
         real(rp), intent(in) :: matrix(:, :, :), dm_oao(:, :, :)
         real(rp) :: projected_matrix(size(matrix, 1), size(matrix, 2), size(matrix, 3))
 
@@ -174,12 +174,14 @@ contains
                                         transpose(projected_matrix(:, :, i))
         end do
 
-    end function ref_project
+    end function ref_project_asymm
 
-    function get_delta_dm(x_full, dm_oao) result(delta_dm)
+    function ref_project_symm(x_full, dm_oao) result(delta_dm)
         !
-        ! this function returns the density matrix displacement as the commutator of
-        ! the trial vector and the current density matrix
+        ! this function retains only the occupied-virtual and virtual-occupied
+        ! contributions to a matrix in symmetric form, reproducing the corresponding 
+        ! OAO routine so that tests of routines which project internally do not depend 
+        ! on it
         !
         real(rp), intent(in) :: x_full(:, :, :), dm_oao(:, :, :)
         real(rp) :: delta_dm(size(x_full, 1), size(x_full, 2), size(x_full, 3))
@@ -191,7 +193,7 @@ contains
             delta_dm(:, :, i) = delta_dm(:, :, i) + transpose(delta_dm(:, :, i))
         end do
 
-    end function get_delta_dm
+    end function ref_project_symm
 
     function ref_hess_x(x_full, response, dm_oao, fock_oo, fock_vv, n_param) &
         result(hess_x)
@@ -215,8 +217,8 @@ contains
                                    transpose(hess_x_full(:, :, i))
         end do
 
-        ! add only occupied-virtual and virtual-occupied contributions of response part
-        hess_x_full = hess_x_full + ref_project(response, dm_oao)
+        ! project response onto occupied-virtual and virtual-occupied subspace
+        hess_x_full = hess_x_full + ref_project_asymm(response, dm_oao)
 
         ! pack Hessian linear transformation
         hess_x = merge(4.0_rp, 2.0_rp, size(x_full, 3) == 1) * &
@@ -496,12 +498,12 @@ contains
 
     end function test_pack_asymm
 
-    logical(c_bool) function test_project() bind(C)
+    logical(c_bool) function test_project_asymm() bind(C)
         !
         ! this function tests the function which retains only the occupied-virtual and
-        ! virtual-occupied contributions to a matrix
+        ! virtual-occupied contributions to a matrix in antisymmetric form
         !
-        use otr_oao, only: project
+        use otr_oao, only: project_asymm
         use otr_oao_test_reference, only: n_ao, n_particle
 
         real(rp) :: matrix(n_ao, n_ao, n_particle), dm_oao(n_ao, n_ao, n_particle), &
@@ -509,7 +511,7 @@ contains
         real(rp), allocatable :: projected_matrix(:, :, :)
 
         ! assume tests pass
-        test_project = .true.
+        test_project_asymm = .true.
 
         ! initialize matrices and density matrices, each occupying a single, distinct
         ! orbital only
@@ -533,20 +535,72 @@ contains
                                      0.0_rp, 2.0_rp, 0.0_rp], [n_ao, n_ao])
 
         ! call routine and determine if dimensions and values of resulting matrix match
-        projected_matrix = project(matrix, dm_oao)
+        projected_matrix = project_asymm(matrix, dm_oao)
         if (size(projected_matrix, 1) /= n_ao .or. &
             size(projected_matrix, 3) /= n_particle) then
-            write (stderr, *) "test_project failed: Incorrect matrix dimensions."
-            test_project = .false.
+            write (stderr, *) "test_project_asymm failed: Incorrect matrix dimensions."
+            test_project_asymm = .false.
             return
         end if
         if (norm2(projected_matrix - expected) > tol) then
-            write (stderr, *) "test_project failed: Incorrect matrix values."
-            test_project = .false.
+            write (stderr, *) "test_project_asymm failed: Incorrect matrix values."
+            test_project_asymm = .false.
         end if
         deallocate(projected_matrix)
 
-    end function test_project
+    end function test_project_asymm
+
+    logical(c_bool) function test_project_symm() bind(C)
+        !
+        ! this function tests the function which retains only the occupied-virtual and
+        ! virtual-occupied contributions to a matrix in symmetric form
+        !
+        use otr_oao, only: project_symm
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        real(rp) :: x_full(n_ao, n_ao, n_particle), dm_oao(n_ao, n_ao, n_particle), &
+                    expected(n_ao, n_ao, n_particle)
+        real(rp), allocatable :: projected_matrix(:, :, :)
+
+        ! assume tests pass
+        test_project_symm = .true.
+
+        ! initialize antisymmetric trial vectors and density matrices, each occupying
+        ! a single, distinct orbital only
+        x_full(:, :, 1) = reshape([0.0_rp, -1.0_rp, -2.0_rp, &
+                                   1.0_rp, 0.0_rp, -3.0_rp, &
+                                   2.0_rp, 3.0_rp, 0.0_rp], [n_ao, n_ao])
+        x_full(:, :, 2) = reshape([0.0_rp, -4.0_rp, -5.0_rp, &
+                                   4.0_rp, 0.0_rp, -6.0_rp, &
+                                   5.0_rp, 6.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_oao = 0.0_rp
+        dm_oao(1, 1, 1) = 1.0_rp
+        dm_oao(2, 2, 2) = 1.0_rp
+
+        ! initialize expected matrices, where only the symmetrized occupied-virtual
+        ! elements survive
+        expected(:, :, 1) = reshape([0.0_rp, 1.0_rp, 2.0_rp, &
+                                     1.0_rp, 0.0_rp, 0.0_rp, &
+                                     2.0_rp, 0.0_rp, 0.0_rp], [n_ao, n_ao])
+        expected(:, :, 2) = reshape([0.0_rp, -4.0_rp, 0.0_rp, &
+                                     -4.0_rp, 0.0_rp, 6.0_rp, &
+                                     0.0_rp, 6.0_rp, 0.0_rp], [n_ao, n_ao])
+
+        ! call routine and determine if dimensions and values of resulting matrix match
+        projected_matrix = project_symm(x_full, dm_oao)
+        if (size(projected_matrix, 1) /= n_ao .or. &
+            size(projected_matrix, 3) /= n_particle) then
+            write (stderr, *) "test_project_symm failed: Incorrect matrix dimensions."
+            test_project_symm = .false.
+            return
+        end if
+        if (norm2(projected_matrix - expected) > tol) then
+            write (stderr, *) "test_project_symm failed: Incorrect matrix values."
+            test_project_symm = .false.
+        end if
+        deallocate(projected_matrix)
+
+    end function test_project_symm
 
     logical(c_bool) function test_purify() bind(C)
         !
@@ -1268,7 +1322,7 @@ contains
         ! the response is the mock response of the density matrix displacement
         allocate(x(n_param))
         x_full = ref_unpack_asymm(x, n_particle, n_ao)
-        delta_dm = get_delta_dm(x_full, dm_oao(:, :, 1:1))
+        delta_dm = ref_project_symm(x_full, dm_oao(:, :, 1:1))
         expected_hess_x = ref_hess_x(x_full, mock_response_factor * delta_dm, &
                                      dm_oao(:, :, 1:1), fock_oo(:, :, 1:1), &
                                      fock_vv(:, :, 1:1), n_param)
@@ -1300,7 +1354,7 @@ contains
         ! the response is the mock response of the density matrix displacements
         allocate(x(n_param))
         x_full = ref_unpack_asymm(x, n_particle, n_ao)
-        delta_dm = get_delta_dm(x_full, dm_oao)
+        delta_dm = ref_project_symm(x_full, dm_oao)
         expected_hess_x = ref_hess_x(x_full, mock_response_factor * delta_dm, dm_oao, &
                                      fock_oo, fock_vv, n_param)
 
@@ -1327,8 +1381,9 @@ contains
 
     logical(c_bool) function test_project_oao() bind(C)
         !
-        ! this function tests the subroutine which projects out the occupied-occupied
-        ! and virtual-virtual contributions from a vector
+        ! this function tests the subroutine which discards the redundant
+        ! occupied-occupied and virtual-virtual rotations from a vector, retaining
+        ! only its occupied-virtual and virtual-occupied contributions
         !
         use otr_oao, only: project_oao, oao_object
         use opentrustregion_unit_tests, only: setup_settings
@@ -1355,8 +1410,8 @@ contains
 
         ! initialize expected vector
         oao_object%n_particle = n_particle
-        expected = ref_pack_asymm(ref_project(ref_unpack_asymm(vector, n_particle, &
-                                                               n_ao), dm_oao), n_param)
+        expected = ref_pack_asymm(ref_project_asymm(ref_unpack_asymm( &
+            vector, n_particle, n_ao), dm_oao), n_param)
 
         ! call routine and determine if values of resulting vector match
         call project_oao(vector, error)
