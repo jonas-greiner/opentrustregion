@@ -427,6 +427,7 @@ contains
                                         ((10 * settings%conv_tol)**2 - grad_rms**2))) &
                                    / min_eigval
                         kappa = n_kappa * kappa
+                        kappa_norm = dnrm2(n_param, kappa, 1_ip)
                         if (imacro == 1) then
                             call settings%log("Started at saddle point. The "// &
                                               "algorithm will continue by moving "// &
