@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any
+    from typing import Tuple, Callable, Optional, Any, Type, Union
 
 
 # load the opentrustregion library, fallback to testsuite in case opentrustregion was
@@ -45,38 +45,40 @@ lib_candidates = [
     f"libopentrustregion_64.{ext}",
     f"libtestsuite.{ext}",
 ]
-lib = None
 
-# try to load from installed package (site-packages)
-for lib_name in lib_candidates:
-    lib_path = resources.files("pyopentrustregion") / lib_name
-    if lib_path.is_file():
-        lib = CDLL(str(lib_path))
 
-# fallback: try to load from same directory (editable install)
-if lib is None:
+def _load_lib() -> CDLL:
+    # try to load from installed package (site-packages)
+    for lib_name in lib_candidates:
+        lib_path = resources.files("pyopentrustregion") / lib_name
+        if lib_path.is_file():
+            return CDLL(str(lib_path))
+
+    # fallback: try to load from same directory (editable install)
     for lib_name in lib_candidates:
         local_path = os.path.join(os.path.dirname(__file__), lib_name)
         if os.path.exists(local_path):
-            lib = CDLL(local_path)
+            return CDLL(local_path)
 
-# fallback: try to load from ../build (development build)
-if lib is None:
+    # fallback: try to load from ../build (development build)
     for lib_name in lib_candidates:
         build_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "../build", lib_name)
         )
         if os.path.exists(build_path):
-            lib = CDLL(build_path)
+            return CDLL(build_path)
 
-# if all failed
-if lib is None:
+    # if all failed
     raise FileNotFoundError(
         f"Cannot find either opentrustregion or testsuite library ({lib_candidates})"
     )
 
+
+lib = _load_lib()
+
 # determine integer size used in library
 ilp64 = c_bool.in_dll(lib, "ilp64")
+c_int: Type[Union[c_int32, c_int64]]
 if ilp64.value:
     c_int = c_int64
 else:
