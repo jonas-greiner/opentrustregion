@@ -305,6 +305,9 @@ module otr_arh
                               arh_object%dm_oao)
             if (error /= 0) return
 
+            ! the density was updated but the response was not rebuilt
+            oao_object%response_stale = .true.
+
             ! get energy, Fock matrix and non-linear potential
             allocate(fock_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
@@ -450,6 +453,9 @@ module otr_arh
             call rotate_dm_ao(kappa, n_particle, n_ao, arh_object%dm_ao, error, &
                               arh_object%dm_oao)
             if (error /= 0) return
+
+            ! the density was updated but the response was not rebuilt
+            oao_object%response_stale = .true.
 
             ! get energy, Fock matrix, same and opposite spin potentials, and 
             ! non-linear potential

@@ -50,6 +50,7 @@ fortran_tests = {
         "project_oao",
         "project_symm",
         "purify",
+        "refresh_oao_response",
         "rotate_dm_ao",
         "symmetric_transformation",
         "unpack_asymm",

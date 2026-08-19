@@ -1036,6 +1036,98 @@ contains
 
     end function test_calculate_grad_h_diag
 
+    logical(c_bool) function test_refresh_oao_response() bind(C)
+        !
+        ! this function tests the subroutine which rebuilds the OAO response callbacks 
+        ! at the currently stored density matrix
+        !
+        use otr_oao, only: refresh_oao_response, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+        integer(ip) :: i, error
+
+        ! assume tests pass
+        test_refresh_oao_response = .true.
+
+        ! set up the OAO object with a density matrix and a mock density matrix
+        ! updating function, and mark the response as stale as ARH would after moving
+        ! the density on its own
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        do i = 1, n_particle
+            dm_ao(:, :, i) = generate_random_density_matrix(n_ao, 2)
+        end do
+        oao_object%dm_ao => dm_ao
+        oao_object%update_dm_cs => mock_update_dm_cs
+        oao_object%response_stale = .true.
+
+        ! reset mock density matrix updating function call count
+        n_mock_calls = 0
+
+        ! call routine and determine if the density matrix updating function was
+        ! called to rebuild the response and if the flag was cleared
+        call refresh_oao_response(error)
+        if (error /= 0) then
+            write (stderr, *) "test_refresh_oao_response failed: Produced error "// &
+                "for the closed-shell case."
+            test_refresh_oao_response = .false.
+            deallocate(oao_object)
+            return
+        end if
+        if (n_mock_calls /= 1) then
+            write (stderr, *) "test_refresh_oao_response failed: Density matrix "// &
+                "updating function was not called for the closed-shell case."
+            test_refresh_oao_response = .false.
+        end if
+        if (.not. associated(oao_object%get_response_cs, mock_get_response_cs)) then
+            write (stderr, *) "test_refresh_oao_response failed: Response function "// &
+                "not updated for the closed-shell case."
+            test_refresh_oao_response = .false.
+        end if
+        if (oao_object%response_stale) then
+            write (stderr, *) "test_refresh_oao_response failed: Response still "// &
+                "marked stale after being refreshed for the closed-shell case."
+            test_refresh_oao_response = .false.
+        end if
+
+        ! repeat for the open-shell case
+        oao_object%update_dm_cs => null()
+        oao_object%update_dm_os => mock_update_dm_os
+        oao_object%response_stale = .true.
+        n_mock_calls = 0
+        call refresh_oao_response(error)
+        if (error /= 0) then
+            write (stderr, *) "test_refresh_oao_response failed: Produced error "// &
+                "for the open-shell case."
+            test_refresh_oao_response = .false.
+            deallocate(oao_object)
+            return
+        end if
+        if (n_mock_calls /= 1) then
+            write (stderr, *) "test_refresh_oao_response failed: Density matrix "// &
+                "updating function was not called for the open-shell case."
+            test_refresh_oao_response = .false.
+        end if
+        if (.not. associated(oao_object%get_response_os, mock_get_response_os)) then
+            write (stderr, *) "test_refresh_oao_response failed: Response function "// &
+                "not updated for the open-shell case."
+            test_refresh_oao_response = .false.
+        end if
+        if (oao_object%response_stale) then
+            write (stderr, *) "test_refresh_oao_response failed: Response still "// &
+                "marked stale after being refreshed for the open-shell case."
+            test_refresh_oao_response = .false.
+        end if
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_refresh_oao_response
+
     logical(c_bool) function test_obj_func_oao() bind(C)
         !
         ! this function tests the function which defines the energy evaluation in the
@@ -1188,6 +1280,23 @@ contains
             test_update_orbs_oao = .false.
         end if
 
+        ! mark the response as stale (as an approximate-Hessian extension such as ARH
+        ! would after moving the density without going through this routine) and call
+        ! again without an orbital rotation, and determine if this still forces a
+        ! recompute and clears the flag
+        oao_object%response_stale = .true.
+        call update_orbs_oao(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (n_mock_calls /= 2) then
+            write (stderr, *) "test_update_orbs_oao failed: Quantities not "// &
+                "recomputed for a stale response."
+            test_update_orbs_oao = .false.
+        end if
+        if (oao_object%response_stale) then
+            write (stderr, *) "test_update_orbs_oao failed: Response still "// &
+                "marked stale after being recomputed."
+            test_update_orbs_oao = .false.
+        end if
+
         ! call routine with an orbital rotation and determine if the energy, gradient,
         ! Hessian diagonal, and Hessian linear transformation are recomputed and
         ! correct and if the response function is still set
@@ -1198,7 +1307,7 @@ contains
                 "an orbital rotation."
             test_update_orbs_oao = .false.
         end if
-        if (n_mock_calls /= 2) then
+        if (n_mock_calls /= 3) then
             write (stderr, *) "test_update_orbs_oao failed: Quantities not "// &
                 "recomputed after an orbital rotation."
             test_update_orbs_oao = .false.
@@ -1371,6 +1480,34 @@ contains
         if (norm2(hess_x - expected_hess_x) > tol) then
             write (stderr, *) "test_hess_x_oao failed: Incorrect Hessian linear "// &
                 "transformation for open-shell case."
+            test_hess_x_oao = .false.
+        end if
+        deallocate(x, hess_x)
+
+        ! mark the response as stale (as ARH would after updating the density without 
+        ! going through update_orbs_oao) and call again, and determine if this triggers 
+        ! the density matrix updating function to refresh the response and clears the 
+        ! flag
+        oao_object%dm_ao => dm_oao
+        oao_object%update_dm_os => mock_update_dm_os
+        oao_object%response_stale = .true.
+        n_mock_calls = 0
+        allocate(x(n_param), hess_x(n_param))
+        call random_number(x)
+        call hess_x_oao(x, hess_x, error)
+        if (error /= 0) then
+            write (stderr, *) "test_hess_x_oao failed: Produced error while "// &
+                "refreshing a stale response."
+            test_hess_x_oao = .false.
+        end if
+        if (n_mock_calls /= 1) then
+            write (stderr, *) "test_hess_x_oao failed: Stale response was not "// &
+                "refreshed."
+            test_hess_x_oao = .false.
+        end if
+        if (oao_object%response_stale) then
+            write (stderr, *) "test_hess_x_oao failed: Response still marked "// &
+                "stale after being refreshed."
             test_hess_x_oao = .false.
         end if
         deallocate(x, hess_x)

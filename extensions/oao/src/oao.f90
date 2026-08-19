@@ -93,6 +93,7 @@ module otr_oao
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
                                  fock_oo(:, :, :), fock_vv(:, :, :), grad(:), &
                                  h_diag(:)
+        logical :: response_stale = .false.
         procedure(get_energy_os_type), pointer, nopass :: get_energy_os => null()
         procedure(update_dm_os_type), pointer, nopass :: update_dm_os => null()
         procedure(get_response_os_type), pointer, nopass :: get_response_os => null()
@@ -329,6 +330,7 @@ module otr_oao
         ! check if orbitals are actually rotated
         if ((sum(abs(kappa)) > 0.0_rp) .or. &
             (abs(oao_object%energy) <= numerical_zero) .or. &
+            oao_object%response_stale .or. &
             (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
                     .and. (associated(oao_object%get_response_cs) .or. &
                            associated(oao_object%get_response_os))))) then
@@ -371,6 +373,9 @@ module otr_oao
                                        oao_object%grad, oao_object%h_diag, &
                                        oao_object%fock_oo, oao_object%fock_vv)
             deallocate(fock_oao)
+
+            ! the response callbacks were just rebuilt at the current density
+            oao_object%response_stale = .false.
         end if
 
         ! set outputs
@@ -407,6 +412,13 @@ module otr_oao
 
         ! number of parameters
         n_param = oao_object%n_param
+
+        ! rebuild the response if the density was moved without it being updated, since
+        ! the static and response parts would otherwise refer to different points
+        if (oao_object%response_stale) then
+            call refresh_oao_response(error)
+            if (error /= 0) return
+        end if
 
         ! unpack trial vector
         x_full = unpack_asymm(x, n_particle, n_ao)
@@ -517,6 +529,38 @@ module otr_oao
         if (allocated(oao_object)) deallocate(oao_object)
 
     end subroutine oao_deconstructor
+
+    subroutine refresh_oao_response(error)
+        !
+        ! this subroutine rebuilds the response callbacks at the currently stored
+        ! density matrix
+        !
+        integer(ip), intent(out) :: error
+
+        real(rp) :: energy
+        real(rp), allocatable :: fock_ao(:, :, :)
+
+        ! initialize error flag
+        error = 0
+
+        ! rebuild response, the energy and Fock matrix are byproducts which are
+        ! discarded since the caller already holds them for the current density
+        allocate(fock_ao(oao_object%n_ao, oao_object%n_ao, oao_object%n_particle))
+        if (associated(oao_object%update_dm_os)) then
+            call oao_object%update_dm_os(oao_object%dm_ao, energy, fock_ao, &
+                                         oao_object%get_response_os, error)
+        else
+            call oao_object%update_dm_cs(oao_object%dm_ao(:, :, 1), energy, &
+                                         fock_ao(:, :, 1), &
+                                         oao_object%get_response_cs, error)
+        end if
+        deallocate(fock_ao)
+        if (error /= 0) return
+
+        ! the response callbacks were just rebuilt at the current density
+        oao_object%response_stale = .false.
+
+    end subroutine refresh_oao_response
 
     subroutine rotate_dm_ao(kappa, n_particle, n_ao, rot_dm_ao, error, &
                             rot_dm_oao)
