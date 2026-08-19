@@ -34,22 +34,58 @@ if NUMPY_AVAILABLE:
 
 # define all tests in alphabetical order
 fortran_tests = {
+    "oao_tests": [
+        "calculate_grad_h_diag",
+        "compute_sqrt_and_inv_sqrt",
+        "hess_x_oao",
+        "init_oao_settings",
+        "matrix_exponential",
+        "oao_deconstructor",
+        "oao_factory_cs",
+        "oao_factory_os",
+        "oao_sanity_check",
+        "obj_func_oao",
+        "pack_asymm",
+        "project",
+        "project_oao",
+        "purify",
+        "rotate_dm_ao",
+        "symmetric_transformation",
+        "unpack_asymm",
+        "update_orbs_oao",
+    ],
     "oao_c_interface_tests": [
         "assign_oao_c_f",
         "assign_oao_f_c",
         "get_energy_f_wrapper",
         "get_response_f_wrapper",
+        "hess_x_oao_c_wrapper",
         "init_oao_settings_c",
         "oao_deconstructor_c_wrapper",
         "oao_factory_c_wrapper",
         "obj_func_oao_c_wrapper",
         "project_oao_c_wrapper",
         "update_dm_f_wrapper",
+        "update_orbs_oao_c_wrapper",
     ],
 }
 
 # number of AOs
 n_ao = c_int.in_dll(lib, "test_n_ao").value
+
+
+@add_tests
+class OAOTests(unittest.TestCase):
+    """
+    this class contains unit tests for OAO
+    """
+
+    tests = fortran_tests["oao_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running unit tests for OAO...")
+        return super().setUpClass()
 
 
 @add_tests
@@ -146,7 +182,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
     def test_oao_factory_py_interface(self):
         """
         this function tests the OAO factory python interface (only tests if dm_ao,
-        mock_get_energy and mock_update_dm_spin are passed correctly for the open-shell
+        mock_get_energy and mock_update_dm are passed correctly for the open-shell
         case since everything else is the same in the closed-shell case)
         """
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)

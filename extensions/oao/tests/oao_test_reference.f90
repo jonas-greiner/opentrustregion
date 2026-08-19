@@ -20,18 +20,16 @@ module otr_oao_test_reference
 
     ! derived types for OAO settings
     type :: ref_oao_settings_type
-        logical :: restricted
         integer(ip) :: verbose
     end type
 
     type, bind(C) :: ref_oao_settings_type_c
-        logical(c_bool) :: restricted
         integer(c_ip) :: verbose
     end type
 
     ! general reference parameters
     type(ref_oao_settings_type), parameter :: ref_oao_settings = &
-        ref_oao_settings_type(restricted = .true., verbose = 3)
+        ref_oao_settings_type(verbose = 3)
 
     interface assignment(=)
         module procedure assign_ref_to_ref_c
@@ -55,16 +53,16 @@ module otr_oao_test_reference
 
 contains
 
-    function test_get_energy_2d_funptr(get_energy_funptr, test_name, message) &
+    function test_get_energy_cs_funptr(get_energy_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided energy function pointer for the closed-shell 
         ! case
         !
-        use otr_oao, only: get_energy_2d_type
+        use otr_oao, only: get_energy_cs_type
         use test_reference, only: tol
 
-        procedure(get_energy_2d_type), intent(in), pointer :: get_energy_funptr
+        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
@@ -109,9 +107,9 @@ contains
         ! deallocate arrays
         deallocate(dm_ao)
 
-    end function test_get_energy_2d_funptr
+    end function test_get_energy_cs_funptr
 
-    function test_get_energy_2d_c_funptr(get_energy_c_funptr, test_name, message) &
+    function test_get_energy_cs_c_funptr(get_energy_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided energy C function pointer for the closed-shell 
@@ -169,17 +167,17 @@ contains
         ! deallocate arrays
         deallocate(dm_ao)
 
-    end function test_get_energy_2d_c_funptr
+    end function test_get_energy_cs_c_funptr
 
-    function test_get_energy_3d_funptr(get_energy_funptr, test_name, message) &
+    function test_get_energy_os_funptr(get_energy_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided energy function pointer for the open-shell case
         !
-        use otr_oao, only: get_energy_3d_type
+        use otr_oao, only: get_energy_os_type
         use test_reference, only: tol
 
-        procedure(get_energy_3d_type), intent(in), pointer :: get_energy_funptr
+        procedure(get_energy_os_type), intent(in), pointer :: get_energy_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
@@ -224,9 +222,9 @@ contains
         ! deallocate arrays
         deallocate(dm_ao)
 
-    end function test_get_energy_3d_funptr
+    end function test_get_energy_os_funptr
 
-    function test_get_energy_3d_c_funptr(get_energy_c_funptr, test_name, message) &
+    function test_get_energy_os_c_funptr(get_energy_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided energy C function pointer for the open-shell  
@@ -284,24 +282,24 @@ contains
         ! deallocate arrays
         deallocate(dm_ao)
 
-    end function test_get_energy_3d_c_funptr
+    end function test_get_energy_os_c_funptr
 
-    function test_update_dm_2d_funptr(update_dm_funptr, test_name, message) &
+    function test_update_dm_cs_funptr(update_dm_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided density matrix updating function pointer for 
         ! the closed-shell case
         !
-        use otr_oao, only: update_dm_2d_type, get_response_2d_type
+        use otr_oao, only: update_dm_cs_type, get_response_cs_type
         use test_reference, only: tol
 
-        procedure(update_dm_2d_type), intent(in), pointer :: update_dm_funptr
+        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
         real(rp), allocatable :: dm_ao(:, :), fock(:, :)
         real(rp) :: energy
-        procedure(get_response_2d_type), pointer :: get_response_funptr
+        procedure(get_response_cs_type), pointer :: get_response_funptr
         integer(ip) :: error
 
         ! assume tests pass
@@ -350,12 +348,12 @@ contains
 
         ! test returned response function
         test_passed = test_passed .and. &
-            test_get_response_2d_funptr(get_response_funptr, test_name, " by "// &
+            test_get_response_cs_funptr(get_response_funptr, test_name, " by "// &
                                         "response function returned"//message)
 
-    end function test_update_dm_2d_funptr
+    end function test_update_dm_cs_funptr
 
-    function test_update_dm_2d_c_funptr(update_dm_c_funptr, test_name, message) &
+    function test_update_dm_cs_c_funptr(update_dm_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided density matrix updating C function pointer for 
@@ -423,27 +421,27 @@ contains
 
         ! test returned response function
         test_passed = test_passed .and. &
-            test_get_response_2d_c_funptr(get_response_c_funptr, test_name, " by "// &
+            test_get_response_cs_c_funptr(get_response_c_funptr, test_name, " by "// &
                                           "response function returned"//message)
 
-    end function test_update_dm_2d_c_funptr
+    end function test_update_dm_cs_c_funptr
 
-    function test_update_dm_3d_funptr(update_dm_funptr, test_name, message) &
+    function test_update_dm_os_funptr(update_dm_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided density matrix updating function pointer for 
         ! the open-shell case
         !
-        use otr_oao, only: update_dm_3d_type, get_response_3d_type
+        use otr_oao, only: update_dm_os_type, get_response_os_type
         use test_reference, only: tol
 
-        procedure(update_dm_3d_type), intent(in), pointer :: update_dm_funptr
+        procedure(update_dm_os_type), intent(in), pointer :: update_dm_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
         real(rp), allocatable :: dm_ao(:, :, :), fock(:, :, :)
         real(rp) :: energy
-        procedure(get_response_3d_type), pointer :: get_response_funptr
+        procedure(get_response_os_type), pointer :: get_response_funptr
         integer(ip) :: error
 
         ! assume tests pass
@@ -492,12 +490,12 @@ contains
 
         ! test returned response function
         test_passed = test_passed .and. &
-            test_get_response_3d_funptr(get_response_funptr, test_name, " by "// &
-                                    "response function returned"//message)
+            test_get_response_os_funptr(get_response_funptr, test_name, " by "// &
+                                        "response function returned"//message)
 
-    end function test_update_dm_3d_funptr
+    end function test_update_dm_os_funptr
 
-    function test_update_dm_3d_c_funptr(update_dm_c_funptr, test_name, message) &
+    function test_update_dm_os_c_funptr(update_dm_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided density matrix updating C function pointer for 
@@ -565,21 +563,21 @@ contains
 
         ! test returned response function
         test_passed = test_passed .and. &
-            test_get_response_3d_c_funptr(get_response_c_funptr, test_name, " by "// &
+            test_get_response_os_c_funptr(get_response_c_funptr, test_name, " by "// &
                                           "response function returned"//message)
 
-    end function test_update_dm_3d_c_funptr
+    end function test_update_dm_os_c_funptr
 
-    function test_get_response_2d_funptr(get_response_funptr, test_name, message) &
+    function test_get_response_cs_funptr(get_response_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided response function pointer for the closed-shell 
         ! case
         !
-        use otr_oao, only: get_response_2d_type
+        use otr_oao, only: get_response_cs_type
         use test_reference, only: tol
 
-        procedure(get_response_2d_type), intent(in), pointer :: get_response_funptr
+        procedure(get_response_cs_type), intent(in), pointer :: get_response_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
@@ -623,9 +621,9 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_2d_funptr
+    end function test_get_response_cs_funptr
 
-    function test_get_response_2d_c_funptr(get_response_c_funptr, test_name, message) &
+    function test_get_response_cs_c_funptr(get_response_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided response C function pointer for the 
@@ -682,18 +680,18 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_2d_c_funptr
+    end function test_get_response_cs_c_funptr
 
-    function test_get_response_3d_funptr(get_response_funptr, test_name, message) &
+    function test_get_response_os_funptr(get_response_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided response function pointer for the 
         ! open-shell case
         !
-        use otr_oao, only: get_response_3d_type
+        use otr_oao, only: get_response_os_type
         use test_reference, only: tol
 
-        procedure(get_response_3d_type), intent(in), pointer :: get_response_funptr
+        procedure(get_response_os_type), intent(in), pointer :: get_response_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
@@ -737,9 +735,9 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_3d_funptr
+    end function test_get_response_os_funptr
 
-    function test_get_response_3d_c_funptr(get_response_c_funptr, test_name, message) &
+    function test_get_response_os_c_funptr(get_response_c_funptr, test_name, message) &
         result(test_passed)
         !
         ! this function tests a provided response C function pointer for the 
@@ -756,6 +754,9 @@ contains
         real(c_rp), allocatable :: dm_ao(:, :, :), response(:, :, :)
         integer(c_ip) :: error
 
+        ! assume tests pass
+        test_passed = .true.
+
         ! check if function pointer is associated
         if (.not. c_associated(get_response_c_funptr)) then
             test_passed = .false.
@@ -763,9 +764,6 @@ contains
                 "open-shell case not associated with value."
             return
         end if
-
-        ! assume tests pass
-        test_passed = .true.
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=get_response_c_funptr, fptr=get_response_funptr_c)
@@ -796,7 +794,7 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_3d_c_funptr
+    end function test_get_response_os_c_funptr
 
     subroutine get_reference_oao_values(ref_settings_out) bind(C)
         !
@@ -822,7 +820,6 @@ contains
         lhs%logger => null()
 
         ! set reference values
-        lhs%restricted = rhs%restricted
         lhs%verbose = rhs%verbose
 
         ! set initialization logical
@@ -858,7 +855,6 @@ contains
         type(ref_oao_settings_type_c), intent(out) :: lhs
         type(ref_oao_settings_type), intent(in) :: rhs
 
-        lhs%restricted = logical(rhs%restricted, kind=c_bool)
         lhs%verbose = int(rhs%verbose, kind=c_ip)
 
     end subroutine assign_ref_to_ref_c
@@ -873,8 +869,7 @@ contains
         type(oao_settings_type), intent(in) :: lhs
         type(ref_oao_settings_type), intent(in) :: rhs
 
-        equal_oao_to_ref = (lhs%restricted .eqv. rhs%restricted) .and. &
-                           lhs%verbose == rhs%verbose
+        equal_oao_to_ref = lhs%verbose == rhs%verbose
 
     end function equal_oao_to_ref
 
@@ -933,8 +928,7 @@ contains
 
         type(oao_settings_type), intent(in) :: lhs, rhs
         
-        equal_oao = (lhs%restricted .eqv. rhs%restricted) .and. &
-                    lhs%verbose == rhs%verbose
+        equal_oao = lhs%verbose == rhs%verbose
 
     end function equal_oao
 

@@ -12,79 +12,77 @@ module otr_oao
     implicit none
 
     type, extends(settings_type) :: oao_settings_type
-        logical :: restricted
     contains
         procedure :: init => init_oao_settings
     end type oao_settings_type
 
     type(oao_settings_type), parameter :: default_oao_settings = &
-        oao_settings_type(logger = null(), initialized = .true., restricted = .false., &
-                          verbose = 0)
+        oao_settings_type(logger = null(), initialized = .true., verbose = 0)
 
     abstract interface
-        function get_energy_2d_type(dm, error) result(energy)
+        function get_energy_cs_type(dm, error) result(energy)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             integer(ip), intent(out) :: error
 
             real(rp) :: energy
-        end function get_energy_2d_type
+        end function get_energy_cs_type
     end interface
 
     abstract interface
-        function get_energy_3d_type(dm, error) result(energy)
+        function get_energy_os_type(dm, error) result(energy)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             integer(ip), intent(out) :: error
 
             real(rp) :: energy
-        end function get_energy_3d_type
+        end function get_energy_os_type
     end interface
 
     abstract interface
-        subroutine get_response_2d_type(dm, response, error)
+        subroutine get_response_cs_type(dm, response, error)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out), target, contiguous :: response(:, :)
             integer(ip), intent(out) :: error
-        end subroutine get_response_2d_type
+        end subroutine get_response_cs_type
     end interface
 
     abstract interface
-        subroutine get_response_3d_type(dm, response, error)
+        subroutine get_response_os_type(dm, response, error)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out), target :: response(:, :, :)
             integer(ip), intent(out) :: error
-        end subroutine get_response_3d_type
+        end subroutine get_response_os_type
     end interface
 
     abstract interface
-        subroutine update_dm_2d_type(dm, energy, fock, get_response_funptr, error)
+        subroutine update_dm_cs_type(dm, energy, fock, get_response_funptr, error)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out) :: energy
             real(rp), intent(out), target, contiguous :: fock(:, :)
-            procedure(get_response_2d_type), intent(out), pointer :: get_response_funptr
+            procedure(get_response_cs_type), intent(out), pointer :: get_response_funptr
             integer(ip), intent(out) :: error
-        end subroutine update_dm_2d_type
+        end subroutine update_dm_cs_type
     end interface
 
     abstract interface
-        subroutine update_dm_3d_type(dm, energy, fock, get_response_funptr, error)
+        subroutine update_dm_os_type(dm, energy, fock, get_response_funptr, error)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy
             real(rp), intent(out), target :: fock(:, :, :)
-            procedure(get_response_3d_type), intent(out), pointer :: get_response_funptr
+            procedure(get_response_os_type), intent(out), pointer :: get_response_funptr
             integer(ip), intent(out) :: error
-        end subroutine update_dm_3d_type
+        end subroutine update_dm_os_type
     end interface
 
     type :: oao_type
@@ -95,12 +93,12 @@ module otr_oao
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
                                  fock_oo(:, :, :), fock_vv(:, :, :), grad(:), &
                                  h_diag(:)
-        procedure(get_energy_3d_type), pointer, nopass :: get_energy => null()
-        procedure(update_dm_3d_type), pointer, nopass :: update_dm => null()
-        procedure(get_response_3d_type), pointer, nopass :: get_response => null()
-        procedure(get_energy_2d_type), pointer, nopass :: get_energy_2d => null()
-        procedure(update_dm_2d_type), pointer, nopass :: update_dm_2d => null()
-        procedure(get_response_2d_type), pointer, nopass :: get_response_2d => null()
+        procedure(get_energy_os_type), pointer, nopass :: get_energy_os => null()
+        procedure(update_dm_os_type), pointer, nopass :: update_dm_os => null()
+        procedure(get_response_os_type), pointer, nopass :: get_response_os => null()
+        procedure(get_energy_cs_type), pointer, nopass :: get_energy_cs => null()
+        procedure(update_dm_cs_type), pointer, nopass :: update_dm_cs => null()
+        procedure(get_response_cs_type), pointer, nopass :: get_response_cs => null()
     end type oao_type
 
     ! global variables
@@ -114,19 +112,19 @@ module otr_oao
 
     contains
 
-    subroutine oao_factory_closed_shell(dm_ao, ao_overlap, n_particle, n_ao, &
-                                        get_energy, update_dm, obj_func_oao_funptr, &
-                                        update_orbs_oao_funptr, project_oao_funptr, &
-                                        error, settings)
+    subroutine oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, &
+                              update_dm_cs, obj_func_oao_funptr, &
+                              update_orbs_oao_funptr, project_oao_funptr, error, &
+                              settings)
         !
-        ! this function returns a modified OAO orbital updating function for the 
+        ! this function returns a modified OAO orbital updating function for the
         ! closed-shell case
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_2d_type), intent(in), pointer :: get_energy
-        procedure(update_dm_2d_type), intent(in), pointer :: update_dm
+        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_cs
+        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
@@ -145,29 +143,29 @@ module otr_oao
         nullify(dm_ao_3d)
 
         ! set pointers to functions
-        oao_object%get_energy_2d => get_energy
-        oao_object%update_dm_2d => update_dm
+        oao_object%get_energy_cs => get_energy_cs
+        oao_object%update_dm_cs => update_dm_cs
 
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
         update_orbs_oao_funptr => update_orbs_oao
         project_oao_funptr => project_oao
 
-    end subroutine oao_factory_closed_shell
+    end subroutine oao_factory_cs
 
-    subroutine oao_factory_open_shell(dm_ao, ao_overlap, n_particle, n_ao, get_energy, &
-                                      update_dm, obj_func_oao_funptr, &
-                                      update_orbs_oao_funptr, project_oao_funptr, &
-                                      error, settings)
+    subroutine oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, &
+                              update_dm_os, obj_func_oao_funptr, &
+                              update_orbs_oao_funptr, project_oao_funptr, error, &
+                              settings)
         !
-        ! this function returns a modified OAO orbital updating function for the 
+        ! this function returns a modified OAO orbital updating function for the
         ! open-shell case
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_3d_type), intent(in), pointer :: get_energy
-        procedure(update_dm_3d_type), intent(in), pointer :: update_dm
+        procedure(get_energy_os_type), intent(in), pointer :: get_energy_os
+        procedure(update_dm_os_type), intent(in), pointer :: update_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
@@ -182,15 +180,15 @@ module otr_oao
         if (error /= 0) return
 
         ! set pointers to functions
-        oao_object%get_energy => get_energy
-        oao_object%update_dm => update_dm
+        oao_object%get_energy_os => get_energy_os
+        oao_object%update_dm_os => update_dm_os
 
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
         update_orbs_oao_funptr => update_orbs_oao
         project_oao_funptr => project_oao
 
-    end subroutine oao_factory_open_shell
+    end subroutine oao_factory_os
 
     subroutine oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
         !
@@ -252,9 +250,7 @@ module otr_oao
         end if
 
         ! get number of non-redundant parameters
-        oao_object%n_param = n_ao * (n_ao - 1) / 2
-        if (.not. oao_object%settings%restricted) &
-            oao_object%n_param = n_particle * oao_object%n_param
+        oao_object%n_param = n_particle * n_ao * (n_ao - 1) / 2
 
     end subroutine oao_factory_common
 
@@ -296,15 +292,15 @@ module otr_oao
 
         ! get rotated density matrix in AO basis
         allocate(rot_dm_ao(oao_object%n_ao, oao_object%n_ao, oao_object%n_particle))
-        call rotate_dm_ao(kappa, oao_object%n_particle, oao_object%n_ao, &
-                          oao_object%settings%restricted, rot_dm_ao, error)
+        call rotate_dm_ao(kappa, oao_object%n_particle, oao_object%n_ao, rot_dm_ao, &
+                          error)
         if (error /= 0) return
 
         ! calculate mean-field energy
-        if (associated(oao_object%get_energy)) then
-            energy = oao_object%get_energy(rot_dm_ao, error)
+        if (associated(oao_object%get_energy_os)) then
+            energy = oao_object%get_energy_os(rot_dm_ao, error)
         else
-            energy = oao_object%get_energy_2d(rot_dm_ao(:, :, 1), error)
+            energy = oao_object%get_energy_cs(rot_dm_ao(:, :, 1), error)
         end if
         if (error /= 0) return
 
@@ -334,8 +330,8 @@ module otr_oao
         if ((sum(abs(kappa)) > 0.0_rp) .or. &
             (abs(oao_object%energy) <= numerical_zero) .or. &
             (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
-                    .and. (associated(oao_object%get_response_2d) .or. &
-                           associated(oao_object%get_response))))) then
+                    .and. (associated(oao_object%get_response_cs) .or. &
+                           associated(oao_object%get_response_os))))) then
             ! number of AOs
             n_ao = oao_object%n_ao
 
@@ -343,19 +339,19 @@ module otr_oao
             n_particle = oao_object%n_particle
 
             ! rotate density matrix
-            call rotate_dm_ao(kappa, n_particle, n_ao, oao_object%settings%restricted, &
-                              oao_object%dm_ao, error, oao_object%dm_oao)
+            call rotate_dm_ao(kappa, n_particle, n_ao,  oao_object%dm_ao, error, &
+                              oao_object%dm_oao)
             if (error /= 0) return
 
             ! get energy, Fock matrix, and response function
             allocate(fock_ao(n_ao, n_ao, n_particle))
-            if (associated(oao_object%update_dm)) then
-                call oao_object%update_dm(oao_object%dm_ao, oao_object%energy, &
-                                          fock_ao, oao_object%get_response, error)
+            if (associated(oao_object%update_dm_os)) then
+                call oao_object%update_dm_os(oao_object%dm_ao, oao_object%energy, &
+                                             fock_ao, oao_object%get_response_os, error)
             else
-                call oao_object%update_dm_2d(oao_object%dm_ao(:, :, 1), &
+                call oao_object%update_dm_cs(oao_object%dm_ao(:, :, 1), &
                                              oao_object%energy, fock_ao(:, :, 1), &
-                                             oao_object%get_response_2d, error)
+                                             oao_object%get_response_cs, error)
             end if
             if (error /= 0) then
                 deallocate(fock_ao)
@@ -372,7 +368,6 @@ module otr_oao
             if (.not. allocated(oao_object%h_diag)) &
                 allocate(oao_object%h_diag(oao_object%n_param))
             call calculate_grad_h_diag(oao_object%dm_oao, fock_oao, n_particle, n_ao, &
-                                       oao_object%settings%restricted, &
                                        oao_object%grad, oao_object%h_diag, &
                                        oao_object%fock_oo, oao_object%fock_vv)
             deallocate(fock_oao)
@@ -414,18 +409,7 @@ module otr_oao
         n_param = oao_object%n_param
 
         ! unpack trial vector
-        x_full = unpack_asymm(x, n_particle, n_ao, oao_object%settings%restricted)
-
-        ! for ROHF, we must explicitly project the trial vector to the valid [c-v], 
-        ! [o-v], and [c-o] rotation blocks. Because we reuse UHF machinery where 
-        ! alpha-occ = [c+o] and beta-occ = [c], a unified spatial trial vector that is 
-        ! unpacked into alpha and beta spin channels contains rotations that are 
-        ! internal and thus redundant in the UHF context. Without this projection, 
-        ! the alpha Hessian vector product would leak non-zero values into 
-        ! the [c-c] block and the beta Hessian vector product into the [v-v] blocks. 
-        ! This projection thus prevents singular dimensions in the solver.
-        if (oao_object%settings%restricted .and. oao_object%n_particle > 1) &
-            x_full = project(x_full, oao_object%dm_oao)
+        x_full = unpack_asymm(x, n_particle, n_ao)
 
         ! get static part
         allocate(hess_x_full(n_ao, n_ao, n_particle))
@@ -452,10 +436,10 @@ module otr_oao
 
         ! get response of Fock matrix to density matrix response
         allocate(fock_response(n_ao, n_ao, n_particle))
-        if (associated(oao_object%get_response)) then
-            call oao_object%get_response(dm_response, fock_response, error)
+        if (associated(oao_object%get_response_os)) then
+            call oao_object%get_response_os(dm_response, fock_response, error)
         else
-            call oao_object%get_response_2d(dm_response(:, :, 1), &
+            call oao_object%get_response_cs(dm_response(:, :, 1), &
                                             fock_response(:, :, 1), error)
         end if
         if (error /= 0) return
@@ -469,12 +453,10 @@ module otr_oao
         if (error /= 0) return
 
         ! pack Hessian linear transformation
-        if (oao_object%settings%restricted) then
-            hess_x = 4.0_rp * pack_asymm(hess_x_full, oao_object%n_param, &
-                                         oao_object%settings%restricted)
+        if (oao_object%n_particle == 1) then
+            hess_x = 4.0_rp * pack_asymm(hess_x_full, oao_object%n_param)
         else
-            hess_x = 2.0_rp * pack_asymm(hess_x_full, oao_object%n_param, &
-                                         oao_object%settings%restricted)
+            hess_x = 2.0_rp * pack_asymm(hess_x_full, oao_object%n_param)
         end if
         deallocate(hess_x_full)
 
@@ -495,15 +477,14 @@ module otr_oao
 
         ! unpack vector
         vector_full = unpack_asymm(vector, oao_object%n_particle, &
-                                   oao_object%n_ao, oao_object%settings%restricted)
+                                   oao_object%n_ao)
 
         ! project out o-o and v-v contributions
         projected_vector_full = project(vector_full, oao_object%dm_oao)
         deallocate(vector_full)
 
         ! pack vector
-        vector = pack_asymm(projected_vector_full, size(vector, kind=ip), &
-                            oao_object%settings%restricted)
+        vector = pack_asymm(projected_vector_full, size(vector))
         deallocate(projected_vector_full)
 
     end subroutine project_oao
@@ -542,32 +523,29 @@ module otr_oao
 
     end subroutine oao_deconstructor
 
-    subroutine rotate_dm_ao(kappa, n_particle, n_ao, restricted, rot_dm_ao, error, &
+    subroutine rotate_dm_ao(kappa, n_particle, n_ao, rot_dm_ao, error, &
                             rot_dm_oao)
         !
         ! this subroutine returns the rotated density matrix in AO basis
         !
         real(rp), intent(in) :: kappa(:)
         integer(ip), intent(in) :: n_particle, n_ao
-        logical, intent(in) :: restricted
         integer(ip), intent(out) :: error
         real(rp), intent(out) :: rot_dm_ao(:, :, :)
         real(rp), intent(out), target, optional :: rot_dm_oao(:, :, :)
 
         real(rp), allocatable :: kappa_full(:, :, :), temp(:, :)
-        real(rp), pointer :: rot_dm_oao_ptr(:, :, :), u_ptr(:, :)
+        real(rp), pointer :: rot_dm_oao_ptr(:, :, :)
         real(rp), allocatable, target :: u(:, :, :), rot_dm_oao_local(:, :, :)
-        integer(ip) :: n_rot_mat, i
+        integer(ip) :: i
 
         ! initialize error flag
         error = 0
 
         ! get rotation matrix
-        n_rot_mat = n_particle
-        if (restricted) n_rot_mat = 1
-        allocate(u(n_ao, n_ao, n_rot_mat))
-        kappa_full = unpack_asymm(kappa, n_rot_mat, n_ao, restricted)
-        do i = 1, n_rot_mat
+        allocate(u(n_ao, n_ao, n_particle))
+        kappa_full = unpack_asymm(kappa, n_particle, n_ao)
+        do i = 1, n_particle
             u(:, :, i) = matrix_exponential(kappa_full(:, :, i), error)
             if (error /= 0) return
         end do
@@ -582,15 +560,11 @@ module otr_oao
 
         ! rotate density matrix
         allocate(temp(n_ao, n_ao))
-        ! spin-restricted case: use same rotation matrix for both spins
-        if (restricted) u_ptr => u(:, :, n_rot_mat)
         do i = 1, n_particle
-            ! spin-unrestricted case: use corresponding rotation matrix
-            if (.not. restricted) u_ptr => u(:, :, i)
             call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, oao_object%dm_oao(:, :, i), &
-                       n_ao, u_ptr, n_ao, 0.0_rp, temp, n_ao)
-            call dgemm("T", "N", n_ao, n_ao, n_ao, 1.0_rp, u_ptr, n_ao, temp, n_ao, &
-                       0.0_rp, rot_dm_oao_ptr(:, :, i), n_ao)
+                       n_ao, u(:, :, i), n_ao, 0.0_rp, temp, n_ao)
+            call dgemm("T", "N", n_ao, n_ao, n_ao, 1.0_rp, u(:, :, i), n_ao, temp, &
+                       n_ao, 0.0_rp, rot_dm_oao_ptr(:, :, i), n_ao)
         end do
 
         ! purify density matrix
@@ -604,8 +578,8 @@ module otr_oao
 
     end subroutine rotate_dm_ao
 
-    subroutine calculate_grad_h_diag(dm_oao, fock_oao, n_particle, n_ao, restricted, &
-                                     grad, h_diag, fock_oo, fock_vv)
+    subroutine calculate_grad_h_diag(dm_oao, fock_oao, n_particle, n_ao, grad, h_diag, &
+                                     fock_oo, fock_vv)
         !
         ! this function calculates the gradient and Hessian diagonal in OAO basis while 
         ! also returning the occupied-occupied and virtual-virtual parts of the Fock 
@@ -613,7 +587,6 @@ module otr_oao
         !
         real(rp), intent(in) :: dm_oao(:, :, :), fock_oao(:, :, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        logical, intent(in) :: restricted
         real(rp), intent(out) :: grad(:), h_diag(:)
         real(rp), intent(out) :: fock_oo(:, :, :), fock_vv(:, :, :)
 
@@ -641,7 +614,7 @@ module otr_oao
         deallocate(dm_fock_oao, fock_dm_oao)
 
         ! construct gradient
-        if (restricted) then
+        if (n_particle == 1) then
             grad_full = 4.0_rp * (fock_ov - fock_vo)
         else
             grad_full = 2.0_rp * (fock_ov - fock_vo)
@@ -649,30 +622,20 @@ module otr_oao
         deallocate(fock_ov, fock_vo)
 
         ! pack gradient
-        grad = pack_asymm(grad_full, size(grad, kind=ip), restricted)
+        grad = pack_asymm(grad_full, size(grad))
 
         ! construct Hessian diagonal
         idx = 1
-        if (restricted) then
+        do k = 1, n_particle
             do j = 1, n_ao
                 do i = 1, j - 1
-                    h_diag(idx) = 4.0_rp * sum(fock_vv(i, i, :) + fock_vv(j, j, :) - &
-                                               fock_oo(i, i, :) - fock_oo(j, j, :)) / &
-                                  n_particle
+                    h_diag(idx) = fock_vv(i, i, k) + fock_vv(j, j, k) - &
+                                  fock_oo(i, i, k) - fock_oo(j, j, k)
                     idx = idx + 1
                 end do
             end do
-        else
-            do k = 1, n_particle
-                do j = 1, n_ao
-                    do i = 1, j - 1
-                        h_diag(idx) = fock_vv(i, i, k) + fock_vv(j, j, k) - &
-                                      fock_oo(i, i, k) - fock_oo(j, j, k)
-                        idx = idx + 1
-                    end do
-                end do
-            end do
-        end if
+        end do
+        if (n_particle == 1) h_diag = 4.0_rp * h_diag
 
     end subroutine calculate_grad_h_diag
 
@@ -771,14 +734,13 @@ module otr_oao
 
     end function symmetric_transformation
 
-    function unpack_asymm(matrix_nonred, n_particle, n_ao, spin_sum) result(matrix)
+    function unpack_asymm(matrix_nonred, n_particle, n_ao) result(matrix)
         !
         ! this function unpacks an antisymmetric matrix and returns the resulting 
         ! unpacked matrix
         !
         real(rp), intent(in) :: matrix_nonred(:)
         integer(ip), intent(in) :: n_particle, n_ao
-        logical, intent(in) :: spin_sum
         real(rp), allocatable :: matrix(:, :, :)
 
         integer(ip) :: i, j, k, idx
@@ -787,44 +749,27 @@ module otr_oao
         allocate(matrix(n_ao, n_ao, n_particle))
         matrix = 0.0_rp
 
-        ! initialize index
+        ! unpack asymmetric matrix
         idx = 1
-
-        ! spin-restricted case: same matrix for both spins
-        if (spin_sum) then
+        do k = 1, n_particle
             do j = 1, n_ao
                 do i = 1, j - 1
-                    matrix(i, j, 1) = matrix_nonred(idx)
-                    matrix(j, i, 1) = -matrix_nonred(idx)
+                    matrix(i, j, k) = matrix_nonred(idx)
+                    matrix(j, i, k) = -matrix_nonred(idx)
                     idx = idx + 1
                 end do
             end do
-            do i = 2, n_particle
-                matrix(:, :, i) = matrix(:, :, 1)
-            end do
-        ! spin-unrestricted case: unpack each spin separately
-        else
-            do k = 1, n_particle
-                do j = 1, n_ao
-                    do i = 1, j - 1
-                        matrix(i, j, k) = matrix_nonred(idx)
-                        matrix(j, i, k) = -matrix_nonred(idx)
-                        idx = idx + 1
-                    end do
-                end do
-            end do
-        end if
+        end do
 
     end function unpack_asymm
 
-    function pack_asymm(matrix, n_param, spin_sum) result(matrix_nonred)
+    function pack_asymm(matrix, n_param) result(matrix_nonred)
         !
         ! this function packs an antisymmetric matrix for RHF while deallocating the 
         ! original unpacked matrix
         !
         real(rp), intent(in) :: matrix(:, :, :)
         integer(ip), intent(in) :: n_param
-        logical, intent(in) :: spin_sum
         real(rp), allocatable :: matrix_nonred(:)
 
         integer(ip) :: idx, i, j, k
@@ -832,28 +777,16 @@ module otr_oao
         ! allocate redundant matrix
         allocate(matrix_nonred(n_param))
 
-        ! initialize index
+        ! pack asymmetric matrix
         idx = 1
-
-        ! spin-restricted case: sum over both spins
-        if (spin_sum) then
+        do k = 1, size(matrix, 3)
             do j = 1, size(matrix, 2)
                 do i = 1, j - 1
-                    matrix_nonred(idx) = sum(matrix(i, j, :)) / size(matrix, 3)
+                    matrix_nonred(idx) = matrix(i, j, k)
                     idx = idx + 1
                 end do
             end do
-        ! spin-unrestricted case: pack each spin separately
-        else
-            do k = 1, size(matrix, 3)
-                do j = 1, size(matrix, 2)
-                    do i = 1, j - 1
-                        matrix_nonred(idx) = matrix(i, j, k)
-                        idx = idx + 1
-                    end do
-                end do
-            end do
-        end if
+        end do
 
     end function pack_asymm
 

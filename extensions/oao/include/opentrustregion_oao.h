@@ -41,7 +41,6 @@ extern "C"
     {
         logger_fp logger;
         c_bool initialized;
-        c_bool restricted;
         c_int verbose;
     } oao_settings_type;
 
@@ -64,7 +63,7 @@ extern "C"
      * @param settings_c                 OAO settings
      * @param obj_func_oao_c_funptr      Output: wrapped objective function pointer
      * @param update_orbs_oao_c_funptr   Output: wrapped update_orbs function pointer
-     * @param precond_oao_c_funptr       Output: wrapped preconditioner function pointer
+     * @param project_oao_c_funptr       Output: wrapped projection function pointer
      *
      * @return                           Integer error code from Fortran
      */
@@ -77,7 +76,7 @@ extern "C"
         update_dm_fp update_dm_c_funptr,
         obj_func_fp *obj_func_oao_c_funptr,
         update_orbs_fp *update_orbs_oao_c_funptr,
-        precond_fp *precond_oao_c_funptr,
+        project_fp *project_oao_c_funptr,
         oao_settings_type *settings_c);
 
     /**

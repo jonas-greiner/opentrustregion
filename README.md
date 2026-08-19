@@ -356,7 +356,7 @@ The library uses structured integer return codes to indicate whether a function 
 | `15`               | `conv_check`        |
 | `16`               | `project`           |
 | `17`               | `modify_step`       |
-| `18`               | `init_trial_step`   |
+| `18`               | `init_trial_space`  |
 
 ### Error Codes (`EE`)
 
@@ -383,7 +383,202 @@ Optional settings can be adjusted by modifying object attributes directly. Orbit
 
 ## Optional Extensions
 
-OpenTrustRegion (OTR) supports additional optional modules that can be enabled during installation. Two main extensions are currently available: **quasi-Newton** and **augmented Roothaan–Hall (ARH)**.
+OpenTrustRegion (OTR) supports additional optional modules that can be enabled during installation. These include **orthogonal atomic orbitals (OAO)**, **quasi-Newton**, **augmented Roothaan–Hall (ARH)**, and **subspace gradient-enhanced kriging (S-GEK)**.
+
+### Orthogonal Atomic Orbitals (OAO)
+
+This extension provides orbital optimization in the orthogonalized atomic orbital (AO) basis for RHF and UHF. It is the foundation the ARH extension is built on, and can also be used on its own when the exact Hessian-vector product (rather than ARH's history-based approximation) is preferred.
+
+#### Installation
+
+Enable the extension at build time using CMake:
+
+```sh
+cmake -DENABLE_OAO=ON ..
+```
+
+or, when installing the Python package:
+
+```sh
+CMAKE_FLAGS='-DENABLE_OAO=ON' pip install .
+```
+
+This exposes an `oao_factory` function that prepares OAO-specific callbacks for energy, orbital updates, and projection.
+
+#### Usage
+
+The routine `oao_factory` constructs and returns OAO versions of energy, orbital updating, and projection functions. This routine requires the following input arguments:
+
+#### Required Arguments
+
+- **`dm_ao`** (real array): Represents the starting AO density matrix and is updated throughout the calculation with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations.
+- **`ao_overlap`** (real array): Represents the AO overlap matrix with dimension (`n_ao`, `n_ao`).
+- **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell)
+- **`n_ao`** (integer): Specifies the number of AOs.
+- **`get_energy`** (function):  
+  Accepts an AO density matrix and returns:
+  - Energy value (real)
+  - An integer error code (0 for success, positive integers < 100 for errors)
+- **`update_dm`** (subroutine):  
+  Accepts an AO density matrix and returns:
+  - Energy value (real)
+  - Fock matrix (real array, written in-place)
+  - A `get_response` function pointer: a callback that accepts a density matrix perturbation and returns the corresponding linear response of the Fock matrix (real array, written in-place) and an integer error code. This is used to build the exact Hessian-vector product.
+  - An integer error code (0 for success, positive integers < 100 for errors)
+- **`obj_func_oao`** (subroutine): Returned OAO objective function as defined for the `solver` subroutine.
+- **`update_orbs_oao`** (subroutine): Returned OAO orbital updating subroutine as defined for the `solver` subroutine.
+- **`project_oao`** (subroutine): Returned OAO projection subroutine as defined for the `solver` subroutine.
+- **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
+- **`oao_settings`** (oao_settings_type): Settings object which controls optional arguments as described below.
+
+---
+
+The following Fortran snippet demonstrates how to use the OAO interface:
+
+```fortran
+use opentrustregion, only: settings_type, solver, obj_func_type, update_orbs_type, &
+                           project_type
+use opentrustregion_oao, only: oao_factory, oao_settings_type, init_oao_settings, &
+                               oao_deconstructor
+
+type(settings_type) :: settings
+type(oao_settings_type) :: oao_settings
+procedure(obj_func_type), pointer :: obj_func_oao_funptr
+procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
+procedure(project_type), pointer :: project_oao_funptr
+integer(ip) :: n_particle, n_ao, n_param, error
+real(rp), allocatable, target :: dm_ao(:, :)
+real(rp), allocatable :: ao_overlap(:, :)
+
+! set callback function pointers to existing implementations
+get_energy_funptr => get_energy
+update_dm_funptr => update_dm
+
+! initialize OAO settings
+call init_oao_settings(oao_settings)
+
+! override default settings
+oao_settings%verbose = 1
+
+! get OAO routines
+call oao_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy, update_dm, &
+                 obj_func_oao_funptr, update_orbs_oao_funptr, project_oao_funptr, &
+                 error, oao_settings)
+
+! initialize settings
+call settings%init(error)
+
+! override settings
+settings%project => project_oao_funptr
+
+! set number of parameters
+n_param = n_ao * (n_ao - 1) / 2
+
+! call solver
+call solver(obj_func_oao_funptr, update_orbs_oao_funptr, n_param, error, settings)
+
+! deallocate OAO objects
+call oao_deconstructor()
+```
+
+---
+
+The following C snippet demonstrates equivalent usage through the C interface:
+
+```C
+#include "opentrustregion.h"
+#include "opentrustregion_oao.h"
+
+c_int n_particle, n_ao, n_param;
+c_real dm_ao[n_ao][n_ao], ao_overlap[n_ao][n_ao]
+
+// set callback function pointers to existing implementations
+get_energy_fp get_energy_funptr = (void*)get_energy;
+update_dm_fp update_dm_funptr = (void*)update_dm;
+
+// initialize OAO settings
+oao_settings_type oao_settings = oao_settings_init();
+
+// override default settings
+oao_settings.verbose = 1;
+
+// get callback functions
+obj_func_fp obj_func_oao_funptr;
+update_orbs_fp update_orbs_oao_funptr;
+project_fp project_oao_funptr;
+c_int error = oao_factory(dm_ao, 
+                          ao_overlap, 
+                          n_particle, 
+                          n_ao,
+                          get_energy, 
+                          update_dm_funptr,
+                          &obj_func_oao_funptr,
+                          &update_orbs_oao_funptr,
+                          &project_oao_funptr,
+                          oao_settings);
+
+// initialize settings
+solver_settings_type settings = solver_settings_init();
+
+// override settings
+settings.project = project_oao_funptr;
+
+// set number of parameters
+n_param = n_ao * (n_ao - 1) / 2
+
+// call solver
+error = solver(obj_func_oao_funptr, update_orbs_oao_funptr, n_param, settings);
+
+// deallocate OAO objects
+oao_deconstructor();
+```
+
+---
+
+The following Python snippet demonstrates the equivalent usage through the Python interface:
+
+```python
+from pyopentrustregion import SolverSettings, solver
+from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
+
+dm_ao = np.asarray(dm_ao, dtype=np.float64)
+ao_overlap = np.asarray(ao_overlap, dtype=np.float64)
+
+# initialize OAO settings
+oao_settings = OAOSettings()
+
+# override default settings
+oao_settings.verbose = 1
+
+# get callback functions
+obj_func_oao, update_orbs_oao, project_oao = oao_factory(
+    dm_ao, ao_overlap, n_particle, n_ao, get_energy, update_dm, oao_settings
+)
+
+# initialize settings
+settings = SolverSettings()
+
+# override settings
+settings.project = project_oao
+
+# set number of parameters
+n_param = n_ao * (n_ao - 1) / 2
+
+# call solver
+solver(obj_func_oao, update_orbs_oao, n_param, settings)
+
+# deallocate OAO objects
+oao_deconstructor()
+```
+
+---
+
+- `dm_ao`, `ao_overlap` and `n_ao` are assumed to be prepared elsewhere.
+- `get_energy` and `update_dm` are callback procedures provided elsewhere.
+- OAO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden. `oao_settings_type` does not add any settings of its own beyond the base ones.
+- `oao_factory` returns three procedures: `obj_func`, `update_orbs`, and `project`, which are passed to the normal `solver`.
+- Unlike ARH, OAO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `update_dm`, rather than a history-based approximation.
+- Clean up OAO resources and get final AO density matrix by calling `oao_deconstructor`.
 
 ### Quasi-Newton Extension
 
@@ -555,11 +750,11 @@ or, when installing the Python package:
 CMAKE_FLAGS='-DENABLE_ARH=ON' pip install .
 ```
 
-This exposes an `arh_factory` function that prepares ARH-specific callbacks for energy, orbital updates, and preconditioners.
+This exposes an `arh_factory` function that prepares ARH-specific callbacks for energy, orbital updates, and projection.
 
 #### Usage
 
-The routine `arh_factory` constructs and returns ARH versions of energy, orbital updating, and preconditioning functions. This routine requires the following input arguments:
+The routine `arh_factory` constructs and returns ARH versions of energy, orbital updating, and projection functions. This routine requires the following input arguments:
 
 #### Required Arguments
 
@@ -571,16 +766,17 @@ The routine `arh_factory` constructs and returns ARH versions of energy, orbital
   Accepts an AO density matrix and returns:
   - Energy value (real)
   - An integer error code (0 for success, positive integers < 100 for errors)
-- **`get_fock`** (subroutine):  
+- **`update_dm`** (subroutine):  
   Accepts an AO density matrix and returns:
   - Energy value (real)
   - Fock matrix (real array, written in-place)
   - Same-spin potential (real array, written in-place, only for open-shell calculations)
   - Opposite-spin potential (real array, written in-place, only for open-shell calculations)
+  - Non-linear (exchange-correlation) potential (real array, written in-place)
   - An integer error code (0 for success, positive integers < 100 for errors)
 - **`obj_func_arh`** (subroutine): Returned ARH objective function as defined for the `solver` subroutine.
 - **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.
-- **`precond_arh`** (subroutine): Returned ARH preconditioning subroutine as defined for the `solver` subroutine.
+- **`project_arh`** (subroutine): Returned ARH projection subroutine as defined for the `solver` subroutine.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 - **`arh_settings`** (arh_settings_type): Settings object which controls optional arguments as described below.
 
@@ -591,7 +787,7 @@ The following Fortran snippet demonstrates how to use the ARH interface:
 
 ```fortran
 use opentrustregion, only: settings_type, solver, obj_func_type, update_orbs_type, &
-                           precond_type
+                           project_type
 use opentrustregion_arh, only: arh_factory, arh_settings_type, init_arh_settings, &
                                arh_deconstructor
 
@@ -599,32 +795,31 @@ type(settings_type) :: settings
 type(arh_settings_type) :: arh_settings
 procedure(obj_func_type), pointer :: obj_func_arh_funptr
 procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-procedure(precond_type), pointer :: precond_arh_funptr
+procedure(project_type), pointer :: project_arh_funptr
 integer(ip) :: n_particle, n_ao, n_param, error
 real(rp), allocatable, target :: dm_ao(:, :)
 real(rp), allocatable :: ao_overlap(:, :)
 
 ! set callback function pointers to existing implementations
 get_energy_funptr => get_energy
-get_fock_funptr => get_fock
+update_dm_funptr => update_dm
 
 ! initialize ARH settings
 call init_arh_settings(arh_settings)
 
 ! override default settings
 arh_settings%verbose = 1
-arh_settings%restricted = .true.
 
 ! get ARH routines
-call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy, get_fock, &
-                 obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
+call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy, update_dm, &
+                 obj_func_arh_funptr, update_orbs_arh_funptr, project_arh_funptr, &
                  error, arh_settings)
 
 ! initialize settings
 call settings%init(error)
 
 ! override settings
-settings%precond => precond_arh_funptr
+settings%project => project_arh_funptr
 settings%hess_symm = .false.
 
 ! set number of parameters
@@ -650,35 +845,35 @@ c_real dm_ao[n_ao][n_ao], ao_overlap[n_ao][n_ao]
 
 // set callback function pointers to existing implementations
 get_energy_fp get_energy_funptr = (void*)get_energy;
-get_fock_fp get_fock_funptr = (void*)get_fock;
+update_dm_fp update_dm_funptr;
+update_dm_funptr.cs = (void*)update_dm;
 
 // initialize ARH settings
 arh_settings_type arh_settings = arh_settings_init();
 
 // override default settings
 arh_settings.verbose = 1;
-arh_settings.restricted = true;
 
 // get callback functions
 obj_func_fp obj_func_arh_funptr;
 update_orbs_fp update_orbs_arh_funptr;
-precond_fp precond_arh_funptr;
+project_fp project_arh_funptr;
 c_int error = arh_factory(dm_ao, 
                           ao_overlap, 
                           n_particle, 
                           n_ao,
                           get_energy, 
-                          get_fock,
+                          update_dm_funptr,
                           &obj_func_arh_funptr,
                           &update_orbs_arh_funptr,
-                          &precond_arh_funptr
+                          &project_arh_funptr,
                           arh_settings);
 
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
 // override settings
-settings.precond = precond_arh_funptr
+settings.project = project_arh_funptr;
 settings.hess_symm = false;
 
 // set number of parameters
@@ -708,18 +903,17 @@ arh_settings = ARHSettings()
 
 # override default settings
 arh_settings.verbose = 1
-arh_settings.restricted = True
 
 # get callback functions
-obj_func_arh, update_orbs_arh, precond_arh = arh_factory(
-    dm_ao, ao_overlap, n_particle, n_ao, get_energy, get_fock, arh_settings
+obj_func_arh, update_orbs_arh, project_arh = arh_factory(
+    dm_ao, ao_overlap, n_particle, n_ao, get_energy, update_dm, arh_settings
 )
 
 # initialize settings
 settings = SolverSettings()
 
 # override settings
-settings.precond = precond_arh
+settings.project = project_arh
 settings.hess_symm = False
 
 # set number of parameters
@@ -735,20 +929,21 @@ arh_deconstructor()
 ---
 
 - `dm_ao`, `ao_overlap` and `n_ao` are assumed to be prepared elsewhere.
-- `get_energy` and `get_fock` are callback procedures provided elsewhere.
+- `get_energy` and `update_dm` are callback procedures provided elsewhere.
 - ARH settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
-- `arh_factory` returns three procedures: `obj_func`, `update_orbs`, and `precond`, which are passed to the normal `solver`.
+- `arh_factory` returns three procedures: `obj_func`, `update_orbs`, and `project`, which are passed to the normal `solver`.
 - ARH breaks Hessian symmetry; when using ARH set `hess_symm` to `false` before calling `solver`.
 - Clean up ARH resources and get final AO density matrix by calling `arh_deconstructor`.
 
 #### Optional Settings
 The ARH factory function can be fine-tuned using the following settings:
 
-- **`restricted`** (boolean): Controls whether a spin-restricted formalism is used.
 - **`arh_type`** (string): Specifies which ARH type to use. Options include:
-  - `"standard"`: standard ARH method,
-  - `"symmetric"`: simple symmetrized version of ARH,
-  - `"multisecant_psb"`: symmetric version of ARH which fulfills all multisecant conditions.
+  - `"arh"`: standard ARH method which is not symmetric but fulfills all multisecant conditions,
+  - `"symm_arh"`: simple symmetrized version of ARH which does not fulfill the multisecant conditions,
+  - `"ms_psb"`: multisecant Powell symmetric Broyden which is only symmetric and fulfills all multisecant conditions for HF and other methods for which the energy is quadratic in the density matrix,
+  - `"ms_sp"`: subspace-projected multisecant method,
+  - `"ms_sr1"`: multisecant symmetric-rank-1 method, which treats the linear (Coulomb and exact exchange) part of the response exactly through a dedicated regularized system and the non-linear (exchange-correlation) part through a separate, independently regularized multisecant system.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
 
 ### Subspace Gradient-Enhanced Kriging Extension

@@ -44,12 +44,13 @@ contains
                                logger_c_type
         use otr_oao_c_interface, only: dm_ao_3d_c
         use test_reference, only: tol_c
-        use otr_oao_test_reference, only: test_get_energy_2d_c_funptr, &
-                                          test_get_energy_3d_c_funptr, &
-                                          test_update_dm_2d_c_funptr
-        use otr_arh_test_reference, only: test_update_dm_spin_c_funptr, operator(/=)
+        use otr_oao_test_reference, only: test_get_energy_cs_c_funptr, &
+                                          test_get_energy_os_c_funptr
+        use otr_arh_test_reference, only: test_update_dm_os_c_funptr, &
+                                          test_update_dm_cs_c_funptr, &
+                                          operator(/=)
         use c_interface_unit_tests, only: mock_obj_func, mock_project
-        use otr_oao_c_interface_unit_tests, only: mock_update_orbs_oao
+        use otr_oao_c_interface_mock, only: mock_update_orbs_oao
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
@@ -85,15 +86,16 @@ contains
 
             ! test passed energy function
             test_arh_factory_interface = test_arh_factory_interface .and. &
-                test_get_energy_2d_c_funptr(get_energy_c_funptr, &
+                test_get_energy_cs_c_funptr(get_energy_c_funptr, &
                                             "arh_factory_py_interface", &
                                             " by given energy function")
 
             ! test passed density matrix updating function
             test_arh_factory_interface = test_arh_factory_interface .and. &
-                test_update_dm_2d_c_funptr(update_dm_c_funptr, &
-                                           "arh_factory_py_interface", &
-                                           " by given density matrix updating function")
+                test_update_dm_cs_c_funptr(update_dm_c_funptr, &
+                                           "arh_factory_py_interface", " by given "// &
+                                           "density matrix updating function with "// &
+                                           "non-linear potential contribution")
 
             ! check if passed number of AOs is correct
             if (n_ao_c /= 3) then
@@ -125,17 +127,17 @@ contains
 
             ! test passed energy function
             test_arh_factory_interface = test_arh_factory_interface .and. &
-                test_get_energy_3d_c_funptr(get_energy_c_funptr, &
+                test_get_energy_os_c_funptr(get_energy_c_funptr, &
                                             "arh_factory_py_interface", &
                                             " by given energy function")
 
             ! test passed density matrix updating function
             test_arh_factory_interface = test_arh_factory_interface .and. &
-                test_update_dm_spin_c_funptr(update_dm_c_funptr, &
-                                             "arh_factory_py_interface", " by "// &
-                                             "given density matrix updating "// &
-                                             "function with separate same- and "// &
-                                             "opposite-spin potential contributions")
+                test_update_dm_os_c_funptr(update_dm_c_funptr, &
+                                           "arh_factory_py_interface", " by given "// &
+                                           "density matrix updating function with "// &
+                                           "separate same- and opposite-spin "// &
+                                           "potential contributions")
 
         ! number of particles is not correct
         else

@@ -74,15 +74,21 @@ if(BLA_SIZEOF_INTEGER EQUAL 8)
         add_compile_definitions("dnrm2=dnrm2_64")
         add_compile_definitions("dgemv=dgemv_64")
         add_compile_definitions("dgemm=dgemm_64")
+        add_compile_definitions("dtrsv=dtrsv_64")
     endif()
     if(LAPACK_64)
         add_compile_definitions("dsyev=dsyev_64")
         add_compile_definitions("dsysv=dsysv_64")
         add_compile_definitions("dgeev=dgeev_64")
+        add_compile_definitions("dgelss=dgelss_64")
         add_compile_definitions("dgesv=dgesv_64")
+        add_compile_definitions("dgesvd=dgesvd_64")
         add_compile_definitions("dgetrf=dgetrf_64")
         add_compile_definitions("dgetri=dgetri_64")
+        add_compile_definitions("dgetrs=dgetrs_64")
         add_compile_definitions("dposv=dposv_64")
+        add_compile_definitions("dpotrf=dpotrf_64")
+        add_compile_definitions("dpttrf=dpttrf_64")
         add_compile_definitions("zheev=zheev_64")
     endif()
 else()
@@ -219,6 +225,7 @@ if (BUILD_TESTS)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
             extensions/oao/tests/oao_test_reference.f90
+            extensions/oao/tests/oao_unit_tests.f90
             extensions/oao/tests/oao_c_interface_unit_tests.f90
             extensions/oao/tests/oao_mock.f90
             extensions/oao/tests/oao_c_interface_mock.f90

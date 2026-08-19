@@ -49,7 +49,6 @@ class OAOSettingsC(Structure):
     _fields_ = [
         ("logger", c_void_p),
         ("initialized", c_bool),
-        ("restricted", c_bool),
         ("verbose", c_int),
     ]
 

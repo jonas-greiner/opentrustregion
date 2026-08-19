@@ -17,6 +17,7 @@ from pyopentrustregion.tests import (
 # try to load extension module tests if available
 try:
     from pyopentrustregion.extensions.oao.tests import (
+        OAOTests,
         OAOCInterfaceTests,
         OAOPyInterfaceTests,
     )

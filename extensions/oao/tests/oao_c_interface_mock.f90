@@ -30,6 +30,26 @@ module otr_oao_c_interface_mock
 
 contains
 
+    function mock_update_orbs_oao(kappa, func, grad, h_diag, hess_x_c_funptr) &
+        result(error) bind(C)
+        !
+        ! this subroutine is a test subroutine for the orbital update C function
+        !
+        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
+        use otr_oao_c_interface, only: dm_ao_3d_c
+
+        real(c_rp), intent(in), target :: kappa(*)
+        real(c_rp), intent(out) :: func
+        real(c_rp), intent(out), target :: grad(*), h_diag(*)
+        type(c_funptr), intent(out) :: hess_x_c_funptr
+        integer(c_ip) :: error
+
+        error = mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr)
+
+        dm_ao_3d_c = 2.0_c_rp
+
+    end function mock_update_orbs_oao
+
     function mock_oao_factory_c_wrapper(dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, &
                                         get_energy_c_funptr, update_dm_c_funptr, &
                                         obj_func_oao_c_funptr, &
@@ -45,12 +65,11 @@ contains
                                logger_c_type
         use otr_oao_c_interface, only: dm_ao_3d_c
         use test_reference, only: tol_c
-        use otr_oao_test_reference, only: test_get_energy_2d_c_funptr, &
-                                          test_get_energy_3d_c_funptr, &
-                                          test_update_dm_2d_c_funptr, &
-                                          test_update_dm_3d_c_funptr, operator(/=)
+        use otr_oao_test_reference, only: test_get_energy_cs_c_funptr, &
+                                          test_get_energy_os_c_funptr, &
+                                          test_update_dm_cs_c_funptr, &
+                                          test_update_dm_os_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_obj_func, mock_project
-        use otr_oao_c_interface_unit_tests, only: mock_update_orbs_oao
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
@@ -86,16 +105,15 @@ contains
 
             ! test passed energy function
             test_oao_factory_interface = test_oao_factory_interface .and. &
-                test_get_energy_2d_c_funptr(get_energy_c_funptr, &
+                test_get_energy_cs_c_funptr(get_energy_c_funptr, &
                                             "oao_factory_py_interface", &
                                             " by given energy function")
 
             ! test passed density matrix updating function
             test_oao_factory_interface = test_oao_factory_interface .and. &
-                test_update_dm_2d_c_funptr(update_dm_c_funptr, &
-                                           "oao_factory_py_interface", &
-                                           " by given density matrix updating "// &
-                                           "function")
+                test_update_dm_cs_c_funptr(update_dm_c_funptr, &
+                                           "oao_factory_py_interface", " by given "// &
+                                           "density matrix updating function")
 
             ! check if passed number of AOs is correct
             if (n_ao_c /= 3) then
@@ -132,13 +150,13 @@ contains
 
             ! test passed energy function
             test_oao_factory_interface = test_oao_factory_interface .and. &
-                test_get_energy_3d_c_funptr(get_energy_c_funptr, &
+                test_get_energy_os_c_funptr(get_energy_c_funptr, &
                                             "oao_factory_py_interface", &
                                             " by given energy function")
 
             ! test passed density matrix updating function
             test_oao_factory_interface = test_oao_factory_interface .and. &
-                test_update_dm_3d_c_funptr(update_dm_c_funptr, &
+                test_update_dm_os_c_funptr(update_dm_c_funptr, &
                                            "oao_factory_py_interface", " by given "// &
                                            "density matrix updating function")
 

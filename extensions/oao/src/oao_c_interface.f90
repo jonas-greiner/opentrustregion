@@ -10,11 +10,11 @@ module otr_oao_c_interface
                                project_type
     use c_interface, only: c_ip, c_rp, obj_func_c_type, update_orbs_c_type, &
                            hess_x_c_type, project_c_type
-    use otr_oao, only: standard_oao_factory_closed_shell => oao_factory_closed_shell, &
-                       standard_oao_factory_open_shell => oao_factory_open_shell, &
+    use otr_oao, only: standard_oao_factory_cs => oao_factory_cs, &
+                       standard_oao_factory_os => oao_factory_os, &
                        standard_oao_deconstructor => oao_deconstructor, &
-                       get_energy_2d_type, get_energy_3d_type, update_dm_2d_type, &
-                       update_dm_3d_type, get_response_2d_type, get_response_3d_type
+                       get_energy_cs_type, get_energy_os_type, update_dm_cs_type, &
+                       update_dm_os_type, get_response_cs_type, get_response_os_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
                                            c_funloc, c_f_procpointer, c_associated, &
                                            c_null_funptr
@@ -67,7 +67,7 @@ module otr_oao_c_interface
     ! derived type for OAO settings
     type, bind(C) :: oao_settings_type_c
         type(c_funptr) :: logger
-        logical(c_bool) :: initialized, restricted
+        logical(c_bool) :: initialized
         integer(c_ip) :: verbose
     end type
 
@@ -75,26 +75,26 @@ module otr_oao_c_interface
     integer(ip) :: n_particle, n_ao
     real(c_rp), pointer :: dm_ao_3d_c(:, :, :)
 
-    procedure(standard_oao_factory_closed_shell), pointer :: oao_factory_closed_shell &
-        => standard_oao_factory_closed_shell
-    procedure(standard_oao_factory_open_shell), pointer :: oao_factory_open_shell => &
-        standard_oao_factory_open_shell
+    procedure(standard_oao_factory_cs), pointer :: oao_factory_cs => &
+        standard_oao_factory_cs
+    procedure(standard_oao_factory_os), pointer :: oao_factory_os => &
+        standard_oao_factory_os
     procedure(standard_oao_deconstructor), pointer :: oao_deconstructor => &
         standard_oao_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(get_energy_2d_type), pointer :: get_energy_2d_f_wrapper_ptr => &
-        get_energy_2d_f_wrapper
-    procedure(get_energy_3d_type), pointer :: get_energy_3d_f_wrapper_ptr => &
-        get_energy_3d_f_wrapper
-    procedure(update_dm_2d_type), pointer :: update_dm_2d_f_wrapper_ptr => &
-        update_dm_2d_f_wrapper
-    procedure(update_dm_3d_type), pointer :: update_dm_3d_f_wrapper_ptr => &
-        update_dm_3d_f_wrapper
-    procedure(get_response_2d_type), pointer :: get_response_2d_f_wrapper_ptr => &
-        get_response_2d_f_wrapper
-    procedure(get_response_3d_type), pointer :: get_response_3d_f_wrapper_ptr => &
-        get_response_3d_f_wrapper
+    procedure(get_energy_cs_type), pointer :: get_energy_cs_f_wrapper_ptr => &
+        get_energy_cs_f_wrapper
+    procedure(get_energy_os_type), pointer :: get_energy_os_f_wrapper_ptr => &
+        get_energy_os_f_wrapper
+    procedure(update_dm_cs_type), pointer :: update_dm_cs_f_wrapper_ptr => &
+        update_dm_cs_f_wrapper
+    procedure(update_dm_os_type), pointer :: update_dm_os_f_wrapper_ptr => &
+        update_dm_os_f_wrapper
+    procedure(get_response_cs_type), pointer :: get_response_cs_f_wrapper_ptr => &
+        get_response_cs_f_wrapper
+    procedure(get_response_os_type), pointer :: get_response_os_f_wrapper_ptr => &
+        get_response_os_f_wrapper
     procedure(obj_func_c_type), pointer :: obj_func_oao_c_wrapper_ptr => &
         obj_func_oao_c_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_oao_c_wrapper_ptr => &
@@ -135,10 +135,10 @@ contains
         real(rp), pointer, contiguous :: dm_ao_2d(:, :)
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
         real(rp), pointer :: ao_overlap(:, :)
-        procedure(get_energy_2d_type), pointer :: get_energy_2d_funptr
-        procedure(get_energy_3d_type), pointer :: get_energy_3d_funptr
-        procedure(update_dm_2d_type), pointer :: update_dm_2d_funptr
-        procedure(update_dm_3d_type), pointer :: update_dm_3d_funptr
+        procedure(get_energy_cs_type), pointer :: get_energy_cs_funptr
+        procedure(get_energy_os_type), pointer :: get_energy_os_funptr
+        procedure(update_dm_cs_type), pointer :: update_dm_cs_funptr
+        procedure(update_dm_os_type), pointer :: update_dm_os_funptr
         procedure(obj_func_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
         procedure(project_type), pointer :: project_oao_funptr
@@ -149,8 +149,7 @@ contains
         ! store globally to access assumed size arrays passed from C to Fortran
         n_particle = int(n_particle_c, kind=ip)
         n_ao = int(n_ao_c, kind=ip)
-        n_param = n_ao * (n_ao - 1) / 2
-        if (.not. settings_c%restricted) n_param = n_particle * n_param
+        n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -180,11 +179,11 @@ contains
 
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
-            get_energy_2d_funptr => get_energy_2d_f_wrapper
-            update_dm_2d_funptr => update_dm_2d_f_wrapper
+            get_energy_cs_funptr => get_energy_cs_f_wrapper
+            update_dm_cs_funptr => update_dm_cs_f_wrapper
         else
-            get_energy_3d_funptr => get_energy_3d_f_wrapper
-            update_dm_3d_funptr => update_dm_3d_f_wrapper
+            get_energy_os_funptr => get_energy_os_f_wrapper
+            update_dm_os_funptr => update_dm_os_f_wrapper
         end if
 
         ! convert settings
@@ -192,15 +191,15 @@ contains
 
         ! call factory function
         if (n_particle == 1) then
-            call oao_factory_closed_shell(dm_ao_2d, ao_overlap, n_particle, n_ao, &
-                                          get_energy_2d_funptr, update_dm_2d_funptr, &
-                                          obj_func_oao_funptr, update_orbs_oao_funptr, &
-                                          project_oao_funptr, error, settings)
+            call oao_factory_cs(dm_ao_2d, ao_overlap, n_particle, n_ao, &
+                                get_energy_cs_funptr, update_dm_cs_funptr, &
+                                obj_func_oao_funptr, update_orbs_oao_funptr, &
+                                project_oao_funptr, error, settings)
         else
-            call oao_factory_open_shell(dm_ao_3d, ao_overlap, n_particle, n_ao, &
-                                        get_energy_3d_funptr, update_dm_3d_funptr, &
-                                        obj_func_oao_funptr, update_orbs_oao_funptr, &
-                                        project_oao_funptr, error, settings)
+            call oao_factory_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
+                                get_energy_os_funptr, update_dm_os_funptr, &
+                                obj_func_oao_funptr, update_orbs_oao_funptr, &
+                                project_oao_funptr, error, settings)
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
@@ -218,7 +217,7 @@ contains
 
     end function oao_factory_c_wrapper
 
-    function get_energy_2d_f_wrapper(dm, error) result(energy)
+    function get_energy_cs_f_wrapper(dm, error) result(energy)
         !
         ! this subroutine wraps the energy subroutine to convert Fortran variables to C 
         ! variables for the closed-shell case
@@ -230,11 +229,11 @@ contains
         real(rp), pointer :: dm_3d(:, :, :)
 
         dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
-        energy = get_energy_3d_f_wrapper(dm_3d, error)
+        energy = get_energy_os_f_wrapper(dm_3d, error)
 
-    end function get_energy_2d_f_wrapper
+    end function get_energy_cs_f_wrapper
 
-    function get_energy_3d_f_wrapper(dm, error) result(energy)
+    function get_energy_os_f_wrapper(dm, error) result(energy)
         !
         ! this subroutine wraps the energy subroutine to convert Fortran variables to C 
         ! variables for the open-shell case
@@ -265,9 +264,9 @@ contains
             deallocate(dm_c)
         end if
 
-    end function get_energy_3d_f_wrapper
+    end function get_energy_os_f_wrapper
 
-    subroutine update_dm_2d_f_wrapper(dm, energy, fock, get_response_2d_funptr, error)
+    subroutine update_dm_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, error)
         !
         ! this subroutine wraps the density matrix updating subroutine to convert 
         ! Fortran variables to C variables for the closed-shell case
@@ -275,24 +274,24 @@ contains
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), target, contiguous :: fock(:, :)
-        procedure(get_response_2d_type), intent(out), pointer :: get_response_2d_funptr
+        procedure(get_response_cs_type), intent(out), pointer :: get_response_cs_funptr
 
         integer(ip), intent(out) :: error
 
         real(rp), pointer :: dm_3d(:, :, :), fock_3d(:, :, :)
-        procedure(get_response_3d_type), pointer :: get_response_funptr
+        procedure(get_response_os_type), pointer :: get_response_funptr
 
         dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
         fock_3d(1:size(fock, 1), 1:size(fock, 2), 1:1) => fock
         get_response_funptr => null()
-        call update_dm_3d_f_wrapper(dm_3d, energy, fock_3d, get_response_funptr, error)
+        call update_dm_os_f_wrapper(dm_3d, energy, fock_3d, get_response_funptr, error)
 
         ! associate procedure pointer to wrapper function
-        get_response_2d_funptr => get_response_2d_f_wrapper
+        get_response_cs_funptr => get_response_cs_f_wrapper
 
-    end subroutine update_dm_2d_f_wrapper
+    end subroutine update_dm_cs_f_wrapper
 
-    subroutine update_dm_3d_f_wrapper(dm, energy, fock, get_response_funptr, error)
+    subroutine update_dm_os_f_wrapper(dm, energy, fock, get_response_funptr, error)
         !
         ! this subroutine wraps the density matrix updating subroutine to convert 
         ! Fortran variables to C variables for the open-shell case
@@ -300,7 +299,7 @@ contains
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), target :: fock(:, :, :)
-        procedure(get_response_3d_type), intent(out), pointer :: get_response_funptr
+        procedure(get_response_os_type), intent(out), pointer :: get_response_funptr
         integer(ip), intent(out) :: error
 
         real(c_rp) :: energy_c
@@ -336,11 +335,11 @@ contains
                              fptr=get_response_before_wrapping)
 
         ! associate procedure pointer to wrapper function
-        get_response_funptr => get_response_3d_f_wrapper
+        get_response_funptr => get_response_os_f_wrapper
 
-    end subroutine update_dm_3d_f_wrapper
+    end subroutine update_dm_os_f_wrapper
 
-    subroutine get_response_2d_f_wrapper(dm, response, error)
+    subroutine get_response_cs_f_wrapper(dm, response, error)
         !
         ! this subroutine wraps the response subroutine to convert Fortran variables 
         ! to C variables
@@ -353,11 +352,11 @@ contains
 
         dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
         response_3d(1:size(response, 1), 1:size(response, 2), 1:1) => response
-        call get_response_3d_f_wrapper(dm_3d, response_3d, error)
+        call get_response_os_f_wrapper(dm_3d, response_3d, error)
 
-    end subroutine get_response_2d_f_wrapper
+    end subroutine get_response_cs_f_wrapper
 
-    subroutine get_response_3d_f_wrapper(dm, response, error)
+    subroutine get_response_os_f_wrapper(dm, response, error)
         !
         ! this subroutine wraps the response subroutine to convert Fortran variables 
         ! to C variables
@@ -389,7 +388,7 @@ contains
             deallocate(dm_c, response_c)
         end if
 
-    end subroutine get_response_3d_f_wrapper
+    end subroutine get_response_os_f_wrapper
 
     function obj_func_oao_c_wrapper(kappa_c, func_c) result(error_c) bind(C)
         !
@@ -538,9 +537,6 @@ contains
                 settings%logger => null()
             end if
 
-            ! convert logicals
-            settings%restricted = logical(settings_c%restricted)
-
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
 
@@ -562,9 +558,6 @@ contains
         if (settings%initialized) then
             ! callback functions cannot be converted
             settings_c%logger = c_null_funptr
-
-            ! convert logicals
-            settings_c%restricted = logical(settings%restricted, kind=c_bool)
 
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)

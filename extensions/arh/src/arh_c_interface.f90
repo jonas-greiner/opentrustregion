@@ -10,10 +10,10 @@ module otr_arh_c_interface
                                project_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
     use otr_oao_c_interface, only: n_particle, n_ao
-    use otr_arh, only: standard_arh_factory_closed_shell => arh_factory_closed_shell, &
-                       standard_arh_factory_open_shell => arh_factory_open_shell, &
+    use otr_arh, only: standard_arh_factory_cs => arh_factory_cs, &
+                       standard_arh_factory_os => arh_factory_os, &
                        standard_arh_deconstructor => arh_deconstructor, &
-                       update_dm_spin_type
+                       update_dm_os_type, update_dm_cs_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
                                            c_funloc, c_f_procpointer, c_associated, &
                                            c_char, c_null_funptr
@@ -21,45 +21,56 @@ module otr_arh_c_interface
     implicit none
 
     ! define procedure pointer which will point to the Fortran procedures
-    procedure(update_dm_spin_c_type), pointer :: update_dm_spin_before_wrapping => &
-                                                 null()
+    procedure(update_dm_os_c_type), pointer :: update_dm_os_before_wrapping => null()
+    procedure(update_dm_cs_c_type), pointer :: update_dm_cs_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
-        function update_dm_spin_c_type(dm_ao_c, energy_c, fock_c, v_same_spin_c, &
-                                       v_opposite_spin_c, get_response_c_funptr) &
+        function update_dm_os_c_type(dm_ao_c, energy_c, fock_c, v_same_spin_c, &
+                                     v_opposite_spin_c, v_nonlinear_c) &
             result(error_c) bind(C)
-            import :: c_rp, c_ip, c_funptr
+            import :: c_rp, c_ip
 
             real(c_rp), intent(in), target :: dm_ao_c(*)
             real(c_rp), intent(out) :: energy_c
             real(c_rp), intent(out), target :: fock_c(*), v_same_spin_c(*), &
-                                               v_opposite_spin_c(*)
-            type(c_funptr), intent(out) :: get_response_c_funptr
+                                               v_opposite_spin_c(*), v_nonlinear_c(*)
             integer(c_ip) :: error_c
-        end function update_dm_spin_c_type
+        end function update_dm_os_c_type
+
+        function update_dm_cs_c_type(dm_ao_c, energy_c, fock_c, v_nonlinear_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(in), target :: dm_ao_c(*)
+            real(c_rp), intent(out) :: energy_c
+            real(c_rp), intent(out), target :: fock_c(*), v_nonlinear_c(*)
+            integer(c_ip) :: error_c
+        end function update_dm_cs_c_type
     end interface
 
     ! derived type for ARH settings
     type, bind(C) :: arh_settings_type_c
         type(c_funptr) :: logger
-        logical(c_bool) :: initialized, restricted
+        logical(c_bool) :: initialized
         integer(c_ip) :: verbose
         character(c_char) :: arh_type(kw_len + 1)
     end type
 
-    procedure(standard_arh_factory_closed_shell), pointer :: arh_factory_closed_shell &
-        => standard_arh_factory_closed_shell
-    procedure(standard_arh_factory_open_shell), pointer :: arh_factory_open_shell &
-        => standard_arh_factory_open_shell
+    procedure(standard_arh_factory_cs), pointer :: arh_factory_cs => &
+        standard_arh_factory_cs
+    procedure(standard_arh_factory_os), pointer :: arh_factory_os => &
+        standard_arh_factory_os
     procedure(standard_arh_deconstructor), pointer :: arh_deconstructor => &
         standard_arh_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_dm_spin_type), pointer :: update_dm_spin_f_wrapper_ptr => &
-        update_dm_spin_f_wrapper
+    procedure(update_dm_os_type), pointer :: update_dm_os_f_wrapper_ptr => &
+        update_dm_os_f_wrapper
+    procedure(update_dm_cs_type), pointer :: update_dm_cs_f_wrapper_ptr => &
+        update_dm_cs_f_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_arh_c_wrapper_ptr => &
         update_orbs_arh_c_wrapper
     procedure(hess_x_c_type), pointer :: hess_x_arh_c_wrapper_ptr => &
@@ -83,13 +94,10 @@ contains
         ! variables to Fortran variables
         !
         use otr_arh, only: arh_settings_type
-        use otr_oao, only: get_energy_2d_type, get_energy_3d_type, update_dm_2d_type, &
-                           obj_func_type
+        use otr_oao, only: get_energy_cs_type, get_energy_os_type, obj_func_type
         use otr_oao_c_interface, only: dm_ao_3d_c, get_energy_before_wrapping, &
-                                       update_dm_before_wrapping, &
-                                       get_energy_2d_f_wrapper, &
-                                       update_dm_2d_f_wrapper, &
-                                       get_energy_3d_f_wrapper, &
+                                       get_energy_cs_f_wrapper, &
+                                       get_energy_os_f_wrapper, &
                                        obj_func_oao_before_wrapping, &
                                        project_oao_before_wrapping, &
                                        obj_func_oao_c_wrapper, project_oao_c_wrapper
@@ -106,10 +114,10 @@ contains
         real(rp), pointer, contiguous :: dm_ao_2d(:, :)
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
         real(rp), pointer :: ao_overlap(:, :)
-        procedure(get_energy_2d_type), pointer :: get_energy_2d_funptr
-        procedure(get_energy_3d_type), pointer :: get_energy_3d_funptr
-        procedure(update_dm_2d_type), pointer :: update_dm_funptr
-        procedure(update_dm_spin_type), pointer :: update_dm_spin_funptr
+        procedure(get_energy_cs_type), pointer :: get_energy_cs_funptr
+        procedure(get_energy_os_type), pointer :: get_energy_os_funptr
+        procedure(update_dm_cs_type), pointer :: update_dm_cs_funptr
+        procedure(update_dm_os_type), pointer :: update_dm_os_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(project_type), pointer :: project_arh_funptr
@@ -120,8 +128,7 @@ contains
         ! store globally to access assumed size arrays passed from C to Fortran
         n_particle = int(n_particle_c, kind=ip)
         n_ao = int(n_ao_c, kind=ip)
-        n_param = n_ao * (n_ao - 1) / 2
-        if (.not. settings_c%restricted) n_param = n_particle * n_param
+        n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -149,19 +156,19 @@ contains
         call c_f_procpointer(cptr=get_energy_c_funptr, fptr=get_energy_before_wrapping)
         if (n_particle == 1) then
             call c_f_procpointer(cptr=update_dm_c_funptr, &
-                                 fptr=update_dm_before_wrapping)
+                                 fptr=update_dm_cs_before_wrapping)
         else
             call c_f_procpointer(cptr=update_dm_c_funptr, &
-                                 fptr=update_dm_spin_before_wrapping)
+                                 fptr=update_dm_os_before_wrapping)
         end if
 
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
-            get_energy_2d_funptr => get_energy_2d_f_wrapper
-            update_dm_funptr => update_dm_2d_f_wrapper
+            get_energy_cs_funptr => get_energy_cs_f_wrapper
+            update_dm_cs_funptr => update_dm_cs_f_wrapper
         else
-            get_energy_3d_funptr => get_energy_3d_f_wrapper
-            update_dm_spin_funptr => update_dm_spin_f_wrapper
+            get_energy_os_funptr => get_energy_os_f_wrapper
+            update_dm_os_funptr => update_dm_os_f_wrapper
         end if
 
         ! convert settings
@@ -169,15 +176,15 @@ contains
 
         ! call factory function
         if (n_particle == 1) then
-            call arh_factory_closed_shell(dm_ao_2d, ao_overlap, n_particle, n_ao, &
-                                          get_energy_2d_funptr, update_dm_funptr, &
-                                          obj_func_arh_funptr, update_orbs_arh_funptr, &
-                                          project_arh_funptr, error, settings)
+            call arh_factory_cs(dm_ao_2d, ao_overlap, n_particle, n_ao, &
+                                get_energy_cs_funptr, update_dm_cs_funptr, &
+                                obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                project_arh_funptr, error, settings)
         else
-            call arh_factory_open_shell(dm_ao_3d, ao_overlap, n_particle, n_ao, &
-                                        get_energy_3d_funptr, update_dm_spin_funptr, &
-                                        obj_func_arh_funptr, update_orbs_arh_funptr, &
-                                        project_arh_funptr, error, settings)
+            call arh_factory_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
+                                get_energy_os_funptr, update_dm_os_funptr, &
+                                obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                project_arh_funptr, error, settings)
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
@@ -195,27 +202,21 @@ contains
 
     end function arh_factory_c_wrapper
 
-    subroutine update_dm_spin_f_wrapper(dm, energy, fock, v_same_spin, &
-                                        v_opposite_spin, get_response_funptr, error)
+    subroutine update_dm_os_f_wrapper(dm, energy, fock, v_same_spin, v_opposite_spin, &
+                                      v_nonlinear, error)
         !
-        ! this subroutine wraps the density matrix updating subroutine to convert 
+        ! this subroutine wraps the density matrix updating subroutine to convert
         ! Fortran variables to C variables
         !
-        use otr_oao, only: get_response_3d_type
-        use otr_oao_c_interface, only: get_response_before_wrapping, &
-                                       get_response_3d_f_wrapper
-
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
-                                         v_opposite_spin(:, :, :)
-        procedure(get_response_3d_type), intent(out), pointer :: get_response_funptr
+                                         v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
         integer(ip), intent(out) :: error
 
         real(c_rp) :: energy_c
         real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :), v_same_spin_c(:, :, :), &
-                               v_opposite_spin_c(:, :, :)
-        type(c_funptr) :: get_response_c_funptr
+                               v_opposite_spin_c(:, :, :), v_nonlinear_c(:, :, :)
         integer(c_ip) :: error_c
 
         ! convert arguments to C kind
@@ -224,18 +225,18 @@ contains
             fock_c => fock
             v_same_spin_c => v_same_spin
             v_opposite_spin_c => v_opposite_spin
+            v_nonlinear_c => v_nonlinear
         else
-            allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)), &
-                     fock_c(size(dm, 1), size(dm, 2), size(dm, 3)), &
-                     v_same_spin_c(size(dm, 1), size(dm, 2), size(dm, 3)), &
-                     v_opposite_spin_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-            dm_c = real(dm, kind=c_rp)
+            allocate(dm_c, source=real(dm, kind=c_rp))
+            allocate(fock_c, mold=real(fock, kind=c_rp))
+            allocate(v_same_spin_c, mold=real(v_same_spin, kind=c_rp))
+            allocate(v_opposite_spin_c, mold=real(v_opposite_spin, kind=c_rp))
+            allocate(v_nonlinear_c, mold=real(v_nonlinear, kind=c_rp))
         end if
 
         ! call density matrix updating C function
-        error_c = update_dm_spin_before_wrapping(dm_c, energy_c, fock_c, v_same_spin_c, &
-                                                 v_opposite_spin_c, &
-                                                 get_response_c_funptr)
+        error_c = update_dm_os_before_wrapping(dm_c, energy_c, fock_c, v_same_spin_c, &
+                                               v_opposite_spin_c, v_nonlinear_c)
 
         ! convert arguments to Fortran kind
         energy = real(energy_c, kind=rp)
@@ -244,18 +245,50 @@ contains
             fock = real(fock_c, kind=rp)
             v_same_spin = real(v_same_spin_c, kind=rp)
             v_opposite_spin = real(v_opposite_spin_c, kind=rp)
-            deallocate(dm_c, fock_c, v_same_spin_c, v_opposite_spin_c)
+            v_nonlinear = real(v_nonlinear_c, kind=rp)
+            deallocate(dm_c, fock_c, v_same_spin_c, v_opposite_spin_c, v_nonlinear_c)
         end if
 
-        ! associate the input C pointer to get_response function to a Fortran procedure
-        ! pointer
-        call c_f_procpointer(cptr=get_response_c_funptr, &
-                             fptr=get_response_before_wrapping)
+    end subroutine update_dm_os_f_wrapper
 
-        ! associate procedure pointer to wrapper function
-        get_response_funptr => get_response_3d_f_wrapper
+    subroutine update_dm_cs_f_wrapper(dm, energy, fock, v_nonlinear, error)
+        !
+        ! this subroutine wraps the density matrix updating subroutine to convert
+        ! Fortran variables to C variables
+        !
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), target, contiguous :: fock(:, :), v_nonlinear(:, :)
+        integer(ip), intent(out) :: error
 
-    end subroutine update_dm_spin_f_wrapper
+        real(c_rp) :: energy_c
+        real(c_rp), pointer, contiguous :: dm_c(:, :), fock_c(:, :), v_nonlinear_c(:, :)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            dm_c => dm
+            fock_c => fock
+            v_nonlinear_c => v_nonlinear
+        else
+            allocate(dm_c, source=real(dm, kind=c_rp))
+            allocate(fock_c, mold=real(fock, kind=c_rp))
+            allocate(v_nonlinear_c, mold=real(v_nonlinear, kind=c_rp))
+        end if
+
+        ! call density matrix updating C function
+        error_c = update_dm_cs_before_wrapping(dm_c, energy_c, fock_c, v_nonlinear_c)
+
+        ! convert arguments to Fortran kind
+        energy = real(energy_c, kind=rp)
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            fock = real(fock_c, kind=rp)
+            v_nonlinear = real(v_nonlinear_c, kind=rp)
+            deallocate(dm_c, fock_c, v_nonlinear_c)
+        end if
+
+    end subroutine update_dm_cs_f_wrapper
 
     function update_orbs_arh_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                        hess_x_c_funptr) result(error_c) bind(C)
@@ -338,9 +371,6 @@ contains
                 settings%logger => null()
             end if
 
-            ! convert logicals
-            settings%restricted = logical(settings_c%restricted)
-
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
 
@@ -366,9 +396,6 @@ contains
         if (settings%initialized) then
             ! callback functions cannot be converted
             settings_c%logger = c_null_funptr
-
-            ! convert logicals
-            settings_c%restricted = logical(settings%restricted, kind=c_bool)
 
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)

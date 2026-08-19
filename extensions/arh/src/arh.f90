@@ -8,10 +8,14 @@ module otr_arh
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
                                hess_x_type, project_type
-    use otr_oao, only: oao_settings_type, default_oao_settings, get_energy_3d_type, &
-                       get_energy_2d_type, update_dm_2d_type
+    use otr_oao, only: oao_settings_type, default_oao_settings, get_energy_os_type, &
+                       get_energy_cs_type
 
     implicit none
+
+    ! define useful parameters
+    real(rp), parameter :: rel_regularization_thresh = 1e-10_rp, &
+                           symm_noise_safety_margin = 5.0_rp
 
     type, extends(oao_settings_type) :: arh_settings_type
         character(kw_len) :: arh_type
@@ -21,25 +25,33 @@ module otr_arh
 
     type(arh_settings_type), parameter :: default_arh_settings = &
         arh_settings_type(oao_settings_type = default_oao_settings, &
-                          arh_type = "symmetric")
+                          arh_type = "ms_sr1")
 
     ! define setting options
-    character(kw_len), parameter :: arh_types(3) = &
-            [character(len=kw_len) :: "standard", "symmetric", "multisecant_psb"]
+    character(kw_len), parameter :: arh_types(5) = &
+            [character(len=kw_len) :: "arh", "symm_arh", "ms_psb", "ms_sp", "ms_sr1"]
 
     abstract interface
-        subroutine update_dm_spin_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
-                                       get_response_funptr, error)
-            use otr_oao, only: get_response_3d_type
+        subroutine update_dm_cs_type(dm, energy, fock, v_nonlinear, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target, contiguous :: dm(:, :)
+            real(rp), intent(out) :: energy
+            real(rp), intent(out), target, contiguous :: fock(:, :), v_nonlinear(:, :)
+            integer(ip), intent(out) :: error
+        end subroutine update_dm_cs_type
+
+        subroutine update_dm_os_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
+                                       v_nonlinear, error)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy
             real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
-                                             v_opposite_spin(:, :, :)
-            procedure(get_response_3d_type), intent(out), pointer :: get_response_funptr
+                                             v_opposite_spin(:, :, :), &
+                                             v_nonlinear(:, :, :)
             integer(ip), intent(out) :: error
-        end subroutine update_dm_spin_type
+        end subroutine update_dm_os_type
     end interface
 
     type :: arh_type
@@ -50,53 +62,56 @@ module otr_arh
                              fock_oo(:, :, :) => null(), fock_vv(:, :, :) => null(), &
                              energy => null(), grad(:) => null(), h_diag(:) => null()
         real(rp), allocatable :: fock_oao(:, :, :), v_same_spin_oao(:, :, :), &
-                                 v_opposite_spin_oao(:, :, :), metric_chol(:, :, :), &
+                                 v_opposite_spin_oao(:, :, :), &
+                                 v_nonlinear_oao(:, :, :), metric_chol(:, :, :), &
+                                 a_eigvecs(:, :), a_inv_eigvals(:), &
+                                 a_eigvecs_comb(:, :), a_inv_eigvals_comb(:), &
                                  dm_list(:, :, :, :), fock_list(:, :, :, :), &
                                  v_same_spin_list(:, :, :, :), &
                                  v_opposite_spin_list(:, :, :, :), &
+                                 v_nonlinear_list(:, :, :, :), &
                                  dm_diff(:, :, :, :), fock_diff(:, :, :, :), &
+                                 v_linear_diff(:, :, :, :), &
                                  v_same_spin_diff(:, :, :, :), &
-                                 v_opposite_spin_diff(:, :, :, :)
+                                 v_opposite_spin_diff(:, :, :, :), &
+                                 v_nonlinear_diff(:, :, :, :)
         integer(ip), allocatable :: metric_rank(:), metric_map(:, :)
-        procedure(get_energy_3d_type), pointer, nopass :: get_energy => null()
-        procedure(update_dm_spin_type), pointer, nopass :: update_dm_spin => null()
-        procedure(get_energy_2d_type), pointer, nopass :: get_energy_2d => null()
-        procedure(update_dm_2d_type), pointer, nopass :: update_dm_2d => null()
+        procedure(get_energy_os_type), pointer, nopass :: get_energy_os => null()
+        procedure(update_dm_os_type), pointer, nopass :: update_dm_os => null()
+        procedure(get_energy_cs_type), pointer, nopass :: get_energy_cs => null()
+        procedure(update_dm_cs_type), pointer, nopass :: update_dm_cs => null()
     end type arh_type
 
     ! global variables
     type(arh_type), allocatable :: arh_object
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_type), pointer :: update_orbs_arh_closed_shell_ptr => &
-        update_orbs_arh_closed_shell
-    procedure(update_orbs_type), pointer :: update_orbs_arh_open_shell_ptr => &
-        update_orbs_arh_open_shell
+    procedure(update_orbs_type), pointer :: update_orbs_arh_cs_ptr => update_orbs_arh_cs
+    procedure(update_orbs_type), pointer :: update_orbs_arh_os_ptr => update_orbs_arh_os
     procedure(hess_x_type), pointer :: hess_x_arh_ptr => hess_x_arh
 
     ! define module procedures for different spin cases
     interface arh_factory
-        module procedure arh_factory_closed_shell, arh_factory_open_shell
+        module procedure arh_factory_cs, arh_factory_os
     end interface arh_factory
 
     contains
 
-    subroutine arh_factory_closed_shell(dm_ao, ao_overlap, n_particle, n_ao, &
-                                        get_energy, update_dm, obj_func_arh_funptr, &
-                                        update_orbs_arh_funptr, project_arh_funptr, &
-                                        error, settings)
+    subroutine arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, &
+                              update_dm_cs, obj_func_arh_funptr, &
+                              update_orbs_arh_funptr, project_arh_funptr, error, &
+                              settings)
         !
-        ! this function returns a modified ARH orbital updating function for the 
+        ! this function returns a modified ARH orbital updating function for the
         ! closed-shell case
         !
-        use otr_oao, only: get_energy_2d_type, update_dm_2d_type, obj_func_oao, &
-                           project_oao
+        use otr_oao, only: get_energy_cs_type, obj_func_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_2d_type), intent(in), pointer :: get_energy
-        procedure(update_dm_2d_type), intent(in), pointer :: update_dm
+        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_cs
+        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
@@ -115,31 +130,31 @@ module otr_arh
         nullify(dm_ao_3d)
 
         ! set pointers to functions
-        arh_object%get_energy_2d => get_energy
-        arh_object%update_dm_2d => update_dm
+        arh_object%get_energy_cs => get_energy_cs
+        arh_object%update_dm_cs => update_dm_cs
 
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_oao
-        update_orbs_arh_funptr => update_orbs_arh_closed_shell
+        update_orbs_arh_funptr => update_orbs_arh_cs
         project_arh_funptr => project_oao
 
-    end subroutine arh_factory_closed_shell
+    end subroutine arh_factory_cs
 
-    subroutine arh_factory_open_shell(dm_ao, ao_overlap, n_particle, n_ao, get_energy, &
-                                      update_dm_spin, obj_func_arh_funptr, &
-                                      update_orbs_arh_funptr, project_arh_funptr, &
-                                      error, settings)
+    subroutine arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, &
+                              update_dm_os, obj_func_arh_funptr, &
+                              update_orbs_arh_funptr, project_arh_funptr, error, &
+                              settings)
         !
-        ! this function returns a modified ARH orbital updating function for the 
+        ! this function returns a modified ARH orbital updating function for the
         ! open-shell case
         !
-        use otr_oao, only: get_energy_3d_type, obj_func_oao, project_oao
+        use otr_oao, only: get_energy_os_type, obj_func_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_3d_type), intent(in), pointer :: get_energy
-        procedure(update_dm_spin_type), intent(in), pointer :: update_dm_spin
+        procedure(get_energy_os_type), intent(in), pointer :: get_energy_os
+        procedure(update_dm_os_type), intent(in), pointer :: update_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
@@ -154,15 +169,15 @@ module otr_arh
         if (error /= 0) return
 
         ! set pointers to functions
-        arh_object%get_energy => get_energy
-        arh_object%update_dm_spin => update_dm_spin
+        arh_object%get_energy_os => get_energy_os
+        arh_object%update_dm_os => update_dm_os
 
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_oao
-        update_orbs_arh_funptr => update_orbs_arh_open_shell
+        update_orbs_arh_funptr => update_orbs_arh_os
         project_arh_funptr => project_oao
 
-    end subroutine arh_factory_open_shell
+    end subroutine arh_factory_os
 
     subroutine arh_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
         !
@@ -178,16 +193,22 @@ module otr_arh
 
         ! call common OAO setup
         call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
+        if (error /= 0) return
 
         ! perform sanity check
         call arh_sanity_check(settings, error)
         if (error /= 0) return
 
-        ! allocate objects
-        if (.not. allocated(arh_object)) allocate(arh_object)
+        ! discard any state (in particular history and derived quantities) from a
+        ! previous calculation: arh_factory is only ever called to start a new
+        ! calculation, never to resume one, so state from an unrelated trajectory must
+        ! never be reused, regardless of whether the new dimensions happen to match
+        ! the old ones
+        if (allocated(arh_object)) deallocate(arh_object)
+        allocate(arh_object)
 
         ! set (potentially new) settings
-        arh_object%settings = settings        
+        arh_object%settings = settings
 
         ! associate OAO values
         arh_object%n_ao => oao_object%n_ao
@@ -222,26 +243,26 @@ module otr_arh
         ! check for character options
         if (.not. any(settings%arh_type == arh_types)) then
             call settings%log("ARH type option unknown. Possible values are "// &
-                              """standard"" (standard ARH), ""symmetric"" (simple "// &
-                              "symmetrized ARH), and ""multisecant_psb"" "// &
-                              "(multisecant PSB version of ARH).", verbosity_error, &
-                              .true.)
+                              """arh"" (standard ARH), ""symm_arh"" (symmetrized "// &
+                              "ARH), ""ms_sp"" (subspace-projected multisecant "// &
+                              "method), ""ms_psb"" (multisecant PSB), and "// &
+                              """ms_sr1"" (multisecant SR1 version).", &
+                              verbosity_error, .true.)
             error = 1
             return
         end if
 
     end subroutine arh_sanity_check
 
-    subroutine update_orbs_arh_closed_shell(kappa, func, grad, h_diag, hess_x_funptr, &
-                                            error)
+    subroutine update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation 
         ! in the OAO basis and the Hessian linear transformation on the basis of 
         ! augmented Roothaan-Hall for the closed-shell case
         !
         use opentrustregion, only: hess_x_type, numerical_zero
-        use otr_oao, only: get_response_2d_type, rotate_dm_ao, &
-                           symmetric_transformation, oao_object, calculate_grad_h_diag
+        use otr_oao, only: rotate_dm_ao, symmetric_transformation, oao_object, &
+                           calculate_grad_h_diag
 
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
@@ -250,8 +271,7 @@ module otr_arh
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, i, n_list
-        real(rp), allocatable :: fock_ao(:, :, :)
-        procedure(get_response_2d_type), pointer :: get_response_2d_funptr
+        real(rp), allocatable :: fock_ao(:, :, :), v_nonlinear_ao(:, :, :)
 
         external :: dgemm
 
@@ -269,35 +289,39 @@ module otr_arh
             ! number of particles
             n_particle = arh_object%n_particle
 
-            ! update list of density and Fock matrices
+            ! update list of density, Fock and non-linear potential matrices
             if (allocated(arh_object%dm_list)) then
                 call prepend(arh_object%dm_list, arh_object%dm_oao)
                 call prepend(arh_object%fock_list, arh_object%fock_oao)
+                call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear_oao)
             else
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%fock_list(n_ao, n_ao, n_particle, 0))
+                         arh_object%fock_list(n_ao, n_ao, n_particle, 0), &
+                         arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
             end if
 
             ! rotate density matrix
-            call rotate_dm_ao(kappa, n_particle, n_ao, &
-                              arh_object%settings%restricted, arh_object%dm_ao, error, &
+            call rotate_dm_ao(kappa, n_particle, n_ao, arh_object%dm_ao, error, &
                               arh_object%dm_oao)
             if (error /= 0) return
 
-            ! get energy and Fock matrix
-            allocate(fock_ao(n_ao, n_ao, n_particle))
-            call arh_object%update_dm_2d(arh_object%dm_ao(:, :, 1), arh_object%energy, &
-                                         fock_ao(:, :, 1), get_response_2d_funptr, &
+            ! get energy, Fock matrix and non-linear potential
+            allocate(fock_ao(n_ao, n_ao, n_particle), &
+                     v_nonlinear_ao(n_ao, n_ao, n_particle))
+            call arh_object%update_dm_cs(arh_object%dm_ao(:, :, 1), arh_object%energy, &
+                                         fock_ao(:, :, 1), v_nonlinear_ao(:, :, 1), &
                                          error)
             if (error /= 0) then
-                deallocate(fock_ao)
+                deallocate(fock_ao, v_nonlinear_ao)
                 return
             end if
 
-            ! transform Fock matrix to OAO basis
+            ! transform Fock matrix and non-linear potential to OAO basis
             arh_object%fock_oao = &
                 symmetric_transformation(arh_object%s_inv_sqrt, fock_ao)
-            deallocate(fock_ao)
+            arh_object%v_nonlinear_oao = &
+                symmetric_transformation(arh_object%s_inv_sqrt, v_nonlinear_ao)
+            deallocate(fock_ao, v_nonlinear_ao)
 
             ! calculate gradient and Hessian diagonal
             if (.not. associated(arh_object%grad)) then
@@ -311,28 +335,56 @@ module otr_arh
                 arh_object%h_diag => oao_object%h_diag
             end if
             call calculate_grad_h_diag(arh_object%dm_oao, arh_object%fock_oao, &
-                                       n_particle, n_ao, &
-                                       arh_object%settings%restricted, &
-                                       arh_object%grad, arh_object%h_diag, &
-                                       arh_object%fock_oo, arh_object%fock_vv)
+                                       n_particle, n_ao, arh_object%grad, &
+                                       arh_object%h_diag, arh_object%fock_oo, &
+                                       arh_object%fock_vv)
 
             ! prepare differences for response part of ARH Hessian
             n_list = size(arh_object%dm_list, 4)
-            if (allocated(arh_object%dm_diff)) deallocate(arh_object%dm_diff, &
-                                                          arh_object%fock_diff)
+            if (allocated(arh_object%dm_diff)) &
+                deallocate(arh_object%dm_diff, arh_object%fock_diff, &
+                           arh_object%v_linear_diff, arh_object%v_nonlinear_diff)
             allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
-                     arh_object%fock_diff(n_ao, n_ao, n_particle, n_list))
+                     arh_object%fock_diff(n_ao, n_ao, n_particle, n_list), &
+                     arh_object%v_linear_diff(n_ao, n_ao, n_particle, n_list), &
+                     arh_object%v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
             do i = 1, n_list
                 arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
                                                  arh_object%dm_oao
                 arh_object%fock_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
                                                    arh_object%fock_oao
+                arh_object%v_nonlinear_diff(:, :, :, i) = &
+                    arh_object%v_nonlinear_list(:, :, :, i) - arh_object%v_nonlinear_oao
             end do
 
+            ! linear (Coulomb and exact exchange) part of the potential difference,
+            ! obtained as the remainder of the total Fock matrix difference, since the
+            ! one-electron contribution cancels in the differences
+            arh_object%v_linear_diff = arh_object%fock_diff - &
+                                       arh_object%v_nonlinear_diff
+
             ! construct and diagonalize ARH metric
-            call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
-                                arh_object%metric_rank, arh_object%metric_map)
-            if (error /= 0) return
+            if (arh_object%settings%arh_type == "ms_sr1") then
+                ! linear part: this is exact since Coulomb and exact exchange are
+                ! linear in the density matrix
+                call get_ms_a_inv_cs(arh_object%dm_diff, arh_object%v_linear_diff, &
+                                     .true., arh_object%a_eigvecs, &
+                                     arh_object%a_inv_eigvals, n_ao, &
+                                     arh_object%settings, error)
+                if (error /= 0) return
+                ! non-linear part: kept on a dedicated, separately regularized
+                ! multisecant SR1 system, since the exact linear secant relationship
+                ! and the non-linear one cannot be represented well by a single
+                ! regularized eigenbasis
+                call get_ms_a_inv_cs(arh_object%dm_diff, arh_object%v_nonlinear_diff, &
+                                     .false., arh_object%a_eigvecs_comb, &
+                                     arh_object%a_inv_eigvals_comb, n_ao, &
+                                     arh_object%settings, error)
+                if (error /= 0) return
+            else
+                call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
+                                    arh_object%metric_rank, arh_object%metric_map)
+            end if
         end if
 
         ! set outputs
@@ -341,18 +393,17 @@ module otr_arh
         h_diag = arh_object%h_diag
         hess_x_funptr => hess_x_arh
         
-    end subroutine update_orbs_arh_closed_shell
+    end subroutine update_orbs_arh_cs
 
-    subroutine update_orbs_arh_open_shell(kappa, func, grad, h_diag, hess_x_funptr, &
-                                          error)
+    subroutine update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation 
         ! in the OAO basis and the Hessian linear transformation on the basis of 
         ! augmented Roothaan-Hall for the open-shell case
         !
         use opentrustregion, only: hess_x_type, numerical_zero
-        use otr_oao, only: get_response_3d_type, rotate_dm_ao, &
-                           symmetric_transformation, oao_object, calculate_grad_h_diag
+        use otr_oao, only: rotate_dm_ao, symmetric_transformation, oao_object, &
+                           calculate_grad_h_diag
 
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
@@ -362,9 +413,9 @@ module otr_arh
 
         integer(ip) :: n_ao, n_particle, i, n_list
         real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :), &
-                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :)
-        procedure(get_response_3d_type), pointer :: get_response_3d_funptr
-                                 
+                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
+                                 v_nonlinear_ao(:, :, :)
+
         external :: dgemm
 
         ! initialize error flag
@@ -387,27 +438,30 @@ module otr_arh
                 call prepend(arh_object%v_same_spin_list, arh_object%v_same_spin_oao)
                 call prepend(arh_object%v_opposite_spin_list, &
                              arh_object%v_opposite_spin_oao)
+                call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear_oao)
             else
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
                          arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0))
+                         arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0), &
+                         arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
             end if
 
             ! rotate density matrix
-            call rotate_dm_ao(kappa, n_particle, n_ao, arh_object%settings%restricted, &
-                              arh_object%dm_ao, error, arh_object%dm_oao)
+            call rotate_dm_ao(kappa, n_particle, n_ao, arh_object%dm_ao, error, &
+                              arh_object%dm_oao)
             if (error /= 0) return
 
-            ! get energy, Fock matrix, and same and opposite spin potentials
+            ! get energy, Fock matrix, same and opposite spin potentials, and 
+            ! non-linear potential
             allocate(fock_ao(n_ao, n_ao, n_particle), &
                      v_same_spin_ao(n_ao, n_ao, n_particle), &
-                     v_opposite_spin_ao(n_ao, n_ao, n_particle))
-            call arh_object%update_dm_spin(arh_object%dm_ao, arh_object%energy, &
-                                           fock_ao, v_same_spin_ao, &
-                                           v_opposite_spin_ao, get_response_3d_funptr, &
-                                           error)
+                     v_opposite_spin_ao(n_ao, n_ao, n_particle), &
+                     v_nonlinear_ao(n_ao, n_ao, n_particle))
+            call arh_object%update_dm_os(arh_object%dm_ao, arh_object%energy, fock_ao, &
+                                         v_same_spin_ao, v_opposite_spin_ao, &
+                                         v_nonlinear_ao, error)
             if (error /= 0) then
-                deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao)
+                deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao, v_nonlinear_ao)
                 return
             end if
 
@@ -415,12 +469,14 @@ module otr_arh
             fock_oao = symmetric_transformation(arh_object%s_inv_sqrt, fock_ao)
             deallocate(fock_ao)
 
-            ! transform same and opposite spin potentials to OAO basis
+            ! transform same and opposite spin and non-linear potentials to OAO basis
             arh_object%v_same_spin_oao = &
                 symmetric_transformation(arh_object%s_inv_sqrt, v_same_spin_ao)
             arh_object%v_opposite_spin_oao = &
                 symmetric_transformation(arh_object%s_inv_sqrt, v_opposite_spin_ao)
-            deallocate(v_same_spin_ao, v_opposite_spin_ao)
+            arh_object%v_nonlinear_oao = &
+                symmetric_transformation(arh_object%s_inv_sqrt, v_nonlinear_ao)
+            deallocate(v_same_spin_ao, v_opposite_spin_ao, v_nonlinear_ao)
 
             ! calculate gradient and Hessian diagonal
             if (.not. associated(arh_object%grad)) then
@@ -434,7 +490,6 @@ module otr_arh
                 arh_object%h_diag => oao_object%h_diag
             end if
             call calculate_grad_h_diag(arh_object%dm_oao, fock_oao, n_particle, n_ao, &
-                                       arh_object%settings%restricted, &
                                        arh_object%grad, arh_object%h_diag, &
                                        arh_object%fock_oo, arh_object%fock_vv)
             deallocate(fock_oao)
@@ -443,10 +498,11 @@ module otr_arh
             n_list = size(arh_object%dm_list, 4)
             if (allocated(arh_object%dm_diff)) &
                 deallocate(arh_object%dm_diff, arh_object%v_same_spin_diff, &
-                           arh_object%v_opposite_spin_diff)
+                           arh_object%v_opposite_spin_diff, arh_object%v_nonlinear_diff)
             allocate(arh_object%dm_diff(n_ao, n_ao, n_particle, n_list), &
                      arh_object%v_same_spin_diff(n_ao, n_ao, n_particle, n_list), &
-                     arh_object%v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list))
+                     arh_object%v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list), &
+                     arh_object%v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
             do i = 1, n_list
                 arh_object%dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - &
                                                  arh_object%dm_oao
@@ -456,12 +512,34 @@ module otr_arh
                 arh_object%v_opposite_spin_diff(:, :, :, i) = &
                     arh_object%v_opposite_spin_list(:, :, :, i) - &
                     arh_object%v_opposite_spin_oao
+                arh_object%v_nonlinear_diff(:, :, :, i) = &
+                    arh_object%v_nonlinear_list(:, :, :, i) - arh_object%v_nonlinear_oao
             end do
 
-            ! construct and diagonalize ARH metric
-            call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
-                                arh_object%metric_rank, arh_object%metric_map)
-            if (error /= 0) return
+            ! get inverted A matrix for MS-SR1
+            if (arh_object%settings%arh_type == "ms_sr1") then
+                ! linear part: get spin-separated multisecant SR1 matrix for which 
+                ! separation is exact since Coulomb and exact exchange are linear in 
+                ! the density matrix
+                call get_ms_a_inv_os_linear(arh_object%dm_diff, &
+                                            arh_object%v_same_spin_diff, &
+                                            arh_object%v_opposite_spin_diff, &
+                                            arh_object%a_eigvecs, &
+                                            arh_object%a_inv_eigvals, n_ao, &
+                                            arh_object%settings, error)
+                if (error /= 0) return
+                ! non-linear part: get spin-combined multisecant SR1 matrix
+                call get_ms_a_inv_os_nonlinear(arh_object%dm_diff, &
+                                               arh_object%v_nonlinear_diff, &
+                                               arh_object%a_eigvecs_comb, &
+                                               arh_object%a_inv_eigvals_comb, &
+                                               arh_object%settings, error)
+                if (error /= 0) return
+            ! get inverse of metric for ARH and related methods
+            else
+                call get_arh_metric(arh_object%dm_diff, arh_object%metric_chol, &
+                                    arh_object%metric_rank, arh_object%metric_map)
+            end if
         end if
 
         ! set outputs
@@ -470,21 +548,22 @@ module otr_arh
         h_diag = arh_object%h_diag
         hess_x_funptr => hess_x_arh
         
-    end subroutine update_orbs_arh_open_shell
+    end subroutine update_orbs_arh_os
 
     subroutine hess_x_arh(x, hess_x, error)
         !
         ! this function defines the Hessian linear transformation on the basis of 
-        ! augmented Roothaan-Hall
+        ! augmented Roothaan-Hall and related methods
         !
-        use otr_oao, only: unpack_asymm, project, pack_asymm
+        use otr_oao, only: unpack_asymm, project, pack_asymm, symmetric_transformation
 
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, n_param, i
-        real(rp), allocatable :: x_full(:, :, :), hess_x_full(:, :, :)
+        integer(ip) :: n_ao, n_particle, i
+        real(rp), allocatable :: x_full(:, :, :), hess_x_full(:, :, :), &
+                                 delta_dm(:, :, :), fock_response(:, :, :)
 
         external :: dgemm
 
@@ -497,22 +576,8 @@ module otr_arh
         ! number of particles
         n_particle = arh_object%n_particle
 
-        ! number of parameters
-        n_param = arh_object%n_param
-
         ! unpack trial vector
-        x_full = unpack_asymm(x, n_particle, n_ao, arh_object%settings%restricted)
-
-        ! for ROHF, we must explicitly project the trial vector to the valid [c-v], 
-        ! [o-v], and [c-o] rotation blocks. Because we reuse UHF machinery where 
-        ! alpha-occ = [c+o] and beta-occ = [c], a unified spatial trial vector that is 
-        ! unpacked into alpha and beta spin channels contains rotations that are 
-        ! internal and thus redundant in the ROHF context. Without this projection, 
-        ! the alpha Hessian vector product would leak non-zero values into 
-        ! the [c-c] block and the beta Hessian vector product into the [v-v] blocks. 
-        ! This projection thus prevents singular dimensions in the solver.
-        if (arh_object%settings%restricted .and. arh_object%n_particle > 1) &
-            x_full = project(x_full, arh_object%dm_oao)
+        x_full = unpack_asymm(x, n_particle, n_ao)
 
         ! get static part
         allocate(hess_x_full(n_ao, n_ao, n_particle))
@@ -524,37 +589,94 @@ module otr_arh
                                    transpose(hess_x_full(:, :, i))
         end do
 
-        ! get response contributions
+        ! get current displacement as commutator of trial vector and current density 
+        ! matrix
+        allocate(delta_dm(n_ao, n_ao, n_particle))
+        do i = 1, n_particle
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, arh_object%dm_oao(:, :, i), &
+                       n_ao, x_full(:, :, i), n_ao, 0.0_rp, delta_dm(:, :, i), n_ao)
+            delta_dm(:, :, i) = delta_dm(:, :, i) + transpose(delta_dm(:, :, i))
+        end do
+
+        ! approximate response contributions for linear part
         if (n_particle == 1) then
-            hess_x_full = hess_x_full + &
-                get_response_contribution_closed_shell(arh_object%dm_oao, x_full, &
-                                                       arh_object%dm_diff, &
-                                                       arh_object%fock_diff, &
-                                                       arh_object%metric_chol, &
-                                                       arh_object%metric_rank, &
-                                                       arh_object%metric_map, n_ao, &
-                                                       n_particle, arh_object%settings)
+            ! MS-SR1: exact treatment of the linear part plus a dedicated,
+            ! separately regularized system for the non-linear part, since a single
+            ! regularized eigenbasis cannot represent both the exact linear secant
+            ! relationship and the non-linear one well
+            if (arh_object%settings%arh_type == "ms_sr1") then
+                fock_response = &
+                    get_response_contribution_cs(delta_dm, arh_object%dm_diff, &
+                                                 arh_object%v_linear_diff, &
+                                                 arh_object%metric_chol, &
+                                                 arh_object%metric_rank, &
+                                                 arh_object%metric_map, &
+                                                 arh_object%a_eigvecs, &
+                                                 arh_object%a_inv_eigvals, n_ao, &
+                                                 n_particle, arh_object%settings) &
+                    + get_response_contribution_ms_sr1_nonlinear( &
+                        delta_dm, arh_object%v_nonlinear_diff, &
+                        arh_object%a_eigvecs_comb, arh_object%a_inv_eigvals_comb, &
+                        n_ao, n_particle)
+            ! ARH and symmetric variants: the response is linear in the potential
+            ! difference history and the coefficients only depend on the density
+            ! matrix history, so splitting the potential into a linear and a
+            ! non-linear part would leave the response unchanged and the total Fock
+            ! matrix difference is used directly
+            else
+                fock_response = &
+                    get_response_contribution_cs(delta_dm, &
+                                                 arh_object%dm_diff, &
+                                                 arh_object%fock_diff, &
+                                                 arh_object%metric_chol, &
+                                                 arh_object%metric_rank, &
+                                                 arh_object%metric_map, &
+                                                 arh_object%a_eigvecs, &
+                                                 arh_object%a_inv_eigvals, n_ao, &
+                                                 n_particle, arh_object%settings)
+            end if
         else
-            hess_x_full = hess_x_full + &
-                get_response_contribution_open_shell(arh_object%dm_oao, x_full, &
-                                                     arh_object%dm_diff, &
-                                                     arh_object%v_same_spin_diff, &
-                                                     arh_object%v_opposite_spin_diff, &
-                                                     arh_object%metric_chol, &
-                                                     arh_object%metric_rank, &
-                                                     arh_object%metric_map, n_ao, &
-                                                     n_particle, arh_object%settings)
+            ! MS-SR1: exact spin-separated treatment of the linear part plus a 
+            ! spin-combined treatment of the non-linear part, since the joint 
+            ! spin-separated (S,Y) system of multisecant SR1 requires a 
+            ! same-/opposite-spin cross relation that does not exist for non-linear 
+            ! (e.g. XC) contributions
+            if (arh_object%settings%arh_type == "ms_sr1") then
+                fock_response = &
+                    get_response_contribution_os_separated(delta_dm, &
+                        arh_object%dm_diff, arh_object%v_same_spin_diff, &
+                        arh_object%v_opposite_spin_diff, arh_object%metric_chol, &
+                        arh_object%metric_rank, arh_object%metric_map, &
+                        arh_object%a_eigvecs, arh_object%a_inv_eigvals, n_ao, &
+                        n_particle, arh_object%settings) &
+                    + get_response_contribution_ms_sr1_nonlinear(delta_dm, &
+                        arh_object%v_nonlinear_diff, arh_object%a_eigvecs_comb, &
+                        arh_object%a_inv_eigvals_comb, n_ao, n_particle)
+            ! ARH and symmetric variants: coefficients only depend on the 
+            ! (spin-separated) density matrix history, so the non-linear part is folded 
+            ! into the same per-channel treatment as the linear part, without requiring 
+            ! a dedicated spin-combined metric
+            else
+                fock_response = &
+                    get_response_contribution_os_separated(delta_dm, &
+                        arh_object%dm_diff, arh_object%v_same_spin_diff, &
+                        arh_object%v_opposite_spin_diff, arh_object%metric_chol, &
+                        arh_object%metric_rank, arh_object%metric_map, &
+                        arh_object%a_eigvecs, arh_object%a_inv_eigvals, n_ao, &
+                        n_particle, arh_object%settings, &
+                        arh_object%v_nonlinear_diff)
+            end if
         end if
-        if (error /= 0) return
-        deallocate(x_full)
+        deallocate(x_full, delta_dm)
+
+        ! add only v-o and o-v contributions of ARH response part
+        hess_x_full = hess_x_full + project(fock_response, arh_object%dm_oao)
 
         ! pack Hessian linear transformation
-        if (arh_object%settings%restricted) then
-            hess_x = 4.0_rp * pack_asymm(hess_x_full, size(hess_x, kind=ip), &
-                                         arh_object%settings%restricted)
+        if (arh_object%n_particle == 1) then
+            hess_x = 4.0_rp * pack_asymm(hess_x_full, size(hess_x))
         else
-            hess_x = 2.0_rp * pack_asymm(hess_x_full, size(hess_x, kind=ip), &
-                                         arh_object%settings%restricted)
+            hess_x = 2.0_rp * pack_asymm(hess_x_full, size(hess_x))
         end if
         deallocate(hess_x_full)
 
@@ -597,228 +719,456 @@ module otr_arh
 
     end subroutine arh_deconstructor
 
-    function get_response_contribution_closed_shell(dm_oao, x, dm_diff, fock_diff, &
-                                                    metric_chol, metric_rank, &
-                                                    metric_map, n_ao, n_particle, &
-                                                    settings) result(response)
+    function get_response_contribution_cs(delta_dm, dm_diff, v_diff, metric_chol, &
+                                          metric_rank, metric_map, a_eigvecs, &
+                                          a_inv_eigvals, n_ao, n_particle, settings) &
+        result(response)
         !
         ! this function computes the response contribution to the ARH Hessian for the 
         ! closed-shell case
         !
-        use otr_oao, only: project
-
-        real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
-                                fock_diff(:, :, :, :), metric_chol(:, :, :)
+        real(rp), intent(in) :: delta_dm(:, :, :), dm_diff(:, :, :, :), &
+                                v_diff(:, :, :, :), metric_chol(:, :, :), &
+                                a_eigvecs(:, :), a_inv_eigvals(:)
         integer(ip), intent(in) :: metric_rank(:), metric_map(:, :)
         integer(ip), intent(in) :: n_ao, n_particle
         real(rp) :: response(n_ao, n_ao, n_particle)
         type(arh_settings_type), intent(in) :: settings
 
-        integer(ip) :: n_diff
-        real(rp), allocatable :: delta_dm(:, :), s_delta_dm(:), t_s_delta_dm(:), &
-                                 y_delta_dm(:), t_y_delta_dm(:), y_t_s_delta_dm(:, :), &
-                                 sy_t_s_delta_dm(:), t_sy_t_s_delta_dm(:), val(:)
-        real(rp) :: factor
+        integer(ip) :: n_diff, i
+        real(rp), allocatable :: s_proj(:), y_proj(:), alpha_s(:), alpha_y(:), &
+                                 alpha_sy(:), Y_s(:, :), sy(:), y_tilde(:), &
+                                 step_norms(:), a(:, :)
         external :: dgemm, dgemv
+        real(rp), external :: ddot, dnrm2
 
         ! number of density matrix differences
         n_diff = size(dm_diff, 4)
 
-        ! get factor for symmetrization
-        if (settings%arh_type == "symmetric") then
-            factor = 0.5_rp
-        else
-            factor = 1.0_rp
-        end if
-
-        ! calculate response contributions
+        ! check if there are any density matrix differences to process
         response = 0.0_rp
-        if (n_diff > 0) then
-            ! get current displacement as commutator of trial vector and current 
-            ! density matrix
-            allocate(delta_dm(n_ao, n_ao))
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, 1), n_ao, &
-                       x(:, :, 1), n_ao, 0.0_rp, delta_dm, n_ao)
-            delta_dm = delta_dm + transpose(delta_dm)
+        if (n_diff == 0) return
 
-            ! get traces of density and Fock matrix differences with current 
-            ! displacement
-            allocate(s_delta_dm(n_diff))
+        ! multisecant SR1
+        if (settings%arh_type == "ms_sr1") then
+            if (n_diff > 0) then
+                allocate(y_proj(n_diff), alpha_y(n_diff), y_tilde(n_diff))
+                ! y_proj = Y^T * delta_dm
+                do i = 1, n_diff
+                    y_proj(i) = ddot(n_ao * n_ao, v_diff(:, :, 1, i), 1_ip, &
+                                     delta_dm(:, :, 1), 1_ip)
+                end do
+
+                ! alpha_y = M^-1 * Y^T * delta_dm
+                call dgemv("T", n_diff, n_diff, 1.0_rp, a_eigvecs, n_diff, y_proj, &
+                           1_ip, 0.0_rp, y_tilde, 1_ip)
+                y_tilde = a_inv_eigvals * y_tilde
+                call dgemv("N", n_diff, n_diff, 1.0_rp, a_eigvecs, n_diff, y_tilde, &
+                           1_ip, 0.0_rp, alpha_y, 1_ip)
+
+                ! response = Y * M^-1 * Y^T * delta_dm
+                do i = 1, n_diff
+                    response(:, :, 1) = response(:, :, 1) + alpha_y(i) * &
+                                        v_diff(:, :, 1, i)
+                end do
+                deallocate(y_proj, alpha_y, y_tilde)
+            end if
+        ! ARH and symmetric variants
+        else
+            ! alpha_s = M^-1 * S^T * delta_dm
+            allocate(s_proj(n_diff), alpha_s(n_diff))
             call dgemv("T", n_ao * n_ao, n_diff, 1.0_rp, dm_diff, n_ao * n_ao, &
-                       delta_dm, 1_ip, 0.0_rp, s_delta_dm, 1_ip)
-                call dgemv("T", n_ao * n_ao, n_diff, 1.0_rp, fock_diff, n_ao * n_ao, &
+                       delta_dm, 1_ip, 0.0_rp, s_proj, 1_ip)
+            alpha_s = multiply_with_inverse_metric(s_proj, metric_chol(:, :, 1), &
+                                                   metric_rank(1), metric_map(:, 1))
+            deallocate(s_proj)
+
+            ! compute components based on ARH type
+            select case (settings%arh_type)
+            ! symmetrized ARH
+            case ("symm_arh")
+                allocate(Y_s(n_ao, n_ao), y_proj(n_diff), alpha_y(n_diff))
+                ! Y_s = Y * M^-1 * S^T * delta_dm
+                call dgemv("N", n_ao * n_ao, n_diff, 1.0_rp, v_diff, n_ao * n_ao, &
+                           alpha_s, 1_ip, 0.0_rp, Y_s, 1_ip)
+                ! y_proj = Y^T * delta_dm
+                call dgemv("T", n_ao * n_ao, n_diff, 1.0_rp, v_diff, n_ao * n_ao, &
                            delta_dm, 1_ip, 0.0_rp, y_proj, 1_ip)
+                ! alpha_y = M^-1 * Y^T * delta_dm
+                alpha_y = multiply_with_inverse_metric(y_proj, metric_chol(:, :, 1), &
+                                                       metric_rank(1), metric_map(:, 1))
+                ! response = 0.5 * (Y * M^-1 * S^T * delta_dm + 
+                !                   S * M^-1 * Y^T * delta_dm)
+                response(:, :, 1) = 0.5_rp * Y_s
+                call dgemv("N", n_ao * n_ao, n_diff, 0.5_rp, dm_diff, n_ao * n_ao, &
+                           alpha_y, 1_ip, 1.0_rp, response(:, :, 1), 1_ip)
+                deallocate(Y_s, y_proj, alpha_y)
+
+            ! subspace-projected multisecant and multisecant PSB
+            case ("ms_sp", "ms_psb")
+                allocate(Y_s(n_ao, n_ao), sy(n_diff), alpha_sy(n_diff), &
+                         a(n_diff, n_diff), step_norms(n_diff))
+
+                ! Y_s = Y * M^-1 * S^T * delta_dm
+                call dgemv("N", n_ao * n_ao, n_diff, 1.0_rp, v_diff, n_ao * n_ao, &
+                           alpha_s, 1_ip, 0.0_rp, Y_s, 1_ip)
+
+                ! calculate step norms for weighting
+                do i = 1, n_diff
+                    step_norms(i) = dnrm2(n_ao * n_ao, dm_diff(:, :, 1, i), 1_ip)
+                end do
+
+                ! A = S^T Y
+                call dgemm("T", "N", n_diff, n_diff, n_ao * n_ao, 1.0_rp, dm_diff, &
+                           n_ao * n_ao, v_diff, n_ao * n_ao, 0.0_rp, a, n_diff)
+
+                ! apply weighted symmetrization to A
+                call symmetrize_weighted(a, step_norms)
+                deallocate(step_norms)
+
+                ! sy = A_sym * M^-1 * S^T * delta_dm
+                call dgemv("N", n_diff, n_diff, 1.0_rp, a, n_diff, alpha_s, 1_ip, &
+                           0.0_rp, sy, 1_ip)
+                deallocate(a)
+
+                ! alpha_sy = M^-1 * A_sym * M^-1 * S^T * delta_dm
+                alpha_sy = multiply_with_inverse_metric(sy, metric_chol(:, :, 1), &
+                                                        metric_rank(1), &
+                                                        metric_map(:, 1))
+                
+                if (settings%arh_type == "ms_sp") then
+                    ! response = S * M^-1 * A_sym * M^-1 * S^T * delta_dm
+                    call dgemv("N", n_ao * n_ao, n_diff, 1.0_rp, dm_diff, n_ao * n_ao, &
+                               alpha_sy, 1_ip, 0.0_rp, response(:, :, 1), 1_ip)
+                else
+                    allocate(y_proj(n_diff), alpha_y(n_diff))
+                    ! y_proj = Y^T * delta_dm
+                    call dgemv("T", n_ao * n_ao, n_diff, 1.0_rp, v_diff, n_ao * n_ao, &
+                               delta_dm, 1_ip, 0.0_rp, y_proj, 1_ip)
+                    ! alpha_y = M^-1 * Y^T * delta_dm
+                    alpha_y = multiply_with_inverse_metric(y_proj, &
+                                                           metric_chol(:, :, 1), &
+                                                           metric_rank(1), &
+                                                           metric_map(:, 1))
+                    ! alpha_y = M^-1 * Y^T * delta_dm - M^-1 * A_sym * M^-1 * S^T * 
+                    !           delta_dm
+                    alpha_y = alpha_y - alpha_sy
+                    ! response = Y * M^-1 * S^T * delta_dm + S * M^-1 * Y^T * delta_dm -
+                    !            S * M^-1 * A_sym * M^-1 * S^T * delta_dm
+                    response(:, :, 1) = Y_s
+                    call dgemv("N", n_ao * n_ao, n_diff, 1.0_rp, dm_diff, n_ao * n_ao, &
+                               alpha_y, 1_ip, 1.0_rp, response(:, :, 1), 1_ip)
+                    deallocate(y_proj, alpha_y)
+                end if
+                deallocate(Y_s, sy, alpha_sy)
+
+            ! standard ARH
+            case default
+                ! response = Y * M^-1 * S^T * delta_dm
+                call dgemv("N", n_ao * n_ao, n_diff, 1.0_rp, v_diff, n_ao * n_ao, &
+                           alpha_s, 1_ip, 0.0_rp, response(:, :, 1), 1_ip)
+            end select
+            deallocate(alpha_s)
         end if
 
-    end function get_response_contribution_closed_shell
+    end function get_response_contribution_cs
 
-    function get_response_contribution_open_shell(dm_oao, x, dm_diff, &
-                                                  v_same_spin_diff, &
-                                                  v_opposite_spin_diff, &
-                                                  metric_chol, metric_rank, &
-                                                  metric_piv, n_ao, n_particle, &
-                                                  settings) result(response)
+    function get_response_contribution_ms_sr1_nonlinear(delta_dm, v_diff, a_eigvecs, &
+                                                        a_inv_eigvals, n_ao, &
+                                                        n_particle) result(response)
         !
-        ! this function computes the response contribution to the ARH Hessian for the 
-        ! open-shell case
+        ! this function computes the MS-SR1 response contribution to the ARH Hessian
+        ! arising from the non-linear part of the potential, using a single set of
+        ! expansion coefficients obtained from a dedicated, separately regularized
+        ! multisecant SR1 system. This is used for both the closed- and the open-shell
+        ! case, since the non-linear part is never separated by spin channel
         !
-        use otr_oao, only: project
+        real(rp), intent(in) :: delta_dm(:, :, :), v_diff(:, :, :, :), &
+                                a_eigvecs(:, :), a_inv_eigvals(:)
+        integer(ip), intent(in) :: n_ao, n_particle
+        real(rp) :: response(n_ao, n_ao, n_particle)
 
-        real(rp), intent(in) :: dm_oao(:, :, :), x(:, :, :), dm_diff(:, :, :, :), &
+        integer(ip) :: n_diff, i, j
+        real(rp), allocatable :: y_proj(:), alpha_y(:), y_tilde(:)
+
+        external :: dgemv
+        real(rp), external :: ddot
+
+        ! number of density matrix differences
+        n_diff = size(v_diff, 4)
+
+        ! check if there are any density matrix differences to process
+        response = 0.0_rp
+        if (n_diff == 0) return
+
+        allocate(y_proj(n_diff), alpha_y(n_diff), y_tilde(n_diff))
+        ! y_proj = Y^T * delta_dm
+        do i = 1, n_diff
+            y_proj(i) = ddot(n_ao * n_ao * n_particle, v_diff(:, :, :, i), 1_ip, &
+                             delta_dm, 1_ip)
+        end do
+        ! alpha_y = M^-1 * Y^T * delta_dm
+        call dgemv("T", n_diff, n_diff, 1.0_rp, a_eigvecs, n_diff, y_proj, 1_ip, &
+                   0.0_rp, y_tilde, 1_ip)
+        y_tilde = a_inv_eigvals * y_tilde
+        call dgemv("N", n_diff, n_diff, 1.0_rp, a_eigvecs, n_diff, y_tilde, 1_ip, &
+                   0.0_rp, alpha_y, 1_ip)
+        ! response = Y * M^-1 * Y^T * delta_dm
+        do i = 1, n_diff
+            do j = 1, n_particle
+                response(:, :, j) = response(:, :, j) + alpha_y(i) * v_diff(:, :, j, i)
+            end do
+        end do
+        deallocate(y_proj, alpha_y, y_tilde)
+
+    end function get_response_contribution_ms_sr1_nonlinear
+
+    function get_response_contribution_os_separated(delta_dm, dm_diff, &
+                                                    v_same_spin_diff, &
+                                                    v_opposite_spin_diff, &
+                                                    metric_chol, metric_rank, &
+                                                    metric_map, a_eigvecs, &
+                                                    a_inv_eigvals, n_ao, n_particle, &
+                                                    settings, v_nonlinear_diff) &
+        result(response)
+        !
+        ! this function computes the spin-separated response contributions to the ARH 
+        ! Hessian, for ARH and related symmetric methods; if the optional non-linear 
+        ! potential difference is present, it is also included, using the same 
+        ! per-channel expansion coefficients as the linear part, without any 
+        ! same-/opposite-spin cross-mixing, since no such decomposition exists for the 
+        ! non-linear part; for MS-SR1, the non-linear contribution is ignored here, 
+        ! since its non-linear contribution instead requires a dedicated spin-combined 
+        ! MS-SR1 system
+        !
+        real(rp), intent(in) :: delta_dm(:, :, :), dm_diff(:, :, :, :), &
                                 v_same_spin_diff(:, :, :, :), &
-                                v_opposite_spin_diff(:, :, :, :), metric_chol(:, :, :)
+                                v_opposite_spin_diff(:, :, :, :), &
+                                metric_chol(:, :, :), a_eigvecs(:, :), a_inv_eigvals(:)
         integer(ip), intent(in) :: metric_rank(:), metric_map(:, :)
         integer(ip), intent(in) :: n_ao, n_particle
+        real(rp), intent(in), optional :: v_nonlinear_diff(:, :, :, :)
         real(rp) :: response(n_ao, n_ao, n_particle)
         type(arh_settings_type), intent(in) :: settings
 
         integer(ip) :: n_diff, i, j, k
-        real(rp), allocatable :: delta_dm(:, :, :), s_delta_dm(:, :), &
-                                 t_s_delta_dm(:, :), same_y_delta_dm(:), &
-                                 t_same_y_delta_dm(:), opposite_y_delta_dm(:, :), &
-                                 t_opposite_y_delta_dm(:, :), y_t_s_delta_dm(:, :), &
-                                 sy_t_s_delta_dm(:), t_sy_t_s_delta_dm(:)
-        real(rp) :: factor, val
+        real(rp), allocatable :: y_proj(:), alpha_y(:), y_tilde(:), s_proj(:, :), &
+                                 alpha_s(:, :), Y_s(:, :), sy(:), alpha_sy(:), &
+                                 step_norms(:, :), a_same(:, :, :), a_opp(:, :, :), &
+                                 v_same_spin_diff_eff(:, :, :, :)
 
-        real(rp), external :: ddot
+        real(rp), external :: ddot, dnrm2
 
-        ! number of density matrix differences
         n_diff = size(dm_diff, 4)
 
-        ! get factor for symmetrization
-        if (settings%arh_type == "symmetric") then
-            factor = 0.5_rp
-        else
-            factor = 1.0_rp
-        end if
-
-        ! calculate response contributions
         response = 0.0_rp
-        if (n_diff > 0) then
-            ! get current displacement as commutator of trial vector and current 
-            ! density matrix
-            allocate(delta_dm(n_ao, n_ao, n_particle))
-            do j = 1, n_particle
-                call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, j), n_ao, &
-                           x(:, :, j), n_ao, 0.0_rp, delta_dm(:, :, j), n_ao)
-                delta_dm(:, :, j) = delta_dm(:, :, j) + transpose(delta_dm(:, :, j))
-            end do
-            
-            ! allocate necessary arrays
-            allocate(s_delta_dm(n_diff, n_particle), t_s_delta_dm(n_diff, n_particle), &
-                     y_t_s_delta_dm(n_ao, n_ao))
-            if (settings%arh_type == "symmetric" .or. &
-                settings%arh_type == "multisecant_psb") &
-                allocate(same_y_delta_dm(n_diff), t_same_y_delta_dm(n_diff), &
-                         opposite_y_delta_dm(n_diff, n_particle), &
-                         t_opposite_y_delta_dm(n_diff, n_particle))
-            if (settings%arh_type == "multisecant_psb") then
-                allocate(sy_t_s_delta_dm(n_diff), t_sy_t_s_delta_dm(n_diff))
-            end if
+        if (n_diff == 0) return
 
-            ! get traces of density matrix differences with current displacement
+        ! multisecant SR1
+        if (settings%arh_type == "ms_sr1") then
+            allocate(y_proj(2 * n_diff), alpha_y(2 * n_diff), y_tilde(2 * n_diff))
+            ! y_proj = Y^T * delta_dm
+            do i = 1, n_diff
+                y_proj(i) = ddot(n_ao * n_ao, v_same_spin_diff(:, :, 1, i), 1_ip, &
+                                 delta_dm(:, :, 1), 1_ip) + &
+                            ddot(n_ao * n_ao, v_opposite_spin_diff(:, :, 2, i), 1_ip, &
+                                 delta_dm(:, :, 2), 1_ip)
+                y_proj(n_diff + i) = ddot(n_ao * n_ao, &
+                                          v_opposite_spin_diff(:, :, 1, i), 1_ip, &
+                                          delta_dm(:, :, 1), 1_ip) + &
+                                     ddot(n_ao * n_ao, v_same_spin_diff(:, :, 2, i), &
+                                          1_ip, delta_dm(:, :, 2), 1_ip)
+            end do
+            ! alpha_y = M^-1 * Y^T * delta_dm
+            call dgemv("T", 2 * n_diff, 2 * n_diff, 1.0_rp, a_eigvecs, 2 * n_diff, &
+                       y_proj, 1_ip, 0.0_rp, y_tilde, 1_ip)
+            y_tilde = a_inv_eigvals * y_tilde
+            call dgemv("N", 2 * n_diff, 2 * n_diff, 1.0_rp, a_eigvecs, 2 * n_diff, &
+                       y_tilde, 1_ip, 0.0_rp, alpha_y, 1_ip)
+            ! response = Y * alpha
+            do i = 1, n_diff
+                response(:, :, 1) = response(:, :, 1) + alpha_y(i) * &
+                                    v_same_spin_diff(:, :, 1, i) + &
+                                    alpha_y(n_diff + i) * &
+                                    v_opposite_spin_diff(:, :, 1, i)
+                response(:, :, 2) = response(:, :, 2) + alpha_y(i) * &
+                                    v_opposite_spin_diff(:, :, 2, i) + &
+                                    alpha_y(n_diff + i) * v_same_spin_diff(:, :, 2, i)
+            end do
+            deallocate(y_proj, alpha_y, y_tilde)
+
+        ! ARH and symmetric variants
+        else
+            ! fold the non-linear potential difference, if present, into the same-spin
+            ! potential difference without any same-/opposite-spin cross-mixing, since
+            ! no such decomposition exists for it
+            allocate(v_same_spin_diff_eff, source=v_same_spin_diff)
+            if (present(v_nonlinear_diff)) &
+                v_same_spin_diff_eff = v_same_spin_diff_eff + v_nonlinear_diff
+
+            ! alpha_s = M^-1 * S^T * delta_dm
+            allocate(s_proj(n_diff, n_particle), alpha_s(n_diff, n_particle))
             do i = 1, n_diff
                 do j = 1, n_particle
-                    s_delta_dm(i, j) = ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1_ip, &
-                                            delta_dm(:, :, j), 1_ip)
+                    s_proj(i, j) = ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1_ip, &
+                                        delta_dm(:, :, j), 1_ip)
                 end do
             end do
-
-            ! multiply pseudoinverse metric with traces of density matrix differences 
-            ! and current displacement
             do j = 1, n_particle
-                t_s_delta_dm(:, j) = &
-                    multiply_with_inverse_metric(s_delta_dm(:, j), &
-                                                 metric_chol(:, :, j), metric_rank(j), &
-                                                 metric_map(:, j))
+                alpha_s(:, j) = &
+                    multiply_with_inverse_metric(s_proj(:, j), metric_chol(:, :, j), &
+                                                 metric_rank(j), metric_map(:, j))
             end do
+            deallocate(s_proj)
 
-            ! loop over particles
-            do j = 1, n_particle
-                if (settings%arh_type == "symmetric" .or. &
-                    settings%arh_type == "multisecant_psb") then
-                    ! get traces of potential differences with current displacement
+            ! compute components based on ARH type
+            select case (settings%arh_type)
+            ! symmetrized ARH
+            case ("symm_arh")
+                allocate(Y_s(n_ao, n_ao), y_proj(n_diff), alpha_y(n_diff))
+                do j = 1, n_particle
+                    ! Y_s = Y * M^-1 * S^T * delta_dm
+                    Y_s = 0.0_rp
                     do i = 1, n_diff
-                        same_y_delta_dm(i) = ddot(n_ao * n_ao, &
-                                                  v_same_spin_diff(:, :, j, i), 1_ip, &
-                                                  delta_dm(:, :, j), 1_ip)
-                        do k = 1, n_particle
-                            if (k == j) cycle
-                            opposite_y_delta_dm(i, k) = &
-                                ddot(n_ao * n_ao, v_opposite_spin_diff(:, :, k, i), &
-                                     1_ip, delta_dm(:, :, k), 1_ip)
+                        Y_s = Y_s + alpha_s(i, j) * v_same_spin_diff_eff(:, :, j, i) + &
+                              alpha_s(i, 3 - j) * v_opposite_spin_diff(:, :, j, i)
                     end do
-                
-                    ! multiply pseudoinverse metric with traces of potential 
-                    ! differences and current displacement
-                    t_opposite_y_delta_dm = 0.0_rp
-                    t_same_y_delta_dm = &
-                        multiply_with_inverse_metric(same_y_delta_dm, &
-                                                     metric_chol(:, :, j), &
-                                                     metric_rank(j), metric_map(:, j))
-                    do k = 1, n_particle
-                        if (k == j) cycle
-                        t_opposite_y_delta_dm(:, k) = &
-                            multiply_with_inverse_metric( &
-                                opposite_y_delta_dm(:, k), metric_chol(:, :, j), &
-                                metric_rank(j), metric_map(:, j))
-                    end do
-                end if
-
-                ! contract with same and opposite spin potential to get ARH contribution
-                y_t_s_delta_dm = 0.0_rp
-                do i = 1, n_diff
-                    y_t_s_delta_dm = y_t_s_delta_dm + t_s_delta_dm(i, j) * &
-                                     v_same_spin_diff(:, :, j, i)
-                    do k = 1, n_particle
-                        if (k == j) cycle
-                        y_t_s_delta_dm = y_t_s_delta_dm + t_s_delta_dm(i, k) * &
-                                         v_opposite_spin_diff(:, :, j, i)
-                    end do
-                end do
-                response(:, :, j) = factor * y_t_s_delta_dm
-
-                            sy_t_s_delta_dm(i) = ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1, &
-                                                  y_t_s_delta_dm, 1_ip)
-
-                    ! multiply pseudoinverse metric with vector
-                    t_sy_t_s_delta_dm = &
-                        multiply_with_inverse_metric(sy_t_s_delta_dm, &
-                                                     metric_chol(:, :, j), &
-                                                     metric_rank(j), metric_map(:, j))
-                end if
-
-                ! contract with density matrix differences to get symmetric and 
-                ! multisecant PSB contributions
-                if (settings%arh_type == "symmetric" .or. &
-                    settings%arh_type == "multisecant_psb") then
+                    ! y_proj = Y^T * delta_dm
                     do i = 1, n_diff
-                        val = factor * t_same_y_delta_dm(i)
-                        do k = 1, n_particle
-                            if (k == j) cycle
-                            val = val + factor * t_opposite_y_delta_dm(i, k)
-                        end do
-                        if (settings%arh_type == "multisecant_psb") &
-                            val = val - factor * t_sy_t_s_delta_dm(i)
-                        response(:, :, j) = response(:, :, j) + val * &
+                        y_proj(i) = ddot(n_ao * n_ao, &
+                                         v_same_spin_diff_eff(:, :, j, i), 1_ip, &
+                                         delta_dm(:, :, j), 1_ip) + &
+                                    ddot(n_ao * n_ao, &
+                                         v_opposite_spin_diff(:, :, 3 - j, i), 1_ip, &
+                                         delta_dm(:, :, 3 - j), 1_ip)
+                    end do
+                    ! alpha_y = M^-1 * Y^T * delta_dm
+                    alpha_y = &
+                        multiply_with_inverse_metric(y_proj, metric_chol(:, :, j), &
+                                                     metric_rank(j), metric_map(:, j))
+                    ! response = 0.5 * (Y * M^-1 * S^T * delta_dm + 
+                    !                   S * M^-1 * Y^T * delta_dm)
+                    response(:, :, j) = 0.5_rp * Y_s
+                    do i = 1, n_diff
+                        response(:, :, j) = response(:, :, j) + 0.5_rp * alpha_y(i) * &
                                             dm_diff(:, :, j, i)
-                    end do
-                end if
-            end do
-            deallocate(delta_dm, s_delta_dm, t_s_delta_dm, y_t_s_delta_dm)
-            if (settings%arh_type == "symmetric" .or. &
-                settings%arh_type == "multisecant_psb") &
-                deallocate(same_y_delta_dm, opposite_y_delta_dm, t_same_y_delta_dm, &
-                           t_opposite_y_delta_dm)
-            if (settings%arh_type == "multisecant_psb") then
-                deallocate(sy_t_s_delta_dm, t_sy_t_s_delta_dm)
-            end if
+                    end do  
+                end do
+                deallocate(Y_s, y_proj, alpha_y)
 
-            ! add only v-o and o-v contributions of ARH response part
-            response = project(response, dm_oao)
+            ! subspace-projected multisecant and multisecant PSB
+            case ("ms_sp", "ms_psb")
+                allocate(Y_s(n_ao, n_ao), sy(n_diff), alpha_sy(n_diff), &
+                         a_same(n_diff, n_diff, n_particle), &
+                         a_opp(n_diff, n_diff, n_particle), &
+                         step_norms(n_diff, n_particle))
+
+                ! compute step norms for weighing
+                do j = 1, n_particle
+                    do i = 1, n_diff
+                        step_norms(i, j) = dnrm2(n_ao * n_ao, dm_diff(:, :, j, i), 1_ip)
+                    end do
+                end do
+
+                ! A = S^T Y
+                do j = 1, n_particle
+                    do k = 1, n_diff
+                        do i = 1, n_diff
+                            a_same(i, k, j) = &
+                                ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1_ip, &
+                                     v_same_spin_diff_eff(:, :, j, k), 1_ip)
+                            a_opp(i, k, j) = &
+                                ddot(n_ao * n_ao, dm_diff(:, :, j, i), 1_ip, &
+                                     v_opposite_spin_diff(:, :, j, k), 1_ip)
+                        end do
+                    end do
+                end do
+
+                ! symmetrize A_same within each spin channel
+                do j = 1, n_particle
+                    call symmetrize_weighted(a_same(:, :, j), step_norms(:, j))
+                end do
+
+                ! cross-symmetrize A_opp between spin channels
+                call cross_symmetrize_weighted(a_opp(:, :, 1), a_opp(:, :, 2), &
+                                               step_norms(:, 1), step_norms(:, 2))
+                deallocate(step_norms)
+
+                do j = 1, n_particle
+                    ! Y_s = Y * M^-1 * S^T * delta_dm
+                    Y_s = 0.0_rp
+                    do i = 1, n_diff
+                        Y_s = Y_s + alpha_s(i, j) * v_same_spin_diff_eff(:, :, j, i) + &
+                                    alpha_s(i, 3 - j) * v_opposite_spin_diff(:, :, j, i)
+                    end do
+
+                    ! sy = A_sym * M^-1 * S^T * delta_dm
+                    do i = 1, n_diff
+                        sy(i) = ddot(n_diff, a_same(i, :, j), 1_ip, alpha_s(:, j), &
+                                     1_ip) + &
+                                ddot(n_diff, a_opp(i, :, j), 1_ip, alpha_s(:, 3 - j), &
+                                     1_ip)
+                    end do
+
+                    ! alpha_sy = M^-1 * A_sym * M^-1 * S^T * delta_dm
+                    alpha_sy = &
+                        multiply_with_inverse_metric(sy, metric_chol(:, :, j), &
+                                                     metric_rank(j), metric_map(:, j))
+
+                    if (settings%arh_type == "ms_sp") then
+                        ! response = S * M^-1 * A_sym * M^-1 * S^T * delta_dm
+                        do i = 1, n_diff
+                            response(:, :, j) = response(:, :, j) + alpha_sy(i) * &
+                                                dm_diff(:, :, j, i)
+                        end do
+                    else
+                        allocate(y_proj(n_diff), alpha_y(n_diff))
+                        ! y_proj = Y^T * delta_dm
+                        do i = 1, n_diff
+                            y_proj(i) = &
+                                ddot(n_ao * n_ao, v_same_spin_diff_eff(:, :, j, i), &
+                                     1_ip, delta_dm(:, :, j), 1_ip) + &
+                                ddot(n_ao * n_ao, &
+                                     v_opposite_spin_diff(:, :, 3 - j, i), 1_ip, &
+                                     delta_dm(:, :, 3 - j), 1_ip)
+                        end do
+                        ! alpha_y = M^-1 * Y^T * delta_dm
+                        alpha_y = &
+                            multiply_with_inverse_metric(y_proj, metric_chol(:, :, j), &
+                                                         metric_rank(j), &
+                                                         metric_map(:, j))
+                        ! alpha_y = M^-1 * Y^T * delta_dm - 
+                        !           M^-1 * A_sym * M^-1 * S^T * delta_dm
+                        alpha_y = alpha_y - alpha_sy
+                        ! response = Y * M^-1 * S^T * delta_dm + 
+                        !            S * M^-1 * Y^T * delta_dm -
+                        !            S * M^-1 * A_sym * M^-1 * S^T * delta_dm
+                        response(:, :, j) = Y_s
+                        do i = 1, n_diff
+                            response(:, :, j) = response(:, :, j) + alpha_y(i) * &
+                                                dm_diff(:, :, j, i)
+                        end do  
+                        deallocate(y_proj, alpha_y)
+                    end if
+                end do
+                deallocate(Y_s, sy, alpha_sy, a_same, a_opp)
+
+            ! standard ARH
+            case default
+                ! response = Y * M^-1 * S^T * delta_dm
+                do j = 1, n_particle
+                    do i = 1, n_diff
+                        response(:, :, j) = response(:, :, j) + alpha_s(i, j) * &
+                                            v_same_spin_diff_eff(:, :, j, i) + &
+                                            alpha_s(i, 3 - j) * &
+                                            v_opposite_spin_diff(:, :, j, i)
+                    end do
+                end do
+            end select
+            deallocate(alpha_s)
         end if
 
-    end function get_response_contribution_open_shell
+    end function get_response_contribution_os_separated
 
     function multiply_with_inverse_metric(vec, chol, rank, map) result(result_vec)
         !
@@ -860,6 +1210,162 @@ module otr_arh
 
     end function multiply_with_inverse_metric
 
+    subroutine symmetrize_weighted(a, step_norms)
+        !
+        ! this subroutine performs a weighted symmetrization of a square matrix 
+        ! a(i, k), blending a(i, k) with a(k, i) using a weight biased toward the entry 
+        ! associated with the larger step norm
+        !
+        use opentrustregion, only: numerical_zero
+
+        real(rp), intent(inout) :: a(:, :)
+        real(rp), intent(in) :: step_norms(:)
+
+        integer(ip) :: i, k, n
+        real(rp) :: weight
+
+        n = size(a, 1)
+        do k = 2, n
+            do i = 1, k - 1
+                if (step_norms(i) + step_norms(k) > numerical_zero) then
+                    weight = step_norms(k) / (step_norms(i) + step_norms(k))
+                else
+                    weight = 0.5_rp
+                end if
+                a(i, k) = weight * a(k, i) + (1.0_rp - weight) * a(i, k)
+                a(k, i) = a(i, k)
+            end do
+        end do
+
+    end subroutine symmetrize_weighted
+
+    subroutine cross_symmetrize_weighted(a12, a21, step_norms1, step_norms2)
+        !
+        ! this subroutine performs a weighted symmetrization between two related 
+        ! off-diagonal blocks a12(i, k) and a21(k, i) of a larger matrix, analogous to
+        ! symmetrize_weighted but for blocks that are not self-transposed
+        !
+        use opentrustregion, only: numerical_zero
+
+        real(rp), intent(inout) :: a12(:, :), a21(:, :)
+        real(rp), intent(in) :: step_norms1(:), step_norms2(:)
+
+        integer(ip) :: i, k
+        real(rp) :: weight
+
+        do k = 1, size(a12, 2)
+            do i = 1, size(a12, 1)
+                if (step_norms1(i) + step_norms2(k) > numerical_zero) then
+                    weight = step_norms2(k) / (step_norms1(i) + step_norms2(k))
+                else
+                    weight = 0.5_rp
+                end if
+                a12(i, k) = weight * a21(k, i) + (1.0_rp - weight) * a12(i, k)
+                a21(k, i) = a12(i, k)
+            end do
+        end do
+
+    end subroutine cross_symmetrize_weighted
+
+    subroutine symmetrize_exact(a)
+        !
+        ! this subroutine performs a plain, unweighted symmetrization of a square
+        ! matrix, appropriate when a is exactly symmetric in exact arithmetic so that 
+        ! any observed asymmetry is pure numerical noise rather than a genuine
+        ! inconsistency to average over
+        !
+        real(rp), intent(inout) :: a(:, :)
+
+        a = 0.5_rp * (a + transpose(a))
+
+    end subroutine symmetrize_exact
+
+    function noise_threshold(a, settings, error) result(thresh)
+        !
+        ! this function estimates the numerical noise floor of a matrix a that is
+        ! exactly symmetric in exact arithmetic, using the spectral norm (largest
+        ! singular value) of its observed antisymmetric part as a direct measurement of 
+        ! that noise
+        !
+        use opentrustregion, only: numerical_zero, verbosity_error
+
+        real(rp), intent(in) :: a(:, :)
+        type(arh_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+        real(rp) :: thresh
+
+        real(rp), allocatable :: anti(:, :), s(:), work(:)
+        real(rp) :: dummy(1, 1)
+        integer(ip) :: n, lwork, info
+        character(300) :: msg
+        external :: dgesvd
+
+        ! initialize error flag and threshold in case of error
+        error = 0
+        thresh = 0.0_rp
+
+        n = size(a, 1)
+
+        ! get antisymmetric part
+        allocate (anti(n, n), s(n))
+        anti = 0.5_rp * (a - transpose(a))
+
+        ! workspace query
+        allocate (work(1))
+        call dgesvd('N', 'N', n, n, anti, n, s, dummy, 1_ip, dummy, 1_ip, work, &
+                    -1_ip, info)
+        lwork = int(work(1), kind=ip)
+        deallocate (work)
+        allocate (work(lwork))
+
+        ! compute singular values only
+        call dgesvd('N', 'N', n, n, anti, n, s, dummy, 1_ip, dummy, 1_ip, work, &
+                    lwork, info)
+
+        ! check for successful execution
+        if (info /= 0) then
+            write (msg, '(A, I0)') "Singular value decomposition failed: Error in "// &
+                "DGESVD, info = ", info
+            call settings%log(msg, verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! set threshold to largest singular value times safety margin
+        thresh = symm_noise_safety_margin * max(s(1), numerical_zero)
+        deallocate (anti, s, work)
+
+    end function noise_threshold
+
+    function regularized_eigval_inv(eig_vals, eig_val_thresh) result(eig_vals_inv)
+        !
+        ! this function returns Tikhonov-regularized pseudoinverse eigenvalues, damping
+        ! directions close to numerical noise relative to the given threshold
+        !
+        real(rp), intent(in) :: eig_vals(:), eig_val_thresh
+        real(rp) :: eig_vals_inv(size(eig_vals))
+
+        eig_vals_inv = eig_vals / (eig_vals**2 + eig_val_thresh**2)
+
+    end function regularized_eigval_inv
+
+    function truncated_eigval_inv(eig_vals, eig_val_thresh) result(eig_vals_inv)
+        !
+        ! this function returns a hard-truncated pseudoinverse: the exact inverse is
+        ! kept for eigenvalues above the given threshold, while eigenvalues at or
+        ! below it are discarded entirely rather than smoothly damped
+        !
+        real(rp), intent(in) :: eig_vals(:), eig_val_thresh
+        real(rp) :: eig_vals_inv(size(eig_vals))
+
+        where (abs(eig_vals) > eig_val_thresh)
+            eig_vals_inv = 1.0_rp / eig_vals
+        elsewhere
+            eig_vals_inv = 0.0_rp
+        end where
+
+    end function truncated_eigval_inv
+
     subroutine get_arh_metric(dm_diff, chol, rank, map)
         !
         ! this subroutine calculates the augmented Roothaan-Hall metric factorized via 
@@ -873,13 +1379,15 @@ module otr_arh
         real(rp), intent(out), allocatable :: chol(:, :, :)
         integer(ip), intent(out), allocatable :: rank(:), map(:, :)
 
-        integer(ip) :: n_particle, n_dm, i, j, k
+        integer(ip) :: n_ao, n_particle, n_dm, i, j, k
         integer(ip) :: n_accepted, n_rejected
         real(rp) :: raw_diagonal
         real(rp), allocatable :: metric(:, :), work(:)
         real(rp) :: tol
         external :: dtrsv
+        real(rp), external :: ddot
 
+        n_ao = size(dm_diff, 1)
         n_particle = size(dm_diff, 3)
         n_dm = size(dm_diff, 4)
 
@@ -897,7 +1405,8 @@ module otr_arh
             do j = 1, n_dm
                 do i = 1, j
                     ! compute Tr(dm_diff_i * dm_diff_j)
-                    metric(i, j) = sum(dm_diff(:, :, k, j) * dm_diff(:, :, k, i))
+                    metric(i, j) = ddot(n_ao * n_ao, dm_diff(:, :, k, j), 1_ip, &
+                                        dm_diff(:, :, k, i), 1_ip)
                     metric(j, i) = metric(i, j)
                 end do
                 tol = max(tol, metric(j, j))
@@ -924,7 +1433,9 @@ module otr_arh
                                    work, 1_ip)
                         
                         ! subtract projections to find remaining orthogonal magnitude
-                        raw_diagonal = raw_diagonal - sum(work(1:n_accepted)**2)
+                        raw_diagonal = raw_diagonal - &
+                                      ddot(n_accepted, work(1:n_accepted), 1_ip, &
+                                           work(1:n_accepted), 1_ip)
                     end if
                     
                     ! check for linear dependency
@@ -941,7 +1452,8 @@ module otr_arh
                         if (n_accepted > 1) then
                             chol(1:n_accepted-1, n_accepted, k) = work(1:n_accepted-1)
                         end if
-                        chol(n_accepted, n_accepted, k) = sqrt(raw_diagonal)
+                        chol(n_accepted, n_accepted, k) = sqrt(max(0.0_rp, &
+                                                                   raw_diagonal))
                     end if
                 end do
                 rank(k) = n_accepted
@@ -950,6 +1462,215 @@ module otr_arh
         deallocate(metric, work)
 
     end subroutine get_arh_metric
+
+    subroutine get_ms_a_inv_cs(dm_diff, v_diff, linear, eig_vecs, eig_vals_inv, n_ao, &
+                               settings, error)
+        !
+        ! this subroutine computes the pseudoinverse multisecant SR1 matrix for the 
+        ! closed-shell case; for the linear (Coulomb and exact exchange) part; for the 
+        ! linear part, A is exactly symmetric in exact arithmetic, so its observed 
+        ! asymmetry is used directly as a calibrated numerical noise floor to form the 
+        ! pseudoinverse; for the non-linear part, no such exact relationship holds, so 
+        ! a weighted symmetrization is used with a relative threshold for the 
+        ! regularization
+        !
+        use opentrustregion, only: symm_mat_diag, numerical_zero
+
+        real(rp), intent(in) :: dm_diff(:, :, :, :), v_diff(:, :, :, :)
+        logical, intent(in) :: linear
+        real(rp), intent(out), allocatable :: eig_vecs(:, :), eig_vals_inv(:)
+        integer(ip), intent(in) :: n_ao
+        type(arh_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_dm, i
+        real(rp), allocatable :: a(:, :), eig_vals(:), step_norms(:)
+        real(rp) :: eig_val_thresh
+        real(rp), external :: dnrm2
+
+        ! initialize error flag
+        error = 0
+
+        ! handle empty history
+        n_dm = size(dm_diff, 4)
+        if (n_dm == 0) then
+            allocate(eig_vecs(0, 0), eig_vals_inv(0))
+            return
+        end if
+
+        ! A = S^T Y
+        allocate(eig_vecs(n_dm, n_dm), eig_vals_inv(n_dm), a(n_dm, n_dm), &
+                 eig_vals(n_dm))
+        call dgemm("T", "N", n_dm, n_dm, n_ao * n_ao, 1.0_rp, dm_diff, &
+                   n_ao * n_ao, v_diff, n_ao * n_ao, 0.0_rp, a, n_dm)
+
+        ! symmetrize
+        if (linear) then
+            ! measure the numerical noise floor from the observed asymmetry before
+            ! enforcing symmetry
+            eig_val_thresh = noise_threshold(a, settings, error)
+            if (error /= 0) return
+            call symmetrize_exact(a)
+        else
+            ! calculate step norms for weighing
+            allocate(step_norms(n_dm))
+            do i = 1, n_dm
+                step_norms(i) = dnrm2(n_ao * n_ao, dm_diff(:, :, 1, i), 1_ip)
+            end do
+
+            ! enforce symmetry
+            call symmetrize_weighted(a, step_norms)
+            deallocate(step_norms)
+        end if
+
+        ! perform spectral decomposition
+        call symm_mat_diag(a, eig_vals, eig_vecs, settings, error)
+        if (error /= 0) return
+
+        ! construct inverse
+        if (linear) then
+            eig_vals_inv = truncated_eigval_inv(eig_vals, eig_val_thresh)
+        else
+            eig_val_thresh = max(rel_regularization_thresh * maxval(abs(eig_vals)), &
+                                 numerical_zero)
+            eig_vals_inv = regularized_eigval_inv(eig_vals, eig_val_thresh)
+        end if
+        deallocate(a, eig_vals)
+
+    end subroutine get_ms_a_inv_cs
+
+    subroutine get_ms_a_inv_os_linear(dm_diff, v_same_spin_diff, v_opposite_spin_diff, &
+                                      eig_vecs, eig_vals_inv, n_ao, settings, error)
+            !
+            ! this subroutine computes the pseudoinverse multisecant SR1 matrix in a
+            ! spin-separated manner for the linear (Coulomb and exact exchange) part in the 
+            ! open-shell case; A is exactly symmetric in exact arithmetic, so its observed 
+            ! asymmetry is used directly as a calibrated numerical noise floor to form the 
+            ! pseudoinverse
+            !
+            use opentrustregion, only: symm_mat_diag
+
+            real(rp), intent(in) :: dm_diff(:, :, :, :), v_same_spin_diff(:, :, :, :), &
+                                    v_opposite_spin_diff(:, :, :, :)
+            real(rp), intent(out), allocatable :: eig_vecs(:, :), eig_vals_inv(:)
+            integer(ip), intent(in) :: n_ao
+            type(arh_settings_type), intent(in) :: settings
+            integer(ip), intent(out) :: error
+
+            integer(ip) :: n_dm, i, k
+            real(rp), allocatable :: a(:, :), eig_vals(:)
+            real(rp) :: eig_val_thresh
+
+            real(rp), external :: ddot
+
+            ! initialize error flag
+            error = 0
+
+            ! handle empty history
+            n_dm = size(dm_diff, 4)
+            if (n_dm == 0) then
+                allocate(eig_vecs(0, 0), eig_vals_inv(0))
+                return
+            end if
+
+            ! A = S^T Y
+            allocate(a(2 * n_dm, 2 * n_dm))
+            do k = 1, n_dm
+                do i = 1, n_dm
+                    a(i, k) = ddot(n_ao * n_ao, dm_diff(:, :, 1, i), 1_ip, &
+                                   v_same_spin_diff(:, :, 1, k), 1_ip)
+                    a(i, n_dm + k) = ddot(n_ao * n_ao, dm_diff(:, :, 1, i), 1_ip, &
+                                          v_opposite_spin_diff(:, :, 1, k), 1_ip)
+                    a(n_dm + i, k) = ddot(n_ao * n_ao, dm_diff(:, :, 2, i), 1_ip, &
+                                          v_opposite_spin_diff(:, :, 2, k), 1_ip)
+                    a(n_dm + i, n_dm + k) = ddot(n_ao * n_ao, dm_diff(:, :, 2, i), &
+                                                 1_ip, v_same_spin_diff(:, :, 2, k), &
+                                                 1_ip)
+                end do
+            end do
+
+            ! measure the numerical noise floor from the observed asymmetry before
+            ! enforcing symmetry
+            eig_val_thresh = noise_threshold(a, settings, error)
+            if (error /= 0) return
+            call symmetrize_exact(a)
+
+            ! perform spectral decomposition
+            allocate(eig_vecs(2 * n_dm, 2 * n_dm), eig_vals(2 * n_dm))
+            call symm_mat_diag(a, eig_vals, eig_vecs, settings, error)
+            if (error /= 0) return
+
+            ! construct regularized inverse
+            allocate(eig_vals_inv(2 * n_dm))
+            eig_vals_inv = truncated_eigval_inv(eig_vals, eig_val_thresh)
+
+            deallocate(a, eig_vals)
+
+    end subroutine get_ms_a_inv_os_linear
+
+    subroutine get_ms_a_inv_os_nonlinear(dm_diff, v_diff, eig_vecs, eig_vals_inv, &
+                                         settings, error)
+        !
+        ! this subroutine computes the pseudoinverse multisecant SR1 matrix in a
+        ! spin-combined manner for the non-linear part in the open-shell case; a 
+        ! weighted symmetrization is used with a relative threshold for the 
+        ! regularization
+        !
+        use opentrustregion, only: symm_mat_diag, numerical_zero
+
+        real(rp), intent(in) :: dm_diff(:, :, :, :), v_diff(:, :, :, :)
+        real(rp), intent(out), allocatable :: eig_vecs(:, :), eig_vals_inv(:)
+        type(arh_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_dm, flat_len, i, j
+        real(rp), allocatable :: a(:, :), eig_vals(:), step_norms(:)
+        real(rp) :: eig_val_thresh
+        real(rp), external :: ddot, dnrm2
+
+        ! initialize error flag
+        error = 0
+
+        ! handle empty history
+        n_dm = size(dm_diff, 4)
+        if (n_dm == 0) then
+            allocate(eig_vecs(0, 0), eig_vals_inv(0))
+            return
+        end if
+
+        ! A = S^T Y
+        allocate(a(n_dm, n_dm))
+        flat_len = size(dm_diff, 1) * size(dm_diff, 2) * size(dm_diff, 3)
+        do j = 1, n_dm
+            do i = 1, n_dm
+                a(i, j) = ddot(flat_len, dm_diff(:, :, :, i), 1_ip, &
+                               v_diff(:, :, :, j), 1_ip)
+            end do
+        end do
+
+        ! calculate step norms for weighing
+        allocate(step_norms(n_dm))
+        do i = 1, n_dm
+            step_norms(i) = dnrm2(flat_len, dm_diff(:, :, :, i), 1_ip)
+        end do
+
+        ! enforce symmetry
+        call symmetrize_weighted(a, step_norms)
+        deallocate(step_norms)
+
+        ! perform spectral decomposition
+        allocate(eig_vecs(n_dm, n_dm), eig_vals(n_dm))
+        call symm_mat_diag(a, eig_vals, eig_vecs, settings, error)
+        if (error /= 0) return
+
+        ! construct regularized inverse
+        allocate(eig_vals_inv(n_dm))
+        eig_val_thresh = max(rel_regularization_thresh * maxval(abs(eig_vals)), &
+                             numerical_zero)
+        eig_vals_inv = regularized_eigval_inv(eig_vals, eig_val_thresh)
+        deallocate(a, eig_vals)
+
+    end subroutine get_ms_a_inv_os_nonlinear
 
     subroutine prepend(list, new_array)
         !

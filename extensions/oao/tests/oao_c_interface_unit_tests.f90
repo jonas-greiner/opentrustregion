@@ -8,8 +8,7 @@ module otr_oao_c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol, tol_c, n_param
-    use otr_oao_test_reference, only: n_particle, n_ao, n_ao_c
+    use test_reference, only: tol, tol_c
     use otr_oao_c_interface, only: get_energy_c_type, update_dm_c_type, &
                                    get_response_c_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_funloc, c_associated
@@ -17,25 +16,27 @@ module otr_oao_c_interface_unit_tests
     implicit none
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(get_energy_c_type), pointer :: mock_get_energy_2d_ptr => &
-                                             mock_get_energy_2d, &
-                                             mock_get_energy_3d_ptr => &
-                                             mock_get_energy_3d
-    procedure(update_dm_c_type), pointer :: mock_update_dm_2d_ptr => &
-                                            mock_update_dm_2d, mock_update_dm_3d_ptr &
-                                            => mock_update_dm_3d
-    procedure(get_response_c_type), pointer :: mock_get_response_2d_ptr => &
-                                               mock_get_response_2d, &
-                                               mock_get_response_3d_ptr => &
-                                               mock_get_response_3d
+    procedure(get_energy_c_type), pointer :: mock_get_energy_cs_ptr => &
+                                             mock_get_energy_cs, &
+                                             mock_get_energy_os_ptr => &
+                                             mock_get_energy_os
+    procedure(update_dm_c_type), pointer :: mock_update_dm_cs_ptr => &
+                                            mock_update_dm_cs, mock_update_dm_os_ptr &
+                                            => mock_update_dm_os
+    procedure(get_response_c_type), pointer :: mock_get_response_cs_ptr => &
+                                               mock_get_response_cs, &
+                                               mock_get_response_os_ptr => &
+                                               mock_get_response_os
 
 contains
 
-    function mock_get_energy_2d(dm_ao, energy) result(error) bind(C)
+    function mock_get_energy_cs(dm_ao, energy) result(error) bind(C)
         !
         ! this function is a test function for the energy C function for 2D density
         ! matrices
         !
+        use otr_oao_test_reference, only: n_ao
+
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         integer(c_ip) :: error
@@ -44,13 +45,15 @@ contains
 
         error = 0
 
-    end function mock_get_energy_2d
+    end function mock_get_energy_cs
 
-    function mock_get_energy_3d(dm_ao, energy) result(error) bind(C)
+    function mock_get_energy_os(dm_ao, energy) result(error) bind(C)
         !
         ! this function is a test function for the energy C function for 3D density
         ! matrices
         !
+        use otr_oao_test_reference, only: n_ao, n_particle
+
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         integer(c_ip) :: error
@@ -59,14 +62,16 @@ contains
 
         error = 0
 
-    end function mock_get_energy_3d
+    end function mock_get_energy_os
 
-    function mock_update_dm_2d(dm_ao, energy, fock, get_response_c_funptr) &
+    function mock_update_dm_cs(dm_ao, energy, fock, get_response_c_funptr) &
         result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the density matrix updating C 
         ! function for 2D density matrices
         !
+        use otr_oao_test_reference, only: n_ao
+
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         real(c_rp), intent(out), target :: fock(*)
@@ -79,18 +84,20 @@ contains
 
         fock(:flat_len) = 2 * dm_ao(:flat_len)
 
-        get_response_c_funptr = c_funloc(mock_get_response_2d)
+        get_response_c_funptr = c_funloc(mock_get_response_cs)
 
         error = 0_c_ip
 
-    end function mock_update_dm_2d
+    end function mock_update_dm_cs
 
-    function mock_update_dm_3d(dm_ao, energy, fock, get_response_c_funptr) &
+    function mock_update_dm_os(dm_ao, energy, fock, get_response_c_funptr) &
         result(error) bind(C)
         !
-        ! this subroutine is a test subroutine for the density matrix updating C 
+        ! this subroutine is a test subroutine for the density matrix updating C
         ! function for 3D density matrices
         !
+        use otr_oao_test_reference, only: n_ao, n_particle
+
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         real(c_rp), intent(out), target :: fock(*)
@@ -103,17 +110,19 @@ contains
 
         fock(:flat_len) = 2 * dm_ao(:flat_len)
 
-        get_response_c_funptr = c_funloc(mock_get_response_3d)
+        get_response_c_funptr = c_funloc(mock_get_response_os)
 
         error = 0_c_ip
 
-    end function mock_update_dm_3d
+    end function mock_update_dm_os
 
-    function mock_get_response_2d(dm_ao, response) result(error) bind(C)
+    function mock_get_response_cs(dm_ao, response) result(error) bind(C)
         !
-        ! this subroutine is a test subroutine for the response C function for 2D 
+        ! this subroutine is a test subroutine for the response C function for 2D
         ! density matrices
         !
+        use otr_oao_test_reference, only: n_ao
+
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out), target :: response(*)
         integer(c_ip) :: error
@@ -124,13 +133,15 @@ contains
 
         error = 0_c_ip
 
-    end function mock_get_response_2d
+    end function mock_get_response_cs
 
-    function mock_get_response_3d(dm_ao, response) result(error) bind(C)
+    function mock_get_response_os(dm_ao, response) result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the response C function for 3D 
         ! density matrices
         !
+        use otr_oao_test_reference, only: n_ao, n_particle
+
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out), target :: response(*)
         integer(c_ip) :: error
@@ -141,37 +152,17 @@ contains
 
         error = 0_c_ip
 
-    end function mock_get_response_3d
-
-    function mock_update_orbs_oao(kappa, func, grad, h_diag, hess_x_c_funptr) &
-        result(error) bind(C)
-        !
-        ! this subroutine is a test subroutine for the orbital update C function
-        !
-        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
-        use otr_oao_c_interface, only: dm_ao_3d_c
-
-        real(c_rp), intent(in), target :: kappa(*)
-        real(c_rp), intent(out) :: func
-        real(c_rp), intent(out), target :: grad(*), h_diag(*)
-        type(c_funptr), intent(out) :: hess_x_c_funptr
-        integer(c_ip) :: error
-
-        error = mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr)
-
-        dm_ao_3d_c = 2.0_rp
-
-    end function mock_update_orbs_oao
+    end function mock_get_response_os
 
     logical(c_bool) function test_oao_factory_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the OAO factory
         !
-        use otr_oao_c_interface, only: oao_settings_type_c, oao_factory_closed_shell, &
-                                       oao_factory_open_shell, oao_factory_c_wrapper
-        use otr_oao_mock, only: mock_oao_factory_closed_shell, &
-                                mock_oao_factory_open_shell, test_passed
-        use otr_oao_test_reference, only: assignment(=), ref_oao_settings
+        use otr_oao_c_interface, only: oao_settings_type_c, oao_factory_cs, &
+                                       oao_factory_os, oao_factory_c_wrapper
+        use otr_oao_mock, only: mock_oao_factory_cs, mock_oao_factory_os, test_passed
+        use otr_oao_test_reference, only: assignment(=), ref_oao_settings, n_ao, &
+                                          n_particle, n_ao_c
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_project_c_funptr
@@ -191,8 +182,8 @@ contains
         n_particle_c = 1_c_ip
 
         ! inject mock functions
-        oao_factory_closed_shell => mock_oao_factory_closed_shell
-        oao_factory_open_shell => mock_oao_factory_open_shell
+        oao_factory_cs => mock_oao_factory_cs
+        oao_factory_os => mock_oao_factory_os
 
         ! allocate and initialize arrays
         allocate(dm_ao_2d_c(n_ao, n_ao), ao_overlap_c(n_ao, n_ao))
@@ -200,8 +191,8 @@ contains
         ao_overlap_c = 2.0_c_rp
 
         ! get C function pointers to Fortran functions
-        get_energy_c_funptr = c_funloc(mock_get_energy_2d)
-        update_dm_c_funptr = c_funloc(mock_update_dm_2d)
+        get_energy_c_funptr = c_funloc(mock_get_energy_cs)
+        update_dm_c_funptr = c_funloc(mock_update_dm_cs)
 
         ! associate optional settings with values
         settings_c = ref_oao_settings
@@ -266,8 +257,8 @@ contains
         dm_ao_3d_c = 1.0_c_rp
 
         ! get C function pointers to Fortran functions
-        get_energy_c_funptr = c_funloc(mock_get_energy_3d)
-        update_dm_c_funptr = c_funloc(mock_update_dm_3d)
+        get_energy_c_funptr = c_funloc(mock_get_energy_os)
+        update_dm_c_funptr = c_funloc(mock_update_dm_os)
 
         ! call OAO orbital updating factory C wrapper for open-shell case
         error_c = oao_factory_c_wrapper(dm_ao_3d_c, ao_overlap_c, n_particle_c, &
@@ -279,8 +270,8 @@ contains
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
 
-        ! check if tests for dm_ao_3d_c, get_energy_c_funptr and update_dm_c_funptr have 
-        ! passed
+        ! check if tests for dm_ao_3d_c, get_energy_c_funptr and update_dm_c_funptr 
+        ! have passed
         test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. test_passed
 
     end function test_oao_factory_c_wrapper
@@ -289,34 +280,34 @@ contains
         !
         ! this function tests the Fortran wrapper for the energy function
         !
-        use otr_oao, only: get_energy_2d_type, get_energy_3d_type
+        use otr_oao, only: get_energy_cs_type, get_energy_os_type
         use otr_oao_c_interface, only: get_energy_before_wrapping, &
-                                       get_energy_2d_f_wrapper, get_energy_3d_f_wrapper
-        use otr_oao_test_reference, only: test_get_energy_2d_funptr, &
-                                          test_get_energy_3d_funptr
+                                       get_energy_cs_f_wrapper, get_energy_os_f_wrapper
+        use otr_oao_test_reference, only: test_get_energy_cs_funptr, &
+                                          test_get_energy_os_funptr
 
-        procedure(get_energy_2d_type), pointer :: get_energy_2d_funptr
-        procedure(get_energy_3d_type), pointer :: get_energy_3d_funptr
+        procedure(get_energy_cs_type), pointer :: get_energy_cs_funptr
+        procedure(get_energy_os_type), pointer :: get_energy_os_funptr
 
         ! inject mock function
-        get_energy_before_wrapping => mock_get_energy_2d
+        get_energy_before_wrapping => mock_get_energy_cs
 
         ! get pointer to function
-        get_energy_2d_funptr => get_energy_2d_f_wrapper
+        get_energy_cs_funptr => get_energy_cs_f_wrapper
 
         ! test energy wrapper
         test_get_energy_f_wrapper = &
-            test_get_energy_2d_funptr(get_energy_2d_funptr, "get_energy_f_wrapper", "")
+            test_get_energy_cs_funptr(get_energy_cs_funptr, "get_energy_f_wrapper", "")
 
         ! inject mock function
-        get_energy_before_wrapping => mock_get_energy_3d
+        get_energy_before_wrapping => mock_get_energy_os
 
         ! get pointer to function
-        get_energy_3d_funptr => get_energy_3d_f_wrapper
+        get_energy_os_funptr => get_energy_os_f_wrapper
 
         ! test energy wrapper
         test_get_energy_f_wrapper = test_get_energy_f_wrapper .and. &
-            test_get_energy_3d_funptr(get_energy_3d_funptr, "get_energy_f_wrapper", "")
+            test_get_energy_os_funptr(get_energy_os_funptr, "get_energy_f_wrapper", "")
 
     end function test_get_energy_f_wrapper
 
@@ -325,34 +316,34 @@ contains
         ! this function tests the Fortran wrapper for the density matrix updating 
         ! function
         !
-        use otr_oao, only: update_dm_2d_type, update_dm_3d_type
+        use otr_oao, only: update_dm_cs_type, update_dm_os_type
         use otr_oao_c_interface, only: update_dm_before_wrapping, &
-                                       update_dm_2d_f_wrapper, update_dm_3d_f_wrapper
-        use otr_oao_test_reference, only: test_update_dm_2d_funptr, &
-                                          test_update_dm_3d_funptr
+                                       update_dm_cs_f_wrapper, update_dm_os_f_wrapper
+        use otr_oao_test_reference, only: test_update_dm_cs_funptr, &
+                                          test_update_dm_os_funptr
 
-        procedure(update_dm_2d_type), pointer :: update_dm_2d_funptr
-        procedure(update_dm_3d_type), pointer :: update_dm_3d_funptr
+        procedure(update_dm_cs_type), pointer :: update_dm_cs_funptr
+        procedure(update_dm_os_type), pointer :: update_dm_os_funptr
 
         ! inject mock subroutine
-        update_dm_before_wrapping => mock_update_dm_2d
+        update_dm_before_wrapping => mock_update_dm_cs
 
         ! get pointer to subroutine
-        update_dm_2d_funptr => update_dm_2d_f_wrapper
+        update_dm_cs_funptr => update_dm_cs_f_wrapper
 
         ! test density matrix updating wrapper
         test_update_dm_f_wrapper = &
-            test_update_dm_2d_funptr(update_dm_2d_funptr, "update_dm_f_wrapper", "")
+            test_update_dm_cs_funptr(update_dm_cs_funptr, "update_dm_f_wrapper", "")
 
         ! inject mock subroutine
-        update_dm_before_wrapping => mock_update_dm_3d
+        update_dm_before_wrapping => mock_update_dm_os
 
         ! get pointer to subroutine
-        update_dm_3d_funptr => update_dm_3d_f_wrapper
+        update_dm_os_funptr => update_dm_os_f_wrapper
 
         ! test density matrix updating wrapper
         test_update_dm_f_wrapper = test_update_dm_f_wrapper .and. &
-            test_update_dm_3d_funptr(update_dm_3d_funptr, "update_dm_f_wrapper", "")
+            test_update_dm_os_funptr(update_dm_os_funptr, "update_dm_f_wrapper", "")
 
     end function test_update_dm_f_wrapper
 
@@ -360,36 +351,36 @@ contains
         !
         ! this function tests the Fortran wrapper for the response function
         !
-        use otr_oao, only: get_response_2d_type, get_response_3d_type
+        use otr_oao, only: get_response_cs_type, get_response_os_type
         use otr_oao_c_interface, only: get_response_before_wrapping, &
-                                       get_response_2d_f_wrapper, &
-                                       get_response_3d_f_wrapper
-        use otr_oao_test_reference, only: test_get_response_2d_funptr, &
-                                          test_get_response_3d_funptr
+                                       get_response_cs_f_wrapper, &
+                                       get_response_os_f_wrapper
+        use otr_oao_test_reference, only: test_get_response_cs_funptr, &
+                                          test_get_response_os_funptr
 
-        procedure(get_response_2d_type), pointer :: get_response_2d_funptr
-        procedure(get_response_3d_type), pointer :: get_response_3d_funptr
+        procedure(get_response_cs_type), pointer :: get_response_cs_funptr
+        procedure(get_response_os_type), pointer :: get_response_os_funptr
 
         ! inject mock subroutine
-        get_response_before_wrapping => mock_get_response_2d
+        get_response_before_wrapping => mock_get_response_cs
 
         ! get pointer to subroutine
-        get_response_2d_funptr => get_response_2d_f_wrapper
+        get_response_cs_funptr => get_response_cs_f_wrapper
 
         ! test response function wrapper
         test_get_response_f_wrapper = &
-            test_get_response_2d_funptr(get_response_2d_funptr, &
+            test_get_response_cs_funptr(get_response_cs_funptr, &
                                         "get_response_f_wrapper", "")
 
         ! inject mock subroutine
-        get_response_before_wrapping => mock_get_response_3d
+        get_response_before_wrapping => mock_get_response_os
 
         ! get pointer to subroutine
-        get_response_3d_funptr => get_response_3d_f_wrapper
+        get_response_os_funptr => get_response_os_f_wrapper
 
         ! test response function wrapper
         test_get_response_f_wrapper = test_get_response_f_wrapper .and. &
-            test_get_response_3d_funptr(get_response_3d_funptr, &
+            test_get_response_os_funptr(get_response_os_funptr, &
                                         "get_response_f_wrapper", "")
 
     end function test_get_response_f_wrapper
@@ -402,7 +393,7 @@ contains
         use otr_oao_c_interface, only: obj_func_oao_before_wrapping, &
                                        obj_func_oao_c_wrapper
         use otr_oao_mock, only: mock_obj_func_oao
-        use test_reference, only: test_obj_func_c_funptr
+        use test_reference, only: test_obj_func_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -425,7 +416,7 @@ contains
         use otr_oao_c_interface, only: update_orbs_oao_before_wrapping, &
                                        update_orbs_oao_c_wrapper
         use otr_common_mock, only: mock_update_orbs
-        use test_reference, only: test_update_orbs_c_funptr
+        use test_reference, only: test_update_orbs_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -447,7 +438,7 @@ contains
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_oao_c_interface, only: hess_x_oao_before_wrapping, hess_x_oao_c_wrapper
         use otr_common_mock, only: mock_hess_x
-        use test_reference, only: test_hess_x_c_funptr
+        use test_reference, only: test_hess_x_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -470,7 +461,7 @@ contains
         use otr_oao_c_interface, only: project_oao_before_wrapping, &
                                        project_oao_c_wrapper
         use otr_oao_mock, only: mock_project_oao
-        use test_reference, only: test_project_c_funptr
+        use test_reference, only: test_project_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param

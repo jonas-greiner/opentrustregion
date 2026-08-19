@@ -19,15 +19,35 @@ extern "C"
      * Declarations for ARH functions and function pointer types
      * ------------------------------------------------------------------ */
 
-    /* Density matrix updating callback with same-spin and opposite-spin contributions */
-    typedef c_int update_dm_spin_fn(
+    /* Density matrix updating callback with non-linear potential contributions for the
+     * closed-shell case */
+    typedef c_int update_dm_cs_fn(
+        const c_real *dm_ao_c,
+        c_real *energy_c,
+        c_real *fock_c,
+        c_real *v_nonlinear_c);
+    typedef update_dm_cs_fn *update_dm_cs_fp;
+
+    /* Density matrix updating callback with same-spin and opposite-spin and non-linear
+     * potential contributions for the open-shell case */
+    typedef c_int update_dm_os_fn(
         const c_real *dm_ao_c,
         c_real *energy_c,
         c_real *fock_c,
         c_real *v_same_spin_c,
         c_real *v_opposite_spin_c,
-        get_response_fp *get_response_ptr);
-    typedef update_dm_spin_fn *update_dm_spin_fp;
+        c_real *v_nonlinear_c);
+    typedef update_dm_os_fn *update_dm_os_fp;
+
+    /* Density matrix updating callback passed to arh_factory, which is either shape
+     * depending on n_particle_c: set the cs member for the closed-shell case
+     * (n_particle_c == 1), or the os member for the open-shell case
+     * (n_particle_c == 2) */
+    typedef union
+    {
+        update_dm_cs_fp cs;
+        update_dm_os_fp os;
+    } update_dm_fp;
 
     /* ------------------------------------------------------------------
      * Struct corresponding to Fortran type(arh_settings_type_c)
@@ -36,7 +56,6 @@ extern "C"
     {
         logger_fp logger;
         c_bool initialized;
-        c_bool restricted;
         c_int verbose;
         char arh_type[OTR_KW_LEN + 1];
     } arh_settings_type;
@@ -56,11 +75,11 @@ extern "C"
      * @param n_particle_c               Number of particles
      * @param n_ao_c                     Number of AO basis functions
      * @param get_energy_c_funptr        C pointer to get_energy callback
-     * @param update_dm_c_funptr         C pointer to update_dm or update_dm_spin callback
+     * @param update_dm_c_funptr         update_dm_fp union
      * @param settings_c                 ARH settings
      * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
      * @param update_orbs_arh_c_funptr   Output: wrapped update_orbs function pointer
-     * @param precond_arh_c_funptr       Output: wrapped preconditioner function pointer
+     * @param project_arh_c_funptr       Output: wrapped projection function pointer
      *
      * @return                           Integer error code from Fortran
      */
@@ -70,10 +89,10 @@ extern "C"
         c_int n_particle_c,
         c_int n_ao_c,
         get_energy_fp get_energy_c_funptr,
-        update_dm_spin_fp update_dm_c_funptr,
+        update_dm_fp update_dm_c_funptr,
         obj_func_fp *obj_func_arh_c_funptr,
         update_orbs_fp *update_orbs_arh_c_funptr,
-        precond_fp *precond_arh_c_funptr,
+        project_fp *project_arh_c_funptr,
         arh_settings_type *settings_c);
 
     /**
