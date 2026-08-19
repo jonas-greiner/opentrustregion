@@ -998,10 +998,11 @@ contains
         do k = 1, n_particle
             do j = 1, n_ao
                 do i = 1, j - 1
-                    expected_h_diag(idx) = expected_fock_vv(i, i, k) + &
-                                           expected_fock_vv(j, j, k) - &
-                                           expected_fock_oo(i, i, k) - &
-                                           expected_fock_oo(j, j, k)
+                    expected_h_diag(idx) = &
+                        2.0_rp * (expected_fock_vv(i, i, k) + &
+                                  expected_fock_vv(j, j, k) - &
+                                  expected_fock_oo(i, i, k) - &
+                                  expected_fock_oo(j, j, k))
                     idx = idx + 1
                 end do
             end do

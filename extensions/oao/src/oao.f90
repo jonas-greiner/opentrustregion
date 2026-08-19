@@ -630,7 +630,11 @@ module otr_oao
                 end do
             end do
         end do
-        if (n_particle == 1) h_diag = 4.0_rp * h_diag
+        if (n_particle == 1) then
+            h_diag = 4.0_rp * h_diag
+        else
+            h_diag = 2.0_rp * h_diag
+        end if
 
     end subroutine calculate_grad_h_diag
 
