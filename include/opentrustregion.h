@@ -86,6 +86,34 @@ typedef int32_t c_int; /* corresponds to integer(c_ip) */
      * Structs corresponding to Fortran settings
      * ------------------------------------------------------------------ */
 
+    // Struct corresponding to Fortran type(stability_settings_type_c)
+    typedef struct
+    {
+        precond_fp precond;
+        project_fp project;
+        hess_x_fp approx_hess_x;
+        init_trial_space_fp init_trial_space;
+        conv_check_stability_fp conv_check;
+        logger_fp logger;
+
+        c_bool hess_symm;
+        c_bool initialized;
+
+        c_real conv_tol;
+
+        c_int n_random_trial_vectors;
+        c_int n_trial_vectors;
+        c_int n_iter;
+        c_int jacobi_davidson_start;
+        c_int seed;
+        c_int verbose;
+
+        char diag_solver[OTR_KW_LEN + 1];
+    } stability_settings_type;
+
+    // Fortran-callable init subroutine for stability check settings
+    void init_stability_settings(stability_settings_type *settings);
+
     // Struct corresponding to Fortran type(solver_settings_type_c)
     typedef struct
     {
@@ -121,33 +149,6 @@ typedef int32_t c_int; /* corresponds to integer(c_ip) */
 
     // Fortran-callable init subroutine for solver settings
     void init_solver_settings(solver_settings_type *settings);
-
-    // Struct corresponding to Fortran type(stability_settings_type_c)
-    typedef struct
-    {
-        precond_fp precond;
-        hess_x_fp approx_hess_x;
-        init_trial_space_fp init_trial_space;
-        conv_check_stability_fp conv_check_stability;
-        logger_fp logger;
-
-        c_bool hess_symm;
-        c_bool initialized;
-
-        c_real conv_tol;
-
-        c_int n_random_trial_vectors;
-        c_int n_trial_vectors;
-        c_int n_iter;
-        c_int jacobi_davidson_start;
-        c_int seed;
-        c_int verbose;
-
-        char diag_solver[OTR_KW_LEN + 1];
-    } stability_settings_type;
-
-    // Fortran-callable init subroutine for stability check settings
-    void init_stability_settings(stability_settings_type *settings);
 
     /* ------------------------------------------------------------------
      * Fortran wrappers
