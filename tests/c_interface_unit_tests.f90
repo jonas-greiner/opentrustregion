@@ -8,8 +8,9 @@ module c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
-                           obj_func_c_type, precond_c_type, project_c_type, &
-                           modify_step_c_type, conv_check_c_type, logger_c_type
+                           obj_func_c_type, precond_c_type, precond_pd_c_type, &
+                           project_c_type, modify_step_c_type, conv_check_c_type, &
+                           logger_c_type
     use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
                                            c_char, c_null_ptr, c_null_char
@@ -24,6 +25,7 @@ module c_interface_unit_tests
     procedure(hess_x_c_type), pointer :: mock_hess_x_ptr => mock_hess_x
     procedure(obj_func_c_type), pointer :: mock_obj_func_ptr => mock_obj_func
     procedure(precond_c_type), pointer :: mock_precond_ptr => mock_precond
+    procedure(precond_pd_c_type), pointer :: mock_precond_pd_ptr => mock_precond_pd
     procedure(project_c_type), pointer :: mock_project_ptr => mock_project
     procedure(modify_step_c_type), pointer :: mock_modify_step_ptr => mock_modify_step
     procedure(conv_check_c_type), pointer :: mock_conv_check_ptr => mock_conv_check
@@ -97,6 +99,21 @@ contains
         error = 0
 
     end function mock_precond
+
+    function mock_precond_pd(residual, precond_residual) result(error) bind(C)
+        !
+        ! this function is a test function for the C positive-definite preconditioner 
+        ! function
+        !
+        real(c_rp), intent(in), target :: residual(*)
+        real(c_rp), intent(out), target :: precond_residual(*)
+        integer(c_ip) :: error
+
+        precond_residual(:n_param) = 3 * residual(:n_param)
+
+        error = 0
+
+    end function mock_precond_pd
 
     function mock_project(vector) result(error) bind(C)
         !
@@ -192,6 +209,7 @@ contains
         type(solver_settings_type_c) :: settings
 
         settings%precond = c_funloc(mock_precond)
+        settings%precond_pd = c_funloc(mock_precond_pd)
         settings%project = c_funloc(mock_project)
         settings%modify_step = c_funloc(mock_modify_step)
         settings%conv_check = c_funloc(mock_conv_check)
@@ -474,6 +492,29 @@ contains
                                                      "precond_f_wrapper", "")
 
     end function test_precond_f_wrapper
+
+    logical(c_bool) function test_precond_pd_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the positive-definite
+        ! preconditioner function
+        !
+        use opentrustregion, only: precond_pd_type
+        use c_interface, only: precond_pd_before_wrapping, precond_pd_f_wrapper
+        use test_reference, only: test_precond_pd_funptr
+
+        procedure(precond_pd_type), pointer :: precond_pd_funptr
+
+        ! inject mock function
+        precond_pd_before_wrapping => mock_precond_pd
+
+        ! get pointer to subroutine
+        precond_pd_funptr => precond_pd_f_wrapper
+
+        ! test positive-definite preconditioner wrapper
+        test_precond_pd_f_wrapper = test_precond_pd_funptr(precond_pd_funptr, &
+                                                           "precond_pd_f_wrapper", "")
+
+    end function test_precond_pd_f_wrapper
 
     logical(c_bool) function test_project_f_wrapper() bind(C)
         !

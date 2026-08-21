@@ -6,7 +6,8 @@
 
 module otr_oao_mock
 
-    use opentrustregion, only: rp, ip, stderr, obj_func_type, project_type
+    use opentrustregion, only: rp, ip, stderr, obj_func_type, precond_type, &
+                               precond_pd_type, project_type
     use otr_oao, only: oao_factory_cs, oao_factory_os, oao_deconstructor
     use test_reference, only: tol
     use otr_oao_test_reference, only: ref_oao_settings, operator(/=)
@@ -22,6 +23,9 @@ module otr_oao_mock
     procedure(oao_deconstructor), pointer :: mock_oao_deconstructor_ptr => &
         mock_oao_deconstructor
     procedure(obj_func_type), pointer :: mock_obj_func_oao_ptr => mock_obj_func_oao
+    procedure(precond_type), pointer :: mock_precond_oao_ptr => mock_precond_oao
+    procedure(precond_pd_type), pointer :: mock_precond_pd_oao_ptr => &
+        mock_precond_pd_oao
     procedure(project_type), pointer ::  mock_project_oao_ptr => mock_project_oao
 
 contains
@@ -48,6 +52,7 @@ contains
     subroutine mock_oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, &
                                    get_energy_funptr, update_dm_funptr, &
                                    obj_func_oao_funptr, update_orbs_oao_funptr, &
+                                   precond_oao_funptr, precond_pd_oao_funptr, &
                                    project_oao_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
@@ -65,6 +70,8 @@ contains
         procedure(update_dm_cs_type), intent(in), pointer :: update_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
+        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
@@ -128,6 +135,8 @@ contains
         error = 0
         obj_func_oao_funptr => mock_obj_func_oao
         update_orbs_oao_funptr => mock_update_orbs
+        precond_oao_funptr => mock_precond_oao
+        precond_pd_oao_funptr => mock_precond_pd_oao
         project_oao_funptr => mock_project_oao
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
 
@@ -136,7 +145,8 @@ contains
     subroutine mock_oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, &
                                    get_energy_funptr, update_dm_funptr, &
                                    obj_func_oao_funptr, update_orbs_oao_funptr, &
-                                   project_oao_funptr, error, settings)          
+                                   precond_oao_funptr, precond_pd_oao_funptr, &
+                                   project_oao_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
@@ -153,6 +163,8 @@ contains
         procedure(update_dm_os_type), intent(in), pointer :: update_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
+        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
@@ -216,6 +228,8 @@ contains
         error = 0
         obj_func_oao_funptr => mock_obj_func_oao
         update_orbs_oao_funptr => mock_update_orbs
+        precond_oao_funptr => mock_precond_oao
+        precond_pd_oao_funptr => mock_precond_pd_oao
         project_oao_funptr => mock_project_oao
         dm_ao_3d => dm_ao
 
@@ -242,6 +256,37 @@ contains
         error = 0
 
     end function mock_obj_func_oao
+
+    subroutine mock_precond_oao(residual, mu, precond_residual, error)
+        !
+        ! this function is a test function for the OAO level-shifted preconditioner
+        ! function
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        precond_residual = mu * residual
+
+        error = 0
+
+    end subroutine mock_precond_oao
+
+    subroutine mock_precond_pd_oao(residual, precond_residual, error)
+        !
+        ! this function is a test function for the OAO positive-definite preconditioner 
+        ! function
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        precond_residual = 3.0_rp * residual
+
+        error = 0
+
+    end subroutine mock_precond_pd_oao
 
     subroutine mock_project_oao(vector, error)
         !

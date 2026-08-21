@@ -21,6 +21,8 @@ from pyopentrustregion.python_interface import (
     obj_func_interface_type,
     update_orbs_interface_type,
     project_interface_type,
+    precond_interface_type,
+    precond_pd_interface_type,
     logger_interface_type,
     LoggerInterface,
     Settings,
@@ -31,6 +33,8 @@ from pyopentrustregion.extensions.oao.python_interface import (
     get_energy_interface_type,
     GetEnergyInterface,
     ObjFuncPyInterface,
+    PrecondPyInterface,
+    PrecondPDPyInterface,
     ProjectPyInterface,
 )
 
@@ -218,6 +222,8 @@ def arh_factory(
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    Callable[[np.ndarray, float, np.ndarray], None],
+    Callable[[np.ndarray, np.ndarray], None],
     Callable[[np.ndarray], None],
 ]:
     # get pointers to arrays
@@ -269,6 +275,8 @@ def arh_factory(
         (update_dm_cs_interface_type if closed_shell else update_dm_os_interface_type),
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
+        POINTER(precond_interface_type),
+        POINTER(precond_pd_interface_type),
         POINTER(project_interface_type),
         POINTER(ARHSettingsC),
     ]
@@ -276,6 +284,8 @@ def arh_factory(
     # call Fortran function
     obj_func_arh_funptr = obj_func_interface_type()
     update_orbs_arh_funptr = update_orbs_interface_type()
+    precond_arh_funptr = precond_interface_type()
+    precond_pd_arh_funptr = precond_pd_interface_type()
     project_arh_funptr = project_interface_type()
     error = lib.arh_factory(
         dm_ao_ptr,
@@ -286,6 +296,8 @@ def arh_factory(
         update_dm_cs_interface if closed_shell else update_dm_os_interface,
         byref(obj_func_arh_funptr),
         byref(update_orbs_arh_funptr),
+        byref(precond_arh_funptr),
+        byref(precond_pd_arh_funptr),
         byref(project_arh_funptr),
         byref(settings.settings_c),
     )
@@ -307,6 +319,8 @@ def arh_factory(
                 ),
             },
         ),
+        PrecondPyInterface(precond_funptr=precond_arh_funptr),
+        PrecondPDPyInterface(precond_pd_funptr=precond_pd_arh_funptr),
         ProjectPyInterface(project_funptr=project_arh_funptr),
     )
 

@@ -18,6 +18,8 @@ from pyopentrustregion.python_interface import (
     c_real,
     obj_func_interface_type,
     update_orbs_interface_type,
+    precond_interface_type,
+    precond_pd_interface_type,
     project_interface_type,
     logger_interface_type,
     LoggerInterface,
@@ -232,6 +234,52 @@ class ProjectPyInterface:
         return
 
 
+@dataclass
+class PrecondPyInterface:
+    """
+    this class provides the Python interface to the level-shifted preconditioner
+    function
+    """
+
+    precond_funptr: Any
+
+    def __call__(self, residual: np.ndarray, mu: float, precond_residual: np.ndarray):
+        # get pointers to arrays
+        residual_ptr = residual.ctypes.data_as(POINTER(c_real))
+        precond_residual_ptr = precond_residual.ctypes.data_as(POINTER(c_real))
+
+        # call preconditioner function
+        error = self.precond_funptr(residual_ptr, c_real(mu), precond_residual_ptr)
+        if error != 0:
+            raise RuntimeError("Preconditioner function raised error.")
+
+        return
+
+
+@dataclass
+class PrecondPDPyInterface:
+    """
+    this class provides the Python interface to the positive-definite preconditioner
+    function
+    """
+
+    precond_pd_funptr: Any
+
+    def __call__(self, residual: np.ndarray, precond_residual: np.ndarray):
+        # get pointers to arrays
+        residual_ptr = residual.ctypes.data_as(POINTER(c_real))
+        precond_residual_ptr = precond_residual.ctypes.data_as(POINTER(c_real))
+
+        # call preconditioner function
+        error = self.precond_pd_funptr(residual_ptr, precond_residual_ptr)
+        if error != 0:
+            raise RuntimeError(
+                "Positive-definite preconditioner function raised " "error."
+            )
+
+        return
+
+
 def oao_factory(
     dm_ao: np.ndarray,
     ao_overlap: np.ndarray,
@@ -249,6 +297,8 @@ def oao_factory(
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    Callable[[np.ndarray, float, np.ndarray], None],
+    Callable[[np.ndarray, np.ndarray], None],
     Callable[[np.ndarray], None],
 ]:
     # get pointers to arrays
@@ -295,6 +345,8 @@ def oao_factory(
         update_dm_interface_type,
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
+        POINTER(precond_interface_type),
+        POINTER(precond_pd_interface_type),
         POINTER(project_interface_type),
         POINTER(OAOSettingsC),
     ]
@@ -302,6 +354,8 @@ def oao_factory(
     # call Fortran function
     obj_func_oao_funptr = obj_func_interface_type()
     update_orbs_oao_funptr = update_orbs_interface_type()
+    precond_oao_funptr = precond_interface_type()
+    precond_pd_oao_funptr = precond_pd_interface_type()
     project_oao_funptr = project_interface_type()
     error = lib.oao_factory(
         dm_ao_ptr,
@@ -312,6 +366,8 @@ def oao_factory(
         update_dm_interface,
         byref(obj_func_oao_funptr),
         byref(update_orbs_oao_funptr),
+        byref(precond_oao_funptr),
+        byref(precond_pd_oao_funptr),
         byref(project_oao_funptr),
         byref(settings.settings_c),
     )
@@ -331,6 +387,8 @@ def oao_factory(
                 "update_dm_interface": update_dm_interface,
             },
         ),
+        PrecondPyInterface(precond_funptr=precond_oao_funptr),
+        PrecondPDPyInterface(precond_pd_funptr=precond_pd_oao_funptr),
         ProjectPyInterface(project_funptr=project_oao_funptr),
     )
 

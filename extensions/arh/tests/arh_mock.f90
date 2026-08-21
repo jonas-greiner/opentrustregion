@@ -26,19 +26,20 @@ contains
     subroutine mock_arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, &
                                    get_energy_funptr, update_dm_funptr, &
                                    obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                   precond_arh_funptr, precond_pd_arh_funptr, &
                                    project_arh_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
-                                   project_type
+                                   precond_type, precond_pd_type, project_type
         use otr_oao, only: get_energy_cs_type
         use otr_arh, only: arh_settings_type, update_dm_cs_type
         use otr_oao_test_reference, only: test_get_energy_cs_funptr
         use otr_arh_test_reference, only: test_update_dm_cs_funptr, operator(/=)
-        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
-                                dm_ao_3d
+        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_precond_oao, &
+                                mock_precond_pd_oao, mock_project_oao, dm_ao_3d
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -47,6 +48,8 @@ contains
         procedure(update_dm_cs_type), intent(in), pointer :: update_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
+        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
@@ -111,6 +114,8 @@ contains
         error = 0
         obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
+        precond_arh_funptr => mock_precond_oao
+        precond_pd_arh_funptr => mock_precond_pd_oao
         project_arh_funptr => mock_project_oao
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
 
@@ -119,19 +124,20 @@ contains
     subroutine mock_arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, &
                                    get_energy_funptr, update_dm_os_funptr, &
                                    obj_func_arh_funptr, update_orbs_arh_funptr, &
-                                   project_arh_funptr, error, settings)          
+                                   precond_arh_funptr, precond_pd_arh_funptr, &
+                                   project_arh_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
-                                   project_type
+                                   precond_type, precond_pd_type, project_type
         use otr_oao, only: get_energy_os_type
         use otr_arh, only: update_dm_os_type, arh_settings_type
         use otr_oao_test_reference, only: test_get_energy_os_funptr
         use otr_arh_test_reference, only: test_update_dm_os_funptr, operator(/=)
-        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
-                                dm_ao_3d
+        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_precond_oao, &
+                                mock_precond_pd_oao, mock_project_oao, dm_ao_3d
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -140,6 +146,8 @@ contains
         procedure(update_dm_os_type), intent(in), pointer :: update_dm_os_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
+        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
@@ -205,6 +213,8 @@ contains
         error = 0
         obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
+        precond_arh_funptr => mock_precond_oao
+        precond_pd_arh_funptr => mock_precond_pd_oao
         project_arh_funptr => mock_project_oao
         dm_ao_3d => dm_ao
 

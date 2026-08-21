@@ -7,7 +7,7 @@
 module otr_arh_c_interface
 
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type, &
-                               project_type
+                               precond_type, precond_pd_type, project_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
     use otr_oao_c_interface, only: n_particle, n_ao
     use otr_arh, only: standard_arh_factory_cs => arh_factory_cs, &
@@ -87,6 +87,7 @@ contains
     function arh_factory_c_wrapper(dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, &
                                    get_energy_c_funptr, update_dm_c_funptr, &
                                    obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
+                                   precond_arh_c_funptr, precond_pd_arh_c_funptr, &
                                    project_arh_c_funptr, settings_c) result(error_c) &
         bind(C, name="arh_factory")
         !
@@ -99,8 +100,12 @@ contains
                                        get_energy_cs_f_wrapper, &
                                        get_energy_os_f_wrapper, &
                                        obj_func_oao_before_wrapping, &
+                                       precond_oao_before_wrapping, &
+                                       precond_pd_oao_before_wrapping, &
                                        project_oao_before_wrapping, &
-                                       obj_func_oao_c_wrapper, project_oao_c_wrapper
+                                       obj_func_oao_c_wrapper, precond_oao_c_wrapper, &
+                                       precond_pd_oao_c_wrapper, project_oao_c_wrapper
+                                       
         use otr_common_c_interface, only: n_param
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
@@ -108,7 +113,8 @@ contains
         type(c_funptr), intent(in), value :: get_energy_c_funptr, update_dm_c_funptr
         type(arh_settings_type_c), intent(inout) :: settings_c
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, &
-                                       update_orbs_arh_c_funptr, project_arh_c_funptr
+                                       update_orbs_arh_c_funptr, precond_arh_c_funptr, &
+                                       precond_pd_arh_c_funptr, project_arh_c_funptr
         integer(c_ip) :: error_c
 
         real(rp), pointer, contiguous :: dm_ao_2d(:, :)
@@ -120,6 +126,8 @@ contains
         procedure(update_dm_os_type), pointer :: update_dm_os_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+        procedure(precond_type), pointer :: precond_arh_funptr
+        procedure(precond_pd_type), pointer :: precond_pd_arh_funptr
         procedure(project_type), pointer :: project_arh_funptr
         type(arh_settings_type) :: settings
         integer(ip) :: error
@@ -179,22 +187,28 @@ contains
             call arh_factory_cs(dm_ao_2d, ao_overlap, n_particle, n_ao, &
                                 get_energy_cs_funptr, update_dm_cs_funptr, &
                                 obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                precond_arh_funptr, precond_pd_arh_funptr, &
                                 project_arh_funptr, error, settings)
         else
             call arh_factory_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
                                 get_energy_os_funptr, update_dm_os_funptr, &
                                 obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                precond_arh_funptr, precond_pd_arh_funptr, &
                                 project_arh_funptr, error, settings)
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
         obj_func_oao_before_wrapping => obj_func_arh_funptr
         update_orbs_arh_before_wrapping => update_orbs_arh_funptr
+        precond_oao_before_wrapping => precond_arh_funptr
+        precond_pd_oao_before_wrapping => precond_pd_arh_funptr
         project_oao_before_wrapping => project_arh_funptr
 
         ! get a C function pointer to the C wrapper functions
         obj_func_arh_c_funptr = c_funloc(obj_func_oao_c_wrapper)
         update_orbs_arh_c_funptr = c_funloc(update_orbs_arh_c_wrapper)
+        precond_arh_c_funptr = c_funloc(precond_oao_c_wrapper)
+        precond_pd_arh_c_funptr = c_funloc(precond_pd_oao_c_wrapper)
         project_arh_c_funptr = c_funloc(project_oao_c_wrapper)
 
         ! convert return arguments to C kind

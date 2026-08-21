@@ -217,14 +217,123 @@ contains
                                    transpose(hess_x_full(:, :, i))
         end do
 
-        ! project response onto occupied-virtual and virtual-occupied subspace
-        hess_x_full = hess_x_full + ref_project_asymm(response, dm_oao)
+        ! project the combined static and response contributions onto the
+        ! occupied-virtual and virtual-occupied subspace, matching the production code
+        hess_x_full = ref_project_asymm(hess_x_full + response, dm_oao)
 
         ! pack Hessian linear transformation
         hess_x = merge(4.0_rp, 2.0_rp, size(x_full, 3) == 1) * &
                  ref_pack_asymm(hess_x_full, n_param)
 
     end function ref_hess_x
+
+    subroutine ref_diagonalize_static_part(fock_oo, fock_vv, eigvecs, eigvals)
+        !
+        ! this subroutine independently diagonalizes the static part of the Hessian
+        ! for each particle channel
+        !
+        real(rp), intent(in) :: fock_oo(:, :, :), fock_vv(:, :, :)
+        real(rp), intent(out) :: eigvecs(:, :, :), eigvals(:, :)
+
+        integer(ip) :: n_ao, n_particle, i, lwork, info
+        real(rp), allocatable :: a(:, :), work(:)
+        external :: dsyev
+
+        n_ao = size(fock_oo, 1)
+        n_particle = size(fock_oo, 3)
+
+        allocate(a(n_ao, n_ao))
+        do i = 1, n_particle
+            a = fock_vv(:, :, i) - fock_oo(:, :, i)
+            allocate(work(1))
+            call dsyev("V", "U", n_ao, a, n_ao, eigvals(:, i), work, -1_ip, info)
+            lwork = int(work(1))
+            deallocate(work)
+            allocate(work(lwork))
+            call dsyev("V", "U", n_ao, a, n_ao, eigvals(:, i), work, lwork, info)
+            deallocate(work)
+            eigvecs(:, :, i) = a
+        end do
+        deallocate(a)
+
+    end subroutine ref_diagonalize_static_part
+
+    function ref_rotate_to_eigenbasis(vector, eigvecs, n_particle, n_ao) &
+        result(rotated)
+        !
+        ! this function independently rotates a packed antisymmetric vector into a
+        ! given eigenbasis, one particle channel at a time, reproducing the 
+        ! corresponding OAO routine so that tests of routines which project internally 
+        ! do not depend on it
+        !
+        real(rp), intent(in) :: vector(:), eigvecs(:, :, :)
+        integer(ip), intent(in) :: n_particle, n_ao
+        real(rp) :: rotated(size(vector))
+
+        real(rp) :: full(n_ao, n_ao, n_particle), rotated_full(n_ao, n_ao, n_particle)
+        integer(ip) :: i
+
+        full = ref_unpack_asymm(vector, n_particle, n_ao)
+        do i = 1, n_particle
+            rotated_full(:, :, i) = matmul(transpose(eigvecs(:, :, i)), &
+                                           matmul(full(:, :, i), eigvecs(:, :, i)))
+        end do
+
+        rotated = ref_pack_asymm(rotated_full, size(vector))
+
+    end function ref_rotate_to_eigenbasis
+
+    function ref_rotate_from_eigenbasis(vector, eigvecs, n_particle, n_ao) &
+        result(rotated)
+        !
+        ! this function independently rotates a packed antisymmetric vector out of a
+        ! given eigenbasis, one particle channel at a time, reproducing the 
+        ! corresponding OAO routine so that tests of routines which project internally 
+        ! do not depend on it
+        !
+        real(rp), intent(in) :: vector(:), eigvecs(:, :, :)
+        integer(ip), intent(in) :: n_particle, n_ao
+        real(rp) :: rotated(size(vector))
+
+        real(rp) :: full(n_ao, n_ao, n_particle), rotated_full(n_ao, n_ao, n_particle)
+        integer(ip) :: i
+
+        full = ref_unpack_asymm(vector, n_particle, n_ao)
+        do i = 1, n_particle
+            rotated_full(:, :, i) = matmul(eigvecs(:, :, i), &
+                                           matmul(full(:, :, i), &
+                                                  transpose(eigvecs(:, :, i))))
+        end do
+
+        rotated = ref_pack_asymm(rotated_full, size(vector))
+
+    end function ref_rotate_from_eigenbasis
+
+    function ref_hess_eigval_pairs(eigvals, n_particle, n_ao, n_param) &
+        result(eigval_pairs)
+        !
+        ! this function independently constructs the pairwise sums of the static
+        ! Hessian part eigenvalues, reproducing the corresponding OAO routine so that 
+        ! tests of routines which project internally do not depend on it
+        !
+        real(rp), intent(in) :: eigvals(:, :)
+        integer(ip), intent(in) :: n_particle, n_ao, n_param
+        real(rp) :: eigval_pairs(n_param)
+
+        integer(ip) :: i, j, k, idx
+
+        idx = 1
+        do k = 1, n_particle
+            do j = 1, n_ao
+                do i = 1, j - 1
+                    eigval_pairs(idx) = eigvals(i, k) + eigvals(j, k)
+                    idx = idx + 1
+                end do
+            end do
+        end do
+        eigval_pairs = merge(4.0_rp, 2.0_rp, n_particle == 1) * eigval_pairs
+
+    end function ref_hess_eigval_pairs
 
     function mock_get_energy_cs(dm, error) result(energy)
         !
@@ -1240,12 +1349,19 @@ contains
         ! determine if the energy, gradient, Hessian diagonal, and Hessian linear 
         ! transformation are correct and if the response function is set
         kappa = 0.0_rp
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_oao(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_oao failed: Produced error."
             test_update_orbs_oao = .false.
             deallocate(oao_object)
             return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_oao failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after the static Hessian part was rebuilt."
+            test_update_orbs_oao = .false.
         end if
         if (abs(func - sum(dm_ao)) > tol) then
             write (stderr, *) "test_update_orbs_oao failed: Incorrect energy."
@@ -1271,12 +1387,21 @@ contains
             test_update_orbs_oao = .false.
         end if
 
-        ! call routine again without an orbital rotation and determine if the 
-        ! quantities of the already initialized object are reused
+        ! call routine again without an orbital rotation and determine if the
+        ! quantities of the already initialized object are reused, including the
+        ! cached eigendecomposition of the static Hessian part, which should remain
+        ! valid since it was not rebuilt
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_oao(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (n_mock_calls /= 1) then
             write (stderr, *) "test_update_orbs_oao failed: Quantities recomputed "// &
                 "without an orbital rotation."
+            test_update_orbs_oao = .false.
+        end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_oao failed: Cached "// &
+                "eigendecomposition of the static Hessian part marked stale even "// &
+                "though the static Hessian part was not rebuilt."
             test_update_orbs_oao = .false.
         end if
 
@@ -1296,11 +1421,18 @@ contains
                 "marked stale after being recomputed."
             test_update_orbs_oao = .false.
         end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_oao failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after the static Hessian part was rebuilt for a stale response."
+            test_update_orbs_oao = .false.
+        end if
 
         ! call routine with an orbital rotation and determine if the energy, gradient,
         ! Hessian diagonal, and Hessian linear transformation are recomputed and
         ! correct and if the response function is still set
         kappa = 0.1_rp
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_oao(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_oao failed: Produced error after "// &
@@ -1310,6 +1442,12 @@ contains
         if (n_mock_calls /= 3) then
             write (stderr, *) "test_update_orbs_oao failed: Quantities not "// &
                 "recomputed after an orbital rotation."
+            test_update_orbs_oao = .false.
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_oao failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after an orbital rotation."
             test_update_orbs_oao = .false.
         end if
         if (abs(func - sum(oao_object%dm_oao)) > tol) then
@@ -1343,10 +1481,17 @@ contains
         ! linear transformation are correct
         oao_object%update_dm_os => null()
         oao_object%update_dm_cs => mock_update_dm_cs
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_oao(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_oao failed: Produced error for the "// &
                 "closed-shell case."
+            test_update_orbs_oao = .false.
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_oao failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "for the closed-shell case."
             test_update_orbs_oao = .false.
         end if
         if (abs(func - sum(oao_object%dm_oao(:, :, 1))) > tol) then
@@ -1567,6 +1712,423 @@ contains
 
     end function test_project_oao
 
+    logical(c_bool) function test_precond_oao() bind(C)
+        !
+        ! this function tests the subroutine that defines a level-shifted
+        ! preconditioner based on the exact eigendecomposition of the static part of
+        ! the Hessian
+        !
+        use otr_oao, only: precond_oao, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion, only: precond_floor
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
+
+        real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
+                    eigvecs(n_ao, n_ao, n_particle), eigvals(n_ao, n_particle), &
+                    eigval_pairs(n_param), residual(n_param), &
+                    precond_residual(n_param), rotated_residual(n_param), &
+                    expected(n_param), mu
+        integer(ip) :: j, error
+
+        ! assume tests pass
+        test_precond_oao = .true.
+
+        ! generate random Fock matrix contributions, ensuring a non-diagonal static
+        ! part, and a residual vector and level shift
+        do j = 1, n_particle
+            fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
+            fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
+        end do
+        call random_number(residual)
+        mu = 0.3_rp
+
+        ! set up the OAO object
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%fock_oo = fock_oo
+        oao_object%fock_vv = fock_vv
+
+        ! independently diagonalize the static part and construct the expected
+        ! preconditioned residual
+        call ref_diagonalize_static_part(fock_oo, fock_vv, eigvecs, eigvals)
+        eigval_pairs = ref_hess_eigval_pairs(eigvals, n_particle, n_ao, n_param)
+        rotated_residual = ref_rotate_to_eigenbasis(residual, eigvecs, n_particle, n_ao)
+        eigval_pairs = eigval_pairs - mu
+        where (abs(eigval_pairs) < precond_floor) eigval_pairs = precond_floor
+        rotated_residual = rotated_residual / eigval_pairs
+        expected = ref_rotate_from_eigenbasis(rotated_residual, eigvecs, n_particle, &
+                                              n_ao)
+
+        ! call routine and determine if values of the preconditioned residual match
+        call precond_oao(residual, mu, precond_residual, error)
+        if (error /= 0) then
+            write (stderr, *) "test_precond_oao failed: Produced error."
+            test_precond_oao = .false.
+        end if
+        if (norm2(precond_residual - expected) > tol) then
+            write (stderr, *) "test_precond_oao failed: Incorrect preconditioned "// &
+                "residual."
+            test_precond_oao = .false.
+        end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_precond_oao failed: Eigendecomposition still "// &
+                "marked stale after being refreshed."
+            test_precond_oao = .false.
+        end if
+
+        ! mutate the Fock matrix without marking the cache stale, and confirm the
+        ! routine reuses the cached eigendecomposition rather than recomputing it
+        oao_object%fock_oo = fock_oo + 1.0_rp
+        oao_object%fock_vv = fock_vv + 1.0_rp
+        call precond_oao(residual, mu, precond_residual, error)
+        if (error /= 0 .or. norm2(precond_residual - expected) > tol) then
+            write (stderr, *) "test_precond_oao failed: Recomputed the "// &
+                "eigendecomposition despite the cache not being marked stale."
+            test_precond_oao = .false.
+        end if
+
+        ! mark the cache stale and confirm the eigendecomposition is refreshed to
+        ! reflect the mutated Fock matrix
+        oao_object%hess_eigen_stale = .true.
+        call ref_diagonalize_static_part(fock_oo + 1.0_rp, fock_vv + 1.0_rp, eigvecs, &
+                                         eigvals)
+        eigval_pairs = ref_hess_eigval_pairs(eigvals, n_particle, n_ao, n_param)
+        rotated_residual = ref_rotate_to_eigenbasis(residual, eigvecs, n_particle, n_ao)
+        eigval_pairs = eigval_pairs - mu
+        where (abs(eigval_pairs) < precond_floor) eigval_pairs = precond_floor
+        rotated_residual = rotated_residual / eigval_pairs
+        expected = ref_rotate_from_eigenbasis(rotated_residual, eigvecs, n_particle, &
+                                              n_ao)
+        call precond_oao(residual, mu, precond_residual, error)
+        if (error /= 0 .or. norm2(precond_residual - expected) > tol) then
+            write (stderr, *) "test_precond_oao failed: Did not refresh the "// &
+                "eigendecomposition after being marked stale."
+            test_precond_oao = .false.
+        end if
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_precond_oao
+
+    logical(c_bool) function test_precond_pd_oao() bind(C)
+        !
+        ! this function tests the subroutine that defines the positive-definite
+        ! preconditioner based on the exact eigendecomposition of the static part of
+        ! the Hessian
+        !
+        use otr_oao, only: precond_pd_oao, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
+
+        real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
+                    eigvecs(n_ao, n_ao, n_particle), eigvals(n_ao, n_particle), &
+                    eigval_pairs(n_param), residual(n_param), &
+                    precond_residual(n_param), rotated_residual(n_param), &
+                    expected(n_param), floor_val
+        integer(ip) :: j, error
+
+        ! assume tests pass
+        test_precond_pd_oao = .true.
+
+        ! generate random Fock matrix contributions, ensuring a non-diagonal static
+        ! part, and a residual vector
+        do j = 1, n_particle
+            fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
+            fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
+        end do
+        call random_number(residual)
+
+        ! set up the OAO object
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%fock_oo = fock_oo
+        oao_object%fock_vv = fock_vv
+
+        ! independently diagonalize the static part and construct the expected
+        ! preconditioned residual
+        call ref_diagonalize_static_part(fock_oo, fock_vv, eigvecs, eigvals)
+        eigval_pairs = ref_hess_eigval_pairs(eigvals, n_particle, n_ao, n_param)
+        rotated_residual = ref_rotate_to_eigenbasis(residual, eigvecs, n_particle, n_ao)
+        floor_val = max(precond_rel_floor_factor * maxval(abs(eigval_pairs)), &
+                        precond_floor)
+        eigval_pairs = abs(eigval_pairs)
+        where (eigval_pairs < floor_val) eigval_pairs = floor_val
+        rotated_residual = rotated_residual / eigval_pairs
+        expected = ref_rotate_from_eigenbasis(rotated_residual, eigvecs, n_particle, &
+                                              n_ao)
+
+        ! call routine and determine if values of the preconditioned residual match
+        call precond_pd_oao(residual, precond_residual, error)
+        if (error /= 0) then
+            write (stderr, *) "test_precond_pd_oao failed: Produced error."
+            test_precond_pd_oao = .false.
+        end if
+        if (norm2(precond_residual - expected) > tol) then
+            write (stderr, *) "test_precond_pd_oao failed: Incorrect "// &
+                "preconditioned residual."
+            test_precond_pd_oao = .false.
+        end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_precond_pd_oao failed: Eigendecomposition "// &
+                "still marked stale after being refreshed."
+            test_precond_pd_oao = .false.
+        end if
+
+        ! mutate the Fock matrix without marking the cache stale, and confirm the
+        ! routine reuses the cached eigendecomposition rather than recomputing it
+        oao_object%fock_oo = fock_oo + 1.0_rp
+        oao_object%fock_vv = fock_vv + 1.0_rp
+        call precond_pd_oao(residual, precond_residual, error)
+        if (error /= 0 .or. norm2(precond_residual - expected) > tol) then
+            write (stderr, *) "test_precond_pd_oao failed: Recomputed the "// &
+                "eigendecomposition despite the cache not being marked stale."
+            test_precond_pd_oao = .false.
+        end if
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_precond_pd_oao
+
+    logical(c_bool) function test_refresh_hess_eigen() bind(C)
+        !
+        ! this function tests the subroutine that diagonalizes the static part of the
+        ! Hessian and caches the result
+        !
+        use otr_oao, only: refresh_hess_eigen, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
+                    expected_eigvecs(n_ao, n_ao, n_particle), &
+                    expected_eigvals(n_ao, n_particle)
+        integer(ip) :: j, error
+
+        ! assume tests pass
+        test_refresh_hess_eigen = .true.
+
+        ! generate random Fock matrix contributions
+        do j = 1, n_particle
+            fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
+            fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
+        end do
+
+        ! set up the OAO object
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%fock_oo = fock_oo
+        oao_object%fock_vv = fock_vv
+
+        ! independently diagonalize the static part
+        call ref_diagonalize_static_part(fock_oo, fock_vv, expected_eigvecs, &
+                                         expected_eigvals)
+
+        ! call routine and determine if the cached eigendecomposition matches
+        call refresh_hess_eigen(error)
+        if (error /= 0) then
+            write (stderr, *) "test_refresh_hess_eigen failed: Produced error."
+            test_refresh_hess_eigen = .false.
+        end if
+        if (norm2(oao_object%hess_eigvecs - expected_eigvecs) > tol) then
+            write (stderr, *) "test_refresh_hess_eigen failed: Incorrect eigenvectors."
+            test_refresh_hess_eigen = .false.
+        end if
+        if (norm2(oao_object%hess_eigvals - expected_eigvals) > tol) then
+            write (stderr, *) "test_refresh_hess_eigen failed: Incorrect eigenvalues."
+            test_refresh_hess_eigen = .false.
+        end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_refresh_hess_eigen failed: Eigendecomposition "// &
+                "still marked stale after being refreshed."
+            test_refresh_hess_eigen = .false.
+        end if
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_refresh_hess_eigen
+
+    logical(c_bool) function test_rotate_to_hess_eigenbasis() bind(C)
+        !
+        ! this function tests the function that rotates a packed antisymmetric vector 
+        ! into the eigenbasis of the cached static Hessian part
+        !
+        use otr_oao, only: rotate_to_hess_eigenbasis, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
+
+        real(rp) :: eigvecs(n_ao, n_ao, n_particle), vector(n_param), &
+                    expected(n_param), rotated(n_param)
+        integer(ip) :: i, j
+
+        ! assume tests pass
+        test_rotate_to_hess_eigenbasis = .true.
+
+        ! use a cyclic permutation matrix as a simple, exactly orthogonal, non-identity 
+        ! rotation
+        eigvecs = 0.0_rp
+        do j = 1, n_particle
+            do i = 1, n_ao
+                eigvecs(i, mod(i, n_ao) + 1, j) = 1.0_rp
+            end do
+        end do
+        call random_number(vector)
+
+        ! set up the OAO object
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%hess_eigvecs = eigvecs
+
+        ! independently construct the expected rotated vector
+        expected = ref_rotate_to_eigenbasis(vector, eigvecs, n_particle, n_ao)
+
+        ! call routine and determine if values match
+        rotated = rotate_to_hess_eigenbasis(vector)
+        if (norm2(rotated - expected) > tol) then
+            write (stderr, *) "test_rotate_to_hess_eigenbasis failed: Incorrect "// &
+                "vector when rotating into the eigenbasis."
+            test_rotate_to_hess_eigenbasis = .false.
+        end if
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_rotate_to_hess_eigenbasis
+
+    logical(c_bool) function test_rotate_from_hess_eigenbasis() bind(C)
+        !
+        ! this function tests the function that rotates a packed antisymmetric
+        ! vector out of the eigenbasis of the cached static Hessian part
+        !
+        use otr_oao, only: rotate_from_hess_eigenbasis, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
+
+        real(rp) :: eigvecs(n_ao, n_ao, n_particle), vector(n_param), &
+                    expected(n_param), rotated(n_param)
+        integer(ip) :: i, j
+
+        ! assume tests pass
+        test_rotate_from_hess_eigenbasis = .true.
+
+        ! use a cyclic permutation matrix as a simple, exactly orthogonal, non-identity 
+        ! rotation
+        eigvecs = 0.0_rp
+        do j = 1, n_particle
+            do i = 1, n_ao
+                eigvecs(i, mod(i, n_ao) + 1, j) = 1.0_rp
+            end do
+        end do
+        call random_number(vector)
+
+        ! set up the OAO object
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%hess_eigvecs = eigvecs
+
+        ! independently construct the expected rotated vector
+        expected = ref_rotate_from_eigenbasis(vector, eigvecs, n_particle, n_ao)
+
+        ! call routine and determine if values match
+        rotated = rotate_from_hess_eigenbasis(vector)
+        if (norm2(rotated - expected) > tol) then
+            write (stderr, *) "test_rotate_from_hess_eigenbasis failed: Incorrect "// &
+                "vector when rotating out of the eigenbasis."
+            test_rotate_from_hess_eigenbasis = .false.
+        end if
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_rotate_from_hess_eigenbasis
+
+    logical(c_bool) function test_get_hess_eigval_pairs() bind(C)
+        !
+        ! this function tests the function that returns the pairwise sums of the cached 
+        ! static Hessian part eigenvalues; the closed-shell and open-shell cases apply 
+        ! different scaling factors
+        !
+        use otr_oao, only: get_hess_eigval_pairs, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        real(rp), allocatable :: eigvals(:, :), expected(:), eigval_pairs(:)
+
+        ! assume tests pass
+        test_get_hess_eigval_pairs = .true.
+
+        ! set up the OAO object
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+
+        ! closed-shell case
+        oao_object%n_particle = 1
+        oao_object%n_param = oao_object%n_particle * n_ao * (n_ao - 1) / 2
+        allocate(eigvals(n_ao, oao_object%n_particle))
+        call random_number(eigvals)
+        oao_object%hess_eigvals = eigvals
+
+        ! independently construct the expected pairwise sums
+        expected = ref_hess_eigval_pairs(eigvals, oao_object%n_particle, n_ao, &
+                                         oao_object%n_param)
+
+        ! call routine and determine if values match
+        eigval_pairs = get_hess_eigval_pairs()
+        if (norm2(eigval_pairs - expected) > tol) then
+            write (stderr, *) "test_get_hess_eigval_pairs failed: Incorrect "// &
+                "pairwise eigenvalue sums for the closed-shell case."
+            test_get_hess_eigval_pairs = .false.
+        end if
+        deallocate(eigvals)
+
+        ! open-shell case
+        oao_object%n_particle = n_particle
+        oao_object%n_param = oao_object%n_particle * n_ao * (n_ao - 1) / 2
+        allocate(eigvals(n_ao, oao_object%n_particle))
+        call random_number(eigvals)
+        oao_object%hess_eigvals = eigvals
+
+        ! independently construct the expected pairwise sums
+        expected = ref_hess_eigval_pairs(eigvals, oao_object%n_particle, n_ao, &
+                                         oao_object%n_param)
+
+        ! call routine and determine if values match
+        eigval_pairs = get_hess_eigval_pairs()
+        if (norm2(eigval_pairs - expected) > tol) then
+            write (stderr, *) "test_get_hess_eigval_pairs failed: Incorrect "// &
+                "pairwise eigenvalue sums for the open-shell case."
+            test_get_hess_eigval_pairs = .false.
+        end if
+        deallocate(eigvals)
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_get_hess_eigval_pairs
+
     logical(c_bool) function test_oao_factory_cs() bind(C)
         !
         ! this function tests the subroutine which returns the modified OAO orbital
@@ -1574,8 +2136,10 @@ contains
         !
         use otr_oao, only: oao_factory_cs, oao_object, oao_settings_type, &
                            get_energy_cs_type, update_dm_cs_type, obj_func_oao_ptr, &
-                           update_orbs_oao_ptr, project_oao_ptr
-        use opentrustregion, only: obj_func_type, update_orbs_type, project_type
+                           update_orbs_oao_ptr, precond_oao_ptr, precond_pd_oao_ptr, &
+                           project_oao_ptr
+        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
+                                   precond_pd_type, project_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_ao, operator(==)
 
@@ -1590,6 +2154,8 @@ contains
         procedure(update_dm_cs_type), pointer :: update_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
+        procedure(precond_type), pointer :: precond_oao_funptr
+        procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
         procedure(project_type), pointer :: project_oao_funptr
 
         ! assume tests pass
@@ -1611,6 +2177,7 @@ contains
         call oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, &
                                       get_energy_funptr, update_dm_funptr, &
                                       obj_func_oao_funptr, update_orbs_oao_funptr, &
+                                      precond_oao_funptr, precond_pd_oao_funptr, &
                                       project_oao_funptr, error, settings)
         if (error /= 0) then
             write (stderr, *) "test_oao_factory_cs failed: Produced error."
@@ -1681,6 +2248,16 @@ contains
                 "updating function is wrong."
             test_oao_factory_cs = .false.
         end if
+        if (.not. associated(precond_oao_funptr, precond_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_cs failed: Returned level-shifted "// &
+                "preconditioner function is wrong."
+            test_oao_factory_cs = .false.
+        end if
+        if (.not. associated(precond_pd_oao_funptr, precond_pd_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_cs failed: Returned "// &
+                "positive-definite preconditioner function is wrong."
+            test_oao_factory_cs = .false.
+        end if
         if (.not. associated(project_oao_funptr, project_oao_ptr)) then
             write (stderr, *) "test_oao_factory_cs failed: Returned projection "// &
                 "function is wrong."
@@ -1697,8 +2274,10 @@ contains
         !
         use otr_oao, only: oao_factory_os, oao_object, oao_settings_type, &
                            get_energy_os_type, update_dm_os_type, obj_func_oao_ptr, &
-                           update_orbs_oao_ptr, project_oao_ptr
-        use opentrustregion, only: obj_func_type, update_orbs_type, project_type
+                           update_orbs_oao_ptr, precond_oao_ptr, precond_pd_oao_ptr, &
+                           project_oao_ptr
+        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
+                                   precond_pd_type, project_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_ao, n_particle, operator(==)
 
@@ -1713,6 +2292,8 @@ contains
         procedure(update_dm_os_type), pointer :: update_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
+        procedure(precond_type), pointer :: precond_oao_funptr
+        procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
         procedure(project_type), pointer :: project_oao_funptr
 
         ! assume tests pass
@@ -1735,7 +2316,8 @@ contains
         ! call routine and determine if an error is produced
         call oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
                             update_dm_funptr, obj_func_oao_funptr, &
-                            update_orbs_oao_funptr, project_oao_funptr, error, settings)
+                            update_orbs_oao_funptr, precond_oao_funptr, &
+                            precond_pd_oao_funptr, project_oao_funptr, error, settings)
         if (error /= 0) then
             write (stderr, *) "test_oao_factory_os failed: Produced error."
             test_oao_factory_os = .false.
@@ -1793,6 +2375,16 @@ contains
         if (.not. associated(update_orbs_oao_funptr, update_orbs_oao_ptr)) then
             write (stderr, *) "test_oao_factory_os failed: Returned orbital "// &
                 "updating function is wrong."
+            test_oao_factory_os = .false.
+        end if
+        if (.not. associated(precond_oao_funptr, precond_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_os failed: Returned level-shifted "// &
+                "preconditioner function is wrong."
+            test_oao_factory_os = .false.
+        end if
+        if (.not. associated(precond_pd_oao_funptr, precond_pd_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_os failed: Returned "// &
+                "positive-definite preconditioner function is wrong."
             test_oao_factory_os = .false.
         end if
         if (.not. associated(project_oao_funptr, project_oao_ptr)) then

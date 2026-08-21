@@ -213,13 +213,14 @@ contains
         ! this function tests the subroutine which returns the modified ARH orbital
         ! updating function for the closed-shell case
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, project_type
+        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
+                                   precond_pd_type, project_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
                            update_dm_cs_type, update_orbs_arh_cs_ptr
         use otr_oao_test_reference, only: n_ao
         use otr_arh_test_reference, only: operator(==)
         use otr_oao, only: oao_object, get_energy_cs_type, obj_func_oao_ptr, &
-                           project_oao_ptr
+                           precond_oao_ptr, precond_pd_oao_ptr, project_oao_ptr
         use otr_oao_unit_tests, only: mock_get_energy_cs, identity_matrix, &
                                       generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
@@ -235,6 +236,8 @@ contains
         procedure(update_dm_cs_type), pointer :: update_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+        procedure(precond_type), pointer :: precond_arh_funptr
+        procedure(precond_pd_type), pointer :: precond_pd_arh_funptr
         procedure(project_type), pointer :: project_arh_funptr
 
         ! assume tests pass
@@ -256,7 +259,8 @@ contains
         ! call routine and determine if an error is produced
         call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
                          update_dm_funptr, obj_func_arh_funptr, &
-                         update_orbs_arh_funptr, project_arh_funptr, error, settings)
+                         update_orbs_arh_funptr, precond_arh_funptr, &
+                         precond_pd_arh_funptr, project_arh_funptr, error, settings)
         if (error /= 0) then
             write (stderr, *) "test_arh_factory_cs failed: Produced error."
             test_arh_factory_cs = .false.
@@ -316,6 +320,16 @@ contains
                 "updating function is wrong."
             test_arh_factory_cs = .false.
         end if
+        if (.not. associated(precond_arh_funptr, precond_oao_ptr)) then
+            write (stderr, *) "test_arh_factory_cs failed: Returned level-shifted "// &
+                "preconditioner function is wrong."
+            test_arh_factory_cs = .false.
+        end if
+        if (.not. associated(precond_pd_arh_funptr, precond_pd_oao_ptr)) then
+            write (stderr, *) "test_arh_factory_cs failed: Returned "// &
+                "positive-definite preconditioner function is wrong."
+            test_arh_factory_cs = .false.
+        end if
         if (.not. associated(project_arh_funptr, project_oao_ptr)) then
             write (stderr, *) "test_arh_factory_cs failed: Returned projection "// &
                 "function is wrong."
@@ -327,7 +341,8 @@ contains
         settings%arh_type = "unknown"
         call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
                          update_dm_funptr, obj_func_arh_funptr, &
-                         update_orbs_arh_funptr, project_arh_funptr, error, settings)
+                         update_orbs_arh_funptr, precond_arh_funptr, &
+                         precond_pd_arh_funptr, project_arh_funptr, error, settings)
         if (error == 0) then
             write (stderr, *) "test_arh_factory_cs failed: Error not thrown "// &
                 "for unknown ARH type."
@@ -344,13 +359,14 @@ contains
         ! this function tests the subroutine which returns the modified ARH orbital
         ! updating function for the open-shell case
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, project_type
+        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
+                                   precond_pd_type, project_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
                            update_dm_os_type, update_orbs_arh_os_ptr
         use otr_oao_test_reference, only: n_ao, n_particle
         use otr_arh_test_reference, only: operator(==)
         use otr_oao, only: oao_object, get_energy_os_type, obj_func_oao_ptr, &
-                           project_oao_ptr
+                           precond_oao_ptr, precond_pd_oao_ptr, project_oao_ptr
         use otr_oao_unit_tests, only: mock_get_energy_os, identity_matrix, &
                                       generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
@@ -366,6 +382,8 @@ contains
         procedure(update_dm_os_type), pointer :: update_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+        procedure(precond_type), pointer :: precond_arh_funptr
+        procedure(precond_pd_type), pointer :: precond_pd_arh_funptr
         procedure(project_type), pointer :: project_arh_funptr
 
         ! assume tests pass
@@ -389,7 +407,8 @@ contains
         ! call routine and determine if an error is produced
         call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
                          update_dm_funptr, obj_func_arh_funptr, &
-                         update_orbs_arh_funptr, project_arh_funptr, error, settings)
+                         update_orbs_arh_funptr, precond_arh_funptr, &
+                         precond_pd_arh_funptr, project_arh_funptr, error, settings)
         if (error /= 0) then
             write (stderr, *) "test_arh_factory_os failed: Produced error."
             test_arh_factory_os = .false.
@@ -447,6 +466,16 @@ contains
         if (.not. associated(update_orbs_arh_funptr, update_orbs_arh_os_ptr)) then
             write (stderr, *) "test_arh_factory_os failed: Returned orbital "// &
                 "updating function is wrong."
+            test_arh_factory_os = .false.
+        end if
+        if (.not. associated(precond_arh_funptr, precond_oao_ptr)) then
+            write (stderr, *) "test_arh_factory_os failed: Returned level-shifted "// &
+                "preconditioner function is wrong."
+            test_arh_factory_os = .false.
+        end if
+        if (.not. associated(precond_pd_arh_funptr, precond_pd_oao_ptr)) then
+            write (stderr, *) "test_arh_factory_os failed: Returned "// &
+                "positive-definite preconditioner function is wrong."
             test_arh_factory_os = .false.
         end if
         if (.not. associated(project_arh_funptr, project_oao_ptr)) then
@@ -1428,11 +1457,18 @@ contains
         ! call routine without an orbital rotation for an uninitialized object and
         ! determine if an error is produced
         kappa = 0.0_rp
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Produced error."
             test_update_orbs_arh_cs = .false.
             return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after the static Hessian part was rebuilt."
+            test_update_orbs_arh_cs = .false.
         end if
 
         ! determine if the energy, Fock matrix and non-linear potential of the density
@@ -1482,7 +1518,10 @@ contains
         end if
 
         ! call routine again without an orbital rotation and determine if the
-        ! quantities of the already initialized object are reused
+        ! quantities of the already initialized object are reused, including the
+        ! cached eigendecomposition of the static Hessian part, which should remain
+        ! valid since it was not rebuilt
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, &
                                           error)
         if (n_mock_calls /= 1) then
@@ -1495,6 +1534,12 @@ contains
                 "without an orbital rotation."
             test_update_orbs_arh_cs = .false.
         end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part marked stale even "// &
+                "though the static Hessian part was not rebuilt."
+            test_update_orbs_arh_cs = .false.
+        end if
 
         ! save the current quantities, which the history has to retain
         dm_saved = arh_object%dm_oao
@@ -1504,12 +1549,19 @@ contains
         ! call routine with an orbital rotation and determine if the history is
         ! extended
         kappa = 0.1_rp
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Produced error "// &
                 "after orbital rotation."
             test_update_orbs_arh_cs = .false.
             return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after an orbital rotation."
+            test_update_orbs_arh_cs = .false.
         end if
         if (size(arh_object%dm_list, 4) /= 1) then
             write (stderr, *) "test_update_orbs_arh_cs failed: History not extended."
@@ -1584,10 +1636,17 @@ contains
         ! call routine for multisecant SR1 and determine if the separately regularized
         ! multisecant SR1 systems are constructed instead of the ARH metric
         arh_object%settings%arh_type = "ms_sr1"
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
                 "multisecant SR1."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "for multisecant SR1."
             test_update_orbs_arh_cs = .false.
         end if
         if (.not. allocated(arh_object%a_eigvecs)) then
@@ -1672,11 +1731,18 @@ contains
         ! call routine without an orbital rotation for an uninitialized object and
         ! determine if an error is produced
         kappa = 0.0_rp
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_os failed: Produced error."
             test_update_orbs_arh_os = .false.
             return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after the static Hessian part was rebuilt."
+            test_update_orbs_arh_os = .false.
         end if
 
         ! determine if the energy and the potentials of the density matrix updating
@@ -1735,7 +1801,10 @@ contains
         end if
 
         ! call routine again without an orbital rotation and determine if the
-        ! quantities of the already initialized object are reused
+        ! quantities of the already initialized object are reused, including the
+        ! cached eigendecomposition of the static Hessian part, which should remain
+        ! valid since it was not rebuilt
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (n_mock_calls /= 1) then
             write (stderr, *) "test_update_orbs_arh_os failed: Quantities "// &
@@ -1745,6 +1814,12 @@ contains
         if (size(arh_object%dm_list, 4) /= 0) then
             write (stderr, *) "test_update_orbs_arh_os failed: History extended "// &
                 "without an orbital rotation."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
+                "eigendecomposition of the static Hessian part marked stale even "// &
+                "though the static Hessian part was not rebuilt."
             test_update_orbs_arh_os = .false.
         end if
 
@@ -1757,12 +1832,19 @@ contains
         ! call routine with an orbital rotation and determine if the history is
         ! extended
         kappa = 0.1_rp
+        oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &
                 "after orbital rotation."
             test_update_orbs_arh_os = .false.
             return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after an orbital rotation."
+            test_update_orbs_arh_os = .false.
         end if
         if (size(arh_object%dm_list, 4) /= 1) then
             write (stderr, *) "test_update_orbs_arh_os failed: History not extended."

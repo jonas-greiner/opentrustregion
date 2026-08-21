@@ -68,10 +68,10 @@ module opentrustregion
         project_warning_msg = &
             "Custom projection is provided. To optimize performance, OTR assumes "// &
             "that all other provided routines (update_orbs, hess_x, precond, "// &
-            "stability_hess_x, approx_hess_x) are already projected onto the "// &
-            "relevant orbital rotation subspace. If these routines are not "// &
-            "self-projecting, redundant rotations may contaminate the trial space "// &
-            "and cause convergence issues."
+            "precond_pd, stability_hess_x, approx_hess_x) are already projected "// &
+            "onto the relevant orbital rotation subspace. If these routines are "// &
+            "not self-projecting, redundant rotations may contaminate the trial "// &
+            "space and cause convergence issues."
 
     ! interfaces for callback functions
     abstract interface
@@ -115,6 +115,16 @@ module opentrustregion
             real(rp), intent(out), target :: precond_residual(:)
             integer(ip), intent(out) :: error
         end subroutine precond_type
+    end interface
+
+    abstract interface
+        subroutine precond_pd_type(residual, precond_residual, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: residual(:)
+            real(rp), intent(out), target :: precond_residual(:)
+            integer(ip), intent(out) :: error
+        end subroutine precond_pd_type
     end interface
 
     abstract interface
@@ -213,6 +223,7 @@ module opentrustregion
         integer(ip) :: n_macro, n_micro
         character(kw_len) :: subsystem_solver, trust_region_shape
         type(stability_settings_type) :: stability_settings
+        procedure(precond_pd_type), pointer, nopass :: precond_pd => null()
         procedure(modify_step_type), pointer, nopass :: modify_step => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
         procedure(hess_x_type), pointer, nopass :: stability_hess_x => null()
@@ -231,12 +242,12 @@ module opentrustregion
                                 jacobi_davidson_start = 50, seed = 42, verbose = 0, &
                                 diag_solver = "davidson")
     type(solver_settings_type), parameter :: default_solver_settings = &
-        solver_settings_type(precond = null(), project = null(), modify_step = null(), &
-                             conv_check = null(), stability_hess_x = null(), &
-                             logger = null(), stability = .false., &
-                             line_search = .false., hess_symm = .true., &
-                             initialized = .true., conv_tol = 1e-5_rp, &
-                             start_trust_radius = -1.0_rp, &
+        solver_settings_type(precond = null(), precond_pd = null(), project = null(), &
+                             modify_step = null(), conv_check = null(), &
+                             stability_hess_x = null(), logger = null(), &
+                             stability = .false., line_search = .false., &
+                             hess_symm = .true., initialized = .true., &
+                             conv_tol = 1e-5_rp, start_trust_radius = -1.0_rp, &
                              global_red_factor = 1e-3_rp, local_red_factor = 1e-4_rp, &
                              n_random_trial_vectors = 1, n_macro = 150, n_micro = 50, &
                              jacobi_davidson_start = 30, seed = 42, verbose = 0, &
@@ -2118,9 +2129,10 @@ contains
     subroutine rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
         !
         ! this subroutine defines the relative-floor absolute diagonal preconditioner 
-        ! used by TCG and GLTR to define the ellipsoidal trust-region metric; this 
-        ! floors abs(h_diag) relative to its own largest element, which bounds the 
-        ! metric's condition number (cond(abs(h_diag)) <= 1 / precond_rel_floor_factor) 
+        ! used by TCG and GLTR to define the ellipsoidal trust-region metric; the 
+        ! resulting preconditioner must always be positive-definite; this floors 
+        ! abs(h_diag) relative to its own largest element, which bounds the metric's 
+        ! condition number (cond(abs(h_diag)) <= 1 / precond_rel_floor_factor) 
         ! regardless of how small or how negative individual diagonal elements are; a 
         ! stiffly negative direction is treated the same as a stiffly positive one, 
         ! since either way the model changes fast there and a large step should not be 
@@ -2128,7 +2140,7 @@ contains
         !
         real(rp), intent(in) :: vector(:), h_diag(:)
         real(rp), intent(out) :: precond_vector(:)
-        class(optimizer_settings_type), intent(in) :: settings
+        type(solver_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         real(rp) :: floor_val
@@ -2136,9 +2148,9 @@ contains
         ! initialize error flag
         error = 0
 
-        ! check for user-defined preconditioner
-        if (associated(settings%precond)) then
-            call settings%precond(vector, 0.0_rp, precond_vector, error)
+        ! check for user-defined positive-definite preconditioner
+        if (associated(settings%precond_pd)) then
+            call settings%precond_pd(vector, precond_vector, error)
             call add_error_origin(error, error_precond, settings)
             if (error /= 0) return
         ! construct relative-floor diagonal preconditioner

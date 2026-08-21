@@ -106,6 +106,7 @@ obj_func_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 precond_interface_type = CFUNCTYPE(
     c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
+precond_pd_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 project_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 modify_step_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 init_trial_space_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
@@ -218,6 +219,34 @@ class PrecondInterface:
         # call preconditioner
         try:
             self.precond(residual, mu, precond_residual)
+        except RuntimeError:
+            traceback.print_exc(file=sys.stderr)
+            return 1
+
+        return 0
+
+
+@dataclass
+class PrecondPDInterface:
+    """
+    this class provides the interface to the positive-definite preconditioning function
+    used to define the ellipsoidal trust-region metric for the TCG and GLTR subsystem
+    solvers
+    """
+
+    precond_pd: Callable[[np.ndarray, np.ndarray], None]
+    n_param: int
+
+    def __call__(self, residual_ptr, precond_residual_ptr) -> int:
+        # convert pointers to numpy arrays
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+        precond_residual = np.ctypeslib.as_array(
+            precond_residual_ptr, shape=(self.n_param,)
+        )
+
+        # call positive-definite preconditioner
+        try:
+            self.precond_pd(residual, precond_residual)
         except RuntimeError:
             traceback.print_exc(file=sys.stderr)
             return 1
@@ -378,6 +407,7 @@ class StabilitySettingsC(Structure):
 class SolverSettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
+        ("precond_pd", c_void_p),
         ("project", c_void_p),
         ("modify_step", c_void_p),
         ("conv_check", c_void_p),
@@ -458,12 +488,14 @@ class SolverSettings(Settings):
     init_c_struct = lib.init_solver_settings
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
+    precond_pd: Optional[Callable[[np.ndarray, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
     modify_step: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
     stability_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
+    precond_pd_interface: Any
     project_interface: Any
     modify_step_interface: Any
     conv_check_interface: Any
@@ -486,6 +518,13 @@ class SolverSettings(Settings):
         """
         self.set_optional_callback(
             "precond", self.precond, PrecondInterface, precond_interface_type, n_param
+        )
+        self.set_optional_callback(
+            "precond_pd",
+            self.precond_pd,
+            PrecondPDInterface,
+            precond_pd_interface_type,
+            n_param,
         )
         self.set_optional_callback(
             "project", self.project, ProjectInterface, project_interface_type, n_param

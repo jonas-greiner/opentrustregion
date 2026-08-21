@@ -37,6 +37,7 @@ fortran_tests = {
     "oao_tests": [
         "calculate_grad_h_diag",
         "compute_sqrt_and_inv_sqrt",
+        "get_hess_eigval_pairs",
         "hess_x_oao",
         "init_oao_settings",
         "matrix_exponential",
@@ -46,12 +47,17 @@ fortran_tests = {
         "oao_sanity_check",
         "obj_func_oao",
         "pack_asymm",
+        "precond_oao",
+        "precond_pd_oao",
         "project_asymm",
         "project_oao",
         "project_symm",
         "purify",
+        "refresh_hess_eigen",
         "refresh_oao_response",
         "rotate_dm_ao",
+        "rotate_from_hess_eigenbasis",
+        "rotate_to_hess_eigenbasis",
         "symmetric_transformation",
         "unpack_asymm",
         "update_orbs_oao",
@@ -66,6 +72,8 @@ fortran_tests = {
         "oao_deconstructor_c_wrapper",
         "oao_factory_c_wrapper",
         "obj_func_oao_c_wrapper",
+        "precond_oao_c_wrapper",
+        "precond_pd_oao_c_wrapper",
         "project_oao_c_wrapper",
         "update_dm_f_wrapper",
         "update_orbs_oao_c_wrapper",
@@ -206,14 +214,16 @@ class OAOPyInterfaceTests(unittest.TestCase):
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
         # call OAO factory python interface
-        obj_func_oao, update_orbs_oao, project_oao = oao_factory(
-            dm_ao,
-            ao_overlap,
-            n_particle,
-            n_ao,
-            self.mock_get_energy,
-            self.mock_update_dm,
-            settings,
+        obj_func_oao, update_orbs_oao, precond_oao, precond_pd_oao, project_oao = (
+            oao_factory(
+                dm_ao,
+                ao_overlap,
+                n_particle,
+                n_ao,
+                self.mock_get_energy,
+                self.mock_update_dm,
+                settings,
+            )
         )
 
         # check if logger was called correctly
@@ -320,6 +330,49 @@ class OAOPyInterfaceTests(unittest.TestCase):
             print(
                 " test_oao_factory_py_interface failed: Returned projected vector "
                 "of returned OAO projection function wrong."
+            )
+            test_passed = False
+
+        # call returned OAO level-shifted preconditioner function
+        residual = np.full(n_param, 1.0, dtype=np.float64)
+        precond_residual = np.empty(n_param, dtype=np.float64)
+        mu = 5.0
+        try:
+            precond_oao(residual, mu, precond_residual)
+        except RuntimeError:
+            print(
+                " test_oao_factory_py_interface failed: Returned OAO level-shifted "
+                "preconditioner function raises error."
+            )
+            test_passed = False
+
+        # check results
+        if not np.allclose(precond_residual, np.full(n_param, mu, dtype=np.float64)):
+            print(
+                " test_oao_factory_py_interface failed: Returned preconditioned "
+                "residual of returned OAO level-shifted preconditioner function wrong."
+            )
+            test_passed = False
+
+        # call returned OAO positive-definite preconditioner function
+        precond_pd_residual = np.empty(n_param, dtype=np.float64)
+        try:
+            precond_pd_oao(residual, precond_pd_residual)
+        except RuntimeError:
+            print(
+                " test_oao_factory_py_interface failed: Returned OAO positive-definite "
+                "preconditioner function raises error."
+            )
+            test_passed = False
+
+        # check results
+        if not np.allclose(
+            precond_pd_residual, np.full(n_param, 3.0, dtype=np.float64)
+        ):
+            print(
+                " test_oao_factory_py_interface failed: Returned preconditioned "
+                "residual of returned OAO positive-definite preconditioner function "
+                "wrong."
             )
             test_passed = False
 

@@ -87,12 +87,14 @@ contains
         use otr_oao_test_reference, only: n_ao, n_particle, n_ao_c
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
+                                  test_precond_c_funptr, test_precond_pd_c_funptr, &
                                   test_project_c_funptr
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
         type(c_funptr) :: get_energy_c_funptr, update_dm_c_funptr, &
                           obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
+                          precond_arh_c_funptr, precond_pd_arh_c_funptr, &
                           project_arh_c_funptr
         type(arh_settings_type_c) :: settings_c
         integer(c_ip) :: n_particle_c, error_c
@@ -128,6 +130,7 @@ contains
                                         n_ao_c, get_energy_c_funptr, &
                                         update_dm_c_funptr, obj_func_arh_c_funptr, &
                                         update_orbs_arh_c_funptr, &
+                                        precond_arh_c_funptr, precond_pd_arh_c_funptr, &
                                         project_arh_c_funptr, settings_c)
 
         ! check if logging subroutine was correctly called
@@ -163,6 +166,17 @@ contains
         end if
         deallocate(dm_ao_2d_c)
 
+        ! test returned level-shifted preconditioner function
+        test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
+            test_precond_c_funptr(precond_arh_c_funptr, "arh_factory_c_wrapper", &
+                                  " by returned level-shifted preconditioner function")
+
+        ! test returned positive-definite preconditioner function
+        test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
+            test_precond_pd_c_funptr(precond_pd_arh_c_funptr, &
+                                     "arh_factory_c_wrapper", " by returned "// &
+                                     "positive-definite preconditioner function")
+
         ! test returned projection function
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
             test_project_c_funptr(project_arh_c_funptr, "arh_factory_c_wrapper", &
@@ -187,6 +201,7 @@ contains
                                         n_ao_c, get_energy_c_funptr, &
                                         update_dm_c_funptr, obj_func_arh_c_funptr, &
                                         update_orbs_arh_c_funptr, &
+                                        precond_arh_c_funptr, precond_pd_arh_c_funptr, &
                                         project_arh_c_funptr, settings_c)
 
         ! deallocate arrays

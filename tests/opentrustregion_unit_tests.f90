@@ -198,6 +198,21 @@ contains
 
     end subroutine mock_precond
 
+    subroutine mock_precond_pd(residual, precond_residual, error)
+        !
+        ! this subroutine is a test subroutine for the positive-definite preconditioner 
+        ! subroutine
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        precond_residual = 3.0_rp * residual
+
+        error = 0
+
+    end subroutine mock_precond_pd
+
     subroutine mock_project(vector, error)
         !
         ! this subroutine is a test subroutine for the projection subroutine
@@ -2206,19 +2221,20 @@ contains
             test_rel_floor_diag_precond = .false.
         end if
 
-        ! test custom preconditioner
-        settings%precond => mock_precond
+        ! test custom positive-definite preconditioner
+        settings%precond_pd => mock_precond_pd
 
         ! call subroutine and check if results match
         call rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_rel_floor_diag_precond failed: Returned error "// &
-                "for custom preconditioner."
+                "for custom positive-definite preconditioner."
             test_rel_floor_diag_precond = .false.
         end if
-        if (any(abs(precond_vector - 0.0_rp) > tol)) then
+        if (any(abs(precond_vector - 3.0_rp) > tol)) then
             write (stderr, *) "test_rel_floor_diag_precond failed: Returned "// &
-                "preconditioned vector not correct for custom preconditioner."
+                "preconditioned vector not correct for custom positive-definite "// &
+                "preconditioner."
             test_rel_floor_diag_precond = .false.
         end if
 

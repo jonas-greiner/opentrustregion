@@ -160,6 +160,7 @@ fortran_tests = {
         "modify_step_f_wrapper",
         "obj_func_f_wrapper",
         "precond_f_wrapper",
+        "precond_pd_f_wrapper",
         "project_f_wrapper",
         "solver_c_wrapper",
         "stability_check_c_wrapper",
@@ -369,6 +370,13 @@ class PyInterfaceTests(unittest.TestCase):
         this function is a mock function for the preconditioner function
         """
         precond_residual[:] = mu * residual
+
+    def mock_precond_pd(self, residual, precond_residual):
+        """
+        this function is a mock function for the positive-definite preconditioner
+        function
+        """
+        precond_residual[:] = 3 * residual
 
     def mock_project(self, vector):
         """

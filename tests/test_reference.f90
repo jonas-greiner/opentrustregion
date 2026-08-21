@@ -573,6 +573,118 @@ contains
 
     end function test_precond_c_funptr
 
+    function test_precond_pd_funptr(precond_pd_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided positive-definite preconditioner function
+        ! pointer
+        !
+        use opentrustregion, only: precond_pd_type
+
+        procedure(precond_pd_type), intent(in), pointer :: precond_pd_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        real(rp), allocatable :: residual(:), precond_residual(:)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(precond_pd_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Positive-definite "// &
+                "preconditioner function not associated with value."
+            return
+        end if
+
+        ! allocate arrays
+        allocate(residual(n_param), precond_residual(n_param))
+
+        ! initialize residual
+        residual = 1.0_rp
+
+        ! call preconditioning subroutine
+        call precond_pd_funptr(residual, precond_residual, error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check preconditioned residual
+        if (any(abs(precond_residual - 3.0_rp) > tol)) then
+            write (stderr, *) "test_"//test_name//" failed: Preconditioned "// &
+                "residual returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(residual, precond_residual)
+
+    end function test_precond_pd_funptr
+
+    function test_precond_pd_c_funptr(precond_pd_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided positive-definite preconditioner C function
+        ! pointer
+        !
+        use c_interface, only: precond_pd_c_type
+
+        type(c_funptr), intent(in) :: precond_pd_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+        procedure(precond_pd_c_type), pointer :: precond_pd_funptr
+        real(c_rp), allocatable :: residual(:), precond_residual(:)
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(precond_pd_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Positive-definite "// &
+                "preconditioner function not associated with value."
+            return
+        end if
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=precond_pd_c_funptr, fptr=precond_pd_funptr)
+
+        ! allocate arrays
+        allocate(residual(n_param), precond_residual(n_param))
+
+        ! initialize residual
+        residual = 1.0_c_rp
+
+        ! call preconditioning function
+        error = precond_pd_funptr(residual, precond_residual)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
+                "."
+            test_passed = .false.
+        end if
+
+        ! check preconditioned residual
+        if (any(abs(precond_residual - 3.0_c_rp) > tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Preconditioned "// &
+                "residual returned"//message//" wrong."
+            test_passed = .false.
+        end if
+
+        ! deallocate arrays
+        deallocate(residual, precond_residual)
+
+    end function test_precond_pd_c_funptr
+
     function test_project_funptr(project_funptr, test_name, message) result(test_passed)
         !
         ! this function tests a provided projection function pointer
@@ -1125,6 +1237,11 @@ contains
             test_project_funptr(settings%project, test_name, " by"//message// &
                                 " projection subroutine")
 
+        ! test passed positive-definite preconditioner subroutine
+        test_passed = test_passed .and. &
+            test_precond_pd_funptr(settings%precond_pd, test_name, " by"//message// &
+                                   " positive-definite preconditioner subroutine")
+
         ! test passed step modification subroutine
         test_passed = test_passed .and. &
             test_modify_step_funptr(settings%modify_step, test_name, " by"//message// &
@@ -1180,6 +1297,12 @@ contains
         test_passed = test_passed .and. &
             test_project_c_funptr(settings_c%project, test_name, " by"//message// &
                                   " projection function")
+
+        ! test passed positive-definite preconditioner function
+        test_passed = test_passed .and. &
+            test_precond_pd_c_funptr(settings_c%precond_pd, test_name, " by"// &
+                                     message//" positive-definite preconditioner "// &
+                                     "function")
 
         ! test passed step modification function
         test_passed = test_passed .and. &
@@ -1343,6 +1466,11 @@ contains
             test_passed = .false.
             write (stderr, *) test_name//" failed: Projection function associated."
         end if
+        if (associated(settings%precond_pd)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Positive-definite "// &
+                "preconditioner function associated."
+        end if
         if (associated(settings%modify_step)) then
             test_passed = .false.
             write (stderr, *) test_name//" failed: Step modification function "// &
@@ -1392,6 +1520,11 @@ contains
         if (c_associated(settings_c%project)) then
             test_passed = .false.
             write (stderr, *) test_name//" failed: Projection function associated."
+        end if
+        if (c_associated(settings_c%precond_pd)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Positive-definite "// &
+                "preconditioner function associated."
         end if
         if (c_associated(settings_c%modify_step)) then
             test_passed = .false.
@@ -1533,6 +1666,7 @@ contains
 
         ! unassociate function pointers
         lhs%precond => null()
+        lhs%precond_pd => null()
         lhs%project => null()
         lhs%modify_step => null()
         lhs%conv_check => null()

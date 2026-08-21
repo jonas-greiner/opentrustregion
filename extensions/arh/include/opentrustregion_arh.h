@@ -80,6 +80,10 @@ extern "C"
      * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
      * @param update_orbs_arh_c_funptr   Output: wrapped update_orbs function pointer
      * @param project_arh_c_funptr       Output: wrapped projection function pointer
+     * @param precond_arh_c_funptr       Output: wrapped level-shifted preconditioner
+     *                                   function pointer
+     * @param precond_pd_arh_c_funptr    Output: wrapped positive-definite
+     *                                   preconditioner function pointer
      *
      * @return                           Integer error code from Fortran
      */
@@ -92,6 +96,8 @@ extern "C"
         update_dm_fp update_dm_c_funptr,
         obj_func_fp *obj_func_arh_c_funptr,
         update_orbs_fp *update_orbs_arh_c_funptr,
+        precond_fp *precond_arh_c_funptr,
+        precond_pd_fp *precond_pd_arh_c_funptr,
         project_fp *project_arh_c_funptr,
         arh_settings_type *settings_c);
 

@@ -7,7 +7,7 @@
 module otr_arh
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
-                               hess_x_type, project_type
+                               hess_x_type, precond_type, precond_pd_type, project_type
     use otr_oao, only: oao_settings_type, default_oao_settings, get_energy_os_type, &
                        get_energy_cs_type
 
@@ -99,13 +99,15 @@ module otr_arh
 
     subroutine arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, &
                               update_dm_cs, obj_func_arh_funptr, &
-                              update_orbs_arh_funptr, project_arh_funptr, error, &
+                              update_orbs_arh_funptr, precond_arh_funptr, &
+                              precond_pd_arh_funptr, project_arh_funptr, error, &
                               settings)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! closed-shell case
         !
-        use otr_oao, only: get_energy_cs_type, obj_func_oao, project_oao
+        use otr_oao, only: get_energy_cs_type, obj_func_oao, precond_oao, &
+                           precond_pd_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -114,6 +116,8 @@ module otr_arh
         procedure(update_dm_cs_type), intent(in), pointer :: update_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
+        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
@@ -136,19 +140,23 @@ module otr_arh
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_oao
         update_orbs_arh_funptr => update_orbs_arh_cs
+        precond_arh_funptr => precond_oao
+        precond_pd_arh_funptr => precond_pd_oao
         project_arh_funptr => project_oao
 
     end subroutine arh_factory_cs
 
     subroutine arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, &
                               update_dm_os, obj_func_arh_funptr, &
-                              update_orbs_arh_funptr, project_arh_funptr, error, &
+                              update_orbs_arh_funptr, precond_arh_funptr, &
+                              precond_pd_arh_funptr, project_arh_funptr, error, &
                               settings)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! open-shell case
         !
-        use otr_oao, only: get_energy_os_type, obj_func_oao, project_oao
+        use otr_oao, only: get_energy_os_type, obj_func_oao, precond_oao, &
+                           precond_pd_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -157,6 +165,8 @@ module otr_arh
         procedure(update_dm_os_type), intent(in), pointer :: update_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
+        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
         procedure(project_type), intent(out), pointer :: project_arh_funptr
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
@@ -175,6 +185,8 @@ module otr_arh
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_oao
         update_orbs_arh_funptr => update_orbs_arh_os
+        precond_arh_funptr => precond_oao
+        precond_pd_arh_funptr => precond_pd_oao
         project_arh_funptr => project_oao
 
     end subroutine arh_factory_os
@@ -342,6 +354,10 @@ module otr_arh
                                        arh_object%h_diag, arh_object%fock_oo, &
                                        arh_object%fock_vv)
 
+            ! the static Hessian part was just rebuilt, so any cached
+            ! eigendecomposition of it is now stale
+            oao_object%hess_eigen_stale = .true.
+
             ! prepare differences for response part of ARH Hessian
             n_list = size(arh_object%dm_list, 4)
             if (allocated(arh_object%dm_diff)) &
@@ -499,6 +515,10 @@ module otr_arh
                                        arh_object%grad, arh_object%h_diag, &
                                        arh_object%fock_oo, arh_object%fock_vv)
             deallocate(fock_oao)
+
+            ! the static Hessian part was just rebuilt, so any cached
+            ! eigendecomposition of it is now stale
+            oao_object%hess_eigen_stale = .true.
 
             ! prepare differences for response part of ARH Hessian
             n_list = size(arh_object%dm_list, 4)
@@ -670,8 +690,13 @@ module otr_arh
         end if
         deallocate(x_full, delta_dm)
 
-        ! project Fock response onto occupied-virtual and virtual-occupied subspace
-        hess_x_full = hess_x_full + project_asymm(fock_response, arh_object%dm_oao)
+        ! project the combined static and response contributions onto the
+        ! occupied-virtual and virtual-occupied subspace; the static part is already
+        ! confined to that subspace in exact arithmetic, but the projection on the full 
+        ! Hessian linear transformation is free since the Fock response has to be 
+        ! projected anyways and the full projection can prevent some numerical leakage  
+        ! into theredundant subspace
+        hess_x_full = project_asymm(hess_x_full + fock_response, arh_object%dm_oao)
 
         ! pack Hessian linear transformation
         if (arh_object%n_particle == 1) then

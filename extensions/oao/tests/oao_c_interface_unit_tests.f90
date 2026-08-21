@@ -165,12 +165,14 @@ contains
                                           n_particle, n_ao_c
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
+                                  test_precond_c_funptr, test_precond_pd_c_funptr, &
                                   test_project_c_funptr
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
         type(c_funptr) :: get_energy_c_funptr, update_dm_c_funptr, &
                           obj_func_oao_c_funptr, update_orbs_oao_c_funptr, &
+                          precond_oao_c_funptr, precond_pd_oao_c_funptr, &
                           project_oao_c_funptr
         type(oao_settings_type_c) :: settings_c
         integer(c_ip) :: n_particle_c, error_c
@@ -206,6 +208,7 @@ contains
                                         n_ao_c, get_energy_c_funptr, &
                                         update_dm_c_funptr, obj_func_oao_c_funptr, &
                                         update_orbs_oao_c_funptr, &
+                                        precond_oao_c_funptr, precond_pd_oao_c_funptr, &
                                         project_oao_c_funptr, settings_c)
 
         ! check if logging subroutine was correctly called
@@ -241,6 +244,17 @@ contains
         end if
         deallocate(dm_ao_2d_c)
 
+        ! test returned level-shifted preconditioner function
+        test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. &
+            test_precond_c_funptr(precond_oao_c_funptr, "oao_factory_c_wrapper", &
+                                  " by returned level-shifted preconditioner function")
+
+        ! test returned positive-definite preconditioner function
+        test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. &
+            test_precond_pd_c_funptr(precond_pd_oao_c_funptr, &
+                                     "oao_factory_c_wrapper", " by returned "// &
+                                     "positive-definite preconditioner function")
+
         ! test returned projection function
         test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. &
             test_project_c_funptr(project_oao_c_funptr, "oao_factory_c_wrapper", &
@@ -265,6 +279,7 @@ contains
                                         n_ao_c, get_energy_c_funptr, &
                                         update_dm_c_funptr, obj_func_oao_c_funptr, &
                                         update_orbs_oao_c_funptr, &
+                                        precond_oao_c_funptr, precond_pd_oao_c_funptr, &
                                         project_oao_c_funptr, settings_c)
 
         ! deallocate arrays
@@ -452,6 +467,54 @@ contains
                                  "hess_x_oao_c_wrapper", "")
 
     end function test_hess_x_oao_c_wrapper
+
+    logical(c_bool) function test_precond_oao_c_wrapper() bind(C)
+        !
+        ! this function tests the C wrapper for the OAO level-shifted preconditioner
+        ! subroutine
+        !
+        use otr_common_c_interface, only: n_param_global => n_param
+        use otr_oao_c_interface, only: precond_oao_before_wrapping, &
+                                       precond_oao_c_wrapper
+        use otr_oao_mock, only: mock_precond_oao
+        use test_reference, only: test_precond_c_funptr, n_param
+
+        ! set global number of parameters for assumed size arrays
+        n_param_global = n_param
+
+        ! inject mock subroutine
+        precond_oao_before_wrapping => mock_precond_oao
+
+        ! test preconditioner function
+        test_precond_oao_c_wrapper = &
+            test_precond_c_funptr(c_funloc(precond_oao_c_wrapper), &
+                                  "precond_oao_c_wrapper", "")
+
+    end function test_precond_oao_c_wrapper
+
+    logical(c_bool) function test_precond_pd_oao_c_wrapper() bind(C)
+        !
+        ! this function tests the C wrapper for the OAO positive-definite
+        ! preconditioner subroutine
+        !
+        use otr_common_c_interface, only: n_param_global => n_param
+        use otr_oao_c_interface, only: precond_pd_oao_before_wrapping, &
+                                       precond_pd_oao_c_wrapper
+        use otr_oao_mock, only: mock_precond_pd_oao
+        use test_reference, only: test_precond_pd_c_funptr, n_param
+
+        ! set global number of parameters for assumed size arrays
+        n_param_global = n_param
+
+        ! inject mock subroutine
+        precond_pd_oao_before_wrapping => mock_precond_pd_oao
+
+        ! test preconditioner function
+        test_precond_pd_oao_c_wrapper = &
+            test_precond_pd_c_funptr(c_funloc(precond_pd_oao_c_wrapper), &
+                                     "precond_pd_oao_c_wrapper", "")
+
+    end function test_precond_pd_oao_c_wrapper
 
     logical(c_bool) function test_project_oao_c_wrapper() bind(C)
         !

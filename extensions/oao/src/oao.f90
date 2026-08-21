@@ -7,7 +7,7 @@
 module otr_oao
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, project_type
+                               hess_x_type, precond_type, precond_pd_type, project_type
 
     implicit none
 
@@ -92,8 +92,8 @@ module otr_oao
         real(rp), pointer, contiguous :: dm_ao(:, :, :)
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
                                  fock_oo(:, :, :), fock_vv(:, :, :), grad(:), &
-                                 h_diag(:)
-        logical :: response_stale = .false.
+                                 h_diag(:), hess_eigvecs(:, :, :), hess_eigvals(:, :)
+        logical :: response_stale = .false., hess_eigen_stale = .true.
         procedure(get_energy_os_type), pointer, nopass :: get_energy_os => null()
         procedure(update_dm_os_type), pointer, nopass :: update_dm_os => null()
         procedure(get_response_os_type), pointer, nopass :: get_response_os => null()
@@ -109,13 +109,16 @@ module otr_oao
     procedure(obj_func_type), pointer :: obj_func_oao_ptr => obj_func_oao
     procedure(update_orbs_type), pointer :: update_orbs_oao_ptr => update_orbs_oao
     procedure(hess_x_type), pointer :: hess_x_oao_ptr => hess_x_oao
+    procedure(precond_type), pointer :: precond_oao_ptr => precond_oao
+    procedure(precond_pd_type), pointer :: precond_pd_oao_ptr => precond_pd_oao
     procedure(project_type), pointer :: project_oao_ptr => project_oao
 
     contains
 
     subroutine oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, &
                               update_dm_cs, obj_func_oao_funptr, &
-                              update_orbs_oao_funptr, project_oao_funptr, error, &
+                              update_orbs_oao_funptr, precond_oao_funptr, &
+                              precond_pd_oao_funptr, project_oao_funptr, error, &
                               settings)
         !
         ! this function returns a modified OAO orbital updating function for the
@@ -128,6 +131,8 @@ module otr_oao
         procedure(update_dm_cs_type), intent(in), pointer :: update_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
+        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
@@ -150,13 +155,16 @@ module otr_oao
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
         update_orbs_oao_funptr => update_orbs_oao
+        precond_oao_funptr => precond_oao
+        precond_pd_oao_funptr => precond_pd_oao
         project_oao_funptr => project_oao
 
     end subroutine oao_factory_cs
 
     subroutine oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, &
                               update_dm_os, obj_func_oao_funptr, &
-                              update_orbs_oao_funptr, project_oao_funptr, error, &
+                              update_orbs_oao_funptr, precond_oao_funptr, &
+                              precond_pd_oao_funptr, project_oao_funptr, error, &
                               settings)
         !
         ! this function returns a modified OAO orbital updating function for the
@@ -169,6 +177,8 @@ module otr_oao
         procedure(update_dm_os_type), intent(in), pointer :: update_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
+        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
+        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
@@ -187,6 +197,8 @@ module otr_oao
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
         update_orbs_oao_funptr => update_orbs_oao
+        precond_oao_funptr => precond_oao
+        precond_pd_oao_funptr => precond_pd_oao
         project_oao_funptr => project_oao
 
     end subroutine oao_factory_os
@@ -227,6 +239,9 @@ module otr_oao
             if (allocated(oao_object%dm_oao)) deallocate(oao_object%dm_oao)
             if (allocated(oao_object%fock_oo)) deallocate(oao_object%fock_oo)
             if (allocated(oao_object%fock_vv)) deallocate(oao_object%fock_vv)
+            if (allocated(oao_object%hess_eigvecs)) &
+                deallocate(oao_object%hess_eigvecs, oao_object%hess_eigvals)
+            oao_object%hess_eigen_stale = .true.
 
             ! number of particles
             oao_object%n_particle = n_particle
@@ -374,6 +389,10 @@ module otr_oao
                                        oao_object%fock_oo, oao_object%fock_vv)
             deallocate(fock_oao)
 
+            ! the static Hessian part was just rebuilt, so any cached
+            ! eigendecomposition of it is now stale
+            oao_object%hess_eigen_stale = .true.
+
             ! the response callbacks were just rebuilt at the current density
             oao_object%response_stale = .false.
         end if
@@ -453,10 +472,14 @@ module otr_oao
         ! transform Fock response to OAO basis
         fock_response = symmetric_transformation(oao_object%s_inv_sqrt, fock_response)
 
-        ! project Fock response onto occupied-virtual and virtual-occupied subspace
-        hess_x_full = hess_x_full + project_asymm(fock_response, oao_object%dm_oao)
+        ! project the combined static and response contributions onto the
+        ! occupied-virtual and virtual-occupied subspace; the static part is already
+        ! confined to that subspace in exact arithmetic, but the projection on the full 
+        ! Hessian linear transformation is free since the Fock response has to be 
+        ! projected anyways and the full projection can prevent some numerical leakage  
+        ! into theredundant subspace
+        hess_x_full = project_asymm(hess_x_full + fock_response, oao_object%dm_oao)
         deallocate(fock_response)
-        if (error /= 0) return
 
         ! pack Hessian linear transformation
         if (oao_object%n_particle == 1) then
@@ -495,6 +518,264 @@ module otr_oao
         deallocate(projected_vector_full)
 
     end subroutine project_oao
+
+    subroutine precond_oao(residual, mu, precond_residual, error)
+        !
+        ! this subroutine defines a level-shifted preconditioner based on the exact
+        ! eigendecomposition of the static part of the Hessian
+        !
+        use opentrustregion, only: precond_floor
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
+
+        ! initialize error flag
+        error = 0
+
+        ! refresh the eigendecomposition if the static Hessian part has changed
+        if (oao_object%hess_eigen_stale) then
+            call refresh_hess_eigen(error)
+            if (error /= 0) return
+        end if
+
+        ! rotate residual into the eigenbasis of the static Hessian part
+        rotated_residual = rotate_to_hess_eigenbasis(residual)
+
+        ! get pairwise sums of eigenvalues
+        eigval_pairs = get_hess_eigval_pairs()
+
+        ! apply level-shifted diagonal scaling in the eigenbasis
+        eigval_pairs = eigval_pairs - mu
+        where (abs(eigval_pairs) < precond_floor) eigval_pairs = precond_floor
+        rotated_residual = rotated_residual / eigval_pairs
+
+        ! rotate back to the original basis
+        precond_residual = rotate_from_hess_eigenbasis(rotated_residual)
+
+    end subroutine precond_oao
+
+    subroutine precond_pd_oao(residual, precond_residual, error)
+        !
+        ! this subroutine defines the positive-definite preconditioner based on the 
+        ! exact eigendecomposition of the static part of the Hessian
+        !
+        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
+        real(rp) :: floor_val
+
+        ! initialize error flag
+        error = 0
+
+        ! refresh the eigendecomposition if the static Hessian part has changed
+        if (oao_object%hess_eigen_stale) then
+            call refresh_hess_eigen(error)
+            if (error /= 0) return
+        end if
+
+        ! rotate residual into the eigenbasis of the static Hessian part
+        rotated_residual = rotate_to_hess_eigenbasis(residual)
+
+        ! get pairwise sums of eigenvalues
+        eigval_pairs = get_hess_eigval_pairs()
+
+        ! set floor value while guarding against vanishing eigenvalue pairs
+        floor_val = max(precond_rel_floor_factor * maxval(abs(eigval_pairs)), &
+                        precond_floor)
+        eigval_pairs = abs(eigval_pairs)
+        where (eigval_pairs < floor_val) eigval_pairs = floor_val
+        rotated_residual = rotated_residual / eigval_pairs
+
+        ! rotate back to the original basis
+        precond_residual = rotate_from_hess_eigenbasis(rotated_residual)
+
+    end subroutine precond_pd_oao
+
+    subroutine refresh_hess_eigen(error)
+        !
+        ! this subroutine diagonalizes the static part of the Hessian for each particle 
+        ! channel and caches the result; this operator is symmetric and, since the
+        ! occupied-occupied/virtual-virtual blocks of the Fock matrix are sandwiched
+        ! between the (idempotent) density matrix and its complement, its eigenspaces
+        ! coincide with the occupied and virtual subspaces even though 
+        ! occupied-occupied and virtual-virtual parts of the Fock matrix are not 
+        ! individually diagonal in the OAO basis
+        !
+        use opentrustregion, only: verbosity_error
+
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_ao, n_particle, i, lwork, info
+        real(rp), allocatable :: a(:, :), work(:)
+        character(300) :: msg
+        external :: dsyev
+
+        ! initialize error flag
+        error = 0
+
+        ! number of AOs and particles
+        n_ao = oao_object%n_ao
+        n_particle = oao_object%n_particle
+
+        ! allocate cache arrays if necessary
+        if (.not. allocated(oao_object%hess_eigvecs)) &
+            allocate(oao_object%hess_eigvecs(n_ao, n_ao, n_particle), &
+                     oao_object%hess_eigvals(n_ao, n_particle))
+
+        allocate(a(n_ao, n_ao))
+        do i = 1, n_particle
+            ! form the static part for this particle channel, dsyev overwrites it
+            a = oao_object%fock_vv(:, :, i) - oao_object%fock_oo(:, :, i)
+
+            ! query optimal workspace size
+            lwork = -1
+            allocate(work(1))
+            call dsyev("V", "U", n_ao, a, n_ao, oao_object%hess_eigvals(:, i), work, &
+                       lwork, info)
+            lwork = int(work(1))
+            deallocate(work)
+            allocate(work(lwork))
+
+            ! perform eigendecomposition
+            call dsyev("V", "U", n_ao, a, n_ao, oao_object%hess_eigvals(:, i), work, &
+                       lwork, info)
+            deallocate(work)
+
+            ! check for successful execution
+            if (info /= 0) then
+                write (msg, '(A, I0)') "Eigendecomposition of static Hessian part "// &
+                    "failed: Error in DSYEV, info = ", info
+                call oao_object%settings%log(msg, verbosity_error, .true.)
+                error = 1
+                deallocate(a)
+                return
+            end if
+
+            oao_object%hess_eigvecs(:, :, i) = a
+        end do
+        deallocate(a)
+
+        ! the cached eigendecomposition now matches the current static Hessian part
+        oao_object%hess_eigen_stale = .false.
+
+    end subroutine refresh_hess_eigen
+
+    function rotate_to_hess_eigenbasis(vector) result(rotated)
+        !
+        ! this function rotates a packed antisymmetric orbital-rotation vector into
+        ! the eigenbasis of the cached static Hessian part, one particle channel at
+        ! a time
+        !
+        real(rp), intent(in) :: vector(:)
+        real(rp), allocatable :: rotated(:)
+
+        integer(ip) :: n_ao, n_particle, i
+        real(rp), allocatable :: full(:, :, :), rotated_full(:, :, :), temp(:, :)
+        external :: dgemm
+
+        ! number of AOs and particles
+        n_ao = oao_object%n_ao
+        n_particle = oao_object%n_particle
+
+        ! unpack vector
+        full = unpack_asymm(vector, n_particle, n_ao)
+
+        ! rotate each particle channel by the cached eigenvectors
+        allocate(rotated_full(n_ao, n_ao, n_particle), temp(n_ao, n_ao))
+        do i = 1, n_particle
+            call dgemm("T", "N", n_ao, n_ao, n_ao, 1.0_rp, &
+                       oao_object%hess_eigvecs(:, :, i), n_ao, full(:, :, i), n_ao, &
+                       0.0_rp, temp, n_ao)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, temp, n_ao, &
+                       oao_object%hess_eigvecs(:, :, i), n_ao, 0.0_rp, &
+                       rotated_full(:, :, i), n_ao)
+        end do
+        deallocate(full, temp)
+
+        ! pack vector
+        rotated = pack_asymm(rotated_full, size(vector))
+        deallocate(rotated_full)
+
+    end function rotate_to_hess_eigenbasis
+
+    function rotate_from_hess_eigenbasis(vector) result(rotated)
+        !
+        ! this function rotates a packed antisymmetric orbital-rotation vector out
+        ! of the eigenbasis of the cached static Hessian part, one particle channel
+        ! at a time
+        !
+        real(rp), intent(in) :: vector(:)
+        real(rp), allocatable :: rotated(:)
+
+        integer(ip) :: n_ao, n_particle, i
+        real(rp), allocatable :: full(:, :, :), rotated_full(:, :, :), temp(:, :)
+        external :: dgemm
+
+        ! number of AOs and particles
+        n_ao = oao_object%n_ao
+        n_particle = oao_object%n_particle
+
+        ! unpack vector
+        full = unpack_asymm(vector, n_particle, n_ao)
+
+        ! rotate each particle channel by the cached eigenvectors
+        allocate(rotated_full(n_ao, n_ao, n_particle), temp(n_ao, n_ao))
+        do i = 1, n_particle
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, &
+                       oao_object%hess_eigvecs(:, :, i), n_ao, full(:, :, i), n_ao, &
+                       0.0_rp, temp, n_ao)
+            call dgemm("N", "T", n_ao, n_ao, n_ao, 1.0_rp, temp, n_ao, &
+                       oao_object%hess_eigvecs(:, :, i), n_ao, 0.0_rp, &
+                       rotated_full(:, :, i), n_ao)
+        end do
+        deallocate(full, temp)
+
+        ! pack vector
+        rotated = pack_asymm(rotated_full, size(vector))
+        deallocate(rotated_full)
+
+    end function rotate_from_hess_eigenbasis
+
+    function get_hess_eigval_pairs() result(eigval_pairs)
+        !
+        ! this function returns the pairwise sums of the cached static-Hessian-part
+        ! eigenvalues, packed in the same order as h_diag
+        !
+        real(rp), allocatable :: eigval_pairs(:)
+
+        integer(ip) :: n_ao, n_particle, i, j, k, idx
+
+        ! number of AOs and particles
+        n_ao = oao_object%n_ao
+        n_particle = oao_object%n_particle
+
+        ! construct pairwise sums of eigenvalues
+        allocate(eigval_pairs(oao_object%n_param))
+        idx = 1
+        do k = 1, n_particle
+            do j = 1, n_ao
+                do i = 1, j - 1
+                    eigval_pairs(idx) = oao_object%hess_eigvals(i, k) + &
+                                        oao_object%hess_eigvals(j, k)
+                    idx = idx + 1
+                end do
+            end do
+        end do
+        if (n_particle == 1) then
+            eigval_pairs = 4.0_rp * eigval_pairs
+        else
+            eigval_pairs = 2.0_rp * eigval_pairs
+        end if
+
+    end function get_hess_eigval_pairs
 
     subroutine init_oao_settings(self, error)
         !

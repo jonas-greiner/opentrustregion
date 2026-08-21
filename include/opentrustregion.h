@@ -57,6 +57,10 @@ typedef int32_t c_int; /* corresponds to integer(c_ip) */
         const c_real *residual, const c_real *mu, c_real *precond_residual);
     typedef precond_fn *precond_fp;
 
+    /* Positive-definite preconditioner callback */
+    typedef c_int precond_pd_fn(const c_real *residual, c_real *precond_residual);
+    typedef precond_pd_fn *precond_pd_fp;
+
     /* Projection callback */
     typedef c_int project_fn(c_real *vector);
     typedef project_fn *project_fp;
@@ -118,6 +122,7 @@ typedef int32_t c_int; /* corresponds to integer(c_ip) */
     typedef struct
     {
         precond_fp precond;
+        precond_pd_fp precond_pd;
         project_fp project;
         modify_step_fp modify_step;
         conv_check_fp conv_check;

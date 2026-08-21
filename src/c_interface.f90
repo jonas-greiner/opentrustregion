@@ -10,9 +10,10 @@ module c_interface
                                standard_stability_check => stability_check, &
                                default_solver_settings, default_stability_settings, &
                                update_orbs_type, hess_x_type, obj_func_type, &
-                               precond_type, project_type, modify_step_type, &
-                               conv_check_type, init_trial_space_type, &
-                               conv_check_stability_type, logger_type
+                               precond_type, precond_pd_type, project_type, &
+                               modify_step_type, conv_check_type, &
+                               init_trial_space_type, conv_check_stability_type, &
+                               logger_type
     use, intrinsic :: iso_c_binding, only: c_double, c_int64_t, c_int32_t, c_bool, &
                                            c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_char, &
@@ -37,6 +38,7 @@ module c_interface
     procedure(hess_x_c_type), pointer :: hess_x_before_wrapping => null()
     procedure(obj_func_c_type), pointer :: obj_func_before_wrapping => null()
     procedure(precond_c_type), pointer :: precond_before_wrapping => null()
+    procedure(precond_pd_c_type), pointer :: precond_pd_before_wrapping => null()
     procedure(project_c_type), pointer :: project_before_wrapping => null()
     procedure(modify_step_c_type), pointer :: modify_step_before_wrapping => null()
     procedure(conv_check_c_type), pointer :: conv_check_before_wrapping => null()
@@ -92,6 +94,17 @@ module c_interface
             real(c_rp), intent(out), target :: precond_residual_c(*)
             integer(c_ip) :: error
         end function precond_c_type
+    end interface
+
+    abstract interface
+        function precond_pd_c_type(residual_c, precond_residual_c) result(error) &
+            bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(in), target :: residual_c(*)
+            real(c_rp), intent(out), target :: precond_residual_c(*)
+            integer(c_ip) :: error
+        end function precond_pd_c_type
     end interface
 
     abstract interface
@@ -163,8 +176,8 @@ module c_interface
 
     ! derived type for solver settings
     type, bind(C) :: solver_settings_type_c
-        type(c_funptr) :: precond, project, modify_step, conv_check, stability_hess_x, &
-                          logger
+        type(c_funptr) :: precond, precond_pd, project, modify_step, conv_check, &
+                          stability_hess_x, logger
         logical(c_bool) :: stability, line_search, hess_symm, initialized
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
@@ -184,6 +197,8 @@ module c_interface
     procedure(hess_x_type), pointer :: hess_x_f_wrapper_ptr => hess_x_f_wrapper
     procedure(obj_func_type), pointer :: obj_func_f_wrapper_ptr => obj_func_f_wrapper
     procedure(precond_type), pointer :: precond_f_wrapper_ptr => precond_f_wrapper
+    procedure(precond_pd_type), pointer :: precond_pd_f_wrapper_ptr => &
+                                           precond_pd_f_wrapper
     procedure(project_type), pointer :: project_f_wrapper_ptr => project_f_wrapper
     procedure(modify_step_type), pointer :: modify_step_f_wrapper_ptr => &
                                             modify_step_f_wrapper
@@ -514,6 +529,41 @@ contains
 
     end subroutine precond_f_wrapper
 
+    subroutine precond_pd_f_wrapper(residual, precond_residual, error)
+        !
+        ! this subroutine exposes a C-implemented positive-definite preconditioner
+        ! function to Fortran
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        real(c_rp), pointer :: residual_c(:), precond_residual_c(:)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            residual_c => residual
+            precond_residual_c => precond_residual
+        else
+            allocate(residual_c(size(residual)))
+            allocate(precond_residual_c(size(residual)))
+            residual_c = real(residual, kind=c_rp)
+        end if
+
+        ! call precond_pd C function
+        error_c = precond_pd_before_wrapping(residual_c, precond_residual_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            precond_residual = real(precond_residual_c, kind=rp)
+            deallocate(residual_c)
+            deallocate(precond_residual_c)
+        end if
+
+    end subroutine precond_pd_f_wrapper
+
     subroutine project_f_wrapper(vector, error)
         !
         ! this subroutine exposes a C-implemented projection function to Fortran
@@ -747,6 +797,13 @@ contains
             else
                 settings%precond => null()
             end if
+            if (c_associated(settings_c%precond_pd)) then
+                call c_f_procpointer(cptr=settings_c%precond_pd, &
+                                     fptr=precond_pd_before_wrapping)
+                settings%precond_pd => precond_pd_f_wrapper
+            else
+                settings%precond_pd => null()
+            end if
             if (c_associated(settings_c%project)) then
                 call c_f_procpointer(cptr=settings_c%project, &
                                      fptr=project_before_wrapping)
@@ -909,6 +966,7 @@ contains
         if (settings%initialized) then
             ! callback functions cannot be converted
             settings_c%precond = c_null_funptr
+            settings_c%precond_pd = c_null_funptr
             settings_c%project = c_null_funptr
             settings_c%modify_step = c_null_funptr
             settings_c%conv_check = c_null_funptr

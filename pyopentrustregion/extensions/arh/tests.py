@@ -207,14 +207,16 @@ class ARHPyInterfaceTests(unittest.TestCase):
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
         # call ARH factory python interface
-        obj_func_arh, update_orbs_arh, project_arh = arh_factory(
-            dm_ao,
-            ao_overlap,
-            n_particle,
-            n_ao,
-            self.mock_get_energy,
-            self.mock_update_dm_cs,
-            settings,
+        obj_func_arh, update_orbs_arh, precond_arh, precond_pd_arh, project_arh = (
+            arh_factory(
+                dm_ao,
+                ao_overlap,
+                n_particle,
+                n_ao,
+                self.mock_get_energy,
+                self.mock_update_dm_cs,
+                settings,
+            )
         )
 
         # check if logger was called correctly
@@ -321,6 +323,50 @@ class ARHPyInterfaceTests(unittest.TestCase):
             print(
                 " test_arh_factory_py_interface failed: Returned projected vector "
                 "of returned ARH projection function wrong."
+            )
+            test_passed = False
+
+        # call returned ARH level-shifted preconditioner function
+        residual = np.full(n_param, 1.0, dtype=np.float64)
+        precond_residual = np.empty(n_param, dtype=np.float64)
+        mu = 5.0
+        try:
+            precond_arh(residual, mu, precond_residual)
+        except RuntimeError:
+            print(
+                " test_arh_factory_py_interface failed: Returned ARH level-shifted "
+                "preconditioner function raises error."
+            )
+            test_passed = False
+
+        # check results
+        if not np.allclose(precond_residual, np.full(n_param, mu, dtype=np.float64)):
+            print(
+                " test_arh_factory_py_interface failed: Returned preconditioned "
+                "residual of returned ARH level-shifted preconditioner function "
+                "wrong."
+            )
+            test_passed = False
+
+        # call returned ARH positive-definite preconditioner function
+        precond_pd_residual = np.empty(n_param, dtype=np.float64)
+        try:
+            precond_pd_arh(residual, precond_pd_residual)
+        except RuntimeError:
+            print(
+                " test_arh_factory_py_interface failed: Returned ARH "
+                "positive-definite preconditioner function raises error."
+            )
+            test_passed = False
+
+        # check results
+        if not np.allclose(
+            precond_pd_residual, np.full(n_param, 3.0, dtype=np.float64)
+        ):
+            print(
+                " test_arh_factory_py_interface failed: Returned preconditioned "
+                "residual of returned ARH positive-definite preconditioner function "
+                "wrong."
             )
             test_passed = False
 
