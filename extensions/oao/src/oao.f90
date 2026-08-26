@@ -514,7 +514,7 @@ module otr_oao
         deallocate(vector_full)
 
         ! pack vector
-        vector = pack_asymm(projected_vector_full, size(vector))
+        vector = pack_asymm(projected_vector_full, size(vector, kind=ip))
         deallocate(projected_vector_full)
 
     end subroutine project_oao
@@ -701,7 +701,7 @@ module otr_oao
         deallocate(full, temp)
 
         ! pack vector
-        rotated = pack_asymm(rotated_full, size(vector))
+        rotated = pack_asymm(rotated_full, size(vector, kind=ip))
         deallocate(rotated_full)
 
     end function rotate_to_hess_eigenbasis
@@ -739,7 +739,7 @@ module otr_oao
         deallocate(full, temp)
 
         ! pack vector
-        rotated = pack_asymm(rotated_full, size(vector))
+        rotated = pack_asymm(rotated_full, size(vector, kind=ip))
         deallocate(rotated_full)
 
     end function rotate_from_hess_eigenbasis
@@ -942,7 +942,7 @@ module otr_oao
         deallocate(fock_ov, fock_vo)
 
         ! pack gradient
-        grad = pack_asymm(grad_full, size(grad))
+        grad = pack_asymm(grad_full, size(grad, kind=ip))
 
         ! construct Hessian diagonal
         idx = 1

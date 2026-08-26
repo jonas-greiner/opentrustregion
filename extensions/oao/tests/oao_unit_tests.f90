@@ -165,7 +165,7 @@ contains
 
         do i = 1, size(matrix, 3)
             ! construct projection matrix on virtual space
-            proj_v = identity_matrix(size(matrix, 1)) - dm_oao(:, :, i)
+            proj_v = identity_matrix(size(matrix, 1, kind=ip)) - dm_oao(:, :, i)
 
             ! construct virtual-occupied and occupied-virtual contributions
             projected_matrix(:, :, i) = matmul(dm_oao(:, :, i), &
@@ -279,7 +279,7 @@ contains
                                            matmul(full(:, :, i), eigvecs(:, :, i)))
         end do
 
-        rotated = ref_pack_asymm(rotated_full, size(vector))
+        rotated = ref_pack_asymm(rotated_full, size(vector, kind=ip))
 
     end function ref_rotate_to_eigenbasis
 
@@ -305,7 +305,7 @@ contains
                                                   transpose(eigvecs(:, :, i))))
         end do
 
-        rotated = ref_pack_asymm(rotated_full, size(vector))
+        rotated = ref_pack_asymm(rotated_full, size(vector, kind=ip))
 
     end function ref_rotate_from_eigenbasis
 
@@ -482,7 +482,7 @@ contains
         call setup_settings(settings)
 
         ! check if a positive number of AOs is accepted
-        call oao_sanity_check(settings, 1, error)
+        call oao_sanity_check(settings, 1_ip, error)
         if (error /= 0) then
             write (stderr, *) "test_oao_sanity_check failed: Error thrown for "// &
                 "positive number of AOs."
@@ -490,7 +490,7 @@ contains
         end if
 
         ! check if a vanishing number of AOs is rejected
-        call oao_sanity_check(settings, 0, error)
+        call oao_sanity_check(settings, 0_ip, error)
         if (error == 0) then
             write (stderr, *) "test_oao_sanity_check failed: Error not thrown for "// &
                 "vanishing number of AOs."
@@ -1168,7 +1168,7 @@ contains
         oao_object%n_ao = n_ao
         oao_object%n_particle = n_particle
         do i = 1, n_particle
-            dm_ao(:, :, i) = generate_random_density_matrix(n_ao, 2)
+            dm_ao(:, :, i) = generate_random_density_matrix(n_ao, 2_ip)
         end do
         oao_object%dm_ao => dm_ao
         oao_object%update_dm_cs => mock_update_dm_cs
@@ -1549,8 +1549,8 @@ contains
         test_hess_x_oao = .true.
 
         ! generate random density matrices, Fock matrix contributions and trial vector
-        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2)
-        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1)
+        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2_ip)
+        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1_ip)
         do j = 1, 2
             fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
             fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
@@ -1681,8 +1681,8 @@ contains
         test_project_oao = .true.
 
         ! generate random density matrices and vector
-        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2)
-        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1)
+        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2_ip)
+        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1_ip)
         call random_number(vector)
 
         ! set up the OAO object

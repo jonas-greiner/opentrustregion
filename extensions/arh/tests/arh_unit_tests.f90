@@ -1069,7 +1069,7 @@ contains
         ! vector match
         map = [1, 2]
         expected = [1.0_rp / 6.0_rp, 1.0_rp / 6.0_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 2, map)
+        result_vec = multiply_with_inverse_metric(vec, chol, 2_ip, map)
         if (norm2(result_vec - expected) > tol) then
             write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
                 "vector for metric of full rank."
@@ -1079,7 +1079,7 @@ contains
         ! call routine for a rank-deficient metric and determine if the linearly
         ! dependent direction is filtered out
         expected = [0.25_rp, 0.0_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 1, map)
+        result_vec = multiply_with_inverse_metric(vec, chol, 1_ip, map)
         if (norm2(result_vec - expected) > tol) then
             write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
                 "vector for rank-deficient metric."
@@ -1090,7 +1090,7 @@ contains
         ! applied to both the incoming and the outgoing vector
         map = [2, 1]
         expected = [0.0_rp, 0.5_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 2, map)
+        result_vec = multiply_with_inverse_metric(vec, chol, 2_ip, map)
         if (norm2(result_vec - expected) > tol) then
             write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
                 "vector for permuted metric."
@@ -1100,7 +1100,7 @@ contains
         ! call routine for a vanishing rank and determine if the resulting vector
         ! vanishes
         expected = [0.0_rp, 0.0_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 0, map)
+        result_vec = multiply_with_inverse_metric(vec, chol, 0_ip, map)
         if (norm2(result_vec - expected) > tol) then
             write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
                 "vector for vanishing rank."
@@ -1982,8 +1982,8 @@ contains
 
         ! generate random density matrices, Fock matrix contributions, density matrix
         ! and potential matrix differences, metrics and trial vector
-        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2)
-        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1)
+        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2_ip)
+        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1_ip)
         do j = 1, 2
             fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
             fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
