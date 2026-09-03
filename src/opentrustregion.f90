@@ -1614,11 +1614,6 @@ contains
             red_space_basis(:, 1) = grad/grad_norm
             red_space_basis(:, 2) = 0.0_rp
             red_space_basis(min_idx, 2) = 1.0_rp
-            if (associated(settings%project)) then
-                call settings%project(red_space_basis(:, 2), error)
-                call add_error_origin(error, error_project, settings)
-                if (error /= 0) return
-            end if
             call gram_schmidt(red_space_basis(:, 2), &
                               reshape(red_space_basis(:, 1), &
                                       [size(red_space_basis, 1), 1]), &
@@ -1670,11 +1665,6 @@ contains
                     call random_number(red_space_basis(:, i))
                     red_space_basis(:, i) = 2 * red_space_basis(:, i) - 1
                 end do
-                if (associated(settings%project)) then
-                    call settings%project(red_space_basis(:, i), error)
-                    call add_error_origin(error, error_project, settings)
-                    if (error /= 0) return
-                end if
                 call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :i - 1), &
                                   settings, error, silent_on_error=.true.)
             end do
@@ -1898,7 +1888,6 @@ contains
         real(rp), allocatable :: start_space(:, :), eigvals(:), h_diag_copy(:), &
                                  leading_block(:, :)
         logical :: converged
-        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
@@ -1960,18 +1949,11 @@ contains
                 min_idx = minloc(h_diag_copy, dim=1)
                 red_space_basis(min_idx, i) = 1.0_rp
                 h_diag_copy(min_idx) = huge(1.0_rp)
-                if (associated(settings%project)) then
-                    call settings%project(red_space_basis(:, i), error)
-                    call add_error_origin(error, error_project, settings)
-                    if (error /= 0) return
-                    red_space_basis(:, i) = red_space_basis(:, i) / &
-                                            dnrm2(n_param, red_space_basis(:, i), 1_ip)
-                end if
             end do
             deallocate(h_diag_copy)
 
-            ! a projector applied individually to each unit vector does not guarantee 
-            ! they remain mutually orthonormal, so re-orthogonalize
+            ! a diagonal unit vector does not generally satisfy an arbitrary projector,
+            ! so project and re-orthogonalize the whole leading block together
             if (associated(settings%project)) then
                 leading_block = red_space_basis(:, :n_trial_vectors)
                 call orthogonalize_trial_vectors(leading_block, settings, error)
@@ -2013,11 +1995,6 @@ contains
         ! orthonormalize vectors while removing linearly dependent and vanishing vectors
         num_valid = 0
         do i = 1, size(red_space_basis, 2)
-            if (associated(settings%project)) then
-                call settings%project(red_space_basis(:, i), error)
-                call add_error_origin(error, error_project, settings)
-                if (error /= 0) return
-            end if
             call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :num_valid), &
                               settings, error, silent_on_error=.true.)
             if (error == 2) then
@@ -2048,14 +2025,16 @@ contains
     subroutine gram_schmidt(vector, space, settings, error, lin_trans_vector, &
                             lin_trans_space, silent_on_error)
         !
-        ! this function orthonormalizes a vector with respect to a vector space
-        ! this function can additionally also return a linear transformation of the 
+        ! this function orthonormalizes a vector with respect to a vector space, 
+        ! additionally applying settings%project, if associated, by alternating between 
+        ! orthogonalization and projection until both converge simultaneously; this 
+        ! function can additionally also return a linear transformation of the 
         ! orthogonalized vector if the linear transformations of the vector and the 
         ! vector space are provided
         !
         real(rp), intent(inout) :: vector(:)
         real(rp), intent(in) :: space(:, :)
-        class(settings_type), intent(in) :: settings
+        class(optimizer_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         real(rp), intent(inout), optional :: lin_trans_vector(:)
         real(rp), intent(in), optional :: lin_trans_space(:, :)
@@ -2077,7 +2056,8 @@ contains
         ! number of vectors
         n_vectors = size(space, 2)
 
-        if (dnrm2(n_param, vector, 1_ip) < zero_thres) then
+        norm = dnrm2(n_param, vector, 1_ip)
+        if (norm < zero_thres) then
             error = 2
             if (.not. present(silent_on_error)) then
                 call settings%log(gram_schmidt_zero_vector_error_msg, verbosity_error, &
@@ -2093,7 +2073,14 @@ contains
             error = 1
             return
         end if
-        
+
+        ! normalize the incoming vector so it always enters a pass below with unit norm 
+        ! (as does every vector produced by the renormalization at the end of a pass); 
+        ! this keeps the linear dependence check below meaningful regardless of the 
+        ! incoming vector's original scale
+        vector = vector / norm
+        if (present(lin_trans_vector)) lin_trans_vector = lin_trans_vector / norm
+
         ! allocate array for orthogonalities
         allocate(orth(size(space, 2)))
 
@@ -2105,6 +2092,11 @@ contains
                 if (present(lin_trans_vector) .and. present(lin_trans_space)) &
                     lin_trans_vector = lin_trans_vector - dot * lin_trans_space(:, i)
             end do
+            if (associated(settings%project)) then
+                call settings%project(vector, error)
+                call add_error_origin(error, error_project, settings)
+                if (error /= 0) return
+            end if
             norm = dnrm2(n_param, vector, 1_ip)
             if (norm < numerical_zero) then
                 error = 2

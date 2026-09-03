@@ -2486,6 +2486,37 @@ contains
             test_gram_schmidt = .false.
         end if
 
+        ! define vector and space such that projecting after orthogonalizing
+        ! reintroduces overlap with the space, forcing repeated passes through the
+        ! loop and exercising the projector inside it, not just once beforehand
+        vector = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
+        settings%project => mock_project
+
+        ! perform Gram-Schmidt orthogonalization and determine whether the projector's
+        ! invariant, orthogonality and normalization are all satisfied simultaneously
+        call gram_schmidt(vector, space, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_gram_schmidt failed: Produced error with "// &
+                "custom projection function."
+            test_gram_schmidt = .false.
+        end if
+        if (abs(dot_product(vector, space(:, 1))) > tol .or. &
+            abs(dot_product(vector, space(:, 2))) > tol) then
+            write (stderr, *) "test_gram_schmidt failed: Added vector with custom "// &
+                "projection function not orthogonal."
+            test_gram_schmidt = .false.
+        end if
+        if (abs(norm2(vector) - 1.0_rp) > tol) then
+            write (stderr, *) "test_gram_schmidt failed: Added vector with custom "// &
+                "projection function not normalized."
+            test_gram_schmidt = .false.
+        end if
+        if (abs(vector(1) - vector(2)) > tol) then
+            write (stderr, *) "test_gram_schmidt failed: Added vector with custom "// &
+                "projection function does not satisfy projector."
+            test_gram_schmidt = .false.
+        end if
+
         ! define vector in space that is already complete
         vector_small = [1.0_rp, 2.0_rp]
         space_small(:, 1) = [1.0_rp, 0.0_rp]
