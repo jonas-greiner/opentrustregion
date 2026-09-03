@@ -44,7 +44,6 @@ module opentrustregion
                            level_shift_local_thres = 1e-12_rp, &
                            newton_eigval_thresh = -1e-5_rp, &
                            stability_thresh = -1e-2_rp, &
-                           stability_max_lower_contrib = 1e-2_rp, &
                            precond_rel_floor_factor = 1e-2_rp
 
     ! define verbosity levels
@@ -208,6 +207,7 @@ module opentrustregion
     end type
 
     type, extends(optimizer_settings_type) :: stability_settings_type
+        logical :: stop_on_instability
         integer(ip) :: n_trial_vectors, n_iter
         character(kw_len) :: diag_solver
         procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
@@ -237,10 +237,10 @@ module opentrustregion
                                 approx_hess_x = null(), init_trial_space = null(), &
                                 conv_check = null(), logger = null(), &
                                 hess_symm = .true., initialized = .true., &
-                                conv_tol = 1e-8_rp, n_random_trial_vectors = 20, &
-                                n_trial_vectors = 0, n_iter = 100, &
-                                jacobi_davidson_start = 50, seed = 42, verbose = 0, &
-                                diag_solver = "davidson")
+                                stop_on_instability = .false., conv_tol = 1e-9_rp, &
+                                n_random_trial_vectors = 20, n_trial_vectors = 1, &
+                                n_iter = 100, jacobi_davidson_start = 50, seed = 42, &
+                                verbose = 0, diag_solver = "davidson")
     type(solver_settings_type), parameter :: default_solver_settings = &
         solver_settings_type(precond = null(), precond_pd = null(), project = null(), &
                              modify_step = null(), conv_check = null(), &
@@ -421,8 +421,9 @@ contains
                     if (.not. associated(settings%stability_settings%logger)) &
                         settings%stability_settings%logger => settings%logger
                     if (.not. associated(settings%stability_settings%conv_check)) &
-                        settings%stability_settings%conv_check => &
-                            default_stability_conv_check
+                        settings%stability_settings%stop_on_instability = .true.
+                    settings%stability_settings%n_trial_vectors = 1
+                    settings%stability_settings%n_random_trial_vectors = 1
                     ! perform stability check
                     call stability_check(h_diag, stability_hess_x_funptr, stable, &
                                          error, settings%stability_settings, &
@@ -565,17 +566,11 @@ contains
         type(stability_settings_type), intent(inout) :: settings
         real(rp), intent(out), optional :: kappa(:), min_eigval
 
-        procedure(hess_x_type), pointer :: approx_hess_x_funptr
-        integer(ip) :: n_param, n_trial, i, iter
-        real(rp), allocatable :: solution(:), h_solution(:), residual(:), &
-                                 basis_vec(:), h_basis_vec(:), red_space_basis(:, :), &
-                                 h_basis(:, :), red_space_hess(:, :), &
-                                 red_space_solution(:), row_vec(:), col_vec(:)
-        real(rp) :: eigval, minres_tol
+        integer(ip) :: n_param
+        real(rp), allocatable :: red_space_basis(:, :), eigvals(:), eigvecs(:, :)
+        real(rp) :: eigval
         character(300) :: msg
-        logical :: conv_check_passed
-        real(rp), external :: dnrm2, ddot
-        external :: dgemm, dgemv
+        logical :: stability_converged
 
         ! initialize error flag
         error = 0
@@ -601,181 +596,28 @@ contains
         if (error /= 0) return
 
         ! generate trial vectors
-        if (associated(settings%init_trial_space)) then
-            allocate(red_space_basis(n_param, settings%n_trial_vectors))
-            call settings%init_trial_space(red_space_basis, error)
-            call add_error_origin(error, error_init_trial_space, settings)
-            if (error /= 0) return
-            call orthogonalize_trial_vectors(red_space_basis, settings, error)
-            call add_error_origin(error, error_stability_check, settings)
-            if (error /= 0) return
-        else
-            allocate(red_space_basis(n_param, 1 + settings%n_random_trial_vectors))
-            red_space_basis(:, 1) = 0.0_rp
-            red_space_basis(minloc(h_diag), 1) = 1.0_rp
-            if (associated(settings%project)) then
-                call settings%project(red_space_basis(:, 1), error)
-                call add_error_origin(error, error_project, settings)
-                if (error /= 0) return
-                red_space_basis(:, 1) = red_space_basis(:, 1) / &
-                                        dnrm2(n_param, red_space_basis(:, 1), 1_ip)
-            end if
-            call generate_random_trial_vectors(red_space_basis, settings, error)
-            call add_error_origin(error, error_stability_check, settings)
-            if (error /= 0) return
-        end if
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        call add_error_origin(error, error_stability_check, settings)
+        if (error /= 0) return
 
-        ! number of trial vectors
-        n_trial = size(red_space_basis, 2)
-
-        ! calculate linear transformations of basis vectors
-        allocate(h_basis(n_param, n_trial))
-        do i = 1, n_trial
-            call hess_x_funptr(red_space_basis(:, i), h_basis(:, i), error)
-            call add_error_origin(error, error_hess_x, settings)
-            if (error /= 0) return
-        end do
-
-        ! increment number of Hessian linear transformations
-        tot_hess_x = tot_hess_x + n_trial
-
-        ! construct reduced space Hessian
-        allocate(red_space_hess(n_trial, n_trial))
-        call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, red_space_basis, &
-                   n_param, h_basis, n_param, 0.0_rp, red_space_hess, n_trial)
-
-        ! allocate arrays used throughout Davidson procedure
-        allocate(red_space_solution(n_trial), solution(n_param), h_solution(n_param), &
-                 residual(n_param), basis_vec(n_param), h_basis_vec(n_param))
-
-        ! check if user provided an approximate Hessian linear transformation for 
-        ! Jacobi-Davidson correction equation
-        if (associated(settings%approx_hess_x)) then
-            approx_hess_x_funptr => settings%approx_hess_x
-        else
-            approx_hess_x_funptr => hess_x_funptr
-        end if
-
-        ! loop over iterations
-        do iter = 1, settings%n_iter
-            ! solve reduced space problem
-            call mat_min_eig(red_space_hess, settings%hess_symm, eigval, &
-                             red_space_solution, settings, error)
-            call add_error_origin(error, error_stability_check, settings)
-            if (error /= 0) return
-
-            ! get full space solution
-            call dgemv("N", n_param, n_trial, 1.0_rp, red_space_basis, n_param, &
-                       red_space_solution, 1_ip, 0.0_rp, solution, 1_ip)
-
-            ! calculate Hessian linear transformation of solution
-            call dgemv("N", n_param, n_trial, 1.0_rp, h_basis, n_param, &
-                       red_space_solution, 1_ip, 0.0_rp, h_solution, 1_ip)
-
-            ! calculate residual
-            residual = h_solution - eigval*solution
-
-            ! check convergence
-            if (associated(settings%conv_check)) then
-                conv_check_passed = settings%conv_check(residual, eigval, error)
-                call add_error_origin(error, error_conv_check, settings)
-                if (error /= 0) return
-            else
-                conv_check_passed = dnrm2(n_param, residual, 1_ip) / &
-                                          sqrt(real(n_param, kind=rp)) < &
-                                    settings%conv_tol
-            end if
-            if (conv_check_passed) exit
-
-            if (settings%diag_solver == "davidson" .or. iter <= &
-                settings%jacobi_davidson_start) then
-                ! precondition residual
-                call level_shifted_diag_precond(residual, 0.0_rp, h_diag, basis_vec, &
-                                                settings, error)
-                if (error /= 0) return
-
-                ! orthonormalize to current orbital space to get new basis vector
-                call gram_schmidt(basis_vec, red_space_basis, settings, error)
-                call add_error_origin(error, error_stability_check, settings)
-                if (error /= 0) return
-
-                ! add linear transformation of new basis vector
-                call hess_x_funptr(basis_vec, h_basis_vec, error)
-                call add_error_origin(error, error_hess_x, settings)
-                if (error /= 0) return
-
-                ! increment Hessian linear transformations
-                tot_hess_x = tot_hess_x + 1
-
-            else
-                ! solve Jacobi-Davidson correction equations
-                minres_tol = 3.0_rp ** (-(iter - settings%jacobi_davidson_start - 1))
-                call minres(-residual, approx_hess_x_funptr, solution, eigval, &
-                            minres_tol, basis_vec, h_basis_vec, settings, error)
-                call add_error_origin(error, error_stability_check, settings)
-                if (error /= 0) return
-
-                ! orthonormalize to current orbital space to get new basis vector
-                call gram_schmidt(basis_vec, red_space_basis, settings, error, &
-                                  lin_trans_vector=h_basis_vec, lin_trans_space=h_basis)
-                call add_error_origin(error, error_stability_check, settings)
-                if (error /= 0) return
-
-                ! check if approximate linear transformation is used or if resulting 
-                ! exact linear transformation still respects Hessian symmetry which 
-                ! can not be the case due to numerical noise accumulation
-                if (associated(settings%approx_hess_x) .or. &
-                    abs(ddot(n_param, red_space_basis(:, n_trial), 1_ip, h_basis_vec, &
-                             1_ip) &
-                        - ddot(n_param, basis_vec, 1_ip, h_basis(:, n_trial), 1_ip)) > &
-                    hess_symm_thres) then
-                    call hess_x_funptr(basis_vec, h_basis_vec, error)
-                    call add_error_origin(error, error_hess_x, settings)
-                    if (error /= 0) return
-                    tot_hess_x = tot_hess_x + 1
-                end if
-                
-            end if
-
-            ! increment trial vector count
-            n_trial = n_trial + 1
-
-            ! add new trial vector to orbital space
-            call add_column(red_space_basis, basis_vec)
-
-            ! add linear transformation of new basis vector
-            call add_column(h_basis, h_basis_vec)
-
-            ! construct new reduced space Hessian
-            allocate(row_vec(n_trial))
-            allocate(col_vec(n_trial))
-            call dgemv("T", n_param, n_trial, 1.0_rp, red_space_basis, n_param, &
-                       h_basis(:, n_trial), 1_ip, 0.0_rp, row_vec, 1_ip)
-            if (settings%hess_symm) then
-                col_vec = row_vec
-            else
-                call dgemv("T", n_param, n_trial, 1.0_rp, h_basis, n_param, &
-                           red_space_basis(:, n_trial), 1_ip, 0.0_rp, col_vec, 1_ip)
-            end if
-            call extend_matrix(red_space_hess, row_vec, col_vec)
-            deallocate(row_vec)
-            deallocate(col_vec)
-
-            ! reallocate reduced space solution
-            deallocate(red_space_solution)
-            allocate(red_space_solution(n_trial))
-
-        end do
+        ! determine the lowest eigenpair of the Hessian
+        allocate(eigvals(1), eigvecs(n_param, 1))
+        call block_davidson(hess_x_funptr, h_diag, red_space_basis, &
+                            settings%hess_symm, 1_ip, settings%n_iter, .true., &
+                            eigvals, eigvecs, stability_converged, settings, error)
+        call add_error_origin(error, error_stability_check, settings)
+        if (error /= 0) return
+        eigval = eigvals(1)
 
         ! check if stability check has converged
-        if (.not. conv_check_passed) then
+        if (.not. stability_converged) then
             error = 1
             call settings%log("Stability check has not converged in the given "// &
                               "number of iterations.", verbosity_error, .true.)
         end if
 
         ! return lowest eigenvector and eigenvalue
-        if (present(kappa)) kappa = solution
+        if (present(kappa)) kappa = eigvecs(:, 1)
         if (present(min_eigval)) min_eigval = eigval
 
         ! determine if saddle point
@@ -786,8 +628,7 @@ contains
         end if
 
         ! deallocate quantities from Davidson iterations
-        deallocate(solution, h_solution, residual, basis_vec, h_basis_vec, &
-                   red_space_solution, red_space_hess, h_basis, red_space_basis)
+        deallocate(red_space_basis, eigvals, eigvecs)
 
         ! flush output
         flush (stdout)
@@ -1668,89 +1509,65 @@ contains
         real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
         integer(ip), intent(out) :: error
 
-        if (symm_matrix) then
-            call symm_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, error)
-        else
-            call general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
-                                     error)
-        end if 
+        real(rp) :: eigval(1), eigvec(size(lowest_eigvec), 1)
+
+        call mat_lowest_eigpairs(matrix, symm_matrix, eigval, eigvec, settings, error)
+        if (error /= 0) return
+        lowest_eigval = eigval(1)
+        lowest_eigvec = eigvec(:, 1)
 
     end subroutine mat_min_eig
 
-    subroutine symm_mat_min_eig(symm_matrix, lowest_eigval, lowest_eigvec, settings, &
-                                error)
-        !
-        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
-        ! of a symmetric matrix
-        !
-        real(rp), intent(in) :: symm_matrix(:, :)
-        class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
-        integer(ip), intent(out) :: error
-
-        integer(ip) :: n
-        real(rp), allocatable :: eigvals(:), eigvecs(:, :)
-
-        ! initialize error flag
-        error = 0
-
-        ! size of matrix
-        n = size(symm_matrix, 1)
-
-        ! allocate arrays
-        allocate(eigvals(n), eigvecs(n, n))
-
-        ! diagonalize matrix
-        call symm_mat_diag(symm_matrix, eigvals, eigvecs, settings, error)
-        if (error /= 0) return
-
-        ! get lowest eigenvalue and corresponding eigenvector
-        lowest_eigval = eigvals(1)
-        lowest_eigvec = eigvecs(:, 1)
-
-        ! deallocate eigenvalues and eigenvectors
-        deallocate(eigvals, eigvecs)
-
-    end subroutine symm_mat_min_eig
-
-    subroutine general_mat_min_eig(matrix, lowest_eigval, lowest_eigvec, settings, &
+    subroutine mat_lowest_eigpairs(matrix, symm_matrix, eigvals, eigvecs, settings, &
                                    error)
         !
-        ! this subroutine returns the lowest eigenvalue and corresponding eigenvector 
-        ! of a square matrix
+        ! this subroutine returns the size(eigvals) lowest eigenpairs of a matrix, in
+        ! ascending order
         !
         real(rp), intent(in) :: matrix(:, :)
+        logical, intent(in) :: symm_matrix
         class(settings_type), intent(in) :: settings
-        real(rp), intent(out) :: lowest_eigval, lowest_eigvec(:)
+        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n, min_idx
-        complex(rp), allocatable :: eigvals(:)
-        real(rp), allocatable :: right_eigvecs(:, :), left_eigvecs(:, :)
+        integer(ip) :: n, n_target, i, idx
+        real(rp), allocatable :: all_eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
+        complex(rp), allocatable :: gen_eigvals(:)
+        logical, allocatable :: taken(:)
 
         ! initialize error flag
         error = 0
 
-        ! size of matrix
+        ! size of matrix and number of eigenpairs requested
         n = size(matrix, 1)
+        n_target = size(eigvals)
 
-        ! allocate arrays
-        allocate(eigvals(n), right_eigvecs(n, n), left_eigvecs(n, n))
+        if (symm_matrix) then
+            allocate(all_eigvals(n), right_eigvecs(n, n))
+            call symm_mat_diag(matrix, all_eigvals, right_eigvecs, settings, error)
+            if (error == 0) then
+                eigvals(:n_target) = all_eigvals(:n_target)
+                eigvecs(:, :n_target) = right_eigvecs(:, :n_target)
+            end if
+            deallocate(all_eigvals, right_eigvecs)
+        else
+            allocate(gen_eigvals(n), right_eigvecs(n, n), left_eigvecs(n, n), taken(n))
+            call general_mat_diag(matrix, gen_eigvals, right_eigvecs, left_eigvecs, &
+                                  settings, error)
+            if (error == 0) then
+                ! get eigenvalues with lowest real part
+                taken = .false.
+                do i = 1, n_target
+                    idx = minloc(gen_eigvals%re, dim=1, mask=.not. taken)
+                    taken(idx) = .true.
+                    eigvals(i) = gen_eigvals(idx)%re
+                    eigvecs(:, i) = right_eigvecs(:, idx)
+                end do
+            end if
+            deallocate(gen_eigvals, right_eigvecs, left_eigvecs, taken)
+        end if
 
-        ! diagonalize matrix
-        call general_mat_diag(matrix, eigvals, right_eigvecs, left_eigvecs, settings, &
-                              error)
-        if (error /= 0) return
-
-        ! get lowest eigenvalue and corresponding eigenvector
-        min_idx = minloc(eigvals%re, dim=1)
-        lowest_eigval = eigvals(min_idx)%re
-        lowest_eigvec = right_eigvecs(:, min_idx)
-
-        ! deallocate eigenvalues and eigenvectors
-        deallocate(eigvals, right_eigvecs, left_eigvecs)
-
-    end subroutine general_mat_min_eig
+    end subroutine mat_lowest_eigpairs
 
     subroutine init_rng(seed)
         !
@@ -1814,15 +1631,19 @@ contains
             red_space_basis(:, 1) = grad/grad_norm
         end if
 
-        call generate_random_trial_vectors(red_space_basis, settings, error)
+        call generate_random_trial_vectors(red_space_basis, &
+                                           settings%n_random_trial_vectors, settings, &
+                                           error)
 
     end function generate_trial_vectors
 
-    subroutine generate_random_trial_vectors(red_space_basis, settings, error)
+    subroutine generate_random_trial_vectors(red_space_basis, n_fill, settings, error)
         !
-        ! this subroutine generates random trial vectors
+        ! this subroutine generates random trial vectors, filling the trailing columns
+        ! of the provided space and orthogonalizing them against the leading ones
         !
         real(rp), intent(inout) :: red_space_basis(:, :)
+        integer(ip), intent(in) :: n_fill
         class(optimizer_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
@@ -1839,7 +1660,7 @@ contains
         ! number of trial vectors
         n_trial = size(red_space_basis, 2)
 
-        do i = n_trial - settings%n_random_trial_vectors + 1, n_trial
+        do i = n_trial - n_fill + 1, n_trial
             error = 2
             do while (error == 2)
                 call random_number(red_space_basis(:, i))
@@ -1861,6 +1682,318 @@ contains
         end do
 
     end subroutine generate_random_trial_vectors
+
+    subroutine block_davidson(hess_x_funptr, h_diag, red_space_basis, symm, n_block, &
+                              max_iter, count_hess_x, eigvals, eigvecs, converged, &
+                              settings, error, res_tol)
+        !
+        ! this subroutine determines the lowest eigenpairs of a linear transformation
+        ! with a block Davidson procedure
+        !
+        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
+        real(rp), intent(in) :: h_diag(:)
+        real(rp), allocatable, intent(inout) :: red_space_basis(:, :)
+        logical, intent(in) :: symm, count_hess_x
+        integer(ip), intent(in) :: n_block, max_iter
+        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
+        logical, intent(out) :: converged
+        type(stability_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+        real(rp), intent(in), optional :: res_tol
+
+        procedure(hess_x_type), pointer :: approx_hess_x_funptr
+        integer(ip) :: n_param, n_trial, n_target, n_added, n_unconverged, iter, i
+        real(rp), allocatable :: h_basis(:, :), red_space_hess(:, :), red_eigvals(:), &
+                                 red_eigvecs(:, :), solution(:, :), h_solution(:, :), &
+                                 residual(:, :), basis_vec(:), h_basis_vec(:)
+        real(rp) :: minres_tol
+        logical :: pair_converged
+        real(rp), external :: dnrm2, ddot
+        external :: dgemm
+
+        ! initialize error flag
+        error = 0
+
+        ! number of parameters and trial vectors
+        n_param = size(h_diag)
+        n_trial = size(red_space_basis, 2)
+
+        ! calculate linear transformations of basis vectors
+        allocate(h_basis(n_param, n_trial))
+        do i = 1, n_trial
+            call hess_x_funptr(red_space_basis(:, i), h_basis(:, i), error)
+            call add_error_origin(error, error_hess_x, settings)
+            if (error /= 0) return
+        end do
+
+        ! increment number of Hessian linear transformations, which is skipped for
+        ! transformations that are cheap relative to the exact Hessian
+        if (count_hess_x) tot_hess_x = tot_hess_x + n_trial
+
+        ! check if an approximate Hessian linear transformation is available for the
+        ! Jacobi-Davidson correction equation
+        if (associated(settings%approx_hess_x)) then
+            approx_hess_x_funptr => settings%approx_hess_x
+        else
+            approx_hess_x_funptr => hess_x_funptr
+        end if
+
+        allocate(basis_vec(n_param), h_basis_vec(n_param))
+
+        ! loop over iterations
+        converged = .false.
+        do iter = 1, max_iter
+            ! construct reduced space Hessian
+            allocate(red_space_hess(n_trial, n_trial))
+            call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, red_space_basis, &
+                       n_param, h_basis, n_param, 0.0_rp, red_space_hess, n_trial)
+
+            ! solve reduced space problem for the lowest (real) eigenpairs
+            n_target = min(n_block, n_trial)
+            allocate(red_eigvals(n_target), red_eigvecs(n_trial, n_target))
+            call mat_lowest_eigpairs(red_space_hess, symm, red_eigvals, red_eigvecs, &
+                                     settings, error)
+            call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
+            deallocate(red_space_hess)
+
+            ! get full space solutions, their linear transformations and residuals
+            allocate(solution(n_param, n_target), h_solution(n_param, n_target), &
+                     residual(n_param, n_target))
+            call dgemm("N", "N", n_param, n_target, n_trial, 1.0_rp, red_space_basis, &
+                       n_param, red_eigvecs, n_trial, 0.0_rp, solution, n_param)
+            call dgemm("N", "N", n_param, n_target, n_trial, 1.0_rp, h_basis, n_param, &
+                       red_eigvecs, n_trial, 0.0_rp, h_solution, n_param)
+            do i = 1, n_target
+                residual(:, i) = h_solution(:, i) - red_eigvals(i)*solution(:, i)
+            end do
+
+            ! store the current Ritz pairs
+            eigvals(:n_target) = red_eigvals(:n_target)
+            eigvecs(:, :n_target) = solution
+
+            ! check convergence
+            n_unconverged = 0
+            do i = 1, n_target
+                if (present(res_tol)) then
+                    pair_converged = dnrm2(n_param, residual(:, i), 1_ip) < res_tol
+                else if (associated(settings%conv_check)) then
+                    pair_converged = settings%conv_check(residual(:, i), &
+                                                         red_eigvals(i), error)
+                    call add_error_origin(error, error_conv_check, settings)
+                    if (error /= 0) return
+                else
+                    ! a Ritz value is an upper bound on the true lowest eigenvalue, so
+                    ! once it has dropped below the instability threshold the sign is
+                    ! already certain and convergence can be declared regardless of
+                    ! the residual, when requested
+                    pair_converged = (settings%stop_on_instability .and. &
+                                      red_eigvals(i) < stability_thresh) .or. &
+                                     dnrm2(n_param, residual(:, i), 1_ip) / &
+                                     sqrt(real(n_param, kind=rp)) < settings%conv_tol
+                end if
+                if (.not. pair_converged) n_unconverged = n_unconverged + 1
+            end do
+            if (n_unconverged == 0) then
+                converged = .true.
+                deallocate(red_eigvals, red_eigvecs, solution, h_solution, residual)
+                exit
+            end if
+
+            ! expand the space by one vector per unconverged Ritz pair
+            n_added = 0
+            do i = 1, n_target
+                ! the reduced space cannot exceed the full space
+                if (n_trial >= n_param) exit
+
+                if (present(res_tol)) then
+                    if (dnrm2(n_param, residual(:, i), 1_ip) < res_tol) cycle
+                end if
+
+                if (.not. present(res_tol) .and. n_target == 1 .and. &
+                    settings%diag_solver == "jacobi-davidson" .and. &
+                    iter > settings%jacobi_davidson_start) then
+                    ! solve Jacobi-Davidson correction equations
+                    minres_tol = 3.0_rp**(-(iter - settings%jacobi_davidson_start - 1))
+                    call minres(-residual(:, i), approx_hess_x_funptr, solution(:, i), &
+                                red_eigvals(i), minres_tol, basis_vec, h_basis_vec, &
+                                settings, error)
+                    call add_error_origin(error, error_stability_check, settings)
+                    if (error /= 0) return
+
+                    ! orthonormalize to current space to get new basis vector
+                    call gram_schmidt(basis_vec, red_space_basis, settings, error, &
+                                      lin_trans_vector=h_basis_vec, &
+                                      lin_trans_space=h_basis)
+                    call add_error_origin(error, error_stability_check, settings)
+                    if (error /= 0) return
+
+                    ! check if approximate linear transformation is used or if the
+                    ! resulting exact linear transformation still respects Hessian
+                    ! symmetry, which can not be the case due to numerical noise
+                    ! accumulation
+                    if (associated(settings%approx_hess_x) .or. &
+                        abs(ddot(n_param, red_space_basis(:, n_trial), 1_ip, &
+                                 h_basis_vec, 1_ip) &
+                            - ddot(n_param, basis_vec, 1_ip, h_basis(:, n_trial), &
+                                   1_ip)) > hess_symm_thres) then
+                        call hess_x_funptr(basis_vec, h_basis_vec, error)
+                        call add_error_origin(error, error_hess_x, settings)
+                        if (error /= 0) return
+                        if (count_hess_x) tot_hess_x = tot_hess_x + 1
+                    end if
+                else
+                    ! precondition residual
+                    call level_shifted_diag_precond(residual(:, i), 0.0_rp, h_diag, &
+                                                    basis_vec, settings, error)
+                    if (error /= 0) return
+
+                    ! orthonormalize to current space to get new basis vector
+                    call gram_schmidt(basis_vec, red_space_basis, settings, error, &
+                                      silent_on_error=.true.)
+                    if (error == 2) then
+                        error = 0
+                        cycle
+                    end if
+                    call add_error_origin(error, error_stability_check, settings)
+                    if (error /= 0) return
+
+                    ! add linear transformation of new basis vector
+                    call hess_x_funptr(basis_vec, h_basis_vec, error)
+                    call add_error_origin(error, error_hess_x, settings)
+                    if (error /= 0) return
+                    if (count_hess_x) tot_hess_x = tot_hess_x + 1
+                end if
+
+                ! add new trial vector and its linear transformation to the space
+                call add_column(red_space_basis, basis_vec)
+                call add_column(h_basis, h_basis_vec)
+                n_trial = n_trial + 1
+                n_added = n_added + 1
+            end do
+            deallocate(red_eigvals, red_eigvecs, solution, h_solution, residual)
+
+            ! Ritz pairs remain unconverged but the space can not be expanded any
+            ! further
+            if (n_added == 0) exit
+        end do
+
+        deallocate(h_basis, basis_vec, h_basis_vec)
+
+    end subroutine block_davidson
+
+    subroutine get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        !
+        ! this subroutine generates the initial trial space for the stability check
+        !
+        real(rp), intent(in) :: h_diag(:)
+        real(rp), allocatable, intent(out) :: red_space_basis(:, :)
+        type(stability_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        real(rp), parameter :: approx_hess_trial_conv = 1e-5_rp
+        integer(ip), parameter :: approx_hess_trial_extra = 3, &
+                                  approx_hess_trial_max_iter = 100
+        integer(ip) :: n_param, n_total, n_trial_vectors, i, min_idx
+        real(rp), allocatable :: start_space(:, :), eigvals(:), h_diag_copy(:), &
+                                 leading_block(:, :)
+        logical :: converged
+        real(rp), external :: dnrm2
+
+        ! initialize error flag
+        error = 0
+
+        ! number of parameters
+        n_param = size(h_diag)
+
+        ! a supplied trial space is used as it is
+        if (associated(settings%init_trial_space)) then
+            allocate(red_space_basis(n_param, settings%n_trial_vectors))
+            call settings%init_trial_space(red_space_basis, error)
+            call add_error_origin(error, error_init_trial_space, settings)
+            if (error /= 0) return
+            call orthogonalize_trial_vectors(red_space_basis, settings, error)
+            call add_error_origin(error, error_stability_check, settings)
+            return
+        end if
+
+        ! get total number of trial vectors
+        n_total = min(settings%n_trial_vectors + settings%n_random_trial_vectors, &
+                      n_param)
+        n_trial_vectors = min(settings%n_trial_vectors, n_param)
+        allocate(red_space_basis(n_param, n_total))
+
+        ! check if approximate Hessian is supplied
+        if (n_trial_vectors > 0 .and. associated(settings%approx_hess_x)) then
+            ! extract the lowest approximate Hessian eigenvectors starting from a 
+            ! random space slightly larger than the requested block since the lowest 
+            ! eigenvectors emerge more reliably when a few extra directions are carried 
+            ! along
+            allocate(start_space(n_param, min(n_trial_vectors + &
+                                              approx_hess_trial_extra, n_param - 1)), &
+                     eigvals(n_trial_vectors))
+            call generate_random_trial_vectors(start_space, &
+                                               size(start_space, 2, kind=ip), &
+                                               settings, error)
+            call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
+            call block_davidson(settings%approx_hess_x, h_diag, start_space, .true., &
+                                n_trial_vectors, approx_hess_trial_max_iter, .false., &
+                                eigvals, red_space_basis(:, :n_trial_vectors), &
+                                converged, settings, error, &
+                                res_tol=approx_hess_trial_conv)
+            call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
+
+            ! trial vectors remain usable even if the block did not fully converge
+            if (.not. converged) &
+                call settings%log("Approximate Hessian eigenvectors for the "// &
+                                  "initial trial space did not fully converge. The "// &
+                                  "resulting trial vectors are still used.", &
+                                  verbosity_warning)
+            deallocate(start_space, eigvals)
+        else if (n_trial_vectors > 0) then
+            ! unit vectors along the lowest Hessian diagonal elements
+            h_diag_copy = h_diag
+            red_space_basis(:, :n_trial_vectors) = 0.0_rp
+            do i = 1, n_trial_vectors
+                min_idx = minloc(h_diag_copy, dim=1)
+                red_space_basis(min_idx, i) = 1.0_rp
+                h_diag_copy(min_idx) = huge(1.0_rp)
+                if (associated(settings%project)) then
+                    call settings%project(red_space_basis(:, i), error)
+                    call add_error_origin(error, error_project, settings)
+                    if (error /= 0) return
+                    red_space_basis(:, i) = red_space_basis(:, i) / &
+                                            dnrm2(n_param, red_space_basis(:, i), 1_ip)
+                end if
+            end do
+            deallocate(h_diag_copy)
+
+            ! a projector applied individually to each unit vector does not guarantee 
+            ! they remain mutually orthonormal, so re-orthogonalize
+            if (associated(settings%project)) then
+                leading_block = red_space_basis(:, :n_trial_vectors)
+                call orthogonalize_trial_vectors(leading_block, settings, error)
+                call add_error_origin(error, error_stability_check, settings)
+                if (error /= 0) return
+                n_trial_vectors = size(leading_block, 2)
+                red_space_basis(:, :n_trial_vectors) = leading_block
+                deallocate(leading_block)
+            end if
+        end if
+
+        ! fill the trailing columns with random vectors and remove any linear
+        ! dependencies within the resulting space; the fill count is based on the
+        ! actual number of leading vectors present (n_trial_vectors) rather than the 
+        ! originally requested settings%n_trial_vectors, so that any leading vectors 
+        ! dropped as linearly dependent above are compensated for with additional 
+        ! random ones rather than left as unfilled zero columns
+        call generate_random_trial_vectors(red_space_basis, n_total - n_trial_vectors, &
+                                           settings, error)
+        call add_error_origin(error, error_stability_check, settings)
+
+    end subroutine get_stability_trial_space
 
     subroutine orthogonalize_trial_vectors(red_space_basis, settings, error)
         !
@@ -2004,25 +2137,6 @@ contains
         deallocate(orth)
 
     end subroutine gram_schmidt
-
-    function default_stability_conv_check(residual, eigval, error) result(converged)
-        !
-        ! this function will return convergence once a certain maximum contribution by 
-        ! a hidden state is reached
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: eigval
-        integer(ip), intent(out) :: error
-        logical :: converged
-
-        real(rp), external :: dnrm2
-
-        error = 0
-        converged = eigval < stability_thresh .or. &
-                    dnrm2(size(residual, kind=ip), residual, 1_ip) < &
-                    stability_max_lower_contrib * (eigval - stability_thresh)
-
-    end function default_stability_conv_check
 
     subroutine init_solver_settings(self, error)
         !
@@ -3510,18 +3624,19 @@ contains
                 error = 1
                 return
             end if
-        else if (settings%n_trial_vectors > 0) then
-            call settings%log("Number of trial vectors is only used when trial "// &
-                              "space initialization function is passed, otherwise "// &
-                              "initial trial space is given by lowest Hessian "// &
-                              "diagonal direction and the set number of random "// &
-                              "trial vectors.", verbosity_warning, .false.)
         ! check that number of random trial vectors is below number of parameters
         else if (settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
             write (msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
                 settings%n_random_trial_vectors, "."
             call settings%log(msg, verbosity_warning)
+        ! check that number of trial vectors is not vanishing
+        else if (settings%n_trial_vectors == 0 .and. &
+                 settings%n_random_trial_vectors == 0) then
+            settings%n_random_trial_vectors = n_param/2
+            write (msg, '(A, I0, A)') "Vanishing number of trial vectors for "// &
+                                      "stability check."
+            call settings%log(msg, verbosity_error)
         end if
 
         ! check for character options

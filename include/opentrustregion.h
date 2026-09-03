@@ -101,6 +101,7 @@ typedef int32_t c_int; /* corresponds to integer(c_ip) */
         logger_fp logger;
 
         c_bool hess_symm;
+        c_bool stop_on_instability;
         c_bool initialized;
 
         c_real conv_tol;

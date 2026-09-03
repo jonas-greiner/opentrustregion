@@ -392,6 +392,7 @@ class StabilitySettingsC(Structure):
         ("conv_check", c_void_p),
         ("logger", c_void_p),
         ("hess_symm", c_bool),
+        ("stop_on_instability", c_bool),
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("n_random_trial_vectors", c_int),

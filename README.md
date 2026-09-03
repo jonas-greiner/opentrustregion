@@ -319,12 +319,13 @@ The stability check can be fine-tuned using the following settings:
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion based on the provided residual vector and current eigenvalue estimate. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`init_trial_space`** (subroutine): Returns an initial trial space which does not need to be orthonormalized or projected and is written in-place to the provided matrix. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
+- **`stop_on_instability`** (boolean): When no `conv_check` is supplied, lets the default convergence policy accept a Ritz pair as soon as its eigenvalue drops below the instability threshold, without waiting for the residual to converge, since a Ritz value is an upper bound on the true lowest eigenvalue and the sign is then already certain. Off by default.
 - **`diag_solver`** (string): Specifies which diagonalization solver to use. Options include:
   - `"davidson"`: standard Davidson method,
   - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations.
-- **`conv_tol`** (real): Convergence criterion for the residual norm.
+- **`conv_tol`** (real): Convergence criterion for the RMS residual.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.
-- **`n_trial_vectors`** (integer): Number of trial vectors used to start the Davidson iterations using `init_trial_space` callback subroutine.
+- **`n_trial_vectors`** (integer): Number of non-random trial vectors used to start the Davidson iterations, on top of the `n_random_trial_vectors` random ones (the total trial space size is `n_trial_vectors + n_random_trial_vectors`). When `init_trial_space` is provided this is instead the number of vectors that callback supplies, and no random vectors are added on top. Otherwise, these non-random vectors are the lowest eigenvectors of the approximate Hessian, obtained from `approx_hess_x`, or unit vectors along the lowest Hessian diagonal elements if no approximate Hessian is passed.
 - **`n_iter`** (integer): Maximum number of Davidson iterations.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.

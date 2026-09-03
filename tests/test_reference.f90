@@ -29,7 +29,7 @@ module test_reference
 
     ! derived types for solver settings
     type ref_settings_type
-        logical :: stability, line_search, hess_symm
+        logical :: stability, line_search, hess_symm, stop_on_instability
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_random_trial_vectors, n_macro, n_micro, &
                        jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
@@ -37,7 +37,7 @@ module test_reference
     end type
 
     type, bind(C) :: ref_settings_type_c
-        logical(c_bool) :: stability, line_search, hess_symm
+        logical(c_bool) :: stability, line_search, hess_symm, stop_on_instability
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, &
                       local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
@@ -49,12 +49,13 @@ module test_reference
     ! general reference parameters
     type(ref_settings_type) :: ref_settings = &
         ref_settings_type(stability = .true., line_search = .true., &
-                          hess_symm = .false., conv_tol = 1e-3_rp, &
-                          start_trust_radius = 0.2_rp, global_red_factor = 1e-2_rp, &
-                          local_red_factor = 1e-3_rp, n_random_trial_vectors = 5, &
-                          n_macro = 300, n_micro = 200, jacobi_davidson_start = 10, &
-                          seed = 33, verbose = 3, n_trial_vectors = 2, n_iter = 50, &
-                          subsystem_solver = "tcg", diag_solver = "jacobi-davidson", &
+                          hess_symm = .false., stop_on_instability = .true., &
+                          conv_tol = 1e-3_rp, start_trust_radius = 0.2_rp, &
+                          global_red_factor = 1e-2_rp, local_red_factor = 1e-3_rp, &
+                          n_random_trial_vectors = 5, n_macro = 300, n_micro = 200, &
+                          jacobi_davidson_start = 10, seed = 33, verbose = 3, &
+                          n_trial_vectors = 2, n_iter = 50, subsystem_solver = "tcg", &
+                          diag_solver = "jacobi-davidson", &
                           trust_region_shape = "spherical")
 
     interface assignment(=)
@@ -1716,6 +1717,7 @@ contains
 
         ! set reference values
         lhs%hess_symm = rhs%hess_symm
+        lhs%stop_on_instability = rhs%stop_on_instability
         lhs%conv_tol = rhs%conv_tol
         lhs%n_random_trial_vectors = rhs%n_random_trial_vectors
         lhs%n_trial_vectors = rhs%n_trial_vectors
@@ -1779,6 +1781,7 @@ contains
         lhs%stability = logical(rhs%stability, kind=c_bool)
         lhs%line_search = logical(rhs%line_search, kind=c_bool)
         lhs%hess_symm = logical(rhs%hess_symm, kind=c_bool)
+        lhs%stop_on_instability = logical(rhs%stop_on_instability, kind=c_bool)
         lhs%conv_tol = real(rhs%conv_tol, kind=c_rp)
         lhs%start_trust_radius = real(rhs%start_trust_radius, kind=c_rp)
         lhs%global_red_factor = real(rhs%global_red_factor, kind=c_rp)
@@ -1849,6 +1852,7 @@ contains
         type(ref_settings_type), intent(in) :: rhs
 
         equal_stability_to_ref = (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
+            (lhs%stop_on_instability .eqv. rhs%stop_on_instability) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs%n_trial_vectors == rhs%n_trial_vectors .and. &

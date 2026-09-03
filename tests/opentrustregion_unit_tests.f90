@@ -38,9 +38,11 @@ module opentrustregion_unit_tests
                                               0.47631257_rp, 0.40058250_rp, &
                                               0.31111531_rp, 0.32397158_rp]
 
-    ! define global current variable and 6D Hartmann Hessian so that these can be 
-    ! accessed by procedure pointers
-    real(rp) :: curr_vars(6), hess(6, 6)
+    ! define global current variable and Hessian for 6D Hartmann model and larger mock 
+    ! Hessian so that these can be accessed by procedure pointers
+    integer(ip), parameter :: n_param_mock_hess = 12
+    real(rp) :: curr_vars(6), hess(6, 6), &
+                mock_hess_mat(n_param_mock_hess, n_param_mock_hess)
 
     ! global log message
     character(:), allocatable :: log_message
@@ -136,6 +138,22 @@ contains
 
     end subroutine hess_x_fun
 
+    subroutine mock_hess_x_fun(x, hess_x, error)
+        !
+        ! this subroutine describes the Hessian linear transformation for a larger 
+        ! mock Hessian
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        hess_x = matmul(mock_hess_mat, x)
+
+    end subroutine mock_hess_x_fun
+
     function obj_func(delta_vars, error) result(func)
         !
         ! this function describes the objective function evaluation for the Hartmann
@@ -215,12 +233,14 @@ contains
 
     subroutine mock_project(vector, error)
         !
-        ! this subroutine is a test subroutine for the projection subroutine
+        ! this subroutine is a test projection subroutine that projects onto the
+        ! subspace where the first two components are equal
         !
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
 
-        vector = 2 * vector
+        vector(1) = 0.5_rp * (vector(1) + vector(2))
+        vector(2) = vector(1)
 
         error = 0
 
@@ -391,6 +411,425 @@ contains
         deallocate(final_grad)
 
     end function test_solver
+
+    logical(c_bool) function test_block_davidson() bind(C)
+        !
+        ! this function tests the Davidson procedure for both a single tracked
+        ! eigenpair and a larger block
+        !
+        use opentrustregion, only: hess_x_type, stability_settings_type, block_davidson
+
+        integer(ip), parameter :: n_param = n_param_mock_hess, n_block = 3, &
+                                  lwork = 3 * n_param
+        real(rp), parameter :: res_tol = 1e-8_rp, asymm_perturb = 0.1_rp
+        real(rp) :: ref_mat(n_param, n_param), ref_eigvals(n_param), work(lwork), &
+                    eigvals(n_block), eigvecs(n_param, n_block), &
+                    ref_eigvals_im(n_param), dummy_vecs(1, 1), swap
+        real(rp), allocatable :: trial_space(:, :)
+        integer(ip) :: error, i, j, k, min_idx, info
+        logical :: converged
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        type(stability_settings_type) :: settings
+        external :: dsyev, dgeev
+
+        ! assume tests pass
+        test_block_davidson = .true.
+
+        ! construct symmetric matrix with well separated eigenvalues
+        do i = 1, n_param
+            do j = 1, n_param
+                mock_hess_mat(i, j) = 1.0_rp / real(i + j, kind=rp)
+            end do
+            mock_hess_mat(i, i) = mock_hess_mat(i, i) + real(i, kind=rp)
+        end do
+
+        ! obtain reference eigenvalues
+        ref_mat = mock_hess_mat
+        call dsyev("N", "U", n_param, ref_mat, n_param, ref_eigvals, work, lwork, info)
+        if (info /= 0) then
+            write (stderr, *) "test_block_davidson failed: Reference "// &
+                "eigendecomposition failed."
+            test_block_davidson = .false.
+            return
+        end if
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! set Hessian linear transformation function pointer
+        hess_x_funptr => mock_hess_x_fun
+
+        ! check block of eigenpairs
+        allocate(trial_space(n_param, n_block))
+        trial_space = 0.0_rp
+        do i = 1, n_block
+            trial_space(i, i) = 1.0_rp
+        end do
+        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
+                            trial_space, .true., n_block, 200_ip, .false., eigvals, &
+                            eigvecs, converged, settings, error, res_tol=res_tol)
+        if (error /= 0) then
+            write (stderr, *) "test_block_davidson failed: Produced error for "// &
+                "block of eigenpairs."
+            test_block_davidson = .false.
+            return
+        end if
+        if (.not. converged) then
+            write (stderr, *) "test_block_davidson failed: Block of eigenpairs did "// &
+                "not converge."
+            test_block_davidson = .false.
+        end if
+        do i = 1, n_block
+            if (abs(eigvals(i) - ref_eigvals(i)) > tol) then
+                write (stderr, *) "test_block_davidson failed: Block of eigenpairs "// &
+                    "does not return the lowest eigenvalues."
+                test_block_davidson = .false.
+            end if
+            if (norm2(matmul(mock_hess_mat, eigvecs(:, i)) - &
+                      eigvals(i) * eigvecs(:, i)) > res_tol) then
+                write (stderr, *) "test_block_davidson failed: Block of eigenpairs "// &
+                    "does not return converged eigenvectors."
+                test_block_davidson = .false.
+            end if
+            if (abs(norm2(eigvecs(:, i)) - 1.0_rp) > tol) then
+                write (stderr, *) "test_block_davidson failed: Block of eigenpairs "// &
+                    "does not return normalized eigenvectors."
+                test_block_davidson = .false.
+            end if
+        end do
+        deallocate(trial_space)
+
+        ! check single eigenpair
+        settings%conv_tol = res_tol
+        allocate(trial_space(n_param, 1))
+        trial_space = 0.0_rp
+        trial_space(1, 1) = 1.0_rp
+        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
+                            trial_space, .true., 1_ip, 200_ip, .false., eigvals(:1), &
+                            eigvecs(:, :1), converged, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_block_davidson failed: Produced error for "// &
+                "single eigenpair."
+            test_block_davidson = .false.
+            return
+        end if
+        if (.not. converged) then
+            write (stderr, *) "test_block_davidson failed: Single eigenpair did "// &
+                "not converge."
+            test_block_davidson = .false.
+        end if
+        if (abs(eigvals(1) - ref_eigvals(1)) > tol) then
+            write (stderr, *) "test_block_davidson failed: Single eigenpair does "// &
+                "not return the lowest eigenvalue."
+            test_block_davidson = .false.
+        end if
+        deallocate(trial_space)
+
+        ! construct non-symmetric transformation
+        do i = 1, n_param
+            do j = 1, n_param
+                mock_hess_mat(i, j) = 1.0_rp/real(i + j, kind=rp)
+            end do
+            mock_hess_mat(i, i) = mock_hess_mat(i, i) + real(i, kind=rp)
+        end do
+        do i = 1, n_param
+            do j = i + 1, n_param
+                mock_hess_mat(i, j) = mock_hess_mat(i, j) + &
+                                        asymm_perturb/real(i + j, kind=rp)
+                mock_hess_mat(j, i) = mock_hess_mat(j, i) - &
+                                        asymm_perturb/real(i + j, kind=rp)
+            end do
+        end do
+
+        ! obtain reference eigenvalues which are then sorted by real part with a 
+        ! selection sort since DGEEV returns them in no particular order
+        ref_mat = mock_hess_mat
+        call dgeev("N", "N", n_param, ref_mat, n_param, ref_eigvals, ref_eigvals_im, &
+                   dummy_vecs, 1_ip, dummy_vecs, 1_ip, work, lwork, info)
+        do i = 1, n_param - 1
+            min_idx = i
+            do k = i + 1, n_param
+                if (ref_eigvals(k) < ref_eigvals(min_idx)) min_idx = k
+            end do
+            swap = ref_eigvals(i)
+            ref_eigvals(i) = ref_eigvals(min_idx)
+            ref_eigvals(min_idx) = swap
+        end do
+
+        ! check block of eigenpairs
+        allocate(trial_space(n_param, n_block))
+        trial_space = 0.0_rp
+        do i = 1, n_block
+            trial_space(i, i) = 1.0_rp
+        end do
+        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
+                            trial_space, .false., n_block, 200_ip, .false., eigvals, &
+                            eigvecs, converged, settings, error, res_tol=res_tol)
+        if (error /= 0) then
+            write (stderr, *) "test_block_davidson failed: Produced error for "// &
+                "non-symmetric block of eigenpairs."
+            test_block_davidson = .false.
+            return
+        end if
+        if (.not. converged) then
+            write (stderr, *) "test_block_davidson failed: Non-symmetric block of "// &
+                "eigenpairs did not converge."
+            test_block_davidson = .false.
+        end if
+        do i = 1, n_block
+            if (abs(eigvals(i) - ref_eigvals(i)) > tol) then
+                write (stderr, *) "test_block_davidson failed: Non-symmetric block "// &
+                    "of eigenpairs does not return the eigenvalues with the lowest "// &
+                    "real parts."
+                test_block_davidson = .false.
+            end if
+            if (norm2(matmul(mock_hess_mat, eigvecs(:, i)) - &
+                      eigvals(i) * eigvecs(:, i)) > res_tol) then
+                write (stderr, *) "test_block_davidson failed: Non-symmetric block "// &
+                    "of eigenpairs does not return converged eigenvectors."
+                test_block_davidson = .false.
+            end if
+        end do
+        deallocate(trial_space)
+
+        ! test behavior when stopping at instability by building the well-separated 
+        ! symmetric matrix and forcing its first diagonal entry to be clearly unstable, 
+        ! letting a single iteration with a tight residual tolerance distinguish the 
+        ! two settings unambiguously
+        do i = 1, n_param
+            do j = 1, n_param
+                mock_hess_mat(i, j) = 1.0_rp/real(i + j, kind=rp)
+            end do
+            mock_hess_mat(i, i) = mock_hess_mat(i, i) + real(i, kind=rp)
+        end do
+        mock_hess_mat(1, 1) = -1.0_rp
+
+        call setup_settings(settings)
+        settings%conv_tol = 1e-8_rp
+        allocate(trial_space(n_param, 1))
+        trial_space = 0.0_rp
+        trial_space(1, 1) = 1.0_rp
+
+        ! when not stopping at instability, a single iteration must not report
+        ! convergence, since the residual is far from the tight tolerance and the
+        ! eigenvalue is not consulted on its own
+        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
+                            trial_space, .true., 1_ip, 1_ip, .false., eigvals(:1), &
+                            eigvecs(:, :1), converged, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_block_davidson failed: Produced error when not "// &
+                "stopping at instability."
+            test_block_davidson = .false.
+            return
+        end if
+        if (converged) then
+            write (stderr, *) "test_block_davidson failed: Converged after a "// &
+                "single iteration with an unconverged residual although "// &
+                "not stopping at instability."
+            test_block_davidson = .false.
+        end if
+        deallocate(trial_space)
+
+        ! when stopping at instability, the same single iteration must instead report 
+        ! convergence immediately, since the (exactly known) eigenvalue is already 
+        ! below the instability threshold
+        settings%stop_on_instability = .true.
+        allocate(trial_space(n_param, 1))
+        trial_space = 0.0_rp
+        trial_space(1, 1) = 1.0_rp
+        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
+                            trial_space, .true., 1_ip, 1_ip, .false., eigvals(:1), &
+                            eigvecs(:, :1), converged, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_block_davidson failed: Produced error when "// &
+                "stopping at instability."
+            test_block_davidson = .false.
+            return
+        end if
+        if (.not. converged) then
+            write (stderr, *) "test_block_davidson failed: Did not converge on an "// &
+                "established instability when stopping at instability."
+            test_block_davidson = .false.
+        end if
+        if (abs(eigvals(1) + 1.0_rp) > tol) then
+            write (stderr, *) "test_block_davidson failed: Incorrect Ritz value "// &
+                "when stopping at instability."
+            test_block_davidson = .false.
+        end if
+        deallocate(trial_space)
+
+    end function test_block_davidson
+
+    logical(c_bool) function test_get_stability_trial_space() bind(C)
+        !
+        ! this function tests the subroutine which generates the initial trial space
+        ! for the stability check
+        !
+        use opentrustregion, only: stability_settings_type, get_stability_trial_space
+
+        integer(ip), parameter :: n_param = 4
+
+        type(stability_settings_type) :: settings
+        real(rp) :: h_diag(n_param), overlap, hess_diag_copy(n_param), hv(n_param), &
+                    lambda, ref_eigvals(2)
+        real(rp), allocatable :: red_space_basis(:, :)
+        integer(ip) :: error, i, j, k, ref_idx(2)
+
+        ! assume tests pass
+        test_get_stability_trial_space = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+        settings%n_trial_vectors = 2
+        settings%n_random_trial_vectors = 1
+        settings%project => mock_project
+
+        ! construct Hessian diagonal whose two lowest elements are the first two, so 
+        ! the leading block is built from the first two directions, which the projector 
+        ! above maps onto the same direction
+        h_diag = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
+
+        ! generate trial space and check size and orthonormality
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_get_stability_trial_space failed: Produced error."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        if (size(red_space_basis, 2) /= settings%n_trial_vectors + &
+            settings%n_random_trial_vectors) then
+            write (stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
+                "number of trial vectors when the projector introduces a linear "// &
+                "dependency."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        do i = 1, size(red_space_basis, 2)
+            do j = 1, size(red_space_basis, 2)
+                overlap = dot_product(red_space_basis(:, i), red_space_basis(:, j))
+                if (i == j) overlap = overlap - 1.0_rp
+                if (abs(overlap) > tol) then
+                    write (stderr, *) "test_get_stability_trial_space failed: "// &
+                        "Returned trial space is not orthonormal."
+                    test_get_stability_trial_space = .false.
+                end if
+            end do
+        end do
+
+        ! use an approximate Hessian linear transformation to construct leading block
+        call setup_settings(settings)
+        settings%n_trial_vectors = 2
+        settings%n_random_trial_vectors = 1
+        call hartmann6d_hessian(minimum1)
+
+        ! the Hessian diagonal preconditioner is given the opposite ranking of the
+        ! approximate Hessian's true diagonal, so a silent fallback to the unit-vector 
+        ! leading block would pick the wrong two directions entirely, letting the 
+        ! eigenvector check below also confirm the correct branch ran
+        h_diag = [(-hess(i, i), i = 1, n_param)]
+        settings%approx_hess_x => mock_approx_hess_x
+
+        ! generate trial space and check size, whether leading vectors are the lowest 
+        ! eigenvectors of the approximate Hessian and orthonormality
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_get_stability_trial_space failed: Produced "// &
+                "error with approximate Hessian linear transformation."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        if (size(red_space_basis, 2) /= settings%n_trial_vectors + &
+            settings%n_random_trial_vectors) then
+            write (stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
+                "number of trial vectors with approximate Hessian linear "// &
+                "transformation."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        hess_diag_copy = [(hess(i, i), i = 1, n_param)]
+        do k = 1, 2
+            ref_idx(k) = minloc(hess_diag_copy, dim=1)
+            hess_diag_copy(ref_idx(k)) = huge(1.0_rp)
+        end do
+        ref_eigvals = [(hess(ref_idx(k), ref_idx(k)), k = 1, 2)]
+        do i = 1, settings%n_trial_vectors
+            hv = [(hess(k, k) * red_space_basis(k, i), k = 1, n_param)]
+            lambda = dot_product(red_space_basis(:, i), hv)
+            if (norm2(hv - lambda * red_space_basis(:, i)) > tol) then
+                write (stderr, *) "test_get_stability_trial_space failed: Leading "// &
+                    "vector is not an eigenvector of approximate Hessian linear "// &
+                    "transformation."
+                test_get_stability_trial_space = .false.
+            end if
+            if (all(abs(lambda - ref_eigvals) > tol)) then
+                write (stderr, *) "test_get_stability_trial_space failed: Leading "// &
+                    "vector does not correspond to one of the two lowest "// &
+                    "eigenvalues of approximate Hessian linear transformation."
+                test_get_stability_trial_space = .false.
+            end if
+        end do
+        do i = 1, size(red_space_basis, 2)
+            do j = 1, size(red_space_basis, 2)
+                overlap = dot_product(red_space_basis(:, i), red_space_basis(:, j))
+                if (i == j) overlap = overlap - 1.0_rp
+                if (abs(overlap) > tol) then
+                    write (stderr, *) "test_get_stability_trial_space failed: "// &
+                        "Returned trial space with approximate Hessian linear "// &
+                        "transformation is not orthonormal."
+                    test_get_stability_trial_space = .false.
+                end if
+            end do
+        end do
+
+        ! a supplied trial space initialization callback fully replaces the leading
+        ! block and short-circuits the routine, so the random fill count has to be
+        ! ignored entirely rather than added to the requested number of trial vectors
+        call setup_settings(settings)
+        settings%n_trial_vectors = 3
+        settings%n_random_trial_vectors = 2
+        settings%init_trial_space => mock_init_trial_space
+
+        ! generate trial space and check size, whether the leading block is exactly
+        ! the callback output and orthonormality
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_get_stability_trial_space failed: Produced "// &
+                "error with trial space initialization."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        if (size(red_space_basis, 2) /= settings%n_trial_vectors) then
+            write (stderr, *) "test_get_stability_trial_space failed: Trial space "// &
+                "initialization callback result was padded with random vectors "// &
+                "instead of being used as is."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        do i = 1, size(red_space_basis, 2)
+            do k = 1, n_param
+                if (abs(red_space_basis(k, i) - merge(1.0_rp, 0.0_rp, k == i)) > tol) &
+                    then
+                    write (stderr, *) "test_get_stability_trial_space failed: "// &
+                        "Returned trial space does not match the trial space "// &
+                        "initialization callback output."
+                    test_get_stability_trial_space = .false.
+                end if
+            end do
+        end do
+        do i = 1, size(red_space_basis, 2)
+            do j = 1, size(red_space_basis, 2)
+                overlap = dot_product(red_space_basis(:, i), red_space_basis(:, j))
+                if (i == j) overlap = overlap - 1.0_rp
+                if (abs(overlap) > tol) then
+                    write (stderr, *) "test_get_stability_trial_space failed: "// &
+                        "Returned trial space with trial space initialization is "// &
+                        "not orthonormal."
+                    test_get_stability_trial_space = .false.
+                end if
+            end do
+        end do
+
+    end function test_get_stability_trial_space
 
     logical(c_bool) function test_stability_check() bind(C)
         !
@@ -617,6 +1056,42 @@ contains
             write (stderr, *) "test_stability_check failed: Stability check with "// &
                 "approximate Hessian linear transformation does not return correct "// &
                 "eigenvector direction for saddle point."
+            test_stability_check = .false.
+        end if
+
+        ! initialize settings
+        call settings%init(error)
+
+        ! request a purely random trial space
+        settings%n_trial_vectors = 0
+        settings%n_random_trial_vectors = 3
+
+        ! run stability check, check if error has occured and determine whether saddle 
+        ! point is unstable and the returned direction is correct
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             direction, min_eigval)
+        if (error /= 0) then
+            write (stderr, *) "test_stability_check failed: Produced error with "// &
+                "purely random trial space."
+            test_stability_check = .false.
+        end if
+        if (stable) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "purely random trial space incorrectly classifies stability of "// &
+                "saddle point."
+            test_stability_check = .false.
+        end if
+        if (min_eigval >= 0.0_rp) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "purely random trial space does not return correct eigenvalue for "// &
+                "saddle point."
+            test_stability_check = .false.
+        end if
+        call hess_x_funptr(direction, eigval_vec, error)
+        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
+            write (stderr, *) "test_stability_check failed: Stability check with "// &
+                "purely random trial space does not return correct eigenvector "// &
+                "direction for saddle point."
             test_stability_check = .false.
         end if
 
@@ -1387,91 +1862,74 @@ contains
 
     end function test_add_column
 
-    logical(c_bool) function test_symm_mat_min_eig() bind(C)
+    logical(c_bool) function test_mat_min_eig() bind(C)
         !
         ! this function tests the subroutine for determining the minimum eigenvalue and
-        ! corresponding eigenvector for a symmetric matrix
+        ! corresponding eigenvector of a matrix, for both the symmetric and the
+        ! non-symmetric case
         !
-        use opentrustregion, only: solver_settings_type, symm_mat_min_eig
+        use opentrustregion, only: solver_settings_type, mat_min_eig
 
         type(solver_settings_type) :: settings
-        real(rp) :: matrix(3, 3)
+        real(rp) :: symm_matrix(3, 3), general_matrix(3, 3)
         real(rp) :: eigval, eigvec(3)
         integer(ip) :: error
 
         ! assume tests pass
-        test_symm_mat_min_eig = .true.
+        test_mat_min_eig = .true.
 
         ! setup settings object
         call setup_settings(settings)
 
         ! initialize symmetric matrix
-        matrix = reshape([3.0_rp, 1.0_rp, 1.0_rp, &
-                          1.0_rp, 4.0_rp, 2.0_rp, &
-                          1.0_rp, 2.0_rp, 5.0_rp], [3, 3])
+        symm_matrix = reshape([3.0_rp, 1.0_rp, 1.0_rp, &
+                               1.0_rp, 4.0_rp, 2.0_rp, &
+                               1.0_rp, 2.0_rp, 5.0_rp], [3, 3])
 
-        ! call routine and determine if lowest eigenvalue and corresponding eigenvector
-        ! are found
-        call symm_mat_min_eig(matrix, eigval, eigvec, settings, error)
+        ! call routine for the symmetric case and determine if lowest eigenvalue and
+        ! corresponding eigenvector are found
+        call mat_min_eig(symm_matrix, .true., eigval, eigvec, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_symm_mat_min_eig failed: Produced error."
-            test_symm_mat_min_eig = .false.
+            write (stderr, *) "test_mat_min_eig failed: Produced error for "// &
+                "symmetric matrix."
+            test_mat_min_eig = .false.
         end if
         if (abs(eigval - 2.30797852837_rp) > tol) then
-            write (stderr, *) "test_symm_mat_min_eig failed: Incorrect minimum "// &
-                "eigenvalue for matrix."
-            test_symm_mat_min_eig = .false.
+            write (stderr, *) "test_mat_min_eig failed: Incorrect minimum "// &
+                "eigenvalue for symmetric matrix."
+            test_mat_min_eig = .false.
         end if
-        if (norm2(matmul(matrix, eigvec) - eigval * eigvec) > tol) then
-            write (stderr, *) "test_symm_mat_min_eig failed: Incorrect eigenvector "// &
-                "corresponding to minimum eigenvalue for matrix."
-            test_symm_mat_min_eig = .false.
+        if (norm2(matmul(symm_matrix, eigvec) - eigval * eigvec) > tol) then
+            write (stderr, *) "test_mat_min_eig failed: Incorrect eigenvector "// &
+                "corresponding to minimum eigenvalue for symmetric matrix."
+            test_mat_min_eig = .false.
         end if
 
-    end function test_symm_mat_min_eig
+        ! initialize non-symmetric matrix
+        general_matrix = reshape([3.0_rp, 2.0_rp, 4.0_rp, &
+                                  1.0_rp, 4.0_rp, 6.0_rp, &
+                                  3.0_rp, 5.0_rp, 5.0_rp], [3, 3])
 
-    logical(c_bool) function test_general_mat_min_eig() bind(C)
-        !
-        ! this function tests the subroutine for determining the minimum eigenvalue and
-        ! corresponding right eigenvectors for a square matrix
-        !
-        use opentrustregion, only: solver_settings_type, general_mat_min_eig
-
-        type(solver_settings_type) :: settings
-        real(rp) :: matrix(3, 3)
-        real(rp) :: eigval, eigvec(3)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_general_mat_min_eig = .true.
-
-        ! setup settings object
-        call setup_settings(settings)
-
-        ! initialize symmetric matrix
-        matrix = reshape([3.0_rp, 2.0_rp, 4.0_rp, &
-                          1.0_rp, 4.0_rp, 6.0_rp, &
-                          3.0_rp, 5.0_rp, 5.0_rp], [3, 3])
-
-        ! call routine and determine if lowest eigenvalue and corresponding right 
-        ! eigenvector are found
-        call general_mat_min_eig(matrix, eigval, eigvec, settings, error)
+        ! call routine for the non-symmetric case and determine if lowest eigenvalue
+        ! and corresponding right eigenvector are found
+        call mat_min_eig(general_matrix, .false., eigval, eigvec, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_general_mat_min_eig failed: Produced error."
-            test_general_mat_min_eig = .false.
+            write (stderr, *) "test_mat_min_eig failed: Produced error for "// &
+                "non-symmetric matrix."
+            test_mat_min_eig = .false.
         end if
         if (abs(eigval + 1.43567185527_rp) > tol) then
-            write (stderr, *) "test_general_mat_min_eig failed: Incorrect minimum "// &
-                "eigenvalue for matrix."
-            test_general_mat_min_eig = .false.
+            write (stderr, *) "test_mat_min_eig failed: Incorrect minimum "// &
+                "eigenvalue for non-symmetric matrix."
+            test_mat_min_eig = .false.
         end if
-        if (norm2(matmul(matrix, eigvec) - eigval * eigvec) > tol) then
-            write (stderr, *) "test_general_mat_min_eig failed: Incorrect "// &
-                "eigenvector corresponding to minimum eigenvalue for matrix."
-            test_general_mat_min_eig = .false.
+        if (norm2(matmul(general_matrix, eigvec) - eigval * eigvec) > tol) then
+            write (stderr, *) "test_mat_min_eig failed: Incorrect eigenvector "// &
+                "corresponding to minimum eigenvalue for non-symmetric matrix."
+            test_mat_min_eig = .false.
         end if
 
-    end function test_general_mat_min_eig
+    end function test_mat_min_eig
 
     logical(c_bool) function test_symm_mat_diag() bind(C)
         !
@@ -1566,6 +2024,95 @@ contains
         end if
 
     end function test_general_mat_diag
+
+    logical(c_bool) function test_mat_lowest_eigpairs() bind(C)
+        !
+        ! this function tests the subroutine which returns the lowest eigenpairs of a
+        ! matrix
+        !
+        use opentrustregion, only: solver_settings_type, mat_lowest_eigpairs
+
+        integer(ip), parameter :: n = 3, n_target = 2
+
+        real(rp) :: symm_matrix(n, n), general_matrix(n, n), eigvals(n_target), &
+                    eigvecs(n, n_target), expected_symm(n_target), &
+                    expected_general(n_target), residual(n)
+        integer(ip) :: error, i
+        type(solver_settings_type) :: settings
+
+        ! assume tests pass
+        test_mat_lowest_eigpairs = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! symmetric diagonal matrix with well separated eigenvalues
+        symm_matrix = 0.0_rp
+        symm_matrix(1, 1) = 5.0_rp
+        symm_matrix(2, 2) = 1.0_rp
+        symm_matrix(3, 3) = 3.0_rp
+        expected_symm = [1.0_rp, 3.0_rp]
+
+        ! call routine for the symmetric case and determine whether the lowest
+        ! eigenvalues are returned in ascending order
+        call mat_lowest_eigpairs(symm_matrix, .true., eigvals, eigvecs, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_mat_lowest_eigpairs failed: Produced error for "// &
+                "symmetric matrix."
+            test_mat_lowest_eigpairs = .false.
+            return
+        end if
+        if (norm2(eigvals - expected_symm) > tol) then
+            write (stderr, *) "test_mat_lowest_eigpairs failed: Incorrect lowest "// &
+                "eigenvalues for symmetric matrix."
+            test_mat_lowest_eigpairs = .false.
+        end if
+        do i = 1, n_target
+            residual = matmul(symm_matrix, eigvecs(:, i)) - eigvals(i) * eigvecs(:, i)
+            if (norm2(residual) > tol) then
+                write (stderr, *) "test_mat_lowest_eigpairs failed: Returned "// &
+                    "eigenvectors for symmetric matrix are not eigenvectors."
+                test_mat_lowest_eigpairs = .false.
+            end if
+        end do
+
+        ! upper triangular, and therefore non-symmetric, matrix whose eigenvalues are
+        ! its diagonal entries
+        general_matrix = 0.0_rp
+        general_matrix(1, 1) = 1.0_rp
+        general_matrix(2, 2) = 5.0_rp
+        general_matrix(3, 3) = 3.0_rp
+        general_matrix(1, 2) = 2.0_rp
+        general_matrix(1, 3) = 3.0_rp
+        general_matrix(2, 3) = 4.0_rp
+        expected_general = [1.0_rp, 3.0_rp]
+
+        ! call routine for the non-symmetric case and determine whether the
+        ! eigenvalues with the lowest real parts are returned in ascending order
+        call mat_lowest_eigpairs(general_matrix, .false., eigvals, eigvecs, settings, &
+                                 error)
+        if (error /= 0) then
+            write (stderr, *) "test_mat_lowest_eigpairs failed: Produced error for "// &
+                "non-symmetric matrix."
+            test_mat_lowest_eigpairs = .false.
+            return
+        end if
+        if (norm2(eigvals - expected_general) > tol) then
+            write (stderr, *) "test_mat_lowest_eigpairs failed: Incorrect "// &
+                "eigenvalues with lowest real parts for non-symmetric matrix."
+            test_mat_lowest_eigpairs = .false.
+        end if
+        do i = 1, n_target
+            residual = matmul(general_matrix, &
+                              eigvecs(:, i)) - eigvals(i) * eigvecs(:, i)
+            if (norm2(residual) > tol) then
+                write (stderr, *) "test_mat_lowest_eigpairs failed: Returned right "// &
+                    "eigenvectors for non-symmetric matrix are not eigenvectors."
+                test_mat_lowest_eigpairs = .false.
+            end if
+        end do
+
+    end function test_mat_lowest_eigpairs
 
     logical(c_bool) function test_init_rng() bind(C)
         !
@@ -1724,6 +2271,8 @@ contains
         !
         use opentrustregion, only: solver_settings_type, generate_random_trial_vectors
 
+        integer(ip), parameter :: n_fill = 2
+
         type(solver_settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
         integer(ip) :: error, i, j
@@ -1733,27 +2282,43 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
-        settings%n_random_trial_vectors = 2
 
-        ! allocate reduced space basis and set first normalized basis vector
-        allocate(red_space_basis(4, 3))
+        ! allocate reduced space basis and set first normalized basis vector, which
+        ! is the leading column the routine has to leave alone and orthogonalize the
+        ! randomly filled trailing columns against
+        allocate(red_space_basis(4, n_fill + 1))
         red_space_basis(:, 1) = [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
         red_space_basis(:, 1) = red_space_basis(:, 1) / norm2(red_space_basis(:, 1))
 
-        ! generate trial vectors and determine whether function returns orthonormal 
+        ! generate trial vectors and determine whether function returns orthonormal
         ! trial vectors
-        call generate_random_trial_vectors(red_space_basis, settings, error)
+        call generate_random_trial_vectors(red_space_basis, n_fill, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_generate_trial_vectors failed: Produced error."
+            write (stderr, *) "test_generate_random_trial_vectors failed: Produced "// &
+                "error."
             test_generate_random_trial_vectors = .false.
         end if
+        if (abs(dot_product(red_space_basis(:, 1), &
+                            [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp] / &
+                            norm2([1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp])) - 1.0_rp) > &
+            tol) then
+            write (stderr, *) "test_generate_random_trial_vectors failed: Leading "// &
+                "column was modified."
+            test_generate_random_trial_vectors = .false.
+        end if
+        do i = 2, size(red_space_basis, 2)
+            if (abs(norm2(red_space_basis(:, i)) - 1.0_rp) > tol) then
+                write (stderr, *) "test_generate_random_trial_vectors failed: "// &
+                    "Generated vectors are not normalized."
+                test_generate_random_trial_vectors = .false.
+            end if
+        end do
         do i = 1, size(red_space_basis, 2)
             do j = i + 1, size(red_space_basis, 2)
                 if (abs(dot_product(red_space_basis(:, i), red_space_basis(:, j))) > &
                     tol) then
-                    write (stderr, *) "test_generate_trial_vectors failed: "// &
-                        "Generated vectors are not orthonormal for Hessian with "// &
-                        "only positive diagonal elements."
+                    write (stderr, *) "test_generate_random_trial_vectors failed: "// &
+                        "Generated vectors are not orthonormal."
                     test_generate_random_trial_vectors = .false.
                 end if
             end do
@@ -1942,66 +2507,6 @@ contains
 
     end function test_gram_schmidt
 
-    logical(c_bool) function test_default_stability_conv_check() bind(C)
-        !
-        ! this function tests the default stability convergence check
-        !
-        use opentrustregion, only: default_stability_conv_check, stability_thresh, &
-                                   stability_max_lower_contrib
-
-        real(rp) :: residual(2), eigval
-        integer(ip) :: error
-        logical :: converged
-
-        ! assume tests pass
-        test_default_stability_conv_check = .true.
-
-        ! eigenvalue below stability threshold should converge regardless of residual
-        eigval = stability_thresh - 0.1_rp
-        residual = [1.0_rp, 1.0_rp] * stability_max_lower_contrib
-        converged = default_stability_conv_check(residual, eigval, error)
-        if (error /= 0) then
-            write (stderr, *) "test_default_stability_conv_check failed: Produced "// &
-                "error."
-            test_default_stability_conv_check = .false.
-        end if
-        if (.not. converged) then
-            write (stderr, *) "test_default_stability_conv_check failed: Should "// &
-                "converge for negative eigenvalue."
-            test_default_stability_conv_check = .false.
-        end if
-
-        ! eigenvalue above stability threshold, but bound satisfied
-        eigval = stability_thresh + 1.0_rp
-        residual = [0.5_rp, 0.5_rp] * stability_max_lower_contrib
-        converged = default_stability_conv_check(residual, eigval, error)
-        if (error /= 0) then
-            write (stderr, *) "test_default_stability_conv_check failed: Produced "// &
-                "error."
-            test_default_stability_conv_check = .false.
-        end if
-        if (.not. converged) then
-            write (stderr, *) "test_default_stability_conv_check failed: Should "// &
-                "converge when bound is satisfied."
-            test_default_stability_conv_check = .false.
-        end if
-
-        ! eigenvalue above stability threshold, and bound not satisfied
-        residual = [1.0_rp, 1.0_rp] * stability_max_lower_contrib
-        converged = default_stability_conv_check(residual, eigval, error)
-        if (error /= 0) then
-            write (stderr, *) "test_default_stability_conv_check failed: Produced "// &
-                "error."
-            test_default_stability_conv_check = .false.
-        end if
-        if (converged) then
-            write (stderr, *) "test_default_stability_conv_check failed: Should "// &
-                "not converge when bound is not satisfied."
-            test_default_stability_conv_check = .false.
-        end if
-
-    end function test_default_stability_conv_check
-
     logical(c_bool) function test_init_solver_settings() bind(C)
         !
         ! this function tests the subroutine which initializes the solver settings
@@ -2086,7 +2591,7 @@ contains
         !
         use opentrustregion, only: solver_settings_type, level_shifted_diag_precond
 
-        real(rp) :: vector(3), mu, h_diag(3), precond_vector(3)
+        real(rp) :: vector(3), mu, h_diag(3), precond_vector(3), merged_val
         type(solver_settings_type) :: settings
         integer(ip) :: error
 
@@ -2117,6 +2622,7 @@ contains
 
         ! test custom projector
         settings%project => mock_project
+        merged_val = 0.5_rp * (1e10_rp + 1.0_rp / 3)
 
         ! call subroutine and check if results match
         call level_shifted_diag_precond(vector, mu, h_diag, precond_vector, settings, &
@@ -2126,7 +2632,7 @@ contains
                 "error for custom projection function."
             test_level_shifted_diag_precond = .false.
         end if
-        if (any(abs(precond_vector - [2e10_rp, 2.0_rp / 3, 0.5_rp]) > tol)) then
+        if (any(abs(precond_vector - [merged_val, merged_val, 0.25_rp]) > tol)) then
             write (stderr, *) "test_level_shifted_diag_precond failed: Returned "// &
                 "preconditioned vector not correct for custom projection function."
             test_level_shifted_diag_precond = .false.
@@ -2215,7 +2721,7 @@ contains
                 "for custom projection function."
             test_rel_floor_diag_precond = .false.
         end if
-        if (any(abs(precond_vector - [50.0_rp, 2.0_rp, 0.5_rp]) > tol)) then
+        if (any(abs(precond_vector - [13.0_rp, 13.0_rp, 0.25_rp]) > tol)) then
             write (stderr, *) "test_rel_floor_diag_precond failed: Returned "// &
                 "preconditioned vector not correct for custom projection function."
             test_rel_floor_diag_precond = .false.

@@ -167,7 +167,7 @@ module c_interface
     type, bind(C) :: stability_settings_type_c
         type(c_funptr) :: precond, project, approx_hess_x, init_trial_space, &
                           conv_check, logger
-        logical(c_bool) :: hess_symm, initialized
+        logical(c_bool) :: hess_symm, stop_on_instability, initialized
         real(c_rp) :: conv_tol
         integer(c_ip) :: n_random_trial_vectors, n_trial_vectors, n_iter, &
                          jacobi_davidson_start, seed, verbose
@@ -931,6 +931,7 @@ contains
 
             ! convert logicals
             settings%hess_symm = logical(settings_c%hess_symm)
+            settings%stop_on_instability = logical(settings_c%stop_on_instability)
 
             ! convert reals
             settings%conv_tol = real(settings_c%conv_tol, kind=rp)
@@ -1028,6 +1029,8 @@ contains
 
             ! convert logicals
             settings_c%hess_symm = logical(settings%hess_symm, kind=c_bool)
+            settings_c%stop_on_instability = logical(settings%stop_on_instability, &
+                                                     kind=c_bool)
 
             ! convert reals
             settings_c%conv_tol = real(settings%conv_tol, kind=c_rp)
