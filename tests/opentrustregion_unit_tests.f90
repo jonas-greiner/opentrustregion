@@ -357,6 +357,30 @@ contains
             test_solver = .false.
         end if
 
+        ! check if number of random trial vectors for internal stability check is 
+        ! correct
+        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+        call settings%init(error)
+        settings%stability = .true.
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        if (settings%stability_settings%n_random_trial_vectors /= 1) then
+            write (stderr, *) "test_solver failed: Automatic number of random "// &
+                "trial vectors for stability check not reduced."
+            test_solver = .false.
+        end if
+
+        ! check if explicitly requested number of trial vectors survives
+        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+        call settings%init(error)
+        settings%stability = .true.
+        settings%stability_settings%n_random_trial_vectors = 2
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        if (settings%stability_settings%n_random_trial_vectors /= 2) then
+            write (stderr, *) "test_solver failed: Explicitly requested number of "// &
+                "random trial vectors for stability check not respected."
+            test_solver = .false.
+        end if
+
         ! start near saddle point
         curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         update_orbs_funptr => update_orbs
@@ -3483,7 +3507,8 @@ contains
         ! stability check
         !
         use opentrustregion, only: stability_settings_type, stability_sanity_check, &
-                                   project_warning_msg
+                                   project_warning_msg, &
+                                   standalone_n_random_trial_vectors
 
         type(stability_settings_type) :: settings
         integer(ip) :: error
@@ -3500,6 +3525,16 @@ contains
         if (settings%n_random_trial_vectors /= 1) then
             write(stderr, *) "test_stability_sanity_check failed: Number of random "// &
                 "trial not correctly set."
+            test_stability_sanity_check = .false.
+        end if
+
+        ! check if negative number of trial vectors leads to automatic choice
+        settings%n_random_trial_vectors = -1
+        call stability_sanity_check(settings, 4_ip * &
+                                    standalone_n_random_trial_vectors, error)
+        if (settings%n_random_trial_vectors /= standalone_n_random_trial_vectors) then
+            write(stderr, *) "test_stability_sanity_check failed: Automatic number "// &
+                "of random trial vectors not resolved."
             test_stability_sanity_check = .false.
         end if
 

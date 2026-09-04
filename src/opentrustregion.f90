@@ -238,7 +238,7 @@ module opentrustregion
                                 conv_check = null(), logger = null(), &
                                 hess_symm = .true., initialized = .true., &
                                 stop_on_instability = .false., conv_tol = 1e-9_rp, &
-                                n_random_trial_vectors = 20, n_trial_vectors = 1, &
+                                n_random_trial_vectors = -1, n_trial_vectors = 1, &
                                 n_iter = 100, jacobi_davidson_start = 50, seed = 42, &
                                 verbose = 0, diag_solver = "davidson")
     type(solver_settings_type), parameter :: default_solver_settings = &
@@ -254,6 +254,7 @@ module opentrustregion
                              subsystem_solver = "davidson_ls", &
                              trust_region_shape = "none", &
                              stability_settings = default_stability_settings)
+    integer(ip), parameter :: standalone_n_random_trial_vectors = 20
 
     ! define setting options
     character(kw_len), parameter :: subsystem_solvers(6) = &
@@ -422,8 +423,8 @@ contains
                         settings%stability_settings%logger => settings%logger
                     if (.not. associated(settings%stability_settings%conv_check)) &
                         settings%stability_settings%stop_on_instability = .true.
-                    settings%stability_settings%n_trial_vectors = 1
-                    settings%stability_settings%n_random_trial_vectors = 1
+                    if (settings%stability_settings%n_random_trial_vectors < 0) &
+                        settings%stability_settings%n_random_trial_vectors = 1
                     ! perform stability check
                     call stability_check(h_diag, stability_hess_x_funptr, stable, &
                                          error, settings%stability_settings, &
@@ -3606,6 +3607,10 @@ contains
 
         ! convert strings to lowercase
         settings%diag_solver = string_to_lowercase(settings%diag_solver)
+
+        ! resolve the automatic number of random trial vectors
+        if (settings%n_random_trial_vectors < 0) &
+            settings%n_random_trial_vectors = standalone_n_random_trial_vectors
 
         ! check whether initial trial space function is passed
         if (associated(settings%init_trial_space)) then
