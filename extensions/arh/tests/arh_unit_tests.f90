@@ -19,78 +19,122 @@ module otr_arh_unit_tests
                            mock_v_opposite_spin_factor(2) = [4.0_rp, 9.0_rp], &
                            mock_v_nonlinear_factor(2) = [6.0_rp, 11.0_rp]
 
+    ! dispatch the mock potential by density matrix rank
+    interface mock_potential
+        module procedure mock_potential_cs, mock_potential_os
+    end interface mock_potential
+
 contains
 
-    subroutine build_metric_chol(dm_diff, chol, rank, map)
+    function mock_potential_cs(factor, dm) result(v)
         !
-        ! this subroutine constructs the ARH metric and its upper triangular Cholesky
-        ! factor for linearly independent density matrix differences, so that tests
-        ! which require a metric do not depend on the corresponding ARH routine
+        ! this function evaluates a mock potential for a given density matrix as a
+        ! multiple of it plus the anticommutator with a fixed symmetric matrix; the 
+        ! anticommutator makes sure the potential does not commute with the density 
+        ! matrix and is therefore not annihilated by the occupied-virtual projection, 
+        ! which makes testing of projected quantities possible
         !
-        real(rp), intent(in) :: dm_diff(:, :, :, :)
-        real(rp), intent(out) :: chol(:, :, :)
-        integer(ip), intent(out) :: rank(:), map(:, :)
+        real(rp), intent(in) :: factor, dm(:, :)
+        real(rp) :: v(size(dm, 1), size(dm, 1))
 
-        integer(ip) :: n_diff, i, j, k, info
-        external :: dpotrf
+        integer(ip) :: i, j
+        real(rp) :: coupling(size(dm, 1), size(dm, 1))
 
-        n_diff = size(dm_diff, 4)
-        do k = 1, size(dm_diff, 3)
-            ! generate metric
-            do j = 1, n_diff
-                do i = 1, n_diff
-                    chol(i, j, k) = sum(dm_diff(:, :, k, i) * dm_diff(:, :, k, j))
-                end do
+        do j = 1, size(dm, 1)
+            do i = 1, size(dm, 1)
+                coupling(i, j) = 1.0_rp / real(i + j, kind=rp)
             end do
+        end do
+        v = factor * dm + 0.25_rp * (matmul(coupling, dm) + matmul(dm, coupling))
 
-            ! factorize metric in place
-            call dpotrf("U", n_diff, chol(:, :, k), n_diff, info)
+    end function mock_potential_cs
 
-            ! all differences are linearly independent and keep their order
-            rank(k) = n_diff
-            map(:, k) = [(i, i = 1, n_diff)]
+    function mock_potential_os(factor, dm) result(v)
+        !
+        ! this function applies mock_potential_cs to every spin channel of an
+        ! open-shell density matrix
+        !
+        real(rp), intent(in) :: factor, dm(:, :, :)
+        real(rp) :: v(size(dm, 1), size(dm, 1), size(dm, 3))
+
+        integer(ip) :: i
+
+        do i = 1, size(dm, 3)
+            v(:, :, i) = mock_potential(factor, dm(:, :, i))
         end do
 
-    end subroutine build_metric_chol
+    end function mock_potential_os
 
-    subroutine build_a_inv(a, eig_vecs, eig_vals_inv)
+    subroutine mock_update_dm_cs(dm, energy, fock, v_nonlinear, error)
         !
-        ! this subroutine constructs the spectral decomposition of the inverse of a
-        ! symmetric matrix, so that tests which require a multisecant SR1 matrix do not
-        ! depend on the corresponding ARH routines
+        ! this subroutine is a mock density matrix updating function with a separate
+        ! non-linear potential contribution for the closed-shell case, which returns
+        ! multiples of the density matrix that change between calls so that
+        ! non-vanishing differences are produced
         !
-        real(rp), intent(in) :: a(:, :)
-        real(rp), intent(out) :: eig_vecs(:, :), eig_vals_inv(:)
+        use otr_oao_unit_tests, only: n_mock_calls, mock_factor, mock_fock_factor
 
-        integer(ip) :: n, lwork, info
-        real(rp), allocatable :: eig_vals(:), work(:)
-        external :: dsyev
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), target, contiguous :: fock(:, :), v_nonlinear(:, :)
+        integer(ip), intent(out) :: error
 
-        n = size(a, 1)
-        lwork = 10 * n
-        allocate(eig_vals(n), work(lwork))
+        n_mock_calls = n_mock_calls + 1
 
-        ! symmetrize to remove numerical noise and diagonalize
-        eig_vecs = 0.5_rp * (a + transpose(a))
-        call dsyev("V", "U", n, eig_vecs, n, eig_vals, work, lwork, info)
-        eig_vals_inv = 1.0_rp / eig_vals
+        error = 0
+        energy = sum(dm)
+        fock = mock_potential(mock_factor(mock_fock_factor), dm)
+        v_nonlinear = mock_potential(mock_factor(mock_v_nonlinear_factor), dm)
 
-        deallocate(eig_vals, work)
+    end subroutine mock_update_dm_cs
 
-    end subroutine build_a_inv
-
-    function get_pseudoinverse(eig_vecs, eig_vals_inv) result(a_inv)
+    subroutine mock_update_dm_os(dm, energy, fock, v_same_spin, v_opposite_spin, &
+                                 v_nonlinear, error)
         !
-        ! this function assembles the pseudoinverse from the eigenvectors and inverted
-        ! eigenvalues returned by the multisecant SR1 routines
+        ! this subroutine is a mock density matrix updating function with spin-resolved
+        ! and non-linear potential contributions for the open-shell case, which returns
+        ! multiples of the density matrix that change between calls so that
+        ! non-vanishing differences are produced
         !
-        real(rp), intent(in) :: eig_vecs(:, :), eig_vals_inv(:)
-        real(rp) :: a_inv(size(eig_vecs, 1), size(eig_vecs, 1))
+        use otr_oao_unit_tests, only: n_mock_calls, mock_factor, mock_fock_factor
 
-        a_inv = matmul(eig_vecs * spread(eig_vals_inv, 1, size(eig_vecs, 1)), &
-                       transpose(eig_vecs))
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
+                                         v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
+        integer(ip), intent(out) :: error
 
-    end function get_pseudoinverse
+        integer(ip) :: i
+
+        n_mock_calls = n_mock_calls + 1
+
+        error = 0
+        energy = sum(dm)
+        do i = 1, size(dm, 3)
+            fock(:, :, i) = mock_potential(mock_factor(mock_fock_factor), dm(:, :, i))
+            v_same_spin(:, :, i) = &
+                mock_potential(mock_factor(mock_v_same_spin_factor), dm(:, :, i))
+            v_opposite_spin(:, :, i) = &
+                mock_potential(mock_factor(mock_v_opposite_spin_factor), dm(:, :, i))
+            v_nonlinear(:, :, i) = &
+                mock_potential(mock_factor(mock_v_nonlinear_factor), dm(:, :, i))
+        end do
+
+    end subroutine mock_update_dm_os
+
+        function embed_channel(v, channel, n_ao, n_particle) result(embedded)
+        !
+        ! this function embeds a single (n_ao, n_ao) matrix into one channel of a
+        ! full (n_ao, n_ao, n_particle) array, zeroing the other channel(s)
+        !
+        real(rp), intent(in) :: v(:, :)
+        integer(ip), intent(in) :: channel, n_ao, n_particle
+        real(rp) :: embedded(n_ao, n_ao, n_particle)
+
+        embedded = 0.0_rp
+        embedded(:, :, channel) = v
+
+    end function embed_channel
 
     function generate_random_dm_diff(dm, n) result(dm_diff)
         !
@@ -158,55 +202,697 @@ contains
 
     end function contract_symm_hessian
 
-    subroutine mock_update_dm_cs(dm, energy, fock, v_nonlinear, error)
+    subroutine generate_fock_partition(n_ao, n_particle, n_electrons, dm_oao, fock_oo, &
+                                       fock_vv)
         !
-        ! this subroutine is a mock density matrix updating function with a separate
-        ! non-linear potential contribution for the closed-shell case, which returns
-        ! multiples of the density matrix that change between calls so that
-        ! non-vanishing differences are produced
+        ! this subroutine generates a random density matrix per particle/spin channel
+        ! and the corresponding occupied-occupied and virtual-virtual Fock matrix
+        ! blocks
         !
-        use otr_oao_unit_tests, only: n_mock_calls, mock_factor, mock_fock_factor
+        use otr_oao_unit_tests, only: generate_random_density_matrix, &
+                                      generate_random_symm_matrix, identity_matrix
 
-        real(rp), intent(in), target, contiguous :: dm(:, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), target, contiguous :: fock(:, :), v_nonlinear(:, :)
-        integer(ip), intent(out) :: error
+        integer(ip), intent(in) :: n_ao, n_particle, n_electrons
+        real(rp), intent(out) :: dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
 
-        n_mock_calls = n_mock_calls + 1
+        real(rp) :: full_fock(n_ao, n_ao), complement(n_ao, n_ao)
+        integer(ip) :: j
 
-        error = 0
-        energy = sum(dm)
-        fock = mock_factor(mock_fock_factor) * dm
-        v_nonlinear = mock_factor(mock_v_nonlinear_factor) * dm
+        do j = 1, n_particle
+            dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_electrons)
+            full_fock = generate_random_symm_matrix(n_ao)
+            complement = identity_matrix(n_ao) - dm_oao(:, :, j)
+            fock_oo(:, :, j) = matmul(dm_oao(:, :, j), matmul(full_fock, &
+                                                              dm_oao(:, :, j)))
+            fock_vv(:, :, j) = matmul(complement, matmul(full_fock, complement))
+        end do
 
-    end subroutine mock_update_dm_cs
+    end subroutine generate_fock_partition
 
-    subroutine mock_update_dm_os(dm, energy, fock, v_same_spin, v_opposite_spin, &
-                                 v_nonlinear, error)
+    function ref_cache_dirs(v_diff, dm_oao, n_param) result(dirs)
         !
-        ! this subroutine is a mock density matrix updating function with spin-resolved
-        ! and non-linear potential contributions for the open-shell case, which returns
-        ! multiples of the density matrix that change between calls so that
-        ! non-vanishing differences are produced
+        ! this function independently projects and packs every column of a
+        ! history-difference array into the non-redundant subspace
         !
-        use otr_oao_unit_tests, only: n_mock_calls, mock_factor, mock_fock_factor
+        use otr_oao_unit_tests, only: ref_project_asymm, ref_pack_asymm
 
-        real(rp), intent(in), target :: dm(:, :, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
-                                         v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
-        integer(ip), intent(out) :: error
+        real(rp), intent(in) :: v_diff(:, :, :, :), dm_oao(:, :, :)
+        integer(ip), intent(in) :: n_param
+        real(rp) :: dirs(n_param, size(v_diff, 4))
 
-        n_mock_calls = n_mock_calls + 1
+        integer(ip) :: k
 
-        error = 0
-        energy = sum(dm)
-        fock = mock_factor(mock_fock_factor) * dm
-        v_same_spin = mock_factor(mock_v_same_spin_factor) * dm
-        v_opposite_spin = mock_factor(mock_v_opposite_spin_factor) * dm
-        v_nonlinear = mock_factor(mock_v_nonlinear_factor) * dm
+        do k = 1, size(v_diff, 4, kind=ip)
+            dirs(:, k) = ref_pack_asymm(ref_project_asymm(v_diff(:, :, :, k), dm_oao), &
+                                        n_param)
+        end do
 
-    end subroutine mock_update_dm_os
+    end function ref_cache_dirs
+
+    subroutine setup_arh_and_oao_objects(arh_type, dm_oao, fock_oo, fock_vv, &
+                                         n_ao_target, n_particle_target, n_param_target)
+        !
+        ! this subroutine sets up the module-global OAO and ARH objects for the
+        ! preconditioner tests; the allocatable caches the individual preconditioner 
+        ! branches need are filled in by the caller
+        !
+        use otr_arh, only: arh_object
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+
+        character(*), intent(in) :: arh_type
+        real(rp), target :: dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
+        integer(ip), target :: n_ao_target, n_particle_target, n_param_target
+
+        ! set up the OAO object so that the static-Hessian eigendecomposition used by
+        ! the preconditioner can be refreshed
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao_target
+        oao_object%n_particle = n_particle_target
+        oao_object%n_param = n_param_target
+        oao_object%fock_oo = fock_oo
+        oao_object%fock_vv = fock_vv
+        oao_object%hess_eigen_stale = .true.
+
+        ! set up the ARH object
+        allocate(arh_object)
+        call setup_settings(arh_object%settings)
+        arh_object%settings%arh_type = arh_type
+        arh_object%n_ao => n_ao_target
+        arh_object%n_particle => n_particle_target
+        arh_object%n_param => n_param_target
+        arh_object%dm_oao => dm_oao
+        arh_object%fock_oo => fock_oo
+        arh_object%fock_vv => fock_vv
+
+    end subroutine setup_arh_and_oao_objects
+
+    function generate_nonredundant_vector(n_param, n_particle, n_ao, dm_oao) &
+        result(vector)
+        !
+        ! this function generates a random vector confined to the non-redundant
+        ! subspace
+        !
+        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_project_asymm, &
+                                      ref_pack_asymm
+
+        integer(ip), intent(in) :: n_param, n_particle, n_ao
+        real(rp), intent(in) :: dm_oao(:, :, :)
+        real(rp) :: vector(n_param)
+
+        call random_number(vector)
+        vector = ref_pack_asymm(ref_project_asymm(ref_unpack_asymm( &
+            vector, n_particle, n_ao), dm_oao), n_param)
+
+    end function generate_nonredundant_vector
+
+    subroutine check_inv_hess_x_arh(hess, vector, mu, test_name, passed)
+        !
+        ! this subroutine checks the exact-inverse of the ARH Woodbury preconditioner 
+        ! against a reference Hessian by applying the reference (B - mu*I) to the 
+        ! preconditioned vector which has to recover the vector, both with and without 
+        ! the level shift
+        !
+        use otr_arh, only: inv_hess_x_arh
+
+        real(rp), intent(in) :: hess(:, :), vector(:), mu
+        character(*), intent(in) :: test_name
+        logical, intent(inout) :: passed
+
+        real(rp), allocatable :: actual(:)
+        integer(ip) :: error
+
+        allocate(actual(size(vector)))
+
+        ! shifted entry point: applying the reference (B - mu*I) to the preconditioned 
+        ! vector has to recover the vector
+        call inv_hess_x_arh(vector, actual, error, mu)
+        if (error /= 0) then
+            write (stderr, *) test_name//" failed: Produced error for the shifted "// &
+                "inverse."
+            passed = .false.
+        end if
+        if (norm2(matmul(hess, actual) - mu * actual - vector) > tol * &
+            (1.0_rp + norm2(hess) * norm2(actual))) then
+            write (stderr, *) test_name//" failed: Shifted inverse is not inverse "// &
+                "of shifted reference Hessian."
+            passed = .false.
+        end if
+
+        ! the unshifted entry point has to reproduce the same round trip against the
+        ! reference Hessian itself, without a level shift
+        call inv_hess_x_arh(vector, actual, error)
+        if (error /= 0) then
+            write (stderr, *) test_name//" failed: Produced error for the "// &
+                "unshifted inverse."
+            passed = .false.
+        end if
+        if (norm2(matmul(hess, actual) - vector) > tol * &
+            (1.0_rp + norm2(hess) * norm2(actual))) then
+            write (stderr, *) test_name//" failed: Inverse is not inverse "// &
+                "of reference Hessian."
+            passed = .false.
+        end if
+
+    end subroutine check_inv_hess_x_arh
+
+    function ref_response_cs(arh_type, delta_dm, dm_diff, fock_diff, v_linear_diff, &
+                             v_nonlinear_diff, metric_inv, a_sym, a_inv, a_inv_comb, &
+                             n_ao, n_diff) result(response)
+        !
+        ! this function independently reimplements the closed-shell ARH response
+        ! contribution for every ARH types
+        !
+        character(*), intent(in) :: arh_type
+        real(rp), intent(in) :: delta_dm(:, :, :), dm_diff(:, :, :, :), &
+                                fock_diff(:, :, :, :), v_linear_diff(:, :, :, :), &
+                                v_nonlinear_diff(:, :, :, :), metric_inv(:, :), &
+                                a_sym(:, :), a_inv(:, :), a_inv_comb(:, :)
+        integer(ip), intent(in) :: n_ao, n_diff
+        real(rp) :: response(n_ao, n_ao, 1)
+
+        integer(ip) :: i
+        real(rp) :: s_proj(n_diff), alpha_s(n_diff), y_proj(n_diff), alpha_y(n_diff), &
+                   sy(n_diff), alpha_sy(n_diff), lin_proj(n_diff), alpha_lin(n_diff), &
+                   nl_proj(n_diff), alpha_nl(n_diff)
+
+        response = 0.0_rp
+
+        ! MS-SR1 keeps the linear and non-linear potential differences on their own, 
+        ! independent systems
+        if (arh_type == "ms_sr1") then
+            do i = 1, n_diff
+                lin_proj(i) = sum(v_linear_diff(:, :, 1, i) * delta_dm(:, :, 1))
+            end do
+            alpha_lin = matmul(a_inv, lin_proj)
+            do i = 1, n_diff
+                response(:, :, 1) = response(:, :, 1) + alpha_lin(i) * &
+                                    v_linear_diff(:, :, 1, i)
+            end do
+            do i = 1, n_diff
+                nl_proj(i) = sum(v_nonlinear_diff(:, :, 1, i) * delta_dm(:, :, 1))
+            end do
+            alpha_nl = matmul(a_inv_comb, nl_proj)
+            do i = 1, n_diff
+                response(:, :, 1) = response(:, :, 1) + alpha_nl(i) * &
+                                    v_nonlinear_diff(:, :, 1, i)
+            end do
+            return
+        end if
+
+        ! every other type starts by contracting the density-matrix-difference
+        ! history
+        do i = 1, n_diff
+            s_proj(i) = sum(dm_diff(:, :, 1, i) * delta_dm(:, :, 1))
+        end do
+        alpha_s = matmul(metric_inv, s_proj)
+
+        ! the shared output direction of standard ARH
+        do i = 1, n_diff
+            response(:, :, 1) = response(:, :, 1) + alpha_s(i) * fock_diff(:, :, 1, i)
+        end do
+
+        ! standard ARH stops here
+        if (arh_type == "arh") return
+
+        ! the transposed contraction shared by symmetrized ARH and MS-PSB
+        do i = 1, n_diff
+            y_proj(i) = sum(fock_diff(:, :, 1, i) * delta_dm(:, :, 1))
+        end do
+        alpha_y = matmul(metric_inv, y_proj)
+
+        if (arh_type == "symm_arh") then
+            ! symmetrized ARH averages the two contractions
+            response = 0.5_rp * response
+            do i = 1, n_diff
+                response(:, :, 1) = response(:, :, 1) + &
+                                    0.5_rp * alpha_y(i) * dm_diff(:, :, 1, i)
+            end do
+            return
+        end if
+
+        ! the subspace-projected term shared by the MS-SP and MS-PSB methods
+        sy = matmul(a_sym, alpha_s)
+        alpha_sy = matmul(metric_inv, sy)
+
+        if (arh_type == "ms_sp") then
+            ! the MS-SP method keeps only that term
+            response = 0.0_rp
+            do i = 1, n_diff
+                response(:, :, 1) = response(:, :, 1) + alpha_sy(i) * &
+                                    dm_diff(:, :, 1, i)
+            end do
+        else
+            ! MS-PSB adds the transposed contraction and subtracts the
+            ! subspace-projected term
+            do i = 1, n_diff
+                response(:, :, 1) = response(:, :, 1) + &
+                                    (alpha_y(i) - alpha_sy(i)) * dm_diff(:, :, 1, i)
+            end do
+        end if
+
+    end function ref_response_cs
+
+    function ref_response_os(arh_type, delta_dm, dm_diff, v_same_eff, v_opp, v_nl, &
+                             metric_inv, a_block, a_inv_lin, a_inv_comb, n_ao, n_diff) &
+        result(response)
+        !
+        ! this function independently reimplements the open-shell ARH response
+        ! contribution for every ARH type
+        !
+        character(*), intent(in) :: arh_type
+        real(rp), intent(in) :: delta_dm(:, :, :), dm_diff(:, :, :, :), &
+                                v_same_eff(:, :, :, :), v_opp(:, :, :, :), &
+                                v_nl(:, :, :, :), metric_inv(:, :), a_block(:, :), &
+                                a_inv_lin(:, :), a_inv_comb(:, :)
+        integer(ip), intent(in) :: n_ao, n_diff
+        real(rp) :: response(n_ao, n_ao, 2)
+
+        integer(ip) :: i, j
+        real(rp) :: s_proj(2*n_diff), alpha_s(2*n_diff), y_proj(2*n_diff), &
+                    alpha_y(2*n_diff), sy(2*n_diff), alpha_sy(2*n_diff), &
+                    nl_proj(n_diff), alpha_nl(n_diff)
+
+        response = 0.0_rp
+
+        ! MS-SR1 keeps the linear part on a joint spin-separated system and the 
+        ! non-linear part on a dedicated spin-combined one
+        if (arh_type == "ms_sr1") then
+            do i = 1, n_diff
+                y_proj(i) = sum(v_same_eff(:, :, 1, i) * delta_dm(:, :, 1)) + &
+                            sum(v_opp(:, :, 2, i) * delta_dm(:, :, 2))
+                y_proj(n_diff + i) = sum(v_opp(:, :, 1, i) * delta_dm(:, :, 1)) + &
+                                     sum(v_same_eff(:, :, 2, i) * delta_dm(:, :, 2))
+            end do
+            alpha_y = matmul(a_inv_lin, y_proj)
+            do i = 1, n_diff
+                response(:, :, 1) = response(:, :, 1) + &
+                                    alpha_y(i) * v_same_eff(:, :, 1, i) + &
+                                    alpha_y(n_diff + i) * v_opp(:, :, 1, i)
+                response(:, :, 2) = response(:, :, 2) + &
+                                    alpha_y(i) * v_opp(:, :, 2, i) + &
+                                    alpha_y(n_diff + i) * v_same_eff(:, :, 2, i)
+            end do
+
+            ! non-linear part, contracted jointly over both spin channels
+            do i = 1, n_diff
+                nl_proj(i) = sum(v_nl(:, :, :, i) * delta_dm)
+            end do
+            alpha_nl = matmul(a_inv_comb, nl_proj)
+            do i = 1, n_diff
+                do j = 1, 2
+                    response(:, :, j) = response(:, :, j) + alpha_nl(i) * &
+                                        v_nl(:, :, j, i)
+                end do
+            end do
+            return
+        end if
+
+        ! ARH and symmetric variants contract the density matrix history per spin
+        ! channel, with the coefficients of one channel driving that channel's
+        ! same-spin direction and the other channel's opposite-spin direction
+        do j = 1, 2
+            do i = 1, n_diff
+                s_proj((j - 1)*n_diff + i) = sum(dm_diff(:, :, j, i) * &
+                                                 delta_dm(:, :, j))
+            end do
+        end do
+        alpha_s = matmul(metric_inv, s_proj)
+
+        ! the shared output direction of every type below
+        do j = 1, 2
+            do i = 1, n_diff
+                response(:, :, j) = response(:, :, j) + &
+                                    alpha_s((j - 1)*n_diff + i) * &
+                                    v_same_eff(:, :, j, i) + &
+                                    alpha_s((2 - j)*n_diff + i) * v_opp(:, :, j, i)
+            end do
+        end do
+
+        ! standard ARH stops here
+        if (arh_type == "arh") return
+
+        ! the transposed contraction shared by symmetrized ARH and MS-PSB
+        do j = 1, 2
+            do i = 1, n_diff
+                y_proj((j - 1)*n_diff + i) = &
+                    sum(v_same_eff(:, :, j, i) * delta_dm(:, :, j)) + &
+                    sum(v_opp(:, :, 3 - j, i) * delta_dm(:, :, 3 - j))
+            end do
+        end do
+        alpha_y = matmul(metric_inv, y_proj)
+
+        if (arh_type == "symm_arh") then
+            ! symmetrized ARH averages the two contractions
+            response = 0.5_rp * response
+            do j = 1, 2
+                do i = 1, n_diff
+                    response(:, :, j) = response(:, :, j) + 0.5_rp * &
+                                        alpha_y((j - 1)*n_diff + i) * &
+                                        dm_diff(:, :, j, i)
+                end do
+            end do
+            return
+        end if
+
+        ! the subspace-projected term shared by MS-SP and MS-PSB
+        sy = matmul(a_block, alpha_s)
+        alpha_sy = matmul(metric_inv, sy)
+
+        if (arh_type == "ms_sp") then
+            ! the MS-SP method keeps only that term
+            response = 0.0_rp
+            do j = 1, 2
+                do i = 1, n_diff
+                    response(:, :, j) = response(:, :, j) + &
+                                        alpha_sy((j - 1)*n_diff + i) * &
+                                        dm_diff(:, :, j, i)
+                end do
+            end do
+        else
+            ! MS-PSB adds the transposed contraction and subtracts the
+            ! subspace-projected term
+            do j = 1, 2
+                do i = 1, n_diff
+                    response(:, :, j) = response(:, :, j) + &
+                                        (alpha_y((j - 1)*n_diff + i) - &
+                                         alpha_sy((j - 1)*n_diff + i)) * &
+                                         dm_diff(:, :, j, i)
+                end do
+            end do
+        end if
+
+    end function ref_response_os
+
+    function check_inv_hess_x_arh_cs(arh_type, test_name) result(passed)
+        !
+        ! this function performs the exact-inverse check of the closed-shell ARH 
+        ! Woodbury preconditioner for a single ARH type
+        !
+        use otr_arh, only: arh_object
+        use otr_oao, only: oao_object
+        use otr_oao_test_reference, only: n_ao
+        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_project_symm, ref_hess_x, &
+                                      generate_random_symm_matrix
+
+        character(*), intent(in) :: arh_type, test_name
+        logical :: passed
+
+        integer(ip), parameter :: n_diff = 2, n_electrons = 2
+        real(rp), parameter :: mu = 0.1_rp
+
+        integer(ip), target :: n_ao_target, n_particle_target, n_param_target
+        real(rp), target :: dm_oao(n_ao, n_ao, 1), fock_oo(n_ao, n_ao, 1), &
+                            fock_vv(n_ao, n_ao, 1)
+        real(rp) :: dm_diff(n_ao, n_ao, 1, n_diff), fock_diff(n_ao, n_ao, 1, n_diff), &
+                    v_linear_diff(n_ao, n_ao, 1, n_diff), &
+                    v_nonlinear_diff(n_ao, n_ao, 1, n_diff), &
+                    metric_inv(n_diff, n_diff), a_sym(n_diff, n_diff), &
+                    a_inv(n_diff, n_diff), a_inv_comb(n_diff, n_diff)
+        integer(ip) :: n_param, i, k
+        real(rp), allocatable :: x_full(:, :, :), delta_dm(:, :, :), &
+                                 response(:, :, :), hess(:, :), e_i(:), vector(:)
+
+        ! assume test passes
+        passed = .true.
+
+        ! get number of parameters
+        n_param = n_ao * (n_ao - 1) / 2
+
+        ! generate a random density matrix, the corresponding occupied-occupied and
+        ! virtual-virtual Fock matrix blocks, and history differences
+        call generate_fock_partition(n_ao, 1_ip, n_electrons, dm_oao, fock_oo, &
+                                     fock_vv)
+        do k = 1, n_diff
+            dm_diff(:, :, 1, k) = generate_random_symm_matrix(n_ao)
+            fock_diff(:, :, 1, k) = generate_random_symm_matrix(n_ao)
+            v_linear_diff(:, :, 1, k) = generate_random_symm_matrix(n_ao)
+            v_nonlinear_diff(:, :, 1, k) = generate_random_symm_matrix(n_ao)
+        end do
+
+        ! randomly generated (symmetric) metric pseudoinverse, A_sym, and multisecant 
+        ! SR1 pseudoinverse cores
+        metric_inv = generate_random_symm_matrix(n_diff)
+        a_sym = generate_random_symm_matrix(n_diff)
+        a_inv = generate_random_symm_matrix(n_diff)
+        a_inv_comb = generate_random_symm_matrix(n_diff)
+
+        ! set up the ARH and OAO objects
+        n_ao_target = n_ao
+        n_particle_target = 1
+        n_param_target = n_param
+        call setup_arh_and_oao_objects(arh_type, dm_oao, fock_oo, fock_vv, &
+                                       n_ao_target, n_particle_target, n_param_target)
+
+        ! populate the cached history projections
+        arh_object%dm_dirs = ref_cache_dirs(dm_diff, dm_oao, n_param)
+        arh_object%potential_dirs = ref_cache_dirs(fock_diff, dm_oao, n_param)
+        arh_object%linear_potential_dirs = ref_cache_dirs(v_linear_diff, dm_oao, &
+                                                          n_param)
+        arh_object%nonlinear_potential_dirs = ref_cache_dirs(v_nonlinear_diff, dm_oao, &
+                                                             n_param)
+
+        ! assemble the low-rank factors
+        select case (arh_type)
+        case ("ms_sr1")
+            allocate(arh_object%expansion_dirs(n_param, 2 * n_diff), &
+                     arh_object%coupling_matrix(2 * n_diff, 2 * n_diff))
+            arh_object%expansion_dirs(:, :n_diff) = arh_object%linear_potential_dirs
+            arh_object%expansion_dirs(:, n_diff + 1:) = &
+                arh_object%nonlinear_potential_dirs
+            arh_object%coupling_matrix = 0.0_rp
+            arh_object%coupling_matrix(:n_diff, :n_diff) = 8.0_rp * a_inv
+            arh_object%coupling_matrix(n_diff + 1:, n_diff + 1:) = 8.0_rp * a_inv_comb
+        case ("ms_sp")
+            arh_object%expansion_dirs = arh_object%dm_dirs
+            arh_object%coupling_matrix = 8.0_rp * matmul(metric_inv, &
+                                                         matmul(a_sym, metric_inv))
+        case ("symm_arh")
+            allocate(arh_object%expansion_dirs(n_param, 2 * n_diff), &
+                     arh_object%coupling_matrix(2 * n_diff, 2 * n_diff))
+            arh_object%expansion_dirs(:, :n_diff) = arh_object%dm_dirs
+            arh_object%expansion_dirs(:, n_diff + 1:) = arh_object%potential_dirs
+            arh_object%coupling_matrix = 0.0_rp
+            arh_object%coupling_matrix(:n_diff, n_diff + 1:) = 4.0_rp * metric_inv
+            arh_object%coupling_matrix(n_diff + 1:, :n_diff) = 4.0_rp * metric_inv
+        case ("ms_psb")
+            allocate(arh_object%expansion_dirs(n_param, 2 * n_diff), &
+                     arh_object%coupling_matrix(2 * n_diff, 2 * n_diff))
+            arh_object%expansion_dirs(:, :n_diff) = arh_object%dm_dirs
+            arh_object%expansion_dirs(:, n_diff + 1:) = arh_object%potential_dirs
+            arh_object%coupling_matrix = 0.0_rp
+            arh_object%coupling_matrix(:n_diff, :n_diff) = &
+                -8.0_rp * matmul(metric_inv, matmul(a_sym, metric_inv))
+            arh_object%coupling_matrix(:n_diff, n_diff + 1:) = 8.0_rp * metric_inv
+            arh_object%coupling_matrix(n_diff + 1:, :n_diff) = 8.0_rp * metric_inv
+        case default
+            arh_object%expansion_dirs = arh_object%potential_dirs
+            arh_object%projection_dirs = arh_object%dm_dirs
+            arh_object%coupling_matrix = 8.0_rp * metric_inv
+        end select
+        if (.not. allocated(arh_object%projection_dirs)) &
+            arh_object%projection_dirs = arh_object%expansion_dirs
+
+        ! build the dense reference Hessian
+        allocate(hess(n_param, n_param), e_i(n_param))
+        do i = 1, n_param
+            e_i = 0.0_rp
+            e_i(i) = 1.0_rp
+            x_full = ref_unpack_asymm(e_i, 1_ip, n_ao)
+            delta_dm = ref_project_symm(x_full, dm_oao)
+            allocate(response(n_ao, n_ao, 1))
+            response = ref_response_cs(arh_type, delta_dm, dm_diff, fock_diff, &
+                                       v_linear_diff, v_nonlinear_diff, metric_inv, &
+                                       a_sym, a_inv, a_inv_comb, n_ao, n_diff)
+            hess(:, i) = ref_hess_x(x_full, response, dm_oao, fock_oo, fock_vv, n_param)
+            deallocate(response, x_full, delta_dm)
+        end do
+
+        ! generate a vector confined to the non-redundant subspace and check inverse 
+        ! Hessian
+        vector = generate_nonredundant_vector(n_param, 1_ip, n_ao, dm_oao)
+        call check_inv_hess_x_arh(hess, vector, mu, test_name, passed)
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh_object, oao_object)
+
+    end function check_inv_hess_x_arh_cs
+
+    function check_inv_hess_x_arh_os(arh_type, test_name) result(passed)
+        !
+        ! this function performs the exact-inverse check of the open-shell ARH Woodbury 
+        ! preconditioner for a single ARH type
+        !
+        use otr_arh, only: arh_object
+        use otr_oao, only: oao_object
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_project_symm, &
+                                      ref_project_asymm, ref_pack_asymm, ref_hess_x, &
+                                      generate_random_symm_matrix
+
+        character(*), intent(in) :: arh_type, test_name
+        logical :: passed
+
+        integer(ip), parameter :: n_diff = 2, n_electrons = 1
+        real(rp), parameter :: mu = 0.1_rp
+
+        integer(ip), target :: n_ao_target, n_particle_target, n_param_target
+        real(rp), target :: dm_oao(n_ao, n_ao, n_particle), &
+                            fock_oo(n_ao, n_ao, n_particle), &
+                            fock_vv(n_ao, n_ao, n_particle)
+        real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
+                    v_same_diff(n_ao, n_ao, n_particle, n_diff), &
+                    v_opp_diff(n_ao, n_ao, n_particle, n_diff), &
+                    v_nl_diff(n_ao, n_ao, n_particle, n_diff), &
+                    v_same_eff(n_ao, n_ao, n_particle, n_diff), &
+                    metric_inv(2 * n_diff, 2 * n_diff), &
+                    a_block(2 * n_diff, 2 * n_diff), &
+                    a_inv_lin(2 * n_diff, 2 * n_diff), a_inv_comb(n_diff, n_diff)
+        integer(ip) :: i, j, k
+        real(rp), allocatable :: x_full(:, :, :), delta_dm(:, :, :), &
+                                 response(:, :, :), hess(:, :), e_i(:), vector(:)
+
+        ! assume test passes
+        passed = .true.
+
+        ! generate a random density matrix per spin channel and the corresponding
+        ! occupied-occupied and virtual-virtual Fock matrix blocks
+        call generate_fock_partition(n_ao, n_particle, n_electrons, dm_oao, fock_oo, &
+                                     fock_vv)
+
+        ! generate spin-resolved history differences
+        do k = 1, n_diff
+            do j = 1, n_particle
+                dm_diff(:, :, j, k) = generate_random_symm_matrix(n_ao)
+                v_same_diff(:, :, j, k) = generate_random_symm_matrix(n_ao)
+                v_opp_diff(:, :, j, k) = generate_random_symm_matrix(n_ao)
+                v_nl_diff(:, :, j, k) = generate_random_symm_matrix(n_ao)
+            end do
+        end do
+
+        ! multisecant SR1 keeps the non-linear potential on its own spin-combined
+        ! system, while every other type folds it into the same-spin potential
+        if (arh_type == "ms_sr1") then
+            v_same_eff = v_same_diff
+        else
+            v_same_eff = v_same_diff + v_nl_diff
+        end if
+
+        ! randomly generated (symmetric) metric pseudoinverse, A_sym, and multisecant 
+        ! SR1 pseudoinverse cores
+        metric_inv = 0.0_rp
+        metric_inv(1:n_diff, 1:n_diff) = generate_random_symm_matrix(n_diff)
+        metric_inv(n_diff + 1:2*n_diff, n_diff + 1:2*n_diff) = &
+            generate_random_symm_matrix(n_diff)
+        a_block = generate_random_symm_matrix(2*n_diff)
+        a_inv_lin = generate_random_symm_matrix(2*n_diff)
+        a_inv_comb = generate_random_symm_matrix(n_diff)
+
+        ! set up the ARH and OAO objects
+        n_ao_target = n_ao
+        n_particle_target = n_particle
+        n_param_target = n_param
+        call setup_arh_and_oao_objects(arh_type, dm_oao, fock_oo, fock_vv, &
+                                       n_ao_target, n_particle_target, n_param_target)
+
+        ! populate the cached history projections
+        allocate(arh_object%dm_dirs(n_param, 2 * n_diff), &
+                 arh_object%potential_dirs(n_param, 2 * n_diff), &
+                 arh_object%linear_potential_dirs(n_param, 2 * n_diff), &
+                 arh_object%nonlinear_potential_dirs(n_param, n_diff))
+        do k = 1, n_diff
+            do j = 1, n_particle
+                arh_object%dm_dirs(:, (j - 1) * n_diff + k) = ref_pack_asymm( &
+                    ref_project_asymm(embed_channel(dm_diff(:, :, j, k), j, n_ao, &
+                                                    n_particle), dm_oao), n_param)
+            end do
+            arh_object%potential_dirs(:, k) = ref_pack_asymm(ref_project_asymm( &
+                embed_channel(v_same_eff(:, :, 1, k), 1_ip, n_ao, n_particle) + &
+                embed_channel(v_opp_diff(:, :, 2, k), 2_ip, n_ao, n_particle), &
+                dm_oao), n_param)
+            arh_object%potential_dirs(:, n_diff + k) = &
+                ref_pack_asymm(ref_project_asymm( &
+                    embed_channel(v_same_eff(:, :, 2, k), 2_ip, n_ao, n_particle) + &
+                    embed_channel(v_opp_diff(:, :, 1, k), 1_ip, n_ao, n_particle), &
+                    dm_oao), n_param)
+            arh_object%nonlinear_potential_dirs(:, k) = &
+                ref_pack_asymm(ref_project_asymm(v_nl_diff(:, :, :, k), dm_oao), &
+                               n_param)
+        end do
+        arh_object%linear_potential_dirs = arh_object%potential_dirs
+
+        ! assemble the low-rank factors
+        select case (arh_type)
+        case ("ms_sr1")
+            allocate(arh_object%expansion_dirs(n_param, 3 * n_diff), &
+                     arh_object%coupling_matrix(3 * n_diff, 3 * n_diff))
+            arh_object%expansion_dirs(:, :2 * n_diff) = arh_object%linear_potential_dirs
+            arh_object%expansion_dirs(:, 2 * n_diff + 1:) = &
+                arh_object%nonlinear_potential_dirs
+            arh_object%coupling_matrix = 0.0_rp
+            arh_object%coupling_matrix(:2 * n_diff, :2 * n_diff) = 4.0_rp * a_inv_lin
+            arh_object%coupling_matrix(2 * n_diff + 1:, 2 * n_diff + 1:) = 4.0_rp * &
+                                                                           a_inv_comb
+        case ("ms_sp")
+            arh_object%expansion_dirs = arh_object%dm_dirs
+            arh_object%coupling_matrix = 4.0_rp * &
+                                         matmul(metric_inv, matmul(a_block, metric_inv))
+        case ("symm_arh")
+            allocate(arh_object%expansion_dirs(n_param, 4 * n_diff), &
+                     arh_object%coupling_matrix(4 * n_diff, 4 * n_diff))
+            arh_object%expansion_dirs(:, :2 * n_diff) = arh_object%dm_dirs
+            arh_object%expansion_dirs(:, 2 * n_diff + 1:) = arh_object%potential_dirs
+            arh_object%coupling_matrix = 0.0_rp
+            arh_object%coupling_matrix(:2 * n_diff, 2 * n_diff + 1:) = 2.0_rp * &
+                                                                       metric_inv
+            arh_object%coupling_matrix(2 * n_diff + 1:, :2 * n_diff) = 2.0_rp * &
+                                                                       metric_inv
+        case ("ms_psb")
+            allocate(arh_object%expansion_dirs(n_param, 4 * n_diff), &
+                     arh_object%coupling_matrix(4 * n_diff, 4 * n_diff))
+            arh_object%expansion_dirs(:, :2 * n_diff) = arh_object%dm_dirs
+            arh_object%expansion_dirs(:, 2 * n_diff + 1:) = arh_object%potential_dirs
+            arh_object%coupling_matrix = 0.0_rp
+            arh_object%coupling_matrix(:2 * n_diff, :2 * n_diff) = &
+                -4.0_rp * matmul(metric_inv, matmul(a_block, metric_inv))
+            arh_object%coupling_matrix(:2 * n_diff, 2 * n_diff + 1:) = 4.0_rp * &
+                                                                       metric_inv
+            arh_object%coupling_matrix(2 * n_diff + 1:, :2 * n_diff) = 4.0_rp * &
+                                                                       metric_inv
+        case default
+            arh_object%expansion_dirs = arh_object%potential_dirs
+            arh_object%projection_dirs = arh_object%dm_dirs
+            arh_object%coupling_matrix = 4.0_rp * metric_inv
+        end select
+        if (.not. allocated(arh_object%projection_dirs)) &
+            arh_object%projection_dirs = arh_object%expansion_dirs
+
+        ! build the dense reference Hessian one column at a time
+        allocate(hess(n_param, n_param), e_i(n_param))
+        do i = 1, n_param
+            e_i = 0.0_rp
+            e_i(i) = 1.0_rp
+            x_full = ref_unpack_asymm(e_i, n_particle, n_ao)
+            delta_dm = ref_project_symm(x_full, dm_oao)
+            allocate(response(n_ao, n_ao, n_particle))
+            response = ref_response_os(arh_type, delta_dm, dm_diff, v_same_eff, &
+                                       v_opp_diff, v_nl_diff, metric_inv, a_block, &
+                                       a_inv_lin, a_inv_comb, n_ao, n_diff)
+            hess(:, i) = ref_hess_x(x_full, response, dm_oao, fock_oo, fock_vv, &
+                                    n_param)
+            deallocate(response, x_full, delta_dm)
+        end do
+
+        ! generate a vector confined to the non-redundant subspace and check inverse 
+        ! Hessian
+        vector = generate_nonredundant_vector(n_param, n_particle, n_ao, dm_oao)
+        call check_inv_hess_x_arh(hess, vector, mu, test_name, passed)
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh_object, oao_object)
+
+    end function check_inv_hess_x_arh_os
 
     logical(c_bool) function test_arh_factory_cs() bind(C)
         !
@@ -216,11 +902,11 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
                                    precond_pd_type, project_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
-                           update_dm_cs_type, update_orbs_arh_cs_ptr
+                           update_dm_cs_type, update_orbs_arh_cs_ptr, precond_arh_ptr
         use otr_oao_test_reference, only: n_ao
         use otr_arh_test_reference, only: operator(==)
         use otr_oao, only: oao_object, get_energy_cs_type, obj_func_oao_ptr, &
-                           precond_oao_ptr, precond_pd_oao_ptr, project_oao_ptr
+                           precond_pd_oao_ptr, project_oao_ptr
         use otr_oao_unit_tests, only: mock_get_energy_cs, identity_matrix, &
                                       generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
@@ -298,7 +984,7 @@ contains
                 "associated correctly."
             test_arh_factory_cs = .false.
         end if
-        if (.not. associated(arh_object%get_energy_cs, mock_get_energy_cs)) then
+        if (.not. associated(oao_object%get_energy_cs, mock_get_energy_cs)) then
             write (stderr, *) "test_arh_factory_cs failed: Energy function not "// &
                 "stored correctly."
             test_arh_factory_cs = .false.
@@ -320,7 +1006,7 @@ contains
                 "updating function is wrong."
             test_arh_factory_cs = .false.
         end if
-        if (.not. associated(precond_arh_funptr, precond_oao_ptr)) then
+        if (.not. associated(precond_arh_funptr, precond_arh_ptr)) then
             write (stderr, *) "test_arh_factory_cs failed: Returned level-shifted "// &
                 "preconditioner function is wrong."
             test_arh_factory_cs = .false.
@@ -362,17 +1048,16 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
                                    precond_pd_type, project_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
-                           update_dm_os_type, update_orbs_arh_os_ptr
-        use otr_oao_test_reference, only: n_ao, n_particle
+                           update_dm_os_type, update_orbs_arh_os_ptr, precond_arh_ptr
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
         use otr_arh_test_reference, only: operator(==)
         use otr_oao, only: oao_object, get_energy_os_type, obj_func_oao_ptr, &
-                           precond_oao_ptr, precond_pd_oao_ptr, project_oao_ptr
+                           precond_pd_oao_ptr, project_oao_ptr
         use otr_oao_unit_tests, only: mock_get_energy_os, identity_matrix, &
                                       generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
 
-        integer(ip), parameter :: n_electrons = 2, &
-                                  n_param = n_particle * n_ao * (n_ao - 1) / 2
+        integer(ip), parameter :: n_electrons = 2
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
@@ -446,7 +1131,7 @@ contains
                 "associated correctly."
             test_arh_factory_os = .false.
         end if
-        if (.not. associated(arh_object%get_energy_os, mock_get_energy_os)) then
+        if (.not. associated(oao_object%get_energy_os, mock_get_energy_os)) then
             write (stderr, *) "test_arh_factory_os failed: Energy function not "// &
                 "stored correctly."
             test_arh_factory_os = .false.
@@ -468,7 +1153,7 @@ contains
                 "updating function is wrong."
             test_arh_factory_os = .false.
         end if
-        if (.not. associated(precond_arh_funptr, precond_oao_ptr)) then
+        if (.not. associated(precond_arh_funptr, precond_arh_ptr)) then
             write (stderr, *) "test_arh_factory_os failed: Returned level-shifted "// &
                 "preconditioner function is wrong."
             test_arh_factory_os = .false.
@@ -488,79 +1173,6 @@ contains
         deallocate(arh_object, oao_object)
 
     end function test_arh_factory_os
-
-    logical(c_bool) function test_arh_deconstructor() bind(C)
-        !
-        ! this function tests the subroutine which deallocates the ARH objects
-        !
-        use otr_arh, only: arh_deconstructor, arh_object
-        use otr_oao, only: oao_object
-
-        ! assume tests pass
-        test_arh_deconstructor = .true.
-
-        ! allocate ARH and OAO objects
-        if (.not. allocated(arh_object)) allocate(arh_object)
-        if (.not. allocated(oao_object)) allocate(oao_object)
-
-        ! call routine and determine if both objects are deallocated
-        call arh_deconstructor()
-        if (allocated(arh_object)) then
-            write (stderr, *) "test_arh_deconstructor failed: ARH object not "// &
-                "deallocated."
-            test_arh_deconstructor = .false.
-        end if
-        if (allocated(oao_object)) then
-            write (stderr, *) "test_arh_deconstructor failed: OAO object not "// &
-                "deallocated."
-            test_arh_deconstructor = .false.
-        end if
-
-        ! call routine again and determine if already deallocated objects are handled
-        call arh_deconstructor()
-        if (allocated(arh_object)) then
-            write (stderr, *) "test_arh_deconstructor failed: Already deallocated "// &
-                "ARH object not handled."
-            test_arh_deconstructor = .false.
-        end if
-        if (allocated(oao_object)) then
-            write (stderr, *) "test_arh_deconstructor failed: Already deallocated "// &
-                "OAO object not handled."
-            test_arh_deconstructor = .false.
-        end if
-
-    end function test_arh_deconstructor
-
-    logical(c_bool) function test_init_arh_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the ARH settings
-        !
-        use otr_arh, only: arh_settings_type, default_settings => default_arh_settings
-        use otr_arh_test_reference, only: operator(==)
-
-        type(arh_settings_type) :: settings
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_arh_settings = .true.
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! check for error
-        if (error /= 0) then
-            write (stderr, *) "test_init_arh_settings failed: Function raised error."
-            test_init_arh_settings = .false.
-        end if
-
-        ! check settings
-        if (.not. (settings == default_settings)) then
-            write (stderr, *) "test_init_arh_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_arh_settings = .false.
-        end if
-
-    end function test_init_arh_settings
 
     logical(c_bool) function test_arh_sanity_check() bind(C)
         !
@@ -610,93 +1222,1607 @@ contains
 
     end function test_arh_sanity_check
 
-    logical(c_bool) function test_prepend() bind(C)
+    logical(c_bool) function test_update_orbs_arh_cs() bind(C)
         !
-        ! this function tests the subroutine which prepends an array to a list of arrays
+        ! this function tests the subroutine which defines the energy, gradient and
+        ! Hessian diagonal evaluation in the OAO basis for the closed-shell case
         !
-        use otr_arh, only: prepend
+        use opentrustregion, only: hess_x_type
+        use otr_arh, only: update_orbs_arh_cs, arh_object, hess_x_arh_ptr
+        use otr_oao_test_reference, only: n_ao
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: n_mock_calls, mock_fock_factor, identity_matrix, &
+                                      generate_random_density_matrix, &
+                                      ref_pack_asymm, ref_project_asymm
 
-        real(rp), allocatable :: list(:, :, :, :)
-        real(rp) :: new_array(2, 1, 1), expected(2, 1, 1, 3)
+        integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
+                                  n_param = n_ao * (n_ao - 1) / 2
+
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+        real(rp) :: dm_saved(n_ao, n_ao, n_particle), &
+                    fock_saved(n_ao, n_ao, n_particle), &
+                    v_nonlinear_saved(n_ao, n_ao, n_particle), &
+                    dm_saved_2(n_ao, n_ao, n_particle), &
+                    fock_saved_2(n_ao, n_ao, n_particle), &
+                    v_nonlinear_saved_2(n_ao, n_ao, n_particle), metric(2, 2), &
+                    kappa(n_param), grad(n_param), h_diag(n_param), func
+        real(rp), allocatable :: a_linear(:, :)
+        integer(ip) :: i, j, n_diff, error
+        procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! assume tests pass
-        test_prepend = .true.
+        test_update_orbs_arh_cs = .true.
 
-        ! allocate empty list and initialize array to be prepended
-        allocate(list(2, 1, 1, 0))
-        new_array = reshape([1.0_rp, 2.0_rp], [2, 1, 1])
+        ! set up the OAO object with an orthonormal AO basis, so that the AO and the
+        ! OAO basis coincide
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%s_inv_sqrt = identity_matrix(n_ao)
+        dm_ao(:, :, 1) = generate_random_density_matrix(n_ao, n_electrons)
+        oao_object%dm_ao => dm_ao
+        oao_object%dm_oao = dm_ao
+        allocate(oao_object%fock_oo(n_ao, n_ao, n_particle), &
+                 oao_object%fock_vv(n_ao, n_ao, n_particle))
 
-        ! prepend array to empty list and determine if dimensions and values of
-        ! resulting list match
-        call prepend(list, new_array)
-        if (size(list, 4) /= 1) then
-            write (stderr, *) "test_prepend failed: Incorrect list dimensions "// &
-                "after prepending to empty list."
-            test_prepend = .false.
+        ! set up the ARH object the way the ARH factory would
+        allocate(arh_object)
+        call setup_settings(arh_object%settings)
+        arh_object%settings%arh_type = "ms_psb"
+        arh_object%n_ao => oao_object%n_ao
+        arh_object%n_param => oao_object%n_param
+        arh_object%n_particle => oao_object%n_particle
+        arh_object%dm_ao => oao_object%dm_ao
+        arh_object%s_inv_sqrt => oao_object%s_inv_sqrt
+        arh_object%dm_oao => oao_object%dm_oao
+        arh_object%fock_oo => oao_object%fock_oo
+        arh_object%fock_vv => oao_object%fock_vv
+        arh_object%energy => oao_object%energy
+        arh_object%update_dm_cs => mock_update_dm_cs
+
+        ! reset mock density matrix updating function
+        n_mock_calls = 0
+
+        ! call routine without an orbital rotation for an uninitialized object and
+        ! determine if an error is produced
+        kappa = 0.0_rp
+        oao_object%hess_eigen_stale = .false.
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error."
+            test_update_orbs_arh_cs = .false.
+            return
         end if
-        if (norm2(list(:, :, :, 1) - new_array) > tol) then
-            write (stderr, *) "test_prepend failed: Incorrect list values after "// &
-                "prepending to empty list."
-            test_prepend = .false.
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after the static Hessian part was rebuilt."
+            test_update_orbs_arh_cs = .false.
         end if
 
-        ! initialize expected list after prepending two further arrays
-        expected = reshape([5.0_rp, 6.0_rp, &
-                            3.0_rp, 4.0_rp, &
-                            1.0_rp, 2.0_rp], [2, 1, 1, 3])
-
-        ! prepend two further arrays and determine if dimensions and values of
-        ! resulting list match, so that new arrays are added at the front while the
-        ! order of the existing arrays is retained
-        call prepend(list, reshape([3.0_rp, 4.0_rp], [2, 1, 1]))
-        call prepend(list, reshape([5.0_rp, 6.0_rp], [2, 1, 1]))
-        if (size(list, 4) /= 3) then
-            write (stderr, *) "test_prepend failed: Incorrect list dimensions "// &
-                "after prepending to non-empty list."
-            test_prepend = .false.
+        ! determine if the energy, Fock matrix and non-linear potential of the density
+        ! matrix updating function are picked up
+        if (abs(func - sum(dm_ao)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect energy."
+            test_update_orbs_arh_cs = .false.
         end if
-        if (norm2(list - expected) > tol) then
-            write (stderr, *) "test_prepend failed: Incorrect list values after "// &
-                "prepending to non-empty list."
-            test_prepend = .false.
+        if (norm2(arh_object%fock_oao - mock_potential(mock_fock_factor(1), dm_ao)) > &
+            tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect Fock matrix."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (norm2(arh_object%v_nonlinear_oao - &
+                  mock_potential(mock_v_nonlinear_factor(1), dm_ao)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
+                "non-linear potential."
+            test_update_orbs_arh_cs = .false.
         end if
 
-        ! deallocate list
-        deallocate(list)
+        ! determine if the correct gradient, Hessian diagonal and Hessian linear 
+        ! transformation are returned
+        if (norm2(grad - arh_object%grad) > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Gradient not returned."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (norm2(h_diag - arh_object%h_diag) > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Hessian diagonal "// &
+                "not returned."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (.not. associated(hess_x_funptr, hess_x_arh_ptr)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Returned Hessian "// &
+                "linear transformation is wrong."
+            test_update_orbs_arh_cs = .false.
+        end if
 
-    end function test_prepend
+        ! determine if the history is initialized empty
+        if (size(arh_object%dm_list, 4) /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Density matrix "// &
+                "history not initialized empty."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (size(arh_object%dm_dirs, 2) /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Difference "// &
+                "directions not initialized empty."
+            test_update_orbs_arh_cs = .false.
+        end if
 
-    logical(c_bool) function test_symmetrize_exact() bind(C)
+        ! call routine again without an orbital rotation and determine if the
+        ! quantities of the already initialized object are reused, including the
+        ! cached eigendecomposition of the static Hessian part, which should remain
+        ! valid since it was not rebuilt
+        oao_object%hess_eigen_stale = .false.
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                          error)
+        if (n_mock_calls /= 1) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Quantities "// &
+                "recomputed without an orbital rotation."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (size(arh_object%dm_list, 4) /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: History extended "// &
+                "without an orbital rotation."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part marked stale even "// &
+                "though the static Hessian part was not rebuilt."
+            test_update_orbs_arh_cs = .false.
+        end if
+
+        ! save the current quantities, which the history has to retain, and rotate
+        ! twice in a row
+        dm_saved = arh_object%dm_oao
+        fock_saved = arh_object%fock_oao
+        v_nonlinear_saved = arh_object%v_nonlinear_oao
+        kappa = 0.1_rp
+        oao_object%hess_eigen_stale = .false.
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error "// &
+                "after the first orbital rotation."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after an orbital rotation."
+            test_update_orbs_arh_cs = .false.
+        end if
+        dm_saved_2 = arh_object%dm_oao
+        fock_saved_2 = arh_object%fock_oao
+        v_nonlinear_saved_2 = arh_object%v_nonlinear_oao
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error "// &
+                "after the second orbital rotation."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+        if (size(arh_object%dm_list, 4) /= 2) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: History not "// &
+                "extended to two entries."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+
+        ! determine if the history retains the raw quantities at both columns
+        if (norm2(arh_object%dm_list(:, :, :, 1) - dm_saved_2) > tol .or. &
+            norm2(arh_object%dm_list(:, :, :, 2) - dm_saved) > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect density "// &
+                "matrix history."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (norm2(arh_object%fock_list(:, :, :, 1) - fock_saved_2) > tol .or. &
+            norm2(arh_object%fock_list(:, :, :, 2) - fock_saved) > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect Fock "// &
+                "matrix history."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (norm2(arh_object%v_nonlinear_list(:, :, :, 1) - v_nonlinear_saved_2) > &
+            tol .or. &
+            norm2(arh_object%v_nonlinear_list(:, :, :, 2) - v_nonlinear_saved) > tol) &
+        then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
+                "non-linear potential history."
+            test_update_orbs_arh_cs = .false.
+        end if
+
+        ! determine if the quantities the density matrix and Fock matrix differences
+        ! feed into are built from the history and the current quantities
+        if (.not. allocated(arh_object%metric_inv)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: ARH metric "// &
+                "pseudoinverse not constructed."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%a_sym)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized A "// &
+                "matrix not constructed."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%dm_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Density matrix "// &
+                "difference directions not constructed."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Potential "// &
+                "difference directions not constructed."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+        metric(1, 1) = sum((dm_saved_2 - arh_object%dm_oao)**2)
+        metric(2, 2) = sum((dm_saved - arh_object%dm_oao)**2)
+        metric(1, 2) = sum((dm_saved_2 - arh_object%dm_oao) * &
+                           (dm_saved - arh_object%dm_oao))
+        metric(2, 1) = metric(1, 2)
+        if (norm2(matmul(matmul(arh_object%metric_inv, metric), &
+                         arh_object%metric_inv) - arh_object%metric_inv) > tol * &
+            (1.0_rp + norm2(metric) * norm2(arh_object%metric_inv))) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: ARH metric "// &
+                "pseudoinverse is not the pseudoinverse of the metric."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (abs(arh_object%a_sym(1, 1) - sum((dm_saved_2 - arh_object%dm_oao) * &
+                                             (fock_saved_2 - arh_object%fock_oao))) > &
+            tol .or. &
+            abs(arh_object%a_sym(2, 2) - sum((dm_saved - arh_object%dm_oao) * &
+                                             (fock_saved - arh_object%fock_oao))) > &
+            tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
+                "diagonal block of the symmetrized A matrix."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (norm2(arh_object%dm_dirs(:, 1) - &
+                  ref_pack_asymm(ref_project_asymm(dm_saved_2 - arh_object%dm_oao, &
+                                                   arh_object%dm_oao), n_param)) > &
+            tol .or. &
+            norm2(arh_object%dm_dirs(:, 2) - &
+                  ref_pack_asymm(ref_project_asymm(dm_saved - arh_object%dm_oao, &
+                                                   arh_object%dm_oao), n_param)) > &
+            tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect density "// &
+                "matrix difference directions."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (norm2(arh_object%potential_dirs(:, 1) - ref_pack_asymm(ref_project_asymm( &
+                      fock_saved_2 - arh_object%fock_oao, arh_object%dm_oao), &
+                      n_param)) > tol .or. &
+            norm2(arh_object%potential_dirs(:, 2) - ref_pack_asymm(ref_project_asymm( &
+                      fock_saved - arh_object%fock_oao, arh_object%dm_oao), n_param)) &
+            > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect potential "// &
+                "difference directions."
+            test_update_orbs_arh_cs = .false.
+        end if
+
+        ! call routine for multisecant SR1 and determine if the separately regularized
+        ! multisecant SR1 systems are constructed
+        arh_object%settings%arh_type = "ms_sr1"
+        oao_object%hess_eigen_stale = .false.
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
+                "multisecant SR1."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "for multisecant SR1."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (.not. allocated(arh_object%a_inv)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Multisecant SR1 "// &
+                "system not constructed."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (.not. allocated(arh_object%a_inv_comb)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Spin-combined "// &
+                "multisecant SR1 system not constructed."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (.not. allocated(arh_object%linear_potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Linear potential "// &
+                "difference directions not constructed."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%nonlinear_potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
+                "potential difference directions not constructed."
+            test_update_orbs_arh_cs = .false.
+            return
+        end if
+
+        ! determine if the quantities the density matrix and potential differences
+        ! feed into are built from the history and the current quantities
+        n_diff = size(arh_object%dm_list, 4)
+        allocate(a_linear(n_diff, n_diff))
+        do i = 1, n_diff
+            do j = 1, n_diff
+                a_linear(i, j) = sum((arh_object%dm_list(:, :, :, i) - &
+                                      arh_object%dm_oao) * &
+                                     (arh_object%fock_list(:, :, :, j) - &
+                                      arh_object%fock_oao - &
+                                      (arh_object%v_nonlinear_list(:, :, :, j) - &
+                                       arh_object%v_nonlinear_oao)))
+            end do
+        end do
+        a_linear = 0.5_rp * (a_linear + transpose(a_linear))
+        if (norm2(matmul(matmul(arh_object%a_inv, a_linear), arh_object%a_inv) - &
+                  arh_object%a_inv) > tol .or. norm2(arh_object%a_inv) < tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Multisecant SR1 "// &
+                "pseudoinverse is not the pseudoinverse of the linear system built "// &
+                "from the history differences."
+            test_update_orbs_arh_cs = .false.
+        end if
+        deallocate(a_linear)
+        do i = 1, size(arh_object%dm_list, 4)
+            if (norm2(arh_object%linear_potential_dirs(:, i) - ref_pack_asymm( &
+                      ref_project_asymm( &
+                          arh_object%fock_list(:, :, :, i) - arh_object%fock_oao - &
+                          (arh_object%v_nonlinear_list(:, :, :, i) - &
+                           arh_object%v_nonlinear_oao), arh_object%dm_oao), n_param)) &
+                > tol) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
+                    "linear potential difference directions."
+                test_update_orbs_arh_cs = .false.
+            end if
+            if (norm2(arh_object%nonlinear_potential_dirs(:, i) - ref_pack_asymm( &
+                      ref_project_asymm( &
+                          arh_object%v_nonlinear_list(:, :, :, i) - &
+                          arh_object%v_nonlinear_oao, arh_object%dm_oao), n_param)) > &
+                tol) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
+                    "non-linear potential difference directions."
+                test_update_orbs_arh_cs = .false.
+            end if
+        end do
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh_object, oao_object)
+
+    end function test_update_orbs_arh_cs
+
+    logical(c_bool) function test_update_orbs_arh_os() bind(C)
         !
-        ! this function tests the subroutine which performs a plain, unweighted
-        ! symmetrization of a square matrix
+        ! this function tests the subroutine which defines the energy, gradient and
+        ! Hessian diagonal evaluation in the OAO basis for the open-shell case
         !
-        use otr_arh, only: symmetrize_exact
+        use opentrustregion, only: hess_x_type
+        use otr_arh, only: update_orbs_arh_os, arh_object, hess_x_arh_ptr
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: n_mock_calls, identity_matrix, &
+                                      generate_random_density_matrix, &
+                                      ref_pack_asymm, ref_project_asymm
 
-        real(rp) :: a(3, 3), expected(3, 3)
+        integer(ip), parameter :: n_electrons = 2
+
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+        real(rp) :: dm_saved(n_ao, n_ao, n_particle), &
+                    v_same_spin_saved(n_ao, n_ao, n_particle), &
+                    v_opposite_spin_saved(n_ao, n_ao, n_particle), &
+                    v_nonlinear_saved(n_ao, n_ao, n_particle), &
+                    dm_saved_2(n_ao, n_ao, n_particle), &
+                    v_same_spin_saved_2(n_ao, n_ao, n_particle), &
+                    v_opposite_spin_saved_2(n_ao, n_ao, n_particle), &
+                    v_nonlinear_saved_2(n_ao, n_ao, n_particle), kappa(n_param), &
+                    grad(n_param), h_diag(n_param), func
+        integer(ip) :: i, k, col, n_diff, error
+        procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! assume tests pass
-        test_symmetrize_exact = .true.
+        test_update_orbs_arh_os = .true.
 
-        ! initialize matrix with an antisymmetric contribution
-        a = reshape([1.0_rp, 4.0_rp, 5.0_rp, &
-                     2.0_rp, 6.0_rp, 9.0_rp, &
-                     3.0_rp, 7.0_rp, 8.0_rp], [3, 3])
+        ! set up the OAO object with an orthonormal AO basis, so that the AO and the
+        ! OAO basis coincide
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%s_inv_sqrt = identity_matrix(n_ao)
+        do i = 1, n_particle
+            dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_electrons)
+        end do
+        oao_object%dm_ao => dm_ao
+        oao_object%dm_oao = dm_ao
+        allocate(oao_object%fock_oo(n_ao, n_ao, n_particle), &
+                 oao_object%fock_vv(n_ao, n_ao, n_particle))
 
-        ! initialize expected matrix, which averages each pair of off-diagonal elements
-        expected = reshape([1.0_rp, 3.0_rp, 4.0_rp, &
-                            3.0_rp, 6.0_rp, 8.0_rp, &
-                            4.0_rp, 8.0_rp, 8.0_rp], [3, 3])
+        ! set up the ARH object the way the ARH factory would
+        allocate(arh_object)
+        call setup_settings(arh_object%settings)
+        arh_object%settings%arh_type = "ms_psb"
+        arh_object%n_ao => oao_object%n_ao
+        arh_object%n_param => oao_object%n_param
+        arh_object%n_particle => oao_object%n_particle
+        arh_object%dm_ao => oao_object%dm_ao
+        arh_object%s_inv_sqrt => oao_object%s_inv_sqrt
+        arh_object%dm_oao => oao_object%dm_oao
+        arh_object%fock_oo => oao_object%fock_oo
+        arh_object%fock_vv => oao_object%fock_vv
+        arh_object%energy => oao_object%energy
+        arh_object%update_dm_os => mock_update_dm_os
 
-        ! call routine and determine if values of resulting matrix match
-        call symmetrize_exact(a)
-        if (norm2(a - expected) > tol) then
-            write (stderr, *) "test_symmetrize_exact failed: Incorrect matrix "// &
-                "values after symmetrization."
-            test_symmetrize_exact = .false.
+        ! reset mock density matrix updating function
+        n_mock_calls = 0
+
+        ! call routine without an orbital rotation for an uninitialized object and
+        ! determine if an error is produced
+        kappa = 0.0_rp
+        oao_object%hess_eigen_stale = .false.
+        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Produced error."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after the static Hessian part was rebuilt."
+            test_update_orbs_arh_os = .false.
         end if
 
-    end function test_symmetrize_exact
+        ! determine if the energy and the potentials of the density matrix updating
+        ! function are picked up
+        if (abs(func - sum(dm_ao)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect energy."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(arh_object%v_same_spin_oao - &
+                  mock_potential(mock_v_same_spin_factor(1), dm_ao)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect same-spin "// &
+                "potential."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(arh_object%v_opposite_spin_oao - &
+                  mock_potential(mock_v_opposite_spin_factor(1), dm_ao)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
+                "opposite-spin potential."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(arh_object%v_nonlinear_oao - &
+                  mock_potential(mock_v_nonlinear_factor(1), dm_ao)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
+                "non-linear potential."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! determine if the gradient and Hessian diagonal are returned
+        if (norm2(grad - arh_object%grad) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Gradient not returned."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(h_diag - arh_object%h_diag) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Hessian diagonal "// &
+                "not returned."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! determine if the history is initialized empty
+        if (size(arh_object%dm_list, 4) /= 0) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Density matrix "// &
+                "history not initialized empty."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (size(arh_object%dm_dirs, 2) /= 0) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Difference "// &
+                "directions not initialized empty."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! determine if the returned Hessian linear transformation is correct
+        if (.not. associated(hess_x_funptr, hess_x_arh_ptr)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Returned Hessian "// &
+                "linear transformation is wrong."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! call routine again without an orbital rotation and determine if the
+        ! quantities of the already initialized object are reused, including the
+        ! cached eigendecomposition of the static Hessian part, which should remain
+        ! valid since it was not rebuilt
+        oao_object%hess_eigen_stale = .false.
+        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (n_mock_calls /= 1) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Quantities "// &
+                "recomputed without an orbital rotation."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (size(arh_object%dm_list, 4) /= 0) then
+            write (stderr, *) "test_update_orbs_arh_os failed: History extended "// &
+                "without an orbital rotation."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
+                "eigendecomposition of the static Hessian part marked stale even "// &
+                "though the static Hessian part was not rebuilt."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! save the current quantities, which the history has to retain, and rotate
+        ! twice in a row
+        dm_saved = arh_object%dm_oao
+        v_same_spin_saved = arh_object%v_same_spin_oao
+        v_opposite_spin_saved = arh_object%v_opposite_spin_oao
+        v_nonlinear_saved = arh_object%v_nonlinear_oao
+        kappa = 0.1_rp
+        oao_object%hess_eigen_stale = .false.
+        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &
+                "after the first orbital rotation."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        if (.not. oao_object%hess_eigen_stale) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
+                "eigendecomposition of the static Hessian part not marked stale "// &
+                "after an orbital rotation."
+            test_update_orbs_arh_os = .false.
+        end if
+        dm_saved_2 = arh_object%dm_oao
+        v_same_spin_saved_2 = arh_object%v_same_spin_oao
+        v_opposite_spin_saved_2 = arh_object%v_opposite_spin_oao
+        v_nonlinear_saved_2 = arh_object%v_nonlinear_oao
+        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &
+                "after the second orbital rotation."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        if (size(arh_object%dm_list, 4) /= 2) then
+            write (stderr, *) "test_update_orbs_arh_os failed: History not "// &
+                "extended to two entries."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        n_diff = size(arh_object%dm_list, 4)
+        if (norm2(arh_object%dm_list(:, :, :, 1) - dm_saved_2) > tol .or. &
+            norm2(arh_object%dm_list(:, :, :, 2) - dm_saved) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect density "// &
+                "matrix history."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(arh_object%v_same_spin_list(:, :, :, 1) - v_same_spin_saved_2) > tol &
+            .or. norm2(arh_object%v_same_spin_list(:, :, :, 2) - v_same_spin_saved) > &
+            tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect same-spin "// &
+                "potential history."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(arh_object%v_opposite_spin_list(:, :, :, 1) - &
+                  v_opposite_spin_saved_2) > tol .or. &
+            norm2(arh_object%v_opposite_spin_list(:, :, :, 2) - v_opposite_spin_saved) &
+                  > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
+                "opposite-spin potential history."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(arh_object%v_nonlinear_list(:, :, :, 1) - v_nonlinear_saved_2) > &
+            tol .or. &
+            norm2(arh_object%v_nonlinear_list(:, :, :, 2) - v_nonlinear_saved) > tol) &
+        then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
+                "non-linear potential history."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! determine if the quantities the density matrix and potential differences
+        ! feed into are built from the history and the current quantities
+        if (.not. allocated(arh_object%metric_inv)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: ARH metric "// &
+                "pseudoinverse not constructed."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%a_sym)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized A "// &
+                "matrix not constructed."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%dm_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Density matrix "// &
+                "difference directions not constructed."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Potential "// &
+                "difference directions not constructed."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        do i = 1, n_particle
+            do k = 1, n_diff
+                col = (i - 1) * n_diff + k
+                if (k == 1) then
+                    if (abs(arh_object%a_sym(col, col) - &
+                            sum((dm_saved_2(:, :, i) - arh_object%dm_oao(:, :, i)) * &
+                                (v_same_spin_saved_2(:, :, i) - &
+                                 arh_object%v_same_spin_oao(:, :, i) + &
+                                 v_nonlinear_saved_2(:, :, i) - &
+                                 arh_object%v_nonlinear_oao(:, :, i)))) > tol) then
+                        write (stderr, *) "test_update_orbs_arh_os failed: "// &
+                            "Incorrect diagonal block of the symmetrized A matrix."
+                        test_update_orbs_arh_os = .false.
+                    end if
+                    if (norm2(arh_object%dm_dirs(:, col) - ref_pack_asymm( &
+                            ref_project_asymm(embed_channel( &
+                                dm_saved_2(:, :, i) - arh_object%dm_oao(:, :, i), i, &
+                                n_ao, n_particle), arh_object%dm_oao), n_param)) > &
+                        tol) then
+                        write (stderr, *) "test_update_orbs_arh_os failed: "// &
+                            "Incorrect density matrix difference directions."
+                        test_update_orbs_arh_os = .false.
+                    end if
+                    if (norm2(arh_object%potential_dirs(:, col) - ref_pack_asymm( &
+                            ref_project_asymm(embed_channel( &
+                                v_same_spin_saved_2(:, :, i) - &
+                                arh_object%v_same_spin_oao(:, :, i) + &
+                                v_nonlinear_saved_2(:, :, i) - &
+                                arh_object%v_nonlinear_oao(:, :, i), i, n_ao, &
+                                n_particle) + embed_channel( &
+                                v_opposite_spin_saved_2(:, :, 3 - i) - &
+                                arh_object%v_opposite_spin_oao(:, :, 3 - i), 3 - i, &
+                                n_ao, n_particle), arh_object%dm_oao), n_param)) > &
+                        tol) then
+                        write (stderr, *) "test_update_orbs_arh_os failed: "// &
+                            "Incorrect potential difference directions."
+                        test_update_orbs_arh_os = .false.
+                    end if
+                else
+                    if (abs(arh_object%a_sym(col, col) - &
+                            sum((dm_saved(:, :, i) - arh_object%dm_oao(:, :, i)) * &
+                                (v_same_spin_saved(:, :, i) - &
+                                 arh_object%v_same_spin_oao(:, :, i) + &
+                                 v_nonlinear_saved(:, :, i) - &
+                                 arh_object%v_nonlinear_oao(:, :, i)))) > tol) then
+                        write (stderr, *) "test_update_orbs_arh_os failed: "// &
+                            "Incorrect diagonal block of the symmetrized A matrix."
+                        test_update_orbs_arh_os = .false.
+                    end if
+                    if (norm2(arh_object%dm_dirs(:, col) - ref_pack_asymm( &
+                            ref_project_asymm(embed_channel( &
+                                dm_saved(:, :, i) - arh_object%dm_oao(:, :, i), i, &
+                                n_ao, n_particle), arh_object%dm_oao), n_param)) > &
+                        tol) then
+                        write (stderr, *) "test_update_orbs_arh_os failed: "// &
+                            "Incorrect density matrix difference directions."
+                        test_update_orbs_arh_os = .false.
+                    end if
+                    if (norm2(arh_object%potential_dirs(:, col) - ref_pack_asymm( &
+                            ref_project_asymm(embed_channel( &
+                                v_same_spin_saved(:, :, i) - &
+                                arh_object%v_same_spin_oao(:, :, i) + &
+                                v_nonlinear_saved(:, :, i) - &
+                                arh_object%v_nonlinear_oao(:, :, i), i, n_ao, &
+                                n_particle) + embed_channel( &
+                                v_opposite_spin_saved(:, :, 3 - i) - &
+                                arh_object%v_opposite_spin_oao(:, :, 3 - i), 3 - i, &
+                                n_ao, n_particle), arh_object%dm_oao), n_param)) > &
+                        tol) then
+                        write (stderr, *) "test_update_orbs_arh_os failed: "// &
+                            "Incorrect potential difference directions."
+                        test_update_orbs_arh_os = .false.
+                    end if
+                end if
+            end do
+        end do
+        if (abs(arh_object%a_sym(1, n_diff + 1) - &
+                (norm2(dm_saved_2(:, :, 2) - arh_object%dm_oao(:, :, 2)) * &
+                 sum((dm_saved_2(:, :, 2) - arh_object%dm_oao(:, :, 2)) * &
+                     (v_opposite_spin_saved_2(:, :, 2) - &
+                      arh_object%v_opposite_spin_oao(:, :, 2))) + &
+                 norm2(dm_saved_2(:, :, 1) - arh_object%dm_oao(:, :, 1)) * &
+                 sum((dm_saved_2(:, :, 1) - arh_object%dm_oao(:, :, 1)) * &
+                     (v_opposite_spin_saved_2(:, :, 1) - &
+                      arh_object%v_opposite_spin_oao(:, :, 1)))) / &
+                (norm2(dm_saved_2(:, :, 1) - arh_object%dm_oao(:, :, 1)) + &
+                 norm2(dm_saved_2(:, :, 2) - arh_object%dm_oao(:, :, 2)))) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
+                "cross-symmetrized off-diagonal block of the A matrix."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! call routine for multisecant SR1 and determine if the spin-separated and
+        ! spin-combined multisecant SR1 systems are constructed
+        arh_object%settings%arh_type = "ms_sr1"
+        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Produced error for "// &
+                "multisecant SR1."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (.not. allocated(arh_object%a_inv)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Spin-separated "// &
+                "multisecant SR1 system not constructed."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (.not. allocated(arh_object%a_inv_comb)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Spin-combined "// &
+                "multisecant SR1 system not constructed."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (.not. allocated(arh_object%linear_potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Spin-separated "// &
+                "potential difference directions not constructed."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+        if (.not. allocated(arh_object%nonlinear_potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
+                "potential difference directions not constructed."
+            test_update_orbs_arh_os = .false.
+            return
+        end if
+
+        ! determine that the potential difference directions multisecant SR1 keeps
+        ! spin-separated are built from the history and the current quantities
+        do i = 1, size(arh_object%dm_list, 4)
+            if (norm2(arh_object%nonlinear_potential_dirs(:, i) - &
+                      ref_pack_asymm(ref_project_asymm( &
+                          arh_object%v_nonlinear_list(:, :, :, i) - &
+                          arh_object%v_nonlinear_oao, arh_object%dm_oao), n_param)) > &
+                tol) then
+                write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
+                    "non-linear potential difference directions."
+                test_update_orbs_arh_os = .false.
+            end if
+            if (norm2(arh_object%linear_potential_dirs(:, i) - &
+                      ref_pack_asymm(ref_project_asymm( &
+                          embed_channel(arh_object%v_same_spin_list(:, :, 1, i) - &
+                                        arh_object%v_same_spin_oao(:, :, 1), 1_ip, &
+                                        n_ao, n_particle) + &
+                          embed_channel(arh_object%v_opposite_spin_list(:, :, 2, i) - &
+                                        arh_object%v_opposite_spin_oao(:, :, 2), 2_ip, &
+                                        n_ao, n_particle), arh_object%dm_oao), &
+                          n_param)) > tol) then
+                write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
+                    "spin-separated potential difference directions."
+                test_update_orbs_arh_os = .false.
+            end if
+        end do
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh_object, oao_object)
+
+    end function test_update_orbs_arh_os
+
+    logical(c_bool) function test_hess_x_arh() bind(C)
+        !
+        ! this function tests the subroutine which defines the Hessian linear
+        ! transformation on the basis of augmented Roothaan-Hall and related methods
+        !
+        use otr_arh, only: hess_x_arh, arh_object
+        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_pack_asymm, &
+                                      ref_project_asymm, ref_project_symm, ref_hess_x, &
+                                      generate_random_density_matrix, &
+                                      generate_random_symm_matrix
+
+        integer(ip), parameter :: n_diff = 2
+
+        integer(ip), target :: n_particle_target, n_param, n_ao_target
+        real(rp), target :: dm_oao(n_ao, n_ao, n_particle), &
+                            fock_oo(n_ao, n_ao, n_particle), &
+                            fock_vv(n_ao, n_ao, n_particle)
+        real(rp) :: expansion_history(n_ao, n_ao, n_particle, n_diff), &
+                    projection_history(n_ao, n_ao, n_particle, n_diff), &
+                    coupling(n_diff, n_diff), projected(n_diff), coupled(n_diff)
+        integer(ip) :: i, j, error
+        real(rp), allocatable :: x(:), x_full(:, :, :), delta_dm(:, :, :), &
+                                 response(:, :, :), hess_x(:), expected_hess_x(:)
+
+        ! assume tests pass
+        test_hess_x_arh = .true.
+
+        ! generate random density matrices, Fock matrix contributions and history
+        ! matrices the low-rank directions are built from
+        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2_ip)
+        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1_ip)
+        do j = 1, n_particle
+            fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
+            fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
+            do i = 1, n_diff
+                expansion_history(:, :, j, i) = generate_random_symm_matrix(n_ao)
+                projection_history(:, :, j, i) = generate_random_symm_matrix(n_ao)
+            end do
+        end do
+
+        ! asymmetric coupling matrix, so that a swap of the expansion and projection
+        ! directions would not go unnoticed
+        coupling = reshape([2.0_rp, -1.0_rp, 3.0_rp, 0.5_rp], [n_diff, n_diff])
+
+        ! set up the ARH object with the quantities the Hessian linear transformation
+        ! requires
+        allocate(arh_object)
+        n_ao_target = n_ao
+        arh_object%n_ao => n_ao_target
+        arh_object%n_particle => n_particle_target
+        arh_object%n_param => n_param
+        arh_object%dm_oao => dm_oao
+        arh_object%fock_oo => fock_oo
+        arh_object%fock_vv => fock_vv
+        arh_object%coupling_matrix = coupling
+
+        ! set up the closed-shell case
+        n_particle_target = 1
+        n_param = n_ao * (n_ao - 1) / 2
+        allocate(arh_object%expansion_dirs(n_param, n_diff), &
+                 arh_object%projection_dirs(n_param, n_diff))
+        do i = 1, n_diff
+            arh_object%expansion_dirs(:, i) = ref_pack_asymm( &
+                ref_project_asymm(expansion_history(:, :, 1:1, i), dm_oao(:, :, 1:1)), &
+                n_param)
+            arh_object%projection_dirs(:, i) = ref_pack_asymm( &
+                ref_project_asymm(projection_history(:, :, 1:1, i), &
+                                  dm_oao(:, :, 1:1)), n_param)
+        end do
+        allocate(x(n_param))
+        call random_number(x)
+        x_full = ref_unpack_asymm(x, n_particle_target, n_ao)
+        delta_dm = ref_project_symm(x_full, dm_oao(:, :, 1:1))
+        do i = 1, n_diff
+            projected(i) = 0.5_rp * sum(projection_history(:, :, 1:1, i) * delta_dm)
+        end do
+        coupled = matmul(coupling, projected)
+        allocate(response(n_ao, n_ao, n_particle_target))
+        response = 0.0_rp
+        do i = 1, n_diff
+            response = response + coupled(i) / 4.0_rp * expansion_history(:, :, 1:1, i)
+        end do
+        expected_hess_x = ref_hess_x(x_full, response, dm_oao(:, :, 1:1), &
+                                     fock_oo(:, :, 1:1), fock_vv(:, :, 1:1), n_param)
+
+        ! call routine and determine if values of resulting Hessian linear
+        ! transformation match
+        allocate(hess_x(n_param))
+        call hess_x_arh(x, hess_x, error)
+        if (error /= 0) then
+            write (stderr, *) "test_hess_x_arh failed: Produced error for "// &
+                "closed-shell case."
+            test_hess_x_arh = .false.
+        end if
+        if (norm2(hess_x - expected_hess_x) > tol) then
+            write (stderr, *) "test_hess_x_arh failed: Incorrect Hessian linear "// &
+                "transformation for closed-shell case."
+            test_hess_x_arh = .false.
+        end if
+
+        ! test whether absent low-rank part leaves the static part alone 
+        deallocate(arh_object%expansion_dirs, arh_object%projection_dirs, &
+                  arh_object%coupling_matrix)
+        response = 0.0_rp
+        expected_hess_x = ref_hess_x(x_full, response, dm_oao(:, :, 1:1), &
+                                     fock_oo(:, :, 1:1), fock_vv(:, :, 1:1), n_param)
+        call hess_x_arh(x, hess_x, error)
+        if (error /= 0) then
+            write (stderr, *) "test_hess_x_arh failed: Produced error for empty "// &
+                "history."
+            test_hess_x_arh = .false.
+        end if
+        if (norm2(hess_x - expected_hess_x) > tol) then
+            write (stderr, *) "test_hess_x_arh failed: Incorrect Hessian linear "// &
+                "transformation for empty history."
+            test_hess_x_arh = .false.
+        end if
+        deallocate(x, hess_x, response, x_full, delta_dm)
+
+        ! set up the open-shell case
+        n_particle_target = n_particle
+        n_param = n_particle_target * n_ao * (n_ao - 1) / 2
+        arh_object%coupling_matrix = coupling
+        allocate(arh_object%expansion_dirs(n_param, n_diff), &
+                 arh_object%projection_dirs(n_param, n_diff))
+        do i = 1, n_diff
+            arh_object%expansion_dirs(:, i) = ref_pack_asymm( &
+                ref_project_asymm(expansion_history(:, :, :, i), dm_oao), n_param)
+            arh_object%projection_dirs(:, i) = ref_pack_asymm( &
+                ref_project_asymm(projection_history(:, :, :, i), dm_oao), n_param)
+        end do
+        allocate(x(n_param))
+        call random_number(x)
+        x_full = ref_unpack_asymm(x, n_particle_target, n_ao)
+        delta_dm = ref_project_symm(x_full, dm_oao)
+        do i = 1, n_diff
+            projected(i) = 0.5_rp * sum(projection_history(:, :, :, i) * delta_dm)
+        end do
+        coupled = matmul(coupling, projected)
+        allocate(response(n_ao, n_ao, n_particle_target))
+        response = 0.0_rp
+        do i = 1, n_diff
+            response = response + coupled(i) / 2.0_rp * expansion_history(:, :, :, i)
+        end do
+        expected_hess_x = ref_hess_x(x_full, response, dm_oao, fock_oo, fock_vv, &
+                                     n_param)
+
+        ! call routine and determine if values of resulting Hessian linear
+        ! transformation match
+        allocate(hess_x(n_param))
+        call hess_x_arh(x, hess_x, error)
+        if (error /= 0) then
+            write (stderr, *) "test_hess_x_arh failed: Produced error for "// &
+                "open-shell case."
+            test_hess_x_arh = .false.
+        end if
+        if (norm2(hess_x - expected_hess_x) > tol) then
+            write (stderr, *) "test_hess_x_arh failed: Incorrect Hessian linear "// &
+                "transformation for open-shell case."
+            test_hess_x_arh = .false.
+        end if
+        deallocate(x, hess_x, response)
+
+        ! deallocate ARH object
+        deallocate(arh_object)
+
+    end function test_hess_x_arh
+
+    logical(c_bool) function test_inv_hess_x_arh() bind(C)
+        !
+        ! this function tests the exact, optionally level-shifted inverse of the
+        ! approximate Hessian for every ARH type in both the closed- and the
+        ! open-shell case
+        !
+        use otr_arh, only: arh_types
+
+        integer(ip) :: i
+
+        ! assume tests pass
+        test_inv_hess_x_arh = .true.
+
+        ! closed- and open-shell cases are driven through the shared per-shell checker, 
+        ! one case per ARH type
+        do i = 1, size(arh_types)
+            if (.not. check_inv_hess_x_arh_cs(arh_types(i), &
+                    "test_inv_hess_x_arh failed for "//trim(arh_types(i))//"_cs")) &
+                test_inv_hess_x_arh = .false.
+            if (.not. check_inv_hess_x_arh_os(arh_types(i), &
+                    "test_inv_hess_x_arh failed for "//trim(arh_types(i))//"_os")) &
+                test_inv_hess_x_arh = .false.
+        end do
+
+    end function test_inv_hess_x_arh
+
+    logical(c_bool) function test_precond_arh() bind(C)
+        !
+        ! this function tests the preconditioner entry point, which merely hands the
+        ! level shift to inv_hess_x_arh, so it only checks that rather than
+        ! re-deriving the inverse the inv_hess_x_arh tests already cover
+        !
+        use otr_arh, only: precond_arh, inv_hess_x_arh, arh_object
+        use otr_oao, only: oao_object
+        use otr_oao_test_reference, only: n_ao
+
+        real(rp), parameter :: mu = 0.1_rp
+
+        integer(ip), target :: n_ao_target, n_particle_target, n_param_target
+        real(rp), target :: dm_oao(n_ao, n_ao, 1), fock_oo(n_ao, n_ao, 1), &
+                            fock_vv(n_ao, n_ao, 1)
+        integer(ip) :: n_param, error
+        real(rp), allocatable :: residual(:), preconditioned(:), inverted(:)
+
+        ! assume test passes
+        test_precond_arh = .true.
+
+        ! get number of parameters
+        n_param = n_ao * (n_ao - 1) / 2
+
+        ! generate a random density matrix and the oo- and vv-blocks of the Fock matrix
+        call generate_fock_partition(n_ao, 1_ip, 2_ip, dm_oao, fock_oo, fock_vv)
+
+        ! set up the ARH and OAO objects
+        n_ao_target = n_ao
+        n_particle_target = 1
+        n_param_target = n_param
+        call setup_arh_and_oao_objects("arh", dm_oao, fock_oo, fock_vv, n_ao_target, &
+                                       n_particle_target, n_param_target)
+
+        ! call both entry points with the same level shift and determine if the
+        ! preconditioner reproduces the level-shifted inverse
+        allocate(residual(n_param), preconditioned(n_param), inverted(n_param))
+        call random_number(residual)
+        call precond_arh(residual, mu, preconditioned, error)
+        if (error /= 0) then
+            write (stderr, *) "test_precond_arh failed: Produced error."
+            test_precond_arh = .false.
+        end if
+        call inv_hess_x_arh(residual, inverted, error, mu)
+        if (norm2(preconditioned - inverted) > tol) then
+            write (stderr, *) "test_precond_arh failed: Preconditioner does not "// &
+                "reproduce the level-shifted inverse."
+            test_precond_arh = .false.
+        end if
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh_object, oao_object)
+
+    end function test_precond_arh
+
+    logical(c_bool) function test_init_arh_settings() bind(C)
+        !
+        ! this function tests the subroutine which initializes the ARH settings
+        !
+        use otr_arh, only: arh_settings_type, default_settings => default_arh_settings
+        use otr_arh_test_reference, only: operator(==)
+
+        type(arh_settings_type) :: settings
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_init_arh_settings = .true.
+
+        ! initialize settings
+        call settings%init(error)
+
+        ! check for error
+        if (error /= 0) then
+            write (stderr, *) "test_init_arh_settings failed: Function raised error."
+            test_init_arh_settings = .false.
+        end if
+
+        ! check settings
+        if (.not. (settings == default_settings)) then
+            write (stderr, *) "test_init_arh_settings failed: Settings not "// &
+                "initialized correctly."
+            test_init_arh_settings = .false.
+        end if
+
+    end function test_init_arh_settings
+
+    logical(c_bool) function test_arh_deconstructor() bind(C)
+        !
+        ! this function tests the subroutine which deallocates the ARH objects
+        !
+        use otr_arh, only: arh_deconstructor, arh_object
+        use otr_oao, only: oao_object
+
+        ! assume tests pass
+        test_arh_deconstructor = .true.
+
+        ! allocate ARH and OAO objects
+        if (.not. allocated(arh_object)) allocate(arh_object)
+        if (.not. allocated(oao_object)) allocate(oao_object)
+
+        ! call routine and determine if both objects are deallocated
+        call arh_deconstructor()
+        if (allocated(arh_object)) then
+            write (stderr, *) "test_arh_deconstructor failed: ARH object not "// &
+                "deallocated."
+            test_arh_deconstructor = .false.
+        end if
+        if (allocated(oao_object)) then
+            write (stderr, *) "test_arh_deconstructor failed: OAO object not "// &
+                "deallocated."
+            test_arh_deconstructor = .false.
+        end if
+
+        ! call routine again and determine if already deallocated objects are handled
+        call arh_deconstructor()
+        if (allocated(arh_object)) then
+            write (stderr, *) "test_arh_deconstructor failed: Already deallocated "// &
+                "ARH object not handled."
+            test_arh_deconstructor = .false.
+        end if
+        if (allocated(oao_object)) then
+            write (stderr, *) "test_arh_deconstructor failed: Already deallocated "// &
+                "OAO object not handled."
+            test_arh_deconstructor = .false.
+        end if
+
+    end function test_arh_deconstructor
+
+    logical(c_bool) function test_cache_history_projections() bind(C)
+        !
+        ! this function tests the routine which caches the packed history-projection
+        ! directions the low-rank part of the approximate Hessian is built from, by
+        ! projecting and packing every history entry
+        !
+        use otr_arh, only: cache_history_projections
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao_unit_tests, only: generate_random_density_matrix, &
+                                      generate_random_symm_matrix
+
+        integer(ip), parameter :: n_list = 2, n_electrons = 1
+
+        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
+                    v_diff(n_ao, n_ao, n_particle, n_list), &
+                    empty_v_diff(n_ao, n_ao, n_particle, 0)
+        real(rp), allocatable :: dirs(:, :), expected(:, :)
+        integer(ip) :: j, k
+
+        ! assume tests pass
+        test_cache_history_projections = .true.
+
+        ! generate a random density matrix and random history entries
+        do j = 1, n_particle
+            dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_electrons)
+            do k = 1, n_list
+                v_diff(:, :, j, k) = generate_random_symm_matrix(n_ao)
+            end do
+        end do
+
+        ! expected projections
+        expected = ref_cache_dirs(v_diff, dm_oao, n_param)
+
+        ! call routine and determine if dimensions and values of the resulting
+        ! projections match
+        call cache_history_projections(v_diff, dm_oao, n_list, n_param, dirs)
+        if (size(dirs, 1) /= n_param .or. size(dirs, 2) /= n_list) then
+            write (stderr, *) "test_cache_history_projections failed: Incorrect "// &
+                "dimensions of directions."
+            test_cache_history_projections = .false.
+        else if (norm2(dirs - expected) > tol) then
+            write (stderr, *) "test_cache_history_projections failed: Incorrect "// &
+                "directions."
+            test_cache_history_projections = .false.
+        end if
+        deallocate(dirs, expected)
+
+        ! call routine for an empty history and determine if no directions are
+        ! returned
+        call cache_history_projections(empty_v_diff, dm_oao, 0_ip, n_param, dirs)
+        if (size(dirs, 1) /= n_param .or. size(dirs, 2) /= 0) then
+            write (stderr, *) "test_cache_history_projections failed: Incorrect "// &
+                "dimensions of directions for empty history."
+            test_cache_history_projections = .false.
+        end if
+        deallocate(dirs)
+
+    end function test_cache_history_projections
+
+    logical(c_bool) function test_cache_history_projections_channel() bind(C)
+        !
+        ! this function tests the open-shell routine which caches the packed
+        ! history-projection directions of a single spin channel, embedding every
+        ! history entry into that channel alone before projecting and packing it
+        !
+        use otr_arh, only: cache_history_projections_channel
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao_unit_tests, only: ref_project_asymm, ref_pack_asymm, &
+                                      generate_random_density_matrix, &
+                                      generate_random_symm_matrix
+
+        integer(ip), parameter :: n_list = 2, n_electrons = 1
+
+        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
+                    v_diff(n_ao, n_ao, n_particle, n_list)
+        real(rp), allocatable :: dirs(:, :), expected(:, :)
+        integer(ip) :: channel, j, k
+
+        ! assume tests pass
+        test_cache_history_projections_channel = .true.
+
+        ! generate a random density matrix and random history entries
+        do j = 1, n_particle
+            dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_electrons)
+            do k = 1, n_list
+                v_diff(:, :, j, k) = generate_random_symm_matrix(n_ao)
+            end do
+        end do
+
+        ! every channel has to reproduce the history entry of that channel alone
+        allocate(expected(n_param, n_list), dirs(n_param, n_list))
+        do channel = 1, n_particle
+            do k = 1, n_list
+                expected(:, k) = ref_pack_asymm(ref_project_asymm( &
+                    embed_channel(v_diff(:, :, channel, k), channel, n_ao, &
+                                  n_particle), dm_oao), n_param)
+            end do
+            deallocate(dirs)
+            call cache_history_projections_channel(v_diff, channel, dm_oao, n_list, &
+                                                   n_param, n_particle, dirs)
+            if (size(dirs, 1) /= n_param .or. size(dirs, 2) /= n_list) then
+                write (stderr, *) "test_cache_history_projections_channel failed: "// &
+                    "Incorrect dimensions of directions."
+                test_cache_history_projections_channel = .false.
+            else if (norm2(dirs - expected) > tol) then
+                write (stderr, *) "test_cache_history_projections_channel failed: "// &
+                    "Incorrect directions."
+                test_cache_history_projections_channel = .false.
+            end if
+        end do
+        deallocate(dirs, expected)
+
+    end function test_cache_history_projections_channel
+
+    logical(c_bool) function test_cache_channel_split_projections() bind(C)
+        !
+        ! this function tests the open-shell history-projection caching routine which
+        ! embeds a history entry into one spin channel before projecting and packing
+        ! it, keeping the two channels as separate columns
+        !
+        use otr_arh, only: cache_channel_split_projections
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao_unit_tests, only: ref_project_asymm, ref_pack_asymm, &
+                                      generate_random_density_matrix, &
+                                      generate_random_symm_matrix
+
+        integer(ip), parameter :: n_list = 2, n_electrons = 1
+
+        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
+                    v_same(n_ao, n_ao, n_particle, n_list)
+        real(rp), allocatable :: u(:, :), expected(:, :)
+        integer(ip) :: j, k
+
+        ! assume test passes
+        test_cache_channel_split_projections = .true.
+
+        ! generate a random density matrix and random history entries
+        do j = 1, n_particle
+            dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_electrons)
+            do k = 1, n_list
+                v_same(:, :, j, k) = generate_random_symm_matrix(n_ao)
+            end do
+        end do
+
+        ! expected projections
+        allocate(expected(n_param, n_particle * n_list))
+        do k = 1, n_list
+            do j = 1, n_particle
+                expected(:, (j - 1)*n_list + k) = ref_pack_asymm(ref_project_asymm( &
+                    embed_channel(v_same(:, :, j, k), j, n_ao, n_particle), dm_oao), &
+                    n_param)
+            end do
+        end do
+
+        ! call routine and determine if dimensions and values of the resulting
+        ! projections match
+        call cache_channel_split_projections(v_same, dm_oao, n_list, n_param, &
+                                             n_particle, u)
+        if (size(u, 1) /= n_param .or. size(u, 2) /= n_particle * n_list) then
+            write (stderr, *) "test_cache_channel_split_projections failed: "// &
+                "Incorrect dimensions of split projections."
+            test_cache_channel_split_projections = .false.
+        else if (norm2(u - expected) > tol) then
+            write (stderr, *) "test_cache_channel_split_projections failed: "// &
+                "Incorrect split projections."
+            test_cache_channel_split_projections = .false.
+        end if
+        deallocate(u, expected)
+
+    end function test_cache_channel_split_projections
+
+    logical(c_bool) function test_cache_combined_channel_projections() bind(C)
+        !
+        ! this function tests the open-shell history-projection caching routine which
+        ! embeds a history entry into one spin channel before projecting and packing
+        ! it, summing a same-spin channel with the opposite-spin channel of the other
+        ! spin
+        !
+        use otr_arh, only: cache_combined_channel_projections
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao_unit_tests, only: ref_project_asymm, ref_pack_asymm, &
+                                      generate_random_density_matrix, &
+                                      generate_random_symm_matrix
+
+        integer(ip), parameter :: n_list = 2, n_electrons = 1
+
+        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
+                    v_same(n_ao, n_ao, n_particle, n_list), &
+                    v_opp(n_ao, n_ao, n_particle, n_list)
+        real(rp), allocatable :: u(:, :), expected(:, :)
+        integer(ip) :: j, k
+
+        ! assume test passes
+        test_cache_combined_channel_projections = .true.
+
+        ! generate a random density matrix and random history entries
+        do j = 1, n_particle
+            dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_electrons)
+            do k = 1, n_list
+                v_same(:, :, j, k) = generate_random_symm_matrix(n_ao)
+                v_opp(:, :, j, k) = generate_random_symm_matrix(n_ao)
+            end do
+        end do
+
+        ! expected projections
+        allocate(expected(n_param, n_particle * n_list))
+        do k = 1, n_list
+            expected(:, k) = ref_pack_asymm(ref_project_asymm( &
+                embed_channel(v_same(:, :, 1, k), 1_ip, n_ao, n_particle) + &
+                embed_channel(v_opp(:, :, 2, k), 2_ip, n_ao, n_particle), dm_oao), &
+                n_param)
+            expected(:, n_list + k) = ref_pack_asymm(ref_project_asymm( &
+                embed_channel(v_same(:, :, 2, k), 2_ip, n_ao, n_particle) + &
+                embed_channel(v_opp(:, :, 1, k), 1_ip, n_ao, n_particle), dm_oao), &
+                n_param)
+        end do
+
+        ! call routine and determine if dimensions and values of the resulting
+        ! projections match
+        call cache_combined_channel_projections(v_same, v_opp, dm_oao, n_list, &
+                                                n_param, n_particle, u)
+        if (size(u, 1) /= n_param .or. size(u, 2) /= n_particle * n_list) then
+            write (stderr, *) "test_cache_combined_channel_projections failed: "// &
+                "Incorrect dimensions of combined projections."
+            test_cache_combined_channel_projections = .false.
+        else if (norm2(u - expected) > tol) then
+            write (stderr, *) "test_cache_combined_channel_projections failed: "// &
+                "Incorrect combined projections."
+            test_cache_combined_channel_projections = .false.
+        end if
+        deallocate(u, expected)
+
+    end function test_cache_combined_channel_projections
+
+    logical(c_bool) function test_get_low_rank_hess_factors() bind(C)
+        !
+        ! this function tests the subroutine which assembles the low-rank part of the
+        ! approximate Hessian
+        !
+        use otr_arh, only: get_low_rank_hess_factors, arh_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: generate_random_symm_matrix
+
+        integer(ip), parameter :: n_param = 4, n_diff = 2
+
+        integer(ip), target :: n_param_target, n_particle_target
+        real(rp) :: density(n_param, n_diff), potential(n_param, n_diff), &
+                    linear(n_param, n_diff), nonlinear(n_param, n_diff), &
+                    metric_inv(n_diff, n_diff), a_sym(n_diff, n_diff), &
+                    a_inv(n_diff, n_diff), a_inv_comb(n_diff, n_diff), &
+                    metric_weighted_a_sym(n_diff, n_diff)
+
+        ! assume tests pass
+        test_get_low_rank_hess_factors = .true.
+
+        ! generate the packed history directions and the small dense matrices the
+        ! coupling matrices are assembled from
+        call random_number(density)
+        call random_number(potential)
+        call random_number(linear)
+        call random_number(nonlinear)
+        metric_inv = generate_random_symm_matrix(n_diff)
+        a_sym = generate_random_symm_matrix(n_diff)
+        a_inv = generate_random_symm_matrix(n_diff)
+        a_inv_comb = generate_random_symm_matrix(n_diff)
+
+        ! independently reconstruct the metric-weighted curvature
+        metric_weighted_a_sym = matmul(metric_inv, matmul(a_sym, metric_inv))
+
+        ! set up the ARH object with the cached quantities the assembly requires
+        allocate(arh_object)
+        call setup_settings(arh_object%settings)
+        n_param_target = n_param
+        arh_object%n_param => n_param_target
+        n_particle_target = 1
+        arh_object%n_particle => n_particle_target
+        arh_object%dm_dirs = density
+        arh_object%potential_dirs = potential
+        arh_object%linear_potential_dirs = linear
+        arh_object%nonlinear_potential_dirs = nonlinear
+        arh_object%metric_inv = metric_inv
+        arh_object%a_sym = a_sym
+        arh_object%a_inv = a_inv
+        arh_object%a_inv_comb = a_inv_comb
+
+        ! multisecant SR1 stacks the linear and non-linear directions and couples
+        ! each block through its own separately regularized system
+        arh_object%settings%arh_type = "ms_sr1"
+        call get_low_rank_hess_factors()
+        if (any(abs(arh_object%expansion_dirs(:, :n_diff) - linear) > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, n_diff + 1:) - nonlinear) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "expansion directions for multisecant SR1."
+            test_get_low_rank_hess_factors = .false.
+        end if
+        if (any(abs(arh_object%coupling_matrix(:n_diff, :n_diff) - 8.0_rp * a_inv) > &
+                tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, n_diff + 1:) - 8.0_rp * &
+                    a_inv_comb) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, :n_diff)) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "coupling matrix for multisecant SR1."
+            test_get_low_rank_hess_factors = .false.
+        end if
+        if (any(abs(arh_object%projection_dirs - arh_object%expansion_dirs) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Expansion "// &
+                "and projection directions do not coincide for multisecant SR1."
+            test_get_low_rank_hess_factors = .false.
+        end if
+
+        ! subspace-projected multisecant expands in and contracts against the density
+        ! difference history alone
+        arh_object%settings%arh_type = "ms_sp"
+        call get_low_rank_hess_factors()
+        if (any(abs(arh_object%expansion_dirs - density) > tol) .or. &
+            any(abs(arh_object%projection_dirs - density) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "directions for subspace-projected multisecant."
+            test_get_low_rank_hess_factors = .false.
+        end if
+        if (any(abs(arh_object%coupling_matrix - 8.0_rp * metric_weighted_a_sym) > &
+                tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "coupling matrix for subspace-projected multisecant."
+            test_get_low_rank_hess_factors = .false.
+        end if
+
+        ! symmetrized ARH couples the density and potential difference histories in
+        ! both directions, leaving the diagonal blocks empty
+        arh_object%settings%arh_type = "symm_arh"
+        call get_low_rank_hess_factors()
+        if (any(abs(arh_object%expansion_dirs(:, :n_diff) - density) > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, n_diff + 1:) - potential) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "expansion directions for symmetrized ARH."
+            test_get_low_rank_hess_factors = .false.
+        end if
+        if (any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:) - 4.0_rp * &
+                    metric_inv) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, :n_diff) - 4.0_rp * &
+                    metric_inv) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(:n_diff, :n_diff)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, n_diff + 1:)) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "coupling matrix for symmetrized ARH."
+            test_get_low_rank_hess_factors = .false.
+        end if
+
+        ! multisecant PSB adds a density-density block subtracting the doubly counted
+        ! curvature to the symmetrized ARH coupling
+        arh_object%settings%arh_type = "ms_psb"
+        call get_low_rank_hess_factors()
+        if (any(abs(arh_object%coupling_matrix(:n_diff, :n_diff) + 8.0_rp * &
+                    metric_weighted_a_sym) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:) - 8.0_rp * &
+                    metric_inv) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, :n_diff) - 8.0_rp * &
+                    metric_inv) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, n_diff + 1:)) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "coupling matrix for multisecant PSB."
+            test_get_low_rank_hess_factors = .false.
+        end if
+
+        ! standard ARH is the only type whose expansion and projection directions
+        ! differ, expanding in the potential and contracting against the density
+        ! difference history
+        arh_object%settings%arh_type = "arh"
+        call get_low_rank_hess_factors()
+        if (any(abs(arh_object%expansion_dirs - potential) > tol) .or. &
+            any(abs(arh_object%projection_dirs - density) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "directions for standard ARH."
+            test_get_low_rank_hess_factors = .false.
+        end if
+        if (any(abs(arh_object%coupling_matrix - 8.0_rp * metric_inv) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "coupling matrix for standard ARH."
+            test_get_low_rank_hess_factors = .false.
+        end if
+
+        ! test the open-shell coupling matrix which is exactly half its closed-shell 
+        ! counterpart,
+        n_particle_target = 2
+        call get_low_rank_hess_factors()
+        if (any(abs(arh_object%coupling_matrix - 4.0_rp * metric_inv) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Open-shell "// &
+                "coupling matrix is not half the closed-shell one."
+            test_get_low_rank_hess_factors = .false.
+        end if
+
+        ! an empty history has to leave every factor unallocated
+        n_particle_target = 1
+        deallocate(arh_object%dm_dirs)
+        allocate(arh_object%dm_dirs(n_param, 0))
+        call get_low_rank_hess_factors()
+        if (allocated(arh_object%expansion_dirs) .or. &
+            allocated(arh_object%projection_dirs) .or. &
+            allocated(arh_object%coupling_matrix)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Factors were "// &
+                "assembled for an empty history."
+            test_get_low_rank_hess_factors = .false.
+        end if
+
+        ! deallocate ARH object
+        deallocate(arh_object)
+
+    end function test_get_low_rank_hess_factors
+
+    logical(c_bool) function test_build_a_sym_cs() bind(C)
+        !
+        ! this function tests the function which builds the weighted-symmetrized 
+        ! A = S^T Y matrix
+        !
+        use otr_arh, only: build_a_sym_cs
+
+        integer(ip), parameter :: n_ao = 2, n_particle = 1, n_diff = 2
+
+        real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
+                    v_diff(n_ao, n_ao, n_particle, n_diff), &
+                    expected_a_sym(n_diff, n_diff)
+        real(rp), allocatable :: a_sym(:, :)
+
+        ! assume tests pass
+        test_build_a_sym_cs = .true.
+
+        ! initialize density matrix and potential differences and calculate expected A 
+        ! matrix
+        dm_diff(:, :, 1, 1) = reshape([1.0_rp, 0.0_rp, &
+                                       0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 1, 2) = reshape([0.0_rp, 0.0_rp, &
+                                       0.0_rp, 2.0_rp], [n_ao, n_ao])
+        v_diff(:, :, 1, 1) = reshape([10.0_rp, 0.0_rp, &
+                                      0.0_rp, -0.3_rp], [n_ao, n_ao])
+        v_diff(:, :, 1, 2) = reshape([0.6_rp, 0.0_rp, &
+                                      0.0_rp, 0.1_rp], [n_ao, n_ao])
+        expected_a_sym = reshape([10.0_rp, -0.2_rp, &
+                                  -0.2_rp, 0.2_rp], [n_diff, n_diff])
+
+        ! generate A matrix and verify
+        a_sym = build_a_sym_cs(dm_diff, v_diff, n_ao)
+        if (norm2(a_sym - expected_a_sym) > tol) then
+            write (stderr, *) "test_build_a_sym_cs failed: Incorrect symmetrized "// &
+                "matrix."
+            test_build_a_sym_cs = .false.
+        end if
+
+    end function test_build_a_sym_cs
+
+    logical(c_bool) function test_build_a_block_sym_os() bind(C)
+        !
+        ! this function tests the function which builds the dense,
+        ! cross-channel-symmetrized open-shell A matrix
+        !
+        use otr_arh, only: build_a_block_sym_os
+        use otr_oao_test_reference, only: n_particle
+
+        integer(ip), parameter :: n_ao = 2, n_diff = 1
+
+        real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
+                    v_same_eff(n_ao, n_ao, n_particle, n_diff), &
+                    v_opp(n_ao, n_ao, n_particle, n_diff), &
+                    expected_a_block(2 * n_diff, 2 * n_diff)
+        real(rp), allocatable :: a_block(:, :)
+
+        ! assume tests pass
+        test_build_a_block_sym_os = .true.
+
+        ! initialize density matrix and potential differences and calculate expected A 
+        ! matrix
+        dm_diff(:, :, 1, 1) = reshape([1.0_rp, 0.0_rp, &
+                                       0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 2, 1) = reshape([0.0_rp, 0.0_rp, &
+                                       0.0_rp, 1.0_rp], [n_ao, n_ao])
+        v_same_eff(:, :, 1, 1) = reshape([2.0_rp, 0.0_rp, &
+                                          0.0_rp, 0.0_rp], [n_ao, n_ao])
+        v_same_eff(:, :, 2, 1) = reshape([0.0_rp, 0.0_rp, &
+                                          0.0_rp, 4.0_rp], [n_ao, n_ao])
+        v_opp(:, :, 1, 1) = reshape([3.0_rp, 0.0_rp, &
+                                     0.0_rp, 0.0_rp], [n_ao, n_ao])
+        v_opp(:, :, 2, 1) = reshape([0.0_rp, 0.0_rp, &
+                                     0.0_rp, 5.0_rp], [n_ao, n_ao])
+        expected_a_block = reshape([2.0_rp, 4.0_rp, &
+                                    4.0_rp, 4.0_rp], [2 * n_diff, 2 * n_diff])
+
+        ! generate A matrix and verify
+        a_block = build_a_block_sym_os(dm_diff, v_same_eff, v_opp, n_ao)
+        if (norm2(a_block - expected_a_block) > tol) then
+            write (stderr, *) "test_build_a_block_sym_os failed: Incorrect "// &
+                "cross-channel-symmetrized A matrix."
+            test_build_a_block_sym_os = .false.
+        end if
+
+    end function test_build_a_block_sym_os
 
     logical(c_bool) function test_symmetrize_weighted() bind(C)
         !
@@ -840,6 +2966,38 @@ contains
 
     end function test_cross_symmetrize_weighted
 
+    logical(c_bool) function test_symmetrize_exact() bind(C)
+        !
+        ! this function tests the subroutine which performs a plain, unweighted
+        ! symmetrization of a square matrix
+        !
+        use otr_arh, only: symmetrize_exact
+
+        real(rp) :: a(3, 3), expected(3, 3)
+
+        ! assume tests pass
+        test_symmetrize_exact = .true.
+
+        ! initialize matrix with an antisymmetric contribution
+        a = reshape([1.0_rp, 4.0_rp, 5.0_rp, &
+                     2.0_rp, 6.0_rp, 9.0_rp, &
+                     3.0_rp, 7.0_rp, 8.0_rp], [3, 3])
+
+        ! initialize expected matrix, which averages each pair of off-diagonal elements
+        expected = reshape([1.0_rp, 3.0_rp, 4.0_rp, &
+                            3.0_rp, 6.0_rp, 8.0_rp, &
+                            4.0_rp, 8.0_rp, 8.0_rp], [3, 3])
+
+        ! call routine and determine if values of resulting matrix match
+        call symmetrize_exact(a)
+        if (norm2(a - expected) > tol) then
+            write (stderr, *) "test_symmetrize_exact failed: Incorrect matrix "// &
+                "values after symmetrization."
+            test_symmetrize_exact = .false.
+        end if
+
+    end function test_symmetrize_exact
+
     logical(c_bool) function test_noise_threshold() bind(C)
         !
         ! this function tests the function which estimates the numerical noise floor of
@@ -962,27 +3120,27 @@ contains
 
     end function test_truncated_eigval_inv
 
-    logical(c_bool) function test_get_arh_metric() bind(C)
+    logical(c_bool) function test_get_arh_metric_inv() bind(C)
         !
-        ! this function tests the subroutine which calculates the ARH metric and its
-        ! Cholesky factorization
+        ! this function tests the subroutine which calculates the block-diagonal
+        ! pseudoinverse of the ARH metric
         !
-        use otr_arh, only: get_arh_metric
+        use otr_arh, only: get_arh_metric_inv
         use otr_oao_test_reference, only: n_particle
 
         integer(ip), parameter :: n_ao = 2, n_diff = 3
 
         real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
-                    expected_chol(n_diff, n_diff, n_particle)
-        real(rp), allocatable :: chol(:, :, :)
-        integer(ip) :: expected_rank(n_particle), expected_map(n_diff, n_particle)
-        integer(ip), allocatable :: rank(:), map(:, :)
+                    dm_diff_empty(n_ao, n_ao, n_particle, 0), &
+                    expected(n_particle * n_diff, n_particle * n_diff)
+        real(rp), allocatable :: metric_inv(:, :)
 
         ! assume tests pass
-        test_get_arh_metric = .true.
+        test_get_arh_metric_inv = .true.
 
         ! initialize density matrix differences, where the second difference of the
-        ! first particle repeats the first one and is therefore linearly dependent
+        ! first particle repeats the first one and is therefore linearly dependent,
+        ! while the second particle is linearly independent but not orthogonal
         dm_diff(:, :, 1, 1) = reshape([1.0_rp, 0.0_rp, &
                                        0.0_rp, 0.0_rp], [n_ao, n_ao])
         dm_diff(:, :, 1, 2) = reshape([1.0_rp, 0.0_rp, &
@@ -991,123 +3149,51 @@ contains
                                        1.0_rp, 0.0_rp], [n_ao, n_ao])
         dm_diff(:, :, 2, 1) = reshape([1.0_rp, 0.0_rp, &
                                        0.0_rp, 0.0_rp], [n_ao, n_ao])
-        dm_diff(:, :, 2, 2) = reshape([0.0_rp, 1.0_rp, &
+        dm_diff(:, :, 2, 2) = reshape([1.0_rp, 1.0_rp, &
                                        1.0_rp, 0.0_rp], [n_ao, n_ao])
         dm_diff(:, :, 2, 3) = reshape([0.0_rp, 0.0_rp, &
                                        0.0_rp, 1.0_rp], [n_ao, n_ao])
 
-        ! initialize expected numerical ranks and expected maps, where the linearly
-        ! dependent difference is stored at the back while the accepted differences
-        ! retain their chronological order
-        expected_rank = [2, 3]
-        expected_map(:, 1) = [1, 3, 2]
-        expected_map(:, 2) = [1, 2, 3]
+        ! initialize the expected block-diagonal pseudoinverse: the first particle
+        ! has the metric [[1, 0], [0, 2]] over its accepted differences 1 and 3, so
+        ! its inverse lands on the diagonal entries 1 and 3 while the rejected
+        ! difference 2 carries a vanishing row and column, and the second particle
+        ! has the metric [[1, 1, 0], [1, 3, 0], [0, 0, 1]] of full rank
+        expected = 0.0_rp
+        expected(1, 1) = 1.0_rp
+        expected(3, 3) = 0.5_rp
+        expected(4:5, 4:5) = reshape([1.5_rp, -0.5_rp, &
+                                      -0.5_rp, 0.5_rp], [2, 2])
+        expected(6, 6) = 1.0_rp
 
-        ! initialize expected Cholesky factors, where only the accepted differences
-        ! contribute
-        expected_chol = 0.0_rp
-        expected_chol(1, 1, 1) = 1.0_rp
-        expected_chol(2, 2, 1) = sqrt(2.0_rp)
-        expected_chol(1, 1, 2) = 1.0_rp
-        expected_chol(2, 2, 2) = sqrt(2.0_rp)
-        expected_chol(3, 3, 2) = 1.0_rp
-
-        ! call routine and determine if dimensions, numerical ranks, maps and values of
-        ! resulting Cholesky factors match
-        call get_arh_metric(dm_diff, chol, rank, map)
-        if (size(chol, 1) /= n_diff .or. size(chol, 2) /= n_diff .or. &
-            size(chol, 3) /= n_particle .or. size(rank) /= n_particle .or. &
-            size(map, 1) /= n_diff .or. size(map, 2) /= n_particle) then
-            write (stderr, *) "test_get_arh_metric failed: Incorrect dimensions of "// &
-                "returned metric quantities."
-            test_get_arh_metric = .false.
+        ! call routine and determine if dimensions and values of the resulting
+        ! pseudoinverse match
+        call get_arh_metric_inv(dm_diff, metric_inv)
+        if (size(metric_inv, 1) /= n_particle * n_diff .or. &
+            size(metric_inv, 2) /= n_particle * n_diff) then
+            write (stderr, *) "test_get_arh_metric_inv failed: Incorrect "// &
+                "dimensions of metric pseudoinverse."
+            test_get_arh_metric_inv = .false.
             return
         end if
-        if (any(rank /= expected_rank)) then
-            write (stderr, *) "test_get_arh_metric failed: Incorrect numerical "// &
-                "rank of metric."
-            test_get_arh_metric = .false.
+        if (norm2(metric_inv - expected) > tol) then
+            write (stderr, *) "test_get_arh_metric_inv failed: Incorrect metric "// &
+                "pseudoinverse."
+            test_get_arh_metric_inv = .false.
         end if
-        if (any(map /= expected_map)) then
-            write (stderr, *) "test_get_arh_metric failed: Incorrect map of metric."
-            test_get_arh_metric = .false.
+        deallocate(metric_inv)
+
+        ! call routine for an empty history and determine if an empty pseudoinverse
+        ! is returned
+        call get_arh_metric_inv(dm_diff_empty, metric_inv)
+        if (size(metric_inv, 1) /= 0 .or. size(metric_inv, 2) /= 0) then
+            write (stderr, *) "test_get_arh_metric_inv failed: Incorrect "// &
+                "dimensions of metric pseudoinverse for empty history."
+            test_get_arh_metric_inv = .false.
         end if
-        if (norm2(chol - expected_chol) > tol) then
-            write (stderr, *) "test_get_arh_metric failed: Incorrect Cholesky "// &
-                "factor of metric."
-            test_get_arh_metric = .false.
-        end if
+        deallocate(metric_inv)
 
-        ! deallocate metric quantities
-        deallocate(chol, rank, map)
-
-    end function test_get_arh_metric
-
-    logical(c_bool) function test_multiply_with_inverse_metric() bind(C)
-        !
-        ! this function tests the function which multiplies a vector with the
-        ! pseudoinverse of the ARH metric
-        !
-        use otr_arh, only: multiply_with_inverse_metric
-
-        integer(ip), parameter :: n_diff = 2
-
-        real(rp) :: chol(n_diff, n_diff), vec(n_diff), result_vec(n_diff), &
-                    expected(n_diff)
-        integer(ip) :: map(n_diff)
-
-        ! assume tests pass
-        test_multiply_with_inverse_metric = .true.
-
-        ! initialize upper triangular Cholesky factor, which corresponds to a metric
-        ! with the elements 4, 2 and 10, and vector
-        chol = reshape([2.0_rp, 0.0_rp, &
-                        1.0_rp, 3.0_rp], [n_diff, n_diff])
-        vec = [1.0_rp, 2.0_rp]
-
-        ! call routine for a metric of full rank and determine if values of resulting
-        ! vector match
-        map = [1, 2]
-        expected = [1.0_rp / 6.0_rp, 1.0_rp / 6.0_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 2_ip, map)
-        if (norm2(result_vec - expected) > tol) then
-            write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
-                "vector for metric of full rank."
-            test_multiply_with_inverse_metric = .false.
-        end if
-
-        ! call routine for a rank-deficient metric and determine if the linearly
-        ! dependent direction is filtered out
-        expected = [0.25_rp, 0.0_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 1_ip, map)
-        if (norm2(result_vec - expected) > tol) then
-            write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
-                "vector for rank-deficient metric."
-            test_multiply_with_inverse_metric = .false.
-        end if
-
-        ! call routine for a permuted metric and determine if the permutation is
-        ! applied to both the incoming and the outgoing vector
-        map = [2, 1]
-        expected = [0.0_rp, 0.5_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 2_ip, map)
-        if (norm2(result_vec - expected) > tol) then
-            write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
-                "vector for permuted metric."
-            test_multiply_with_inverse_metric = .false.
-        end if
-
-        ! call routine for a vanishing rank and determine if the resulting vector
-        ! vanishes
-        expected = [0.0_rp, 0.0_rp]
-        result_vec = multiply_with_inverse_metric(vec, chol, 0_ip, map)
-        if (norm2(result_vec - expected) > tol) then
-            write (stderr, *) "test_multiply_with_inverse_metric failed: Incorrect "// &
-                "vector for vanishing rank."
-            test_multiply_with_inverse_metric = .false.
-        end if
-
-    end function test_multiply_with_inverse_metric
+    end function test_get_arh_metric_inv
 
     logical(c_bool) function test_get_ms_a_inv_cs() bind(C)
         !
@@ -1123,8 +3209,8 @@ contains
                     fock_diff(n_ao, n_ao, n_particle, n_diff), &
                     empty_dm_diff(n_ao, n_ao, n_particle, 0), &
                     empty_fock_diff(n_ao, n_ao, n_particle, 0), &
-                    a_inv(n_diff, n_diff), expected_a_inv(n_diff, n_diff)
-        real(rp), allocatable :: eig_vecs(:, :), eig_vals_inv(:)
+                    expected_a_inv(n_diff, n_diff)
+        real(rp), allocatable :: a_inv(:, :)
         integer(ip) :: error
         type(arh_settings_type) :: settings
 
@@ -1156,15 +3242,13 @@ contains
 
         ! call routine for the linear part and determine if values of resulting
         ! pseudoinverse match
-        call get_ms_a_inv_cs(dm_diff, fock_diff, .true., eig_vecs, eig_vals_inv, n_ao, &
-                             settings, error)
+        call get_ms_a_inv_cs(dm_diff, fock_diff, .true., a_inv, n_ao, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_get_ms_a_inv_cs failed: Produced error for "// &
                 "linear part."
             test_get_ms_a_inv_cs = .false.
             return
         end if
-        a_inv = get_pseudoinverse(eig_vecs, eig_vals_inv)
         if (norm2(a_inv - expected_a_inv) > tol) then
             write (stderr, *) "test_get_ms_a_inv_cs failed: Incorrect "// &
                 "pseudoinverse for linear part."
@@ -1182,38 +3266,33 @@ contains
 
         ! call routine for the non-linear part and determine if values of resulting
         ! pseudoinverse match
-        call get_ms_a_inv_cs(dm_diff, fock_diff, .false., eig_vecs, eig_vals_inv, &
-                             n_ao, settings, error)
+        call get_ms_a_inv_cs(dm_diff, fock_diff, .false., a_inv, n_ao, settings, &
+                             error)
         if (error /= 0) then
             write (stderr, *) "test_get_ms_a_inv_cs failed: Produced error for "// &
                 "non-linear part."
             test_get_ms_a_inv_cs = .false.
             return
         end if
-        a_inv = get_pseudoinverse(eig_vecs, eig_vals_inv)
         if (norm2(a_inv - expected_a_inv) > tol) then
             write (stderr, *) "test_get_ms_a_inv_cs failed: Incorrect "// &
                 "pseudoinverse for non-linear part."
             test_get_ms_a_inv_cs = .false.
         end if
 
-        ! call routine for an empty history and determine if dimensions of resulting
-        ! quantities vanish
-        call get_ms_a_inv_cs(empty_dm_diff, empty_fock_diff, .true., eig_vecs, &
-                             eig_vals_inv, n_ao, settings, error)
-        if (size(eig_vecs, 1) /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_cs failed: Incorrect eigenvector "// &
-                "dimensions for empty history."
-            test_get_ms_a_inv_cs = .false.
-        end if
-        if (size(eig_vals_inv) /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_cs failed: Incorrect inverted "// &
-                "eigenvalue dimensions for empty history."
+        ! call routine for an empty history and determine if dimensions of the
+        ! resulting pseudoinverse vanish
+        deallocate(a_inv)
+        call get_ms_a_inv_cs(empty_dm_diff, empty_fock_diff, .true., a_inv, n_ao, &
+                             settings, error)
+        if (size(a_inv, 1) /= 0 .or. size(a_inv, 2) /= 0) then
+            write (stderr, *) "test_get_ms_a_inv_cs failed: Incorrect "// &
+                "pseudoinverse dimensions for empty history."
             test_get_ms_a_inv_cs = .false.
         end if
 
         ! deallocate multisecant SR1 quantities
-        deallocate(eig_vecs, eig_vals_inv)
+        deallocate(a_inv)
 
     end function test_get_ms_a_inv_cs
 
@@ -1234,9 +3313,8 @@ contains
                     v_opposite_spin_diff(n_ao, n_ao, n_particle, n_diff), &
                     empty_dm_diff(n_ao, n_ao, n_particle, 0), &
                     empty_v_diff(n_ao, n_ao, n_particle, 0), &
-                    a_inv(2 * n_diff, 2 * n_diff), &
                     expected_a_inv(2 * n_diff, 2 * n_diff)
-        real(rp), allocatable :: eig_vecs(:, :), eig_vals_inv(:)
+        real(rp), allocatable :: a_inv(:, :)
         integer(ip) :: error
         type(arh_settings_type) :: settings
 
@@ -1270,36 +3348,31 @@ contains
 
         ! call routine and determine if values of resulting pseudoinverse match
         call get_ms_a_inv_os_linear(dm_diff, v_same_spin_diff, v_opposite_spin_diff, &
-                                    eig_vecs, eig_vals_inv, n_ao, settings, error)
+                                    a_inv, n_ao, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_get_ms_a_inv_os_linear failed: Produced error."
             test_get_ms_a_inv_os_linear = .false.
             return
         end if
-        a_inv = get_pseudoinverse(eig_vecs, eig_vals_inv)
         if (norm2(a_inv - expected_a_inv) > tol) then
             write (stderr, *) "test_get_ms_a_inv_os_linear failed: Incorrect "// &
                 "pseudoinverse."
             test_get_ms_a_inv_os_linear = .false.
         end if
 
-        ! call routine for an empty history and determine if dimensions of resulting
-        ! quantities vanish
+        ! call routine for an empty history and determine if dimensions of the
+        ! resulting pseudoinverse vanish
+        deallocate(a_inv)
         call get_ms_a_inv_os_linear(empty_dm_diff, empty_v_diff, empty_v_diff, &
-                                    eig_vecs, eig_vals_inv, n_ao, settings, error)
-        if (size(eig_vecs, 1) /= 0) then
+                                    a_inv, n_ao, settings, error)
+        if (size(a_inv, 1) /= 0 .or. size(a_inv, 2) /= 0) then
             write (stderr, *) "test_get_ms_a_inv_os_linear failed: Incorrect "// &
-                "eigenvector dimensions for empty history."
-            test_get_ms_a_inv_os_linear = .false.
-        end if
-        if (size(eig_vals_inv) /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_os_linear failed: Incorrect "// &
-                "inverted eigenvalue dimensions for empty history."
+                "pseudoinverse dimensions for empty history."
             test_get_ms_a_inv_os_linear = .false.
         end if
 
         ! deallocate multisecant SR1 quantities
-        deallocate(eig_vecs, eig_vals_inv)
+        deallocate(a_inv)
 
     end function test_get_ms_a_inv_os_linear
 
@@ -1318,9 +3391,9 @@ contains
         real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
                     v_diff(n_ao, n_ao, n_particle, n_diff), &
                     empty_dm_diff(n_ao, n_ao, n_particle, 0), &
-                    empty_v_diff(n_ao, n_ao, n_particle, 0), a_inv(n_diff, n_diff), &
+                    empty_v_diff(n_ao, n_ao, n_particle, 0), &
                     expected_a_inv(n_diff, n_diff)
-        real(rp), allocatable :: eig_vecs(:, :), eig_vals_inv(:)
+        real(rp), allocatable :: a_inv(:, :)
         integer(ip) :: error
         type(arh_settings_type) :: settings
 
@@ -1360,1201 +3433,128 @@ contains
                                  [n_diff, n_diff])
 
         ! call routine and determine if values of resulting pseudoinverse match
-        call get_ms_a_inv_os_nonlinear(dm_diff, v_diff, eig_vecs, &
-                                               eig_vals_inv, settings, error)
+        call get_ms_a_inv_os_nonlinear(dm_diff, v_diff, a_inv, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Produced error."
             test_get_ms_a_inv_os_nonlinear = .false.
             return
         end if
-        a_inv = get_pseudoinverse(eig_vecs, eig_vals_inv)
         if (norm2(a_inv - expected_a_inv) > tol) then
             write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Incorrect "// &
                 "pseudoinverse."
             test_get_ms_a_inv_os_nonlinear = .false.
         end if
 
-        ! call routine for an empty history and determine if dimensions of resulting
-        ! quantities vanish
-        call get_ms_a_inv_os_nonlinear(empty_dm_diff, empty_v_diff, eig_vecs, &
-                                       eig_vals_inv, settings, error)
-        if (size(eig_vecs, 1) /= 0) then
+        ! call routine for an empty history and determine if dimensions of the
+        ! resulting pseudoinverse vanish
+        deallocate(a_inv)
+        call get_ms_a_inv_os_nonlinear(empty_dm_diff, empty_v_diff, a_inv, settings, &
+                                       error)
+        if (size(a_inv, 1) /= 0 .or. size(a_inv, 2) /= 0) then
             write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Incorrect "// &
-                "eigenvector dimensions for empty history."
-            test_get_ms_a_inv_os_nonlinear = .false.
-        end if
-        if (size(eig_vals_inv) /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Incorrect "// &
-                "inverted eigenvalue dimensions for empty history."
+                "pseudoinverse dimensions for empty history."
             test_get_ms_a_inv_os_nonlinear = .false.
         end if
 
         ! deallocate multisecant SR1 quantities
-        deallocate(eig_vecs, eig_vals_inv)
+        deallocate(a_inv)
 
     end function test_get_ms_a_inv_os_nonlinear
 
-    logical(c_bool) function test_update_orbs_arh_cs() bind(C)
+    logical(c_bool) function test_spectral_to_dense() bind(C)
         !
-        ! this function tests the subroutine which defines the energy, gradient and
-        ! Hessian diagonal evaluation in the OAO basis for the closed-shell case
+        ! this function tests the function which reconstructs a dense symmetric
+        ! matrix from its eigenvectors and inverted eigenvalues
         !
-        use opentrustregion, only: hess_x_type
-        use otr_arh, only: update_orbs_arh_cs, arh_object, hess_x_arh_ptr
-        use otr_oao_test_reference, only: n_ao
-        use otr_oao, only: oao_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_unit_tests, only: n_mock_calls, mock_fock_factor, identity_matrix, &
-                                      generate_random_density_matrix
+        use otr_arh, only: spectral_to_dense
 
-        integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
-                                  n_param = n_ao * (n_ao - 1) / 2
+        integer(ip), parameter :: n = 2
 
-        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
-        real(rp) :: dm_saved(n_ao, n_ao, n_particle), &
-                    fock_saved(n_ao, n_ao, n_particle), &
-                    v_nonlinear_saved(n_ao, n_ao, n_particle), kappa(n_param), &
-                    grad(n_param), h_diag(n_param), func
-        integer(ip) :: error
-        procedure(hess_x_type), pointer :: hess_x_funptr
+        real(rp) :: eigvecs(n, n), inv_eigvals(n), expected(n, n)
+        real(rp), allocatable :: mat(:, :)
 
         ! assume tests pass
-        test_update_orbs_arh_cs = .true.
+        test_spectral_to_dense = .true.
 
-        ! set up the OAO object with an orthonormal AO basis, so that the AO and the
-        ! OAO basis coincide
-        allocate(oao_object)
-        call setup_settings(oao_object%settings)
-        oao_object%n_ao = n_ao
-        oao_object%n_particle = n_particle
-        oao_object%n_param = n_param
-        oao_object%s_sqrt = identity_matrix(n_ao)
-        oao_object%s_inv_sqrt = identity_matrix(n_ao)
-        dm_ao(:, :, 1) = generate_random_density_matrix(n_ao, n_electrons)
-        oao_object%dm_ao => dm_ao
-        oao_object%dm_oao = dm_ao
-        allocate(oao_object%fock_oo(n_ao, n_ao, n_particle), &
-                 oao_object%fock_vv(n_ao, n_ao, n_particle))
+        ! initialize an orthonormal but non-symmetric eigenvector matrix, so that a
+        ! transposed reconstruction would be caught, and distinct inverted eigenvalues
+        eigvecs = reshape([0.6_rp, 0.8_rp, &
+                           -0.8_rp, 0.6_rp], [n, n])
+        inv_eigvals = [0.25_rp, 4.0_rp]
 
-        ! set up the ARH object the way the ARH factory would
-        allocate(arh_object)
-        call setup_settings(arh_object%settings)
-        arh_object%settings%arh_type = "ms_psb"
-        arh_object%n_ao => oao_object%n_ao
-        arh_object%n_param => oao_object%n_param
-        arh_object%n_particle => oao_object%n_particle
-        arh_object%dm_ao => oao_object%dm_ao
-        arh_object%s_inv_sqrt => oao_object%s_inv_sqrt
-        arh_object%dm_oao => oao_object%dm_oao
-        arh_object%fock_oo => oao_object%fock_oo
-        arh_object%fock_vv => oao_object%fock_vv
-        arh_object%energy => oao_object%energy
-        arh_object%update_dm_cs => mock_update_dm_cs
+        ! initialize the expected matrix 0.25 * v1 v1^T + 4 * v2 v2^T
+        expected = reshape([2.65_rp, -1.8_rp, &
+                            -1.8_rp, 1.6_rp], [n, n])
 
-        ! reset mock density matrix updating function
-        n_mock_calls = 0
-
-        ! call routine without an orbital rotation for an uninitialized object and
-        ! determine if an error is produced
-        kappa = 0.0_rp
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-        if (.not. oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
-                "eigendecomposition of the static Hessian part not marked stale "// &
-                "after the static Hessian part was rebuilt."
-            test_update_orbs_arh_cs = .false.
+        ! call routine and determine if dimensions and values of the reconstructed
+        ! matrix match
+        mat = spectral_to_dense(eigvecs, inv_eigvals)
+        if (size(mat, 1) /= n .or. size(mat, 2) /= n) then
+            write (stderr, *) "test_spectral_to_dense failed: Incorrect dimensions "// &
+                "of reconstructed matrix."
+            test_spectral_to_dense = .false.
+        else if (norm2(mat - expected) > tol) then
+            write (stderr, *) "test_spectral_to_dense failed: Incorrect "// &
+                "reconstructed matrix."
+            test_spectral_to_dense = .false.
         end if
 
-        ! determine if the energy, Fock matrix and non-linear potential of the density
-        ! matrix updating function are picked up
-        if (abs(func - sum(dm_ao)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect energy."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%fock_oao - mock_fock_factor(1) * dm_ao) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect Fock matrix."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%v_nonlinear_oao - mock_v_nonlinear_factor(1) * dm_ao) > &
-            tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
-                "non-linear potential."
-            test_update_orbs_arh_cs = .false.
-        end if
+    end function test_spectral_to_dense
 
-        ! determine if the correct gradient, Hessian diagonal and Hessian linear 
-        ! transformation are returned
-        if (norm2(grad - arh_object%grad) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Gradient not returned."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(h_diag - arh_object%h_diag) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Hessian diagonal "// &
-                "not returned."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. associated(hess_x_funptr, hess_x_arh_ptr)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Returned Hessian "// &
-                "linear transformation is wrong."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! determine if the history is initialized empty
-        if (size(arh_object%dm_list, 4) /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Density matrix "// &
-                "history not initialized empty."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%dm_diff, 4) /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Difference history "// &
-                "not initialized empty."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! call routine again without an orbital rotation and determine if the
-        ! quantities of the already initialized object are reused, including the
-        ! cached eigendecomposition of the static Hessian part, which should remain
-        ! valid since it was not rebuilt
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, &
-                                          error)
-        if (n_mock_calls /= 1) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Quantities "// &
-                "recomputed without an orbital rotation."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%dm_list, 4) /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: History extended "// &
-                "without an orbital rotation."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
-                "eigendecomposition of the static Hessian part marked stale even "// &
-                "though the static Hessian part was not rebuilt."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! save the current quantities, which the history has to retain
-        dm_saved = arh_object%dm_oao
-        fock_saved = arh_object%fock_oao
-        v_nonlinear_saved = arh_object%v_nonlinear_oao
-
-        ! call routine with an orbital rotation and determine if the history is
-        ! extended
-        kappa = 0.1_rp
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error "// &
-                "after orbital rotation."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-        if (.not. oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
-                "eigendecomposition of the static Hessian part not marked stale "// &
-                "after an orbital rotation."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%dm_list, 4) /= 1) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: History not extended."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-        if (norm2(arh_object%dm_list(:, :, :, 1) - dm_saved) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect density "// &
-                "matrix history."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%fock_list(:, :, :, 1) - fock_saved) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect Fock "// &
-                "matrix history."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%v_nonlinear_list(:, :, :, 1) - v_nonlinear_saved) > tol) &
-        then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
-                "non-linear potential history."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! determine if the differences are constructed from the history and the current 
-        ! quantities
-        if (norm2(arh_object%dm_diff(:, :, :, 1) - (dm_saved - arh_object%dm_oao)) > &
-            tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect density "// &
-                "matrix difference."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%fock_diff(:, :, :, 1) - &
-                  (fock_saved - arh_object%fock_oao)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect Fock "// &
-                "matrix difference."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%v_nonlinear_diff(:, :, :, 1) - &
-                  (v_nonlinear_saved - arh_object%v_nonlinear_oao)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
-                "non-linear potential difference."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! determine if the linear part of the potential difference is obtained as the
-        ! remainder of the total Fock matrix difference
-        if (norm2(arh_object%v_linear_diff - (arh_object%fock_diff - &
-                                              arh_object%v_nonlinear_diff)) > tol) &
-        then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect linear "// &
-                "part of potential difference."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! determine if the ARH metric is constructed
-        if (.not. allocated(arh_object%metric_chol)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: ARH metric Cholesky "// &
-                "factor not constructed."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. allocated(arh_object%metric_rank)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: ARH metric rank not "// &
-                "constructed."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. allocated(arh_object%metric_map)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: ARH metric map not "// &
-                "constructed."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! call routine for multisecant SR1 and determine if the separately regularized
-        ! multisecant SR1 systems are constructed instead of the ARH metric
-        arh_object%settings%arh_type = "ms_sr1"
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
-                "multisecant SR1."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
-                "eigendecomposition of the static Hessian part not marked stale "// &
-                "for multisecant SR1."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. allocated(arh_object%a_eigvecs)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Multisecant SR1 "// &
-                "system not constructed."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. allocated(arh_object%a_eigvecs_comb)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Spin-combined "// &
-                "multisecant SR1 system not constructed."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! deallocate ARH and OAO objects
-        deallocate(arh_object, oao_object)
-
-    end function test_update_orbs_arh_cs
-
-    logical(c_bool) function test_update_orbs_arh_os() bind(C)
+    logical(c_bool) function test_prepend() bind(C)
         !
-        ! this function tests the subroutine which defines the energy, gradient and
-        ! Hessian diagonal evaluation in the OAO basis for the open-shell case
+        ! this function tests the subroutine which prepends an array to a list of arrays
         !
-        use opentrustregion, only: hess_x_type
-        use otr_arh, only: update_orbs_arh_os, arh_object, hess_x_arh_ptr
-        use otr_oao_test_reference, only: n_ao, n_particle
-        use otr_oao, only: oao_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_unit_tests, only: n_mock_calls, identity_matrix, &
-                                      generate_random_density_matrix
+        use otr_arh, only: prepend
 
-        integer(ip), parameter :: n_electrons = 2, &
-                                  n_param = n_particle * n_ao * (n_ao - 1) / 2
-
-        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
-        real(rp) :: dm_saved(n_ao, n_ao, n_particle), &
-                    v_same_spin_saved(n_ao, n_ao, n_particle), &
-                    v_opposite_spin_saved(n_ao, n_ao, n_particle), &
-                    v_nonlinear_saved(n_ao, n_ao, n_particle), kappa(n_param), &
-                    grad(n_param), h_diag(n_param), func
-        integer(ip) :: i, error
-        procedure(hess_x_type), pointer :: hess_x_funptr
+        real(rp), allocatable :: list(:, :, :, :)
+        real(rp) :: new_array(2, 1, 1), expected(2, 1, 1, 3)
 
         ! assume tests pass
-        test_update_orbs_arh_os = .true.
+        test_prepend = .true.
 
-        ! set up the OAO object with an orthonormal AO basis, so that the AO and the
-        ! OAO basis coincide
-        allocate(oao_object)
-        call setup_settings(oao_object%settings)
-        oao_object%n_ao = n_ao
-        oao_object%n_particle = n_particle
-        oao_object%n_param = n_param
-        oao_object%s_sqrt = identity_matrix(n_ao)
-        oao_object%s_inv_sqrt = identity_matrix(n_ao)
-        do i = 1, n_particle
-            dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_electrons)
-        end do
-        oao_object%dm_ao => dm_ao
-        oao_object%dm_oao = dm_ao
-        allocate(oao_object%fock_oo(n_ao, n_ao, n_particle), &
-                 oao_object%fock_vv(n_ao, n_ao, n_particle))
+        ! allocate empty list and initialize array to be prepended
+        allocate(list(2, 1, 1, 0))
+        new_array = reshape([1.0_rp, 2.0_rp], [2, 1, 1])
 
-        ! set up the ARH object the way the ARH factory would
-        allocate(arh_object)
-        call setup_settings(arh_object%settings)
-        arh_object%settings%arh_type = "ms_psb"
-        arh_object%n_ao => oao_object%n_ao
-        arh_object%n_param => oao_object%n_param
-        arh_object%n_particle => oao_object%n_particle
-        arh_object%dm_ao => oao_object%dm_ao
-        arh_object%s_inv_sqrt => oao_object%s_inv_sqrt
-        arh_object%dm_oao => oao_object%dm_oao
-        arh_object%fock_oo => oao_object%fock_oo
-        arh_object%fock_vv => oao_object%fock_vv
-        arh_object%energy => oao_object%energy
-        arh_object%update_dm_os => mock_update_dm_os
-
-        ! reset mock density matrix updating function
-        n_mock_calls = 0
-
-        ! call routine without an orbital rotation for an uninitialized object and
-        ! determine if an error is produced
-        kappa = 0.0_rp
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Produced error."
-            test_update_orbs_arh_os = .false.
-            return
+        ! prepend array to empty list and determine if dimensions and values of
+        ! resulting list match
+        call prepend(list, new_array)
+        if (size(list, 4) /= 1) then
+            write (stderr, *) "test_prepend failed: Incorrect list dimensions "// &
+                "after prepending to empty list."
+            test_prepend = .false.
         end if
-        if (.not. oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
-                "eigendecomposition of the static Hessian part not marked stale "// &
-                "after the static Hessian part was rebuilt."
-            test_update_orbs_arh_os = .false.
+        if (norm2(list(:, :, :, 1) - new_array) > tol) then
+            write (stderr, *) "test_prepend failed: Incorrect list values after "// &
+                "prepending to empty list."
+            test_prepend = .false.
         end if
 
-        ! determine if the energy and the potentials of the density matrix updating
-        ! function are picked up
-        if (abs(func - sum(dm_ao)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect energy."
-            test_update_orbs_arh_os = .false.
+        ! initialize expected list after prepending two further arrays
+        expected = reshape([5.0_rp, 6.0_rp, &
+                            3.0_rp, 4.0_rp, &
+                            1.0_rp, 2.0_rp], [2, 1, 1, 3])
+
+        ! prepend two further arrays and determine if dimensions and values of
+        ! resulting list match, so that new arrays are added at the front while the
+        ! order of the existing arrays is retained
+        call prepend(list, reshape([3.0_rp, 4.0_rp], [2, 1, 1]))
+        call prepend(list, reshape([5.0_rp, 6.0_rp], [2, 1, 1]))
+        if (size(list, 4) /= 3) then
+            write (stderr, *) "test_prepend failed: Incorrect list dimensions "// &
+                "after prepending to non-empty list."
+            test_prepend = .false.
         end if
-        if (norm2(arh_object%v_same_spin_oao - mock_v_same_spin_factor(1) * dm_ao) > &
-            tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect same-spin "// &
-                "potential."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_opposite_spin_oao - &
-                  mock_v_opposite_spin_factor(1) * dm_ao) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
-                "opposite-spin potential."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_nonlinear_oao - mock_v_nonlinear_factor(1) * dm_ao) > &
-            tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
-                "non-linear potential."
-            test_update_orbs_arh_os = .false.
+        if (norm2(list - expected) > tol) then
+            write (stderr, *) "test_prepend failed: Incorrect list values after "// &
+                "prepending to non-empty list."
+            test_prepend = .false.
         end if
 
-        ! determine if the gradient and Hessian diagonal are returned
-        if (norm2(grad - arh_object%grad) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Gradient not returned."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(h_diag - arh_object%h_diag) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Hessian diagonal "// &
-                "not returned."
-            test_update_orbs_arh_os = .false.
-        end if
+        ! deallocate list
+        deallocate(list)
 
-        ! determine if the history is initialized empty
-        if (size(arh_object%dm_list, 4) /= 0) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Density matrix "// &
-                "history not initialized empty."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (size(arh_object%dm_diff, 4) /= 0) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Difference history "// &
-                "not initialized empty."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! determine if the returned Hessian linear transformation is correct
-        if (.not. associated(hess_x_funptr, hess_x_arh_ptr)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Returned Hessian "// &
-                "linear transformation is wrong."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! call routine again without an orbital rotation and determine if the
-        ! quantities of the already initialized object are reused, including the
-        ! cached eigendecomposition of the static Hessian part, which should remain
-        ! valid since it was not rebuilt
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (n_mock_calls /= 1) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Quantities "// &
-                "recomputed without an orbital rotation."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (size(arh_object%dm_list, 4) /= 0) then
-            write (stderr, *) "test_update_orbs_arh_os failed: History extended "// &
-                "without an orbital rotation."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
-                "eigendecomposition of the static Hessian part marked stale even "// &
-                "though the static Hessian part was not rebuilt."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! save the current quantities, which the history has to retain
-        dm_saved = arh_object%dm_oao
-        v_same_spin_saved = arh_object%v_same_spin_oao
-        v_opposite_spin_saved = arh_object%v_opposite_spin_oao
-        v_nonlinear_saved = arh_object%v_nonlinear_oao
-
-        ! call routine with an orbital rotation and determine if the history is
-        ! extended
-        kappa = 0.1_rp
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &
-                "after orbital rotation."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        if (.not. oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Cached "// &
-                "eigendecomposition of the static Hessian part not marked stale "// &
-                "after an orbital rotation."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (size(arh_object%dm_list, 4) /= 1) then
-            write (stderr, *) "test_update_orbs_arh_os failed: History not extended."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        if (norm2(arh_object%dm_list(:, :, :, 1) - dm_saved) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect density "// &
-                "matrix history."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_same_spin_list(:, :, :, 1) - v_same_spin_saved) > tol) &
-        then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect same-spin "// &
-                "potential history."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_opposite_spin_list(:, :, :, 1) - v_opposite_spin_saved) &
-            > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
-                "opposite-spin potential history."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_nonlinear_list(:, :, :, 1) - v_nonlinear_saved) > tol) &
-        then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
-                "non-linear potential history."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! determine if the differences are constructed from the history and the
-        ! current quantities
-        if (norm2(arh_object%dm_diff(:, :, :, 1) - (dm_saved - arh_object%dm_oao)) > &
-            tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect density "// &
-                "matrix difference."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_same_spin_diff(:, :, :, 1) - &
-                  (v_same_spin_saved - arh_object%v_same_spin_oao)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect same-spin "// &
-                "potential difference."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_opposite_spin_diff(:, :, :, 1) - &
-                  (v_opposite_spin_saved - arh_object%v_opposite_spin_oao)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
-                "opposite-spin potential difference."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%v_nonlinear_diff(:, :, :, 1) - &
-                  (v_nonlinear_saved - arh_object%v_nonlinear_oao)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
-                "non-linear potential difference."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! determine if the ARH metric is constructed
-        if (.not. allocated(arh_object%metric_chol)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: ARH metric Cholesky "// &
-                "factor not constructed."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (.not. allocated(arh_object%metric_rank)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: ARH metric rank not "// &
-                "constructed."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (.not. allocated(arh_object%metric_map)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: ARH metric map not "// &
-                "constructed."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! call routine for multisecant SR1 and determine if the spin-separated and
-        ! spin-combined multisecant SR1 systems are constructed instead of the ARH
-        ! metric
-        arh_object%settings%arh_type = "ms_sr1"
-        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Produced error for "// &
-                "multisecant SR1."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (.not. allocated(arh_object%a_eigvecs)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Spin-separated "// &
-                "multisecant SR1 system not constructed."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (.not. allocated(arh_object%a_eigvecs_comb)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Spin-combined "// &
-                "multisecant SR1 system not constructed."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! deallocate ARH and OAO objects
-        deallocate(arh_object, oao_object)
-
-    end function test_update_orbs_arh_os
-
-    logical(c_bool) function test_hess_x_arh() bind(C)
-        !
-        ! this function tests the subroutine which defines the Hessian linear
-        ! transformation on the basis of augmented Roothaan-Hall and related methods
-        !
-        use otr_arh, only: hess_x_arh, arh_object
-        use otr_oao_test_reference, only: n_ao
-        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_project_symm, ref_hess_x, &
-                                      identity_matrix, generate_random_density_matrix, &
-                                      generate_random_symm_matrix
-        use opentrustregion_unit_tests, only: setup_settings
-
-        integer(ip), parameter :: n_diff = 1
-
-        ! inverted multisecant SR1 eigenvalues, which are chosen independently of the
-        ! density matrix history since only the product of the eigenvectors and the
-        ! inverted eigenvalues enters the response
-        real(rp), parameter :: a_inv_eigval = 0.5_rp, a_inv_eigval_comb = 0.25_rp
-
-        integer(ip), target :: n_particle, n_param, n_ao_target
-        real(rp), target :: dm_oao(n_ao, n_ao, 2), fock_oo(n_ao, n_ao, 2), &
-                            fock_vv(n_ao, n_ao, 2)
-        real(rp) :: dm_diff(n_ao, n_ao, 2, n_diff), fock_diff(n_ao, n_ao, 2, n_diff), &
-                    v_linear_diff(n_ao, n_ao, 2, n_diff), &
-                    v_same_spin_diff(n_ao, n_ao, 2, n_diff), &
-                    v_opposite_spin_diff(n_ao, n_ao, 2, n_diff), &
-                    v_nonlinear_diff(n_ao, n_ao, 2, n_diff), &
-                    metric_chol(n_diff, n_diff, 2), alpha(2)
-        integer(ip) :: metric_rank(2), metric_map(n_diff, 2), j, error
-        real(rp), allocatable :: x(:), x_full(:, :, :), delta_dm(:, :, :), &
-                                 response(:, :, :), hess_x(:), expected_hess_x(:)
-
-        ! assume tests pass
-        test_hess_x_arh = .true.
-
-        ! generate random density matrices, Fock matrix contributions, density matrix
-        ! and potential matrix differences, metrics and trial vector
-        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, 2_ip)
-        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, 1_ip)
-        do j = 1, 2
-            fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
-            fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
-            dm_diff(:, :, j, 1) = generate_random_dm_diff(dm_oao(:, :, j), n_ao)
-            fock_diff(:, :, j, 1) = generate_random_symm_matrix(n_ao)
-            v_linear_diff(:, :, j, 1) = generate_random_symm_matrix(n_ao)
-            v_same_spin_diff(:, :, j, 1) = generate_random_symm_matrix(n_ao)
-            v_opposite_spin_diff(:, :, j, 1) = generate_random_symm_matrix(n_ao)
-            v_nonlinear_diff(:, :, j, 1) = generate_random_symm_matrix(n_ao)
-            metric_chol(1, 1, j) = sqrt(sum(dm_diff(:, :, j, 1)**2))
-            metric_rank(j) = 1
-            metric_map(1, j) = 1
-        end do
-
-        ! set up the ARH object with the quantities the Hessian linear transformation
-        ! requires
-        allocate(arh_object)
-        call setup_settings(arh_object%settings)
-        n_ao_target = n_ao
-        arh_object%n_ao => n_ao_target
-        arh_object%n_particle => n_particle
-        arh_object%n_param => n_param
-        arh_object%dm_oao => dm_oao
-        arh_object%fock_oo => fock_oo
-        arh_object%fock_vv => fock_vv
-        arh_object%a_eigvecs = identity_matrix(n_diff)
-        arh_object%a_inv_eigvals = [a_inv_eigval]
-        arh_object%a_eigvecs_comb = identity_matrix(n_diff)
-        arh_object%a_inv_eigvals_comb = [a_inv_eigval_comb]
-
-        ! set up the closed-shell case with standard ARH
-        n_particle = 1
-        n_param = n_ao * (n_ao - 1) / 2
-        arh_object%settings%arh_type = "arh"
-        arh_object%dm_diff = dm_diff(:, :, 1:1, :)
-        arh_object%fock_diff = fock_diff(:, :, 1:1, :)
-        arh_object%v_linear_diff = v_linear_diff(:, :, 1:1, :)
-        arh_object%v_nonlinear_diff = v_nonlinear_diff(:, :, 1:1, :)
-        arh_object%metric_chol = metric_chol(:, :, 1:1)
-        arh_object%metric_rank = metric_rank(1:1)
-        arh_object%metric_map = metric_map(:, 1:1)
-
-        ! the response reproduces the Fock matrix difference scaled by the projection
-        ! of the displacement onto the density matrix difference
-        allocate(x(n_param))
-        call random_number(x)
-        x_full = ref_unpack_asymm(x, n_particle, n_ao)
-        delta_dm = ref_project_symm(x_full, dm_oao(:, :, 1:1))
-        alpha(1) = sum(dm_diff(:, :, 1, 1) * delta_dm(:, :, 1)) / &
-                   sum(dm_diff(:, :, 1, 1)**2)
-        allocate(response(n_ao, n_ao, 1))
-        response(:, :, 1) = alpha(1) * fock_diff(:, :, 1, 1)
-        expected_hess_x = ref_hess_x(x_full, response, dm_oao(:, :, 1:1), &
-                                     fock_oo(:, :, 1:1), fock_vv(:, :, 1:1), n_param)
-
-        ! call routine and determine if values of resulting Hessian linear
-        ! transformation match
-        allocate(hess_x(n_param))
-        call hess_x_arh(x, hess_x, error)
-        if (error /= 0) then
-            write (stderr, *) "test_hess_x_arh failed: Produced error for "// &
-                "closed-shell case."
-            test_hess_x_arh = .false.
-        end if
-        if (norm2(hess_x - expected_hess_x) > tol) then
-            write (stderr, *) "test_hess_x_arh failed: Incorrect Hessian linear "// &
-                "transformation for closed-shell case."
-            test_hess_x_arh = .false.
-        end if
-
-        ! set up the closed-shell case with multisecant SR1, where the linear part of
-        ! the potential difference is treated separately from the non-linear part
-        arh_object%settings%arh_type = "ms_sr1"
-
-        ! the response reproduces the linear and non-linear parts of the potential
-        ! difference scaled by the projections of the displacement onto these
-        response(:, :, 1) = &
-            a_inv_eigval * sum(v_linear_diff(:, :, 1, 1) * delta_dm(:, :, 1)) * &
-            v_linear_diff(:, :, 1, 1) + a_inv_eigval_comb * &
-            sum(v_nonlinear_diff(:, :, 1, 1) * delta_dm(:, :, 1)) * &
-            v_nonlinear_diff(:, :, 1, 1)
-        expected_hess_x = ref_hess_x(x_full, response, dm_oao(:, :, 1:1), &
-                                     fock_oo(:, :, 1:1), fock_vv(:, :, 1:1), &
-                                     n_param)
-
-        ! call routine and determine if values of resulting Hessian linear
-        ! transformation match
-        call hess_x_arh(x, hess_x, error)
-        if (error /= 0) then
-            write (stderr, *) "test_hess_x_arh failed: Produced error for "// &
-                "closed-shell case with multisecant SR1."
-            test_hess_x_arh = .false.
-        end if
-        if (norm2(hess_x - expected_hess_x) > tol) then
-            write (stderr, *) "test_hess_x_arh failed: Incorrect Hessian linear "// &
-                "transformation for closed-shell case with multisecant SR1."
-            test_hess_x_arh = .false.
-        end if
-        deallocate(x, hess_x, response)
-
-        ! set up the open-shell case with standard ARH
-        n_particle = 2
-        n_param = n_particle * n_param
-        arh_object%settings%arh_type = "arh"
-        arh_object%dm_diff = dm_diff
-        arh_object%v_same_spin_diff = v_same_spin_diff
-        arh_object%v_opposite_spin_diff = v_opposite_spin_diff
-        arh_object%v_nonlinear_diff = v_nonlinear_diff
-        arh_object%metric_chol = metric_chol
-        arh_object%metric_rank = metric_rank
-        arh_object%metric_map = metric_map
-
-        ! the response reproduces the spin-resolved potential differences scaled by the
-        ! projections of the displacements onto the density matrix differences, where
-        ! the non-linear part is folded into the same-spin part without any
-        ! same-/opposite-spin cross-mixing
-        allocate(x(n_param))
-        call random_number(x)
-        x_full = ref_unpack_asymm(x, n_particle, n_ao)
-        delta_dm = ref_project_symm(x_full, dm_oao)
-        allocate(response(n_ao, n_ao, n_particle))
-        do j = 1, n_particle
-            alpha(j) = sum(dm_diff(:, :, j, 1) * delta_dm(:, :, j)) / &
-                       sum(dm_diff(:, :, j, 1)**2)
-        end do
-        do j = 1, n_particle
-            response(:, :, j) = alpha(j) * (v_same_spin_diff(:, :, j, 1) + &
-                                            v_nonlinear_diff(:, :, j, 1)) + &
-                                alpha(3 - j) * v_opposite_spin_diff(:, :, j, 1)
-        end do
-        expected_hess_x = ref_hess_x(x_full, response, dm_oao, fock_oo, fock_vv, &
-                                     n_param)
-
-        ! call routine and determine if values of resulting Hessian linear
-        ! transformation match
-        allocate(hess_x(n_param))
-        call hess_x_arh(x, hess_x, error)
-        if (error /= 0) then
-            write (stderr, *) "test_hess_x_arh failed: Produced error for "// &
-                "open-shell case."
-            test_hess_x_arh = .false.
-        end if
-        if (norm2(hess_x - expected_hess_x) > tol) then
-            write (stderr, *) "test_hess_x_arh failed: Incorrect Hessian linear "// &
-                "transformation for open-shell case."
-            test_hess_x_arh = .false.
-        end if
-        deallocate(x, hess_x, response)
-
-        ! deallocate ARH object
-        deallocate(arh_object)
-
-    end function test_hess_x_arh
-
-    logical(c_bool) function test_get_response_contribution_cs() bind(C)
-        !
-        ! this function tests the function that computes the response contribution to 
-        ! the ARH Hessian for the closed-shell case
-        !
-        use otr_arh, only: get_response_contribution_cs, arh_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_unit_tests, only: generate_random_density_matrix, &
-                                      generate_random_symm_matrix
-
-        integer(ip), parameter :: n_ao = 6, n_electrons = 3, n_particle = 1, n_diff = 2
-
-        ! ARH types for which the response operator is symmetric
-        character(kw_len), parameter :: symmetric_types(4) = &
-            [character(kw_len) :: "symm_arh", "ms_sp", "ms_psb", "ms_sr1"]
-
-        ! ARH types which reproduce the multisecant conditions exactly
-        character(kw_len), parameter :: multisecant_types(3) = &
-            [character(kw_len) :: "arh", "ms_psb", "ms_sr1"]
-
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
-                    dm_diff(n_ao, n_ao, n_particle, n_diff), &
-                    fock_diff(n_ao, n_ao, n_particle, n_diff), &
-                    hess(n_ao, n_ao, n_ao, n_ao), &
-                    metric_chol(n_diff, n_diff, n_particle), a(n_diff, n_diff), &
-                    a_eigvecs(n_diff, n_diff), a_inv_eigvals(n_diff), &
-                    delta_x(n_ao, n_ao, n_particle), delta_y(n_ao, n_ao, n_particle), &
-                    g_x(n_ao, n_ao, n_particle), g_y(n_ao, n_ao, n_particle), &
-                    coeff(n_diff), delta_dm(n_ao, n_ao, n_particle), &
-                    expected_response(n_ao, n_ao, n_particle), &
-                    response(n_ao, n_ao, n_particle)
-        integer(ip) :: metric_rank(n_particle), metric_map(n_diff, n_particle)
-        integer(ip) :: i, j
-        type(arh_settings_type) :: settings
-
-        ! assume tests pass
-        test_get_response_contribution_cs = .true.
-
-        ! setup settings object
-        call setup_settings(settings)
-
-        ! generate random density matrix
-        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_electrons)
-
-        ! generate valid density matrix differences
-        do i = 1, n_diff
-            dm_diff(:, :, 1, i) = generate_random_dm_diff(dm_oao(:, :, 1), n_ao)
-        end do
-
-        ! create a mock Hessian operator and generate the corresponding Fock matrix
-        ! differences
-        hess = generate_random_symm_hessian(n_ao)
-        do i = 1, n_diff
-            fock_diff(:, :, 1, i) = contract_symm_hessian(hess, dm_diff(:, :, 1, i))
-        end do
-
-        ! construct metric and its Cholesky factorization
-        call build_metric_chol(dm_diff, metric_chol, metric_rank, metric_map)
-
-        ! construct multisecant SR1 matrix and the spectral decomposition of its inverse
-        do j = 1, n_diff
-            do i = 1, n_diff
-                a(i, j) = sum(dm_diff(:, :, 1, i) * fock_diff(:, :, 1, j))
-            end do
-        end do
-        call build_a_inv(a, a_eigvecs, a_inv_eigvals)
-
-        ! generate two random density matrix displacements
-        delta_x(:, :, 1) = generate_random_symm_matrix(n_ao)
-        delta_y(:, :, 1) = generate_random_symm_matrix(n_ao)
-
-        ! compute the Hessian actions G(x) and G(y) and test symmetry of Hessian
-        ! operator for all symmetric ARH methods
-        do i = 1, size(symmetric_types)
-            settings%arh_type = symmetric_types(i)
-            g_x = get_response_contribution_cs(delta_x, dm_diff, fock_diff, &
-                                               metric_chol, metric_rank, metric_map, &
-                                               a_eigvecs, a_inv_eigvals, n_ao, &
-                                               n_particle, settings)
-            g_y = get_response_contribution_cs(delta_y, dm_diff, fock_diff, &
-                                               metric_chol, metric_rank, metric_map, &
-                                               a_eigvecs, a_inv_eigvals, n_ao, &
-                                               n_particle, settings)
-            if (abs(sum(delta_y * g_x) - sum(delta_x * g_y)) > tol) then
-                write (stderr, *) "test_get_response_contribution_cs failed: "// &
-                    "Hessian operator is not symmetric for "// &
-                    trim(symmetric_types(i))//" ARH method."
-                test_get_response_contribution_cs = .false.
-            end if
-        end do
-
-        ! create a displacement as a linear combination of previous density matrix
-        ! differences, for which the response has to reproduce the corresponding linear
-        ! combination of Fock matrix differences
-        call random_number(coeff)
-        delta_dm = 0.0_rp
-        expected_response = 0.0_rp
-        do i = 1, n_diff
-            delta_dm(:, :, 1) = delta_dm(:, :, 1) + coeff(i) * dm_diff(:, :, 1, i)
-            expected_response(:, :, 1) = expected_response(:, :, 1) + coeff(i) * &
-                                         fock_diff(:, :, 1, i)
-        end do
-
-        ! check if multisecant conditions are fulfilled
-        do i = 1, size(multisecant_types)
-            settings%arh_type = multisecant_types(i)
-            response = get_response_contribution_cs(delta_dm, dm_diff, fock_diff, &
-                                                    metric_chol, metric_rank, &
-                                                    metric_map, a_eigvecs, &
-                                                    a_inv_eigvals, n_ao, n_particle, &
-                                                    settings)
-            if (norm2(response - expected_response) > tol) then
-                write (stderr, *) "test_get_response_contribution_cs failed: "// &
-                    "Hessian operator does not fulfill multisecant conditions for "// &
-                    trim(multisecant_types(i))//" ARH method."
-                test_get_response_contribution_cs = .false.
-            end if
-        end do
-
-    end function test_get_response_contribution_cs
-
-    logical(c_bool) function test_get_response_contribution_os_separated() &
-        bind(C)
-        !
-        ! this function tests the function that computes the spin-separated response
-        ! contribution to the ARH Hessian for the open-shell case
-        !
-        use otr_arh, only: get_response_contribution_os_separated, &
-                           arh_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_unit_tests, only: generate_random_density_matrix, &
-                                      generate_random_symm_matrix
-        use otr_oao_test_reference, only: n_particle
-
-        integer(ip), parameter :: n_ao = 6, n_electrons = 3, n_diff = 2
-
-        ! ARH types for which the response operator is symmetric
-        character(kw_len), parameter :: symmetric_types(4) = &
-            [character(kw_len) :: "symm_arh", "ms_sp", "ms_psb", "ms_sr1"]
-
-        ! ARH types which reproduce the multisecant conditions exactly
-        character(kw_len), parameter :: multisecant_types(3) = &
-            [character(kw_len) :: "arh", "ms_psb", "ms_sr1"]
-
-        ! ARH types which reproduce the multisecant conditions exactly when the
-        ! non-linear potential contribution is folded in, which multisecant SR1
-        ! deliberately ignores here since it requires a dedicated spin-combined system
-        character(kw_len), parameter :: nonlinear_multisecant_types(2) = &
-            [character(kw_len) :: "arh", "ms_psb"]
-
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
-                    dm_diff(n_ao, n_ao, n_particle, n_diff), &
-                    same_hess(n_ao, n_ao, n_ao, n_ao), &
-                    opposite_hess(n_ao, n_ao, n_ao, n_ao), &
-                    nonlinear_hess(n_ao, n_ao, n_ao, n_ao), &
-                    same_v_diff(n_ao, n_ao, n_particle, n_diff), &
-                    opposite_v_diff(n_ao, n_ao, n_particle, n_diff), &
-                    nonlinear_v_diff(n_ao, n_ao, n_particle, n_diff), &
-                    metric_chol(n_diff, n_diff, n_particle), &
-                    a(2 * n_diff, 2 * n_diff), a_eigvecs(2 * n_diff, 2 * n_diff), &
-                    a_inv_eigvals(2 * n_diff), delta_x(n_ao, n_ao, n_particle), &
-                    delta_y(n_ao, n_ao, n_particle), g_x(n_ao, n_ao, n_particle), &
-                    g_y(n_ao, n_ao, n_particle), coeff(n_diff), &
-                    delta_dm(n_ao, n_ao, n_particle), &
-                    expected_response(n_ao, n_ao, n_particle), &
-                    expected_nonlinear_response(n_ao, n_ao, n_particle), &
-                    response(n_ao, n_ao, n_particle)
-        integer(ip) :: metric_rank(n_particle), metric_map(n_diff, n_particle)
-        integer(ip) :: i, j
-        type(arh_settings_type) :: settings
-
-        ! assume tests pass
-        test_get_response_contribution_os_separated = .true.
-
-        ! setup settings object
-        call setup_settings(settings)
-
-        do j = 1, n_particle
-            ! generate random density matrix
-            dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_electrons)
-
-            ! generate valid density matrix differences
-            do i = 1, n_diff
-                dm_diff(:, :, j, i) = generate_random_dm_diff(dm_oao(:, :, j), n_ao)
-            end do
-        end do
-
-        ! create mock Hessian operators
-        same_hess = generate_random_symm_hessian(n_ao)
-        opposite_hess = generate_random_symm_hessian(n_ao)
-        nonlinear_hess = generate_random_symm_hessian(n_ao)
-
-        ! generate corresponding spin-resolved potential matrix differences, where the
-        ! opposite-spin potential of one spin channel is driven by the density matrix
-        ! difference of the other spin channel while the non-linear potential does not
-        ! mix spin channels
-        do i = 1, n_diff
-            do j = 1, n_particle
-                same_v_diff(:, :, j, i) = contract_symm_hessian(same_hess, &
-                                                                dm_diff(:, :, j, i))
-                opposite_v_diff(:, :, j, i) = &
-                    contract_symm_hessian(opposite_hess, dm_diff(:, :, 3 - j, i))
-                nonlinear_v_diff(:, :, j, i) = &
-                    contract_symm_hessian(nonlinear_hess, dm_diff(:, :, j, i))
-            end do
-        end do
-
-        ! construct metrics and their Cholesky factorizations
-        call build_metric_chol(dm_diff, metric_chol, metric_rank, metric_map)
-
-        ! construct spin-combined multisecant SR1 matrix and the spectral decomposition
-        ! of its inverse
-        do j = 1, n_diff
-            do i = 1, n_diff
-                a(i, j) = sum(dm_diff(:, :, 1, i) * same_v_diff(:, :, 1, j))
-                a(i, n_diff + j) = sum(dm_diff(:, :, 1, i) * &
-                                       opposite_v_diff(:, :, 1, j))
-                a(n_diff + i, j) = sum(dm_diff(:, :, 2, i) * &
-                                       opposite_v_diff(:, :, 2, j))
-                a(n_diff + i, n_diff + j) = sum(dm_diff(:, :, 2, i) * &
-                                                same_v_diff(:, :, 2, j))
-            end do
-        end do
-        call build_a_inv(a, a_eigvecs, a_inv_eigvals)
-
-        ! generate two random density matrix displacements
-        do j = 1, n_particle
-            delta_x(:, :, j) = generate_random_symm_matrix(n_ao)
-            delta_y(:, :, j) = generate_random_symm_matrix(n_ao)
-        end do
-
-        ! compute the Hessian actions G(x) and G(y) and test symmetry of Hessian
-        ! operator for all symmetric ARH methods
-        do i = 1, size(symmetric_types)
-            settings%arh_type = symmetric_types(i)
-            g_x = get_response_contribution_os_separated(delta_x, dm_diff, &
-                                                         same_v_diff, opposite_v_diff, &
-                                                         metric_chol, metric_rank, &
-                                                         metric_map, a_eigvecs, &
-                                                         a_inv_eigvals, n_ao, &
-                                                         n_particle, settings)
-            g_y = get_response_contribution_os_separated(delta_y, dm_diff, &
-                                                         same_v_diff, opposite_v_diff, &
-                                                         metric_chol, metric_rank, &
-                                                         metric_map, a_eigvecs, &
-                                                         a_inv_eigvals, n_ao, &
-                                                         n_particle, settings)
-            if (abs(sum(delta_y * g_x) - sum(delta_x * g_y)) > tol) then
-                write (stderr, *) "test_get_response_contribution_os_separated "// &
-                    "failed: Hessian operator is not symmetric for "// &
-                    trim(symmetric_types(i))//" ARH method."
-                test_get_response_contribution_os_separated = .false.
-            end if
-        end do
-
-        ! create a displacement as a linear combination of previous density matrix
-        ! differences, using the same expansion coefficients in both spin channels, for
-        ! which the response has to reproduce the corresponding linear combination of
-        ! potential matrix differences
-        call random_number(coeff)
-        delta_dm = 0.0_rp
-        expected_response = 0.0_rp
-        expected_nonlinear_response = 0.0_rp
-        do j = 1, n_particle
-            do i = 1, n_diff
-                delta_dm(:, :, j) = delta_dm(:, :, j) + coeff(i) * dm_diff(:, :, j, i)
-                expected_response(:, :, j) = expected_response(:, :, j) + coeff(i) * &
-                                             (same_v_diff(:, :, j, i) + &
-                                              opposite_v_diff(:, :, j, i))
-                expected_nonlinear_response(:, :, j) = &
-                    expected_nonlinear_response(:, :, j) + coeff(i) * &
-                    nonlinear_v_diff(:, :, j, i)
-            end do
-        end do
-
-        ! check if multisecant conditions are fulfilled
-        do i = 1, size(multisecant_types)
-            settings%arh_type = multisecant_types(i)
-            response = &
-                get_response_contribution_os_separated(delta_dm, dm_diff, same_v_diff, &
-                                                       opposite_v_diff, metric_chol, &
-                                                       metric_rank, metric_map, &
-                                                       a_eigvecs, a_inv_eigvals, n_ao, &
-                                                       n_particle, settings)
-            if (norm2(response - expected_response) > tol) then
-                write (stderr, *) "test_get_response_contribution_os_separated "// &
-                    "failed: Hessian operator does not fulfill multisecant "// &
-                    "conditions for "//trim(multisecant_types(i))//" ARH method."
-                test_get_response_contribution_os_separated = .false.
-            end if
-        end do
-
-        ! check if multisecant conditions are also fulfilled when the non-linear
-        ! potential contribution is folded into the same-spin potential
-        do i = 1, size(nonlinear_multisecant_types)
-            settings%arh_type = nonlinear_multisecant_types(i)
-            response = &
-                get_response_contribution_os_separated(delta_dm, dm_diff, same_v_diff, &
-                                                       opposite_v_diff, metric_chol, &
-                                                       metric_rank, metric_map, &
-                                                       a_eigvecs, a_inv_eigvals, n_ao, &
-                                                       n_particle, settings, &
-                                                       nonlinear_v_diff)
-            if (norm2(response - expected_response - expected_nonlinear_response) > &
-                tol) then
-                write (stderr, *) "test_get_response_contribution_os_separated "// &
-                    "failed: Hessian operator does not fulfill multisecant "// &
-                    "conditions for non-linear potential contribution for "// &
-                    trim(nonlinear_multisecant_types(i))//" ARH method."
-                test_get_response_contribution_os_separated = .false.
-            end if
-        end do
-
-    end function test_get_response_contribution_os_separated
-
-    logical(c_bool) function test_get_response_contribution_ms_sr1_nonlinear() bind(C)
-        !
-        ! this function tests the function that computes the spin-combined multisecant
-        ! SR1 response contribution to the ARH Hessian arising from the non-linear part
-        ! of the potential
-        !
-        use otr_arh, only: get_response_contribution_ms_sr1_nonlinear, arh_settings_type
-        use otr_oao_unit_tests, only: generate_random_density_matrix, &
-                                      generate_random_symm_matrix
-        use otr_oao_test_reference, only: n_particle
-
-        integer(ip), parameter :: n_ao = 6, n_electrons = 3, n_diff = 2
-
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
-                    dm_diff(n_ao, n_ao, n_particle, n_diff), &
-                    hess(n_ao, n_ao, n_ao, n_ao), &
-                    v_diff(n_ao, n_ao, n_particle, n_diff), a(n_diff, n_diff), &
-                    a_eigvecs(n_diff, n_diff), a_inv_eigvals(n_diff), &
-                    delta_x(n_ao, n_ao, n_particle), delta_y(n_ao, n_ao, n_particle), &
-                    g_x(n_ao, n_ao, n_particle), g_y(n_ao, n_ao, n_particle), &
-                    coeff(n_diff), delta_dm(n_ao, n_ao, n_particle), &
-                    expected_response(n_ao, n_ao, n_particle), &
-                    response(n_ao, n_ao, n_particle)
-        integer(ip) :: i, j
-
-        ! assume tests pass
-        test_get_response_contribution_ms_sr1_nonlinear = .true.
-
-        do j = 1, n_particle
-            ! generate random density matrix
-            dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_electrons)
-
-            ! generate valid density matrix differences
-            do i = 1, n_diff
-                dm_diff(:, :, j, i) = generate_random_dm_diff(dm_oao(:, :, j), n_ao)
-            end do
-        end do
-
-        ! create a mock Hessian operator and generate the corresponding non-linear
-        ! potential matrix differences, which do not mix spin channels
-        hess = generate_random_symm_hessian(n_ao)
-        do i = 1, n_diff
-            do j = 1, n_particle
-                v_diff(:, :, j, i) = contract_symm_hessian(hess, dm_diff(:, :, j, i))
-            end do
-        end do
-
-        ! construct spin-combined multisecant SR1 matrix and the spectral decomposition
-        ! of its inverse
-        do j = 1, n_diff
-            do i = 1, n_diff
-                a(i, j) = sum(dm_diff(:, :, :, i) * v_diff(:, :, :, j))
-            end do
-        end do
-        call build_a_inv(a, a_eigvecs, a_inv_eigvals)
-
-        ! generate two random density matrix displacements
-        do j = 1, n_particle
-            delta_x(:, :, j) = generate_random_symm_matrix(n_ao)
-            delta_y(:, :, j) = generate_random_symm_matrix(n_ao)
-        end do
-
-        ! compute the Hessian actions G(x) and G(y) and test symmetry of Hessian
-        ! operator
-        g_x = get_response_contribution_ms_sr1_nonlinear(delta_x, v_diff, a_eigvecs, &
-                                                         a_inv_eigvals, n_ao, &
-                                                         n_particle)
-        g_y = get_response_contribution_ms_sr1_nonlinear(delta_y, v_diff, a_eigvecs, &
-                                                         a_inv_eigvals, n_ao, &
-                                                         n_particle)
-        if (abs(sum(delta_y * g_x) - sum(delta_x * g_y)) > tol) then
-            write (stderr, *) "test_get_response_contribution_ms_sr1_nonlinear "// &
-                "failed: Hessian operator is not symmetric."
-            test_get_response_contribution_ms_sr1_nonlinear = .false.
-        end if
-
-        ! create a displacement as a linear combination of previous density matrix
-        ! differences, using the same expansion coefficients in both spin channels, for
-        ! which the response has to reproduce the corresponding linear combination of
-        ! potential matrix differences
-        call random_number(coeff)
-        delta_dm = 0.0_rp
-        expected_response = 0.0_rp
-        do j = 1, n_particle
-            do i = 1, n_diff
-                delta_dm(:, :, j) = delta_dm(:, :, j) + coeff(i) * dm_diff(:, :, j, i)
-                expected_response(:, :, j) = expected_response(:, :, j) + coeff(i) * &
-                                             v_diff(:, :, j, i)
-            end do
-        end do
-
-        ! check if multisecant conditions are fulfilled
-        response = get_response_contribution_ms_sr1_nonlinear(delta_dm, v_diff, &
-                                                              a_eigvecs, &
-                                                              a_inv_eigvals, n_ao, &
-                                                              n_particle)
-        if (norm2(response - expected_response) > tol) then
-            write (stderr, *) "test_get_response_contribution_ms_sr1_nonlinear "// &
-                "failed: Hessian operator does not fulfill multisecant conditions."
-            test_get_response_contribution_ms_sr1_nonlinear = .false.
-        end if
-
-    end function test_get_response_contribution_ms_sr1_nonlinear
+    end function test_prepend
 
 end module otr_arh_unit_tests

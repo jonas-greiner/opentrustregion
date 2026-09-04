@@ -15,6 +15,7 @@ module otr_oao_test_reference
 
     ! number of particles and AOs
     integer(ip), parameter :: n_particle = 2_ip, n_ao = 3_ip
+    integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
     integer(c_ip), parameter :: n_particle_c = int(n_particle, kind=c_ip)
     integer(c_ip), protected, bind(C, name="test_n_ao") :: n_ao_c = int(n_ao, kind=c_ip)
 

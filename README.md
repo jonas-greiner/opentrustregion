@@ -792,7 +792,7 @@ The routine `arh_factory` constructs and returns ARH versions of energy, orbital
   - An integer error code (0 for success, positive integers < 100 for errors)
 - **`obj_func_arh`** (subroutine): Returned ARH objective function as defined for the `solver` subroutine.
 - **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.
-- **`precond_arh`** (subroutine): Returned ARH level-shifted preconditioner as defined for the `precond` setting of the `solver` subroutine. Identical to OAO's own `precond_oao`, based on the exact eigendecomposition of the static part of the Hessian.
+- **`precond_arh`** (subroutine): Returned ARH level-shifted preconditioner as defined for the `precond` setting of the `solver` subroutine. Applies the exact, level-shifted inverse of the full ARH approximate Hessian using the Sherman-Morrison-Woodbury identity.
 - **`precond_pd_arh`** (subroutine): Returned ARH positive-definite preconditioner as defined for the `precond_pd` setting of the `solver` subroutine. Identical to OAO's own `precond_pd_oao`, based on the exact eigendecomposition of the static part of the Hessian.
 - **`project_arh`** (subroutine): Returned ARH projection subroutine as defined for the `solver` subroutine.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
@@ -842,7 +842,6 @@ call settings%init(error)
 settings%precond => precond_arh_funptr
 settings%precond_pd => precond_pd_arh_funptr
 settings%project => project_arh_funptr
-settings%hess_symm = .false.
 
 ! set number of parameters
 n_param = n_ao * (n_ao - 1) / 2
@@ -902,7 +901,6 @@ solver_settings_type settings = solver_settings_init();
 settings.precond = precond_arh_funptr;
 settings.precond_pd = precond_pd_arh_funptr;
 settings.project = project_arh_funptr;
-settings.hess_symm = false;
 
 // set number of parameters
 n_param = n_ao * (n_ao - 1) / 2
@@ -944,7 +942,6 @@ settings = SolverSettings()
 settings.precond = precond_arh
 settings.precond_pd = precond_pd_arh
 settings.project = project_arh
-settings.hess_symm = False
 
 # set number of parameters
 n_param = n_ao * (n_ao - 1) / 2
@@ -962,7 +959,7 @@ arh_deconstructor()
 - `get_energy` and `update_dm` are callback procedures provided elsewhere.
 - ARH settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
 - `arh_factory` returns five procedures: `obj_func`, `update_orbs`, `precond`, `precond_pd`, and `project`, which are passed to the normal `solver`. `precond`/`precond_pd` are optional to wire in; without them, the `solver`'s own default diagonal preconditioner is used instead.
-- ARH breaks Hessian symmetry; when using ARH set `hess_symm` to `false` before calling `solver`.
+- Of the five `arh_type` options below, only `"arh"` breaks Hessian symmetry; `"symm_arh"`, `"ms_psb"`, `"ms_sp"`, and the default `"ms_sr1"` are symmetric.
 - Clean up ARH resources and get final AO density matrix by calling `arh_deconstructor`.
 
 #### Optional Settings

@@ -573,9 +573,8 @@ contains
         ! this function tests the function which packs an antisymmetric matrix
         !
         use otr_oao, only: pack_asymm
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
         real(rp) :: matrix(n_ao, n_ao, n_particle)
         real(rp), allocatable :: matrix_nonred(:)
 
@@ -1244,10 +1243,9 @@ contains
         !
         use otr_oao, only: obj_func_oao, oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_electrons = 2, &
-                                  n_param = n_particle * n_ao * (n_ao - 1) / 2
+        integer(ip), parameter :: n_electrons = 2
 
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), kappa(n_param), energy
         integer(ip) :: i, error
@@ -1312,10 +1310,9 @@ contains
         use otr_oao, only: update_orbs_oao, oao_object, hess_x_oao_ptr
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_electrons = 2, &
-                                  n_param = n_particle * n_ao * (n_ao - 1) / 2
+        integer(ip), parameter :: n_electrons = 2
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: kappa(n_param), grad(n_param), h_diag(n_param), func
@@ -1670,9 +1667,8 @@ contains
         !
         use otr_oao, only: project_oao, oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), vector(n_param), expected(n_param)
         integer(ip) :: error
@@ -1721,9 +1717,8 @@ contains
         use otr_oao, only: precond_oao, oao_object
         use opentrustregion_unit_tests, only: setup_settings
         use opentrustregion, only: precond_floor
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
                     eigvecs(n_ao, n_ao, n_particle), eigvals(n_ao, n_particle), &
@@ -1825,9 +1820,8 @@ contains
         use otr_oao, only: precond_pd_oao, oao_object
         use opentrustregion_unit_tests, only: setup_settings
         use opentrustregion, only: precond_floor, precond_rel_floor_factor
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
                     eigvecs(n_ao, n_ao, n_particle), eigvals(n_ao, n_particle), &
@@ -1969,9 +1963,8 @@ contains
         !
         use otr_oao, only: rotate_to_hess_eigenbasis, oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         real(rp) :: eigvecs(n_ao, n_ao, n_particle), vector(n_param), &
                     expected(n_param), rotated(n_param)
@@ -2020,9 +2013,8 @@ contains
         !
         use otr_oao, only: rotate_from_hess_eigenbasis, oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
 
-        integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         real(rp) :: eigvecs(n_ao, n_ao, n_particle), vector(n_param), &
                     expected(n_param), rotated(n_param)
@@ -2279,10 +2271,9 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
                                    precond_pd_type, project_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_test_reference, only: n_ao, n_particle, operator(==)
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param, operator(==)
 
-        integer(ip), parameter :: n_electrons = 2, &
-                                  n_param = n_particle * n_ao * (n_ao - 1) / 2
+        integer(ip), parameter :: n_electrons = 2
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
