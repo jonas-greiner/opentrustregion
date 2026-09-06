@@ -16,6 +16,45 @@ from pyopentrustregion.tests import (
     PySystemTests,
 )
 
+# try to load extension module tests if available
+try:
+    from pyopentrustregion.extensions.oao.tests import (
+        OAOTests,
+        OAOCInterfaceTests,
+        OAOPyInterfaceTests,
+        OAOCSystemTests,
+    )
+except AttributeError:
+    pass
+
+try:
+    from pyopentrustregion.extensions.quasi_newton.tests import (
+        QNCInterfaceTests,
+        QNPyInterfaceTests,
+        QNCSystemTests,
+    )
+except AttributeError:
+    pass
+
+try:
+    from pyopentrustregion.extensions.arh.tests import (
+        ARHTests,
+        ARHCInterfaceTests,
+        ARHPyInterfaceTests,
+        ARHCSystemTests,
+    )
+except AttributeError:
+    pass
+
+try:
+    from pyopentrustregion.extensions.s_gek.tests import (
+        SGEKCInterfaceTests,
+        SGEKPyInterfaceTests,
+        SGEKCSystemTests,
+    )
+except AttributeError:
+    pass
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=0)

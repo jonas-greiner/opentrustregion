@@ -43,6 +43,21 @@ message(STATUS "Showing option BUILD_SHARED_LIBS: ${BUILD_SHARED_LIBS}")
 option(${otr}_ENABLE_XHOST "Optimize for current machine's instruction set" ON)
 message(STATUS "Showing option ${otr}_ENABLE_XHOST: ${${otr}_ENABLE_XHOST}")
 
+# optional extension modules, all off by default
+option(ENABLE_OAO "Include orthogonal AO extension in OpenTrustRegion" OFF)
+option(ENABLE_QUASI_NEWTON "Include quasi-Newton extension in OpenTrustRegion" OFF)
+option(ENABLE_ARH "Include augmented Roothaan-Hall extension in OpenTrustRegion" OFF)
+option(ENABLE_S_GEK
+       "Include subspace gradient-enhanced kriging extension in OpenTrustRegion" OFF)
+if(ENABLE_ARH AND NOT ENABLE_OAO)
+    message(STATUS "Including orthogonal AO extension module as a dependency for augmented Roothaan-Hall")
+    set(ENABLE_OAO ON CACHE BOOL "Enabled by ARH dependency" FORCE)
+endif()
+message(STATUS "Showing option ENABLE_OAO: ${ENABLE_OAO}")
+message(STATUS "Showing option ENABLE_QUASI_NEWTON: ${ENABLE_QUASI_NEWTON}")
+message(STATUS "Showing option ENABLE_ARH: ${ENABLE_ARH}")
+message(STATUS "Showing option ENABLE_S_GEK: ${ENABLE_S_GEK}")
+
 # ====  Build  ==================================================================
 
 # default build type
@@ -137,6 +152,7 @@ if(BLA_SIZEOF_INTEGER EQUAL 8)
             add_compile_definitions("dnrm2=dnrm2_64")
             add_compile_definitions("dgemv=dgemv_64")
             add_compile_definitions("dgemm=dgemm_64")
+            add_compile_definitions("dtrsv=dtrsv_64")
         endif()
         if(LAPACK_64)
             add_compile_definitions("dsyev=dsyev_64")
@@ -144,6 +160,13 @@ if(BLA_SIZEOF_INTEGER EQUAL 8)
             add_compile_definitions("dgeev=dgeev_64")
             add_compile_definitions("dgelss=dgelss_64")
             add_compile_definitions("dgesv=dgesv_64")
+            add_compile_definitions("dgesvd=dgesvd_64")
+            add_compile_definitions("dgetrf=dgetrf_64")
+            add_compile_definitions("dgetri=dgetri_64")
+            add_compile_definitions("dgetrs=dgetrs_64")
+            add_compile_definitions("dposv=dposv_64")
+            add_compile_definitions("dpotrf=dpotrf_64")
+            add_compile_definitions("dpotri=dpotri_64")
             add_compile_definitions("dpttrf=dpttrf_64")
             add_compile_definitions("zheev=zheev_64")
         endif()
@@ -155,8 +178,57 @@ else()
     set(LIB_SUFFIX "32")
 endif()
 
-# define source files
+# define base source files
 set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
+
+# base include directories
+set(OPENTRUSTREGION_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# conditionally add extension files
+if(ENABLE_OAO)
+    message(STATUS "Including orthogonal AO in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common_c_interface.f90
+        extensions/oao/src/oao.f90
+        extensions/oao/src/oao_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include
+    )
+endif()
+if(ENABLE_QUASI_NEWTON)
+    message(STATUS "Including quasi-Newton in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common_c_interface.f90
+        extensions/quasi_newton/src/quasi_newton.f90
+        extensions/quasi_newton/src/quasi_newton_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include
+    )
+endif()
+if(ENABLE_ARH)
+    message(STATUS "Including augmented Roothaan-Hall in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common_c_interface.f90
+        extensions/arh/src/arh.f90
+        extensions/arh/src/arh_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include
+    )
+endif()
+if(ENABLE_S_GEK)
+    message(STATUS "Including subspace gradient-enhanced kriging in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common_c_interface.f90
+        extensions/s_gek/src/s_gek.f90
+        extensions/s_gek/src/s_gek_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/s_gek/include
+    )
+endif()
 
 # add library
 add_library(opentrustregion ${OPENTRUSTREGION_SOURCES})
@@ -203,7 +275,7 @@ endif()
 
 # set include directories
 target_include_directories(opentrustregion PUBLIC
-                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                           "$<BUILD_INTERFACE:${OPENTRUSTREGION_INCLUDE_DIRS}>"
                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -219,6 +291,50 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
         tests/c_interface_mock.f90
         tests/opentrustregion_system_tests.f90
         tests/c_system_tests.c)
+
+    # conditionally add extension tests
+    if(ENABLE_OAO)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/oao/tests/oao_test_reference.f90
+            extensions/oao/tests/oao_unit_tests.f90
+            extensions/oao/tests/oao_c_interface_unit_tests.f90
+            extensions/oao/tests/oao_mock.f90
+            extensions/oao/tests/oao_c_interface_mock.f90
+            extensions/oao/tests/oao_c_system_tests.c
+        )
+    endif()
+    if(ENABLE_QUASI_NEWTON)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/quasi_newton/tests/quasi_newton_test_reference.f90
+            extensions/quasi_newton/tests/quasi_newton_c_interface_unit_tests.f90
+            extensions/quasi_newton/tests/quasi_newton_mock.f90
+            extensions/quasi_newton/tests/quasi_newton_c_interface_mock.f90
+            extensions/quasi_newton/tests/quasi_newton_c_system_tests.c
+        )
+    endif()
+    if(ENABLE_ARH)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/arh/tests/arh_test_reference.f90
+            extensions/arh/tests/arh_unit_tests.f90
+            extensions/arh/tests/arh_c_interface_unit_tests.f90
+            extensions/arh/tests/arh_mock.f90
+            extensions/arh/tests/arh_c_interface_mock.f90
+            extensions/arh/tests/arh_c_system_tests.c
+        )
+    endif()
+    if(ENABLE_S_GEK)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/s_gek/tests/s_gek_test_reference.f90
+            extensions/s_gek/tests/s_gek_c_interface_unit_tests.f90
+            extensions/s_gek/tests/s_gek_mock.f90
+            extensions/s_gek/tests/s_gek_c_interface_mock.f90
+            extensions/s_gek/tests/s_gek_c_system_tests.c
+        )
+    endif()
 
     # create shared test library which is then called from Python for testing
     add_library(otrtestsuite SHARED ${OPENTRUSTREGION_TESTS})
@@ -278,6 +394,30 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT ${runtime_component}
 )
+if(ENABLE_OAO)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT ${runtime_component}
+    )
+endif()
+if(ENABLE_QUASI_NEWTON)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT ${runtime_component}
+    )
+endif()
+if(ENABLE_ARH)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT ${runtime_component}
+    )
+endif()
+if(ENABLE_S_GEK)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/s_gek/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT ${runtime_component}
+    )
+endif()
 
 # install targets
 install(EXPORT library_interface

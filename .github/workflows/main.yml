@@ -47,7 +47,7 @@ jobs:
             scenario: installed
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # test for editable pip installation
           - os: linux
@@ -57,7 +57,7 @@ jobs:
             scenario: editable
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # test for cmake installation
           - os: linux
@@ -67,7 +67,7 @@ jobs:
             scenario: dev-build
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # testsuite running with gnu compilers on linux with 32-bit integers
           - os: linux
@@ -76,7 +76,7 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # testsuite running with intel compilers on linux with 32-bit integers
           - os: linux
@@ -85,7 +85,7 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # testsuite running with gnu compilers on linux with 64-bit integers
           - os: linux
@@ -94,7 +94,7 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "64"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # testsuite running with intel compilers on linux with 64-bit integers
           - os: linux
@@ -103,7 +103,7 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "64"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # testsuite running with clang compilers on macos with arm processors
           - os: macos-silicon
@@ -112,7 +112,7 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # testsuite running with clang compilers on macos with intel processors
           - os: macos-intel
@@ -121,7 +121,7 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
           # test coverage
           - os: linux
@@ -130,7 +130,7 @@ jobs:
             build-type: coverage
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
+            cmargs: "-DENABLE_OAO=ON -DENABLE_QUASI_NEWTON=ON -DENABLE_ARH=ON -DENABLE_S_GEK=ON"
 
     name: "Repo • 🐍 ${{ matrix.python-version }} • OS ${{ matrix.os }} • Compiler ${{ matrix.compiler }} • Build Type ${{ matrix.build-type }} • ${{ matrix.integer-size }}-bit integers"
     runs-on: ${{ matrix.runs-on }}
@@ -205,15 +205,15 @@ jobs:
 
     - name: Build & Install OpenTrustRegion (32-bit integers)
       if: ${{ matrix.integer-size == '32' && (matrix.build-type == 'test' || (matrix.build-type == 'install' && matrix.scenario == 'installed'))}}
-      run: CMAKE_FLAGS="-DINTEGER_SIZE=4" pip install ${{github.workspace}}
+      run: CMAKE_FLAGS="-DINTEGER_SIZE=4 ${{ matrix.cmargs }}" pip install ${{github.workspace}}
 
     - name: Build & Install OpenTrustRegion (64-bit integers)
       if: ${{ matrix.integer-size == '64' && (matrix.build-type == 'test' || (matrix.build-type == 'install' && matrix.scenario == 'installed'))}}
-      run: CMAKE_FLAGS="-DINTEGER_SIZE=8" pip install ${{github.workspace}}
+      run: CMAKE_FLAGS="-DINTEGER_SIZE=8 ${{ matrix.cmargs }}" pip install ${{github.workspace}}
 
     - name: Build & Install OpenTrustRegion
       if: ${{ matrix.build-type == 'install' && matrix.scenario == 'editable' }}
-      run: pip install -e ${{github.workspace}}
+      run: CMAKE_FLAGS="${{ matrix.cmargs }}" pip install -e ${{github.workspace}}
 
     - name: Build & Install OpenTrustRegion
       if: ${{ matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
@@ -223,7 +223,7 @@ jobs:
         pip install numpy
         mkdir build
         cd build
-        cmake -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install ..
+        cmake -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install ${{ matrix.cmargs }} ..
         cmake --build .
         cmake --install .
         cd $GITHUB_WORKSPACE
@@ -279,11 +279,11 @@ jobs:
     - name: Build & Install OpenTrustRegion with Coverage Flags
       if: ${{ matrix.build-type == 'coverage' }}
       run: |
-        CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DCMAKE_Fortran_FLAGS='--coverage -g'" pip install ${{github.workspace}}
+        CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DCMAKE_Fortran_FLAGS='--coverage -g' ${{ matrix.cmargs }}" pip install ${{github.workspace}}
 
     - name: Testing OpenTrustRegion with Coverage
       if: ${{ matrix.build-type == 'coverage' }}
-      run: coverage run --omit="pyopentrustregion/testsuite.py" -m pyopentrustregion.testsuite
+      run: coverage run --omit="pyopentrustregion/testsuite.py,pyopentrustregion/tests.py,pyopentrustregion/extensions/*/tests.py" -m pyopentrustregion.testsuite
 
     - name: Generate Coverage Report
       id: coverage

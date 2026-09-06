@@ -1,0 +1,361 @@
+# Copyright (C) 2025- Jonas Greiner
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+from __future__ import annotations
+
+import sys
+import numpy as np
+from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure, byref
+from dataclasses import dataclass
+from inspect import signature
+from typing import TYPE_CHECKING
+from pyopentrustregion.python_interface import (
+    lib,
+    c_int,
+    c_real,
+    kw_len,
+    obj_func_interface_type,
+    update_orbs_interface_type,
+    project_interface_type,
+    precond_interface_type,
+    precond_pd_interface_type,
+    logger_interface_type,
+    LoggerInterface,
+    adopt_collector,
+    Settings,
+    auto_bind_fields,
+)
+from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
+from pyopentrustregion.extensions.oao.python_interface import (
+    get_energy_interface_type,
+    GetEnergyInterface,
+    ObjFuncPyInterface,
+    PrecondPyInterface,
+    PrecondPDPyInterface,
+    ProjectPyInterface,
+)
+
+if TYPE_CHECKING:
+    from typing import Tuple, Callable, Optional, Any, Union, Callable, TypeGuard, Dict
+
+    # Python type specifications
+    UpdateDMCSType = Callable[[np.ndarray, np.ndarray, np.ndarray], float]
+    UpdateDMOSType = Callable[
+        [np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray], float
+    ]
+
+
+# type guards
+def is_update_dm_cs(func: Any) -> TypeGuard[UpdateDMCSType]:
+    try:
+        sig = signature(func)
+        return len(sig.parameters) == 3
+    except (ValueError, TypeError):
+        return False
+
+
+def is_update_dm_os(func: Any) -> TypeGuard[UpdateDMOSType]:
+    try:
+        sig = signature(func)
+        return len(sig.parameters) == 5
+    except (ValueError, TypeError):
+        return False
+
+
+# callback function ctypes specifications, ctypes can only deal with simple return
+# types so we interface to Fortran subroutines by creating pointers to the relevant
+# data
+update_dm_os_interface_type = CFUNCTYPE(
+    c_int,
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+)
+update_dm_cs_interface_type = CFUNCTYPE(
+    c_int,
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+    POINTER(c_real),
+)
+
+
+# define classes corresponding to C structs for settings
+class ARHSettingsC(Structure):
+    _fields_ = [
+        ("logger", c_void_p),
+        ("initialized", c_bool),
+        ("verbose", c_int),
+        ("arh_type", c_char * (kw_len + 1)),
+    ]
+
+
+class ARHSettings(Settings):
+
+    c_struct = ARHSettingsC
+    try:
+        init_c_struct = lib.init_arh_settings
+    except AttributeError:
+        raise AttributeError(
+            "Please reinstall the package with: "
+            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
+        )
+
+    logger: Optional[Callable[[str], None]]
+    logger_interface: Any
+
+
+# ensure that appropriate fields are automatically set in settings_c object
+auto_bind_fields(ARHSettings)
+
+
+# define interface factories
+@dataclass
+class UpdateDMCSInterface:
+    """
+    this class provides the interface to the density matrix updating function with a
+    separate non-linear potential contribution for the closed-shell case
+    """
+
+    update_dm_cs: Callable[[np.ndarray, np.ndarray, np.ndarray], float]
+    n_ao: int
+    n_particle: int
+    closed_shell: bool
+    exception: Dict[str, Exception]
+
+    def __call__(self, dm_ao_ptr, energy_ptr, fock_ptr, v_nonlinear_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=2 * (self.n_ao,))
+        fock = np.ctypeslib.as_array(fock_ptr, shape=2 * (self.n_ao,))
+        v_nonlinear = np.ctypeslib.as_array(v_nonlinear_ptr, shape=2 * (self.n_ao,))
+
+        # get energy, Fock matrix, and non-linear potential
+        try:
+            energy_ptr[0] = self.update_dm_cs(dm_ao, fock, v_nonlinear)
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
+@dataclass
+class UpdateDMOSInterface:
+    """
+    this class provides the interface density matrix updating function with same- and
+    opposite-spin and non-linear potential contributions for the open-shell case
+    """
+
+    update_dm_os: Callable[
+        [np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray], float
+    ]
+    n_ao: int
+    n_particle: int
+    closed_shell: bool
+    exception: Dict[str, Exception]
+
+    def __call__(
+        self,
+        dm_ao_ptr,
+        energy_ptr,
+        fock_ptr,
+        v_same_spin_ptr,
+        v_opposite_spin_ptr,
+        v_nonlinear_ptr,
+    ) -> int:
+        # convert matrix pointers to numpy arrays
+        if self.closed_shell:
+            dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=2 * (self.n_ao,))
+            fock = np.ctypeslib.as_array(fock_ptr, shape=2 * (self.n_ao,))
+            v_same_spin = np.ctypeslib.as_array(v_same_spin_ptr, shape=2 * (self.n_ao,))
+            v_opposite_spin = np.ctypeslib.as_array(
+                v_opposite_spin_ptr, shape=2 * (self.n_ao,)
+            )
+            v_nonlinear = np.ctypeslib.as_array(v_nonlinear_ptr, shape=2 * (self.n_ao,))
+        else:
+            dm_ao = np.ctypeslib.as_array(
+                dm_ao_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
+            )
+            fock = np.ctypeslib.as_array(
+                fock_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
+            )
+            v_same_spin = np.ctypeslib.as_array(
+                v_same_spin_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
+            )
+            v_opposite_spin = np.ctypeslib.as_array(
+                v_opposite_spin_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
+            )
+            v_nonlinear = np.ctypeslib.as_array(
+                v_nonlinear_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
+            )
+
+        # get energy, Fock matrix, and same-, opposite-spin, and non-linear potentials
+        try:
+            energy_ptr[0] = self.update_dm_os(
+                dm_ao, fock, v_same_spin, v_opposite_spin, v_nonlinear
+            )
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
+def arh_factory(
+    dm_ao: np.ndarray,
+    ao_overlap: np.ndarray,
+    n_particle: int,
+    n_ao: int,
+    get_energy: Callable[[np.ndarray], float],
+    update_dm: Union[
+        Callable[[np.ndarray, np.ndarray, np.ndarray], float],
+        Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray], float],
+    ],
+    settings: ARHSettings,
+) -> Tuple[
+    Callable[[np.ndarray], float],
+    Callable[
+        [np.ndarray, np.ndarray, np.ndarray],
+        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+    ],
+    Callable[[np.ndarray, float, np.ndarray], None],
+    Callable[[np.ndarray, np.ndarray], None],
+    Callable[[np.ndarray], None],
+]:
+    # get pointers to arrays
+    dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
+    ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
+
+    # determine if closed-shell or open-shell formalism is used
+    closed_shell = dm_ao.ndim == 2
+
+    # collector for exceptions raised inside the wrapped user callbacks; adopted from
+    # get_energy or update_dm when either is itself factory-produced so a whole chain
+    # of factories shares one, and handed to solver through the returned object
+    exception = adopt_collector(get_energy, update_dm)
+
+    # define interfaces for callback functions
+    get_energy_interface = get_energy_interface_type(
+        GetEnergyInterface(
+            get_energy=get_energy,
+            n_ao=n_ao,
+            n_particle=n_particle,
+            closed_shell=closed_shell,
+            exception=exception,
+        )
+    )
+    if is_update_dm_cs(update_dm):
+        update_dm_cs_interface = update_dm_cs_interface_type(
+            UpdateDMCSInterface(update_dm, n_ao, n_particle, closed_shell, exception)
+        )
+    elif is_update_dm_os(update_dm):
+        update_dm_os_interface = update_dm_os_interface_type(
+            UpdateDMOSInterface(update_dm, n_ao, n_particle, closed_shell, exception)
+        )
+
+    # set interfaces for optional callback functions, these need to be set here since
+    # the interface might need parameters that are not known when the attribute to
+    # settings is set (e.g. n_param)
+    settings.set_optional_callback(
+        "logger", settings.logger, LoggerInterface, logger_interface_type
+    )
+
+    if not hasattr(lib, "arh_factory"):
+        raise RuntimeError(
+            "Please reinstall the package with: "
+            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
+        )
+
+    # define result and argument types
+    lib.arh_factory.restype = c_int
+    lib.arh_factory.argtypes = [
+        POINTER(c_real),
+        POINTER(c_real),
+        c_int,
+        c_int,
+        get_energy_interface_type,
+        (update_dm_cs_interface_type if closed_shell else update_dm_os_interface_type),
+        POINTER(obj_func_interface_type),
+        POINTER(update_orbs_interface_type),
+        POINTER(precond_interface_type),
+        POINTER(precond_pd_interface_type),
+        POINTER(project_interface_type),
+        POINTER(ARHSettingsC),
+    ]
+
+    # call Fortran function
+    obj_func_arh_funptr = obj_func_interface_type()
+    update_orbs_arh_funptr = update_orbs_interface_type()
+    precond_arh_funptr = precond_interface_type()
+    precond_pd_arh_funptr = precond_pd_interface_type()
+    project_arh_funptr = project_interface_type()
+    error = lib.arh_factory(
+        dm_ao_ptr,
+        ao_overlap_ptr,
+        n_particle,
+        n_ao,
+        get_energy_interface,
+        update_dm_cs_interface if closed_shell else update_dm_os_interface,
+        byref(obj_func_arh_funptr),
+        byref(update_orbs_arh_funptr),
+        byref(precond_arh_funptr),
+        byref(precond_pd_arh_funptr),
+        byref(project_arh_funptr),
+        byref(settings.settings_c),
+    )
+
+    if error:
+        if "exc" in exception:
+            raise RuntimeError(
+                f"OpenTrustRegion ARH factory produced error (code {error})."
+            ) from exception["exc"]
+        else:
+            raise RuntimeError(
+                f"OpenTrustRegion ARH factory produced error (code {error})."
+            )
+
+    return (
+        ObjFuncPyInterface(
+            obj_func_funptr=obj_func_arh_funptr,
+            get_energy_interface=get_energy_interface,
+            _otr_exception=exception,
+        ),
+        UpdateOrbsPyInterface(
+            update_orbs_funptr=update_orbs_arh_funptr,
+            _otr_exception=exception,
+            saved_objects={
+                "get_energy_interface": get_energy_interface,
+                "update_dm_interface": (
+                    update_dm_cs_interface if closed_shell else update_dm_os_interface
+                ),
+            },
+        ),
+        PrecondPyInterface(precond_funptr=precond_arh_funptr, _otr_exception=exception),
+        PrecondPDPyInterface(
+            precond_pd_funptr=precond_pd_arh_funptr, _otr_exception=exception
+        ),
+        ProjectPyInterface(project_funptr=project_arh_funptr, _otr_exception=exception),
+    )
+
+
+def arh_deconstructor():
+    if not hasattr(lib, "arh_deconstructor"):
+        raise RuntimeError(
+            "Please reinstall the package with: "
+            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
+        )
+
+    # define result and argument types
+    lib.arh_deconstructor.restype = None
+    lib.arh_deconstructor.argtypes = []
+
+    # call Fortran function
+    lib.arh_deconstructor()
+
+    return
