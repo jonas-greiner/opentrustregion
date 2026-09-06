@@ -6,11 +6,12 @@
 
 module c_interface
 
-    use opentrustregion, only: rp, ip, kw_len, standard_solver => solver, &
-                               standard_stability_check => stability_check, &
-                               default_solver_settings, default_stability_settings, &
-                               update_orbs_type, hess_x_type, obj_func_type, &
-                               precond_type, project_type, conv_check_type, logger_type
+    use opentrustregion, only: &
+        rp, ip, kw_len, standard_solver => solver, &
+        standard_stability_check => stability_check, default_solver_settings, &
+        default_stability_settings, update_orbs_type, hess_x_type, obj_func_type, &
+        precond_type, precond_pd_type, project_type, modify_step_type, &
+        conv_check_type, init_trial_space_type, conv_check_stability_type, logger_type
     use, intrinsic :: iso_c_binding, only: &
         c_double, c_int64_t, c_int32_t, c_bool, c_ptr, c_funptr, c_f_pointer, &
         c_f_procpointer, c_associated, c_char, c_null_char, c_null_funptr
@@ -34,8 +35,16 @@ module c_interface
     procedure(hess_x_c_type), pointer :: hess_x_before_wrapping => null()
     procedure(obj_func_c_type), pointer :: obj_func_before_wrapping => null()
     procedure(precond_c_type), pointer :: precond_before_wrapping => null()
+    procedure(precond_pd_c_type), pointer :: precond_pd_before_wrapping => null()
     procedure(project_c_type), pointer :: project_before_wrapping => null()
+    procedure(modify_step_c_type), pointer :: modify_step_before_wrapping => null()
     procedure(conv_check_c_type), pointer :: conv_check_before_wrapping => null()
+    procedure(hess_x_c_type), pointer :: stability_hess_x_before_wrapping => null()
+    procedure(hess_x_c_type), pointer :: approx_hess_x_before_wrapping => null()
+    procedure(init_trial_space_c_type), pointer :: init_trial_space_before_wrapping => &
+        null()
+    procedure(conv_check_stability_c_type), pointer :: &
+        conv_check_stability_before_wrapping => null()
     procedure(logger_c_type), pointer :: logger_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
@@ -44,9 +53,9 @@ module c_interface
                                     hess_x_c_funptr) result(error) bind(C)
             import :: c_rp, c_funptr, c_ip
 
-            real(c_rp), intent(in) :: kappa_c(*)
+            real(c_rp), intent(in), target :: kappa_c(*)
             real(c_rp), intent(out) :: func_c
-            real(c_rp), intent(out) :: grad_c(*), h_diag_c(*)
+            real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
             type(c_funptr), intent(out) :: hess_x_c_funptr
             integer(c_ip) :: error
         end function update_orbs_c_type
@@ -56,8 +65,8 @@ module c_interface
         function hess_x_c_type(x_c, hess_x_c) result(error) bind(C)
             import :: c_rp, c_ip
 
-            real(c_rp), intent(in) :: x_c(*)
-            real(c_rp), intent(out) :: hess_x_c(*)
+            real(c_rp), intent(in), target :: x_c(*)
+            real(c_rp), intent(out), target :: hess_x_c(*)
             integer(c_ip) :: error
         end function hess_x_c_type
     end interface
@@ -66,7 +75,7 @@ module c_interface
         function obj_func_c_type(kappa_c, func) result(error) bind(C)
             import :: c_rp, c_ip
 
-            real(c_rp), intent(in) :: kappa_c(*)
+            real(c_rp), intent(in), target :: kappa_c(*)
             real(c_rp), intent(out) :: func
             integer(c_ip) :: error
         end function obj_func_c_type
@@ -77,10 +86,21 @@ module c_interface
             bind(C)
             import :: c_rp, c_ip
 
-            real(c_rp), intent(in) :: residual_c(*), mu_c
-            real(c_rp), intent(out) :: precond_residual_c(*)
+            real(c_rp), intent(in), target :: residual_c(*)
+            real(c_rp), intent(in) :: mu_c
+            real(c_rp), intent(out), target :: precond_residual_c(*)
             integer(c_ip) :: error
         end function precond_c_type
+    end interface
+
+    abstract interface
+        function precond_pd_c_type(residual_c, precond_residual_c) result(error) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(in), target :: residual_c(*)
+            real(c_rp), intent(out), target :: precond_residual_c(*)
+            integer(c_ip) :: error
+        end function precond_pd_c_type
     end interface
 
     abstract interface
@@ -93,12 +113,42 @@ module c_interface
     end interface
 
     abstract interface
+        function modify_step_c_type(kappa_c) result(error) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(inout), target :: kappa_c(*)
+            integer(c_ip) :: error
+        end function modify_step_c_type
+    end interface
+
+    abstract interface
         function conv_check_c_type(converged) result(error) bind(C)
             import :: c_bool, c_ip
 
             logical(c_bool), intent(out) :: converged
             integer(c_ip) :: error
         end function conv_check_c_type
+    end interface
+
+    abstract interface
+        function init_trial_space_c_type(trial_space_c) result(error) bind(C)
+            import :: c_rp, c_ip
+
+            real(c_rp), intent(out), target :: trial_space_c(*)
+            integer(c_ip) :: error
+        end function init_trial_space_c_type
+    end interface
+
+    abstract interface
+        function conv_check_stability_c_type(residual_c, eigval_c, converged) &
+            result(error) bind(C)
+            import :: c_bool, c_rp, c_ip
+
+            real(c_rp), intent(in), target :: residual_c(*)
+            real(c_rp), intent(in) :: eigval_c
+            logical(c_bool), intent(out) :: converged
+            integer(c_ip) :: error
+        end function conv_check_stability_c_type
     end interface
 
     abstract interface
@@ -111,22 +161,25 @@ module c_interface
 
     ! derived type for stability check settings
     type, bind(C) :: stability_settings_type_c
-        type(c_funptr) :: precond, project, logger
-        logical(c_bool) :: initialized
+        type(c_funptr) :: precond, project, approx_hess_x, init_trial_space, &
+                          conv_check, logger
+        logical(c_bool) :: hess_symm, stop_on_instability, initialized
         real(c_rp) :: conv_tol
-        integer(c_ip) :: n_random_trial_vectors, n_iter, jacobi_davidson_start, seed, &
-                         verbose
+        integer(c_ip) :: n_random_trial_vectors, n_trial_vectors, n_iter, &
+                         jacobi_davidson_start, seed, verbose
         character(kind=c_char) :: diag_solver(kw_len + 1)
     end type
 
     ! derived type for solver settings
     type, bind(C) :: solver_settings_type_c
-        type(c_funptr) :: precond, project, conv_check, logger
-        logical(c_bool) :: stability, line_search, initialized
+        type(c_funptr) :: precond, precond_pd, project, modify_step, conv_check, &
+                          stability_hess_x, logger
+        logical(c_bool) :: stability, line_search, hess_symm, initialized
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
                          jacobi_davidson_start, seed, verbose
         character(kind=c_char) :: subsystem_solver(kw_len + 1)
+        character(kind=c_char) :: trust_region_shape(kw_len + 1)
         type(stability_settings_type_c) :: stability_settings
     end type
 
@@ -140,9 +193,21 @@ module c_interface
     procedure(hess_x_type), pointer :: hess_x_f_wrapper_ptr => hess_x_f_wrapper
     procedure(obj_func_type), pointer :: obj_func_f_wrapper_ptr => obj_func_f_wrapper
     procedure(precond_type), pointer :: precond_f_wrapper_ptr => precond_f_wrapper
+    procedure(precond_pd_type), pointer :: precond_pd_f_wrapper_ptr => &
+        precond_pd_f_wrapper
     procedure(project_type), pointer :: project_f_wrapper_ptr => project_f_wrapper
+    procedure(modify_step_type), pointer :: modify_step_f_wrapper_ptr => &
+        modify_step_f_wrapper
     procedure(conv_check_type), pointer :: conv_check_f_wrapper_ptr => &
         conv_check_f_wrapper
+    procedure(hess_x_type), pointer :: stability_hess_x_f_wrapper_ptr => &
+        stability_hess_x_f_wrapper
+    procedure(hess_x_type), pointer :: approx_hess_x_f_wrapper_ptr => &
+        approx_hess_x_f_wrapper
+    procedure(init_trial_space_type), pointer :: init_trial_space_f_wrapper_ptr => &
+        init_trial_space_f_wrapper
+    procedure(conv_check_stability_type), pointer :: &
+        conv_check_stability_f_wrapper_ptr => conv_check_stability_f_wrapper
     procedure(logger_type), pointer :: logger_f_wrapper_ptr => logger_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
@@ -164,7 +229,7 @@ contains
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
-        type(solver_settings_type_c), intent(in), value :: settings_c
+        type(solver_settings_type_c), intent(inout) :: settings_c
         integer(c_ip) :: error_c
 
         procedure(update_orbs_f_wrapper), pointer :: update_orbs
@@ -197,8 +262,8 @@ contains
     end function solver_c_wrapper
 
     function stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, stable_c, &
-                                       settings_c, kappa_c_ptr) result(error_c) &
-        bind(C, name="stability_check")
+                                       settings_c, kappa_c_ptr, min_eigval_c_ptr) &
+        result(error_c) bind(C, name="stability_check")
         !
         ! this function exposes a Fortran-implemented stability check subroutine to C
         !
@@ -208,12 +273,13 @@ contains
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: hess_x_c_funptr
         logical(c_bool), intent(out) :: stable_c
-        type(stability_settings_type_c), intent(in), value :: settings_c
+        type(stability_settings_type_c), intent(inout) :: settings_c
         type(c_ptr), intent(in), value :: kappa_c_ptr
+        type(c_ptr), intent(in), value :: min_eigval_c_ptr
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:)
-        real(c_rp), pointer :: kappa_ptr_c(:)
+        real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:), min_eigval_ptr
+        real(c_rp), pointer :: kappa_ptr_c(:), min_eigval_ptr_c
         logical :: stable
         integer(ip) :: error
         procedure(hess_x_f_wrapper), pointer :: hess_x
@@ -233,12 +299,19 @@ contains
             allocate(h_diag_ptr(n_param_c))
             h_diag_ptr = real(h_diag_c(:n_param_c), kind=rp)
         end if
+        allocate(kappa_ptr(n_param_c), min_eigval_ptr)
         if (c_associated(kappa_c_ptr)) then
             if (rp == c_rp) then
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr, shape=[n_param_c])
             else
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
-                allocate(kappa_ptr(n_param_c))
+            end if
+        end if
+        if (c_associated(min_eigval_c_ptr)) then
+            if (rp == c_rp) then
+                call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr)
+            else
+                call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr_c)
             end if
         end if
 
@@ -246,19 +319,15 @@ contains
         settings = settings_c
 
         ! call stability check
-        if (c_associated(kappa_c_ptr)) then
-            call stability_check(h_diag_ptr, hess_x, stable, error, settings, &
-                                 kappa=kappa_ptr)
-            if (rp /= c_rp) then
-                kappa_ptr_c = kappa_ptr
-                deallocate(kappa_ptr)
-            end if
-        else
-            call stability_check(h_diag_ptr, hess_x, stable, error, settings)
-        end if
-        if (rp /= c_rp) deallocate(h_diag_ptr)
+        call stability_check(h_diag_ptr, hess_x, stable, error, settings, &
+                             kappa=kappa_ptr, min_eigval=min_eigval_ptr)
 
         ! convert return arguments to C kind
+        if (rp /= c_rp) then
+            kappa_ptr_c = real(kappa_ptr, kind=c_rp)
+            min_eigval_ptr_c = real(min_eigval_ptr, kind=c_rp)
+            deallocate(kappa_ptr, h_diag_ptr, min_eigval_ptr)
+        end if
         stable_c = logical(stable, kind=c_bool)
         error_c = int(error, kind=c_ip)
 
@@ -270,6 +339,27 @@ contains
         !
         use opentrustregion, only: hess_x_type
 
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(out), pointer :: hess_x
+        integer(ip), intent(out) :: error
+
+        call update_orbs_f_wrapper_impl(update_orbs_before_wrapping, kappa, func, &
+                                        grad, h_diag, hess_x, error)
+
+    end subroutine update_orbs_f_wrapper
+
+    recursive subroutine update_orbs_f_wrapper_impl(update_orbs_funptr, kappa, func, &
+                                                    grad, h_diag, hess_x, error)
+        !
+        ! this subroutine wraps the orbital update subroutine to convert Fortran
+        ! variables to C variables for a given function pointer, can be recursive in
+        ! case the passed function pointer also calls this function
+        !
+        use opentrustregion, only: hess_x_type
+
+        procedure(update_orbs_c_type), intent(in), pointer :: update_orbs_funptr
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -294,8 +384,7 @@ contains
         end if
 
         ! call update_orbs C function
-        error_c = update_orbs_before_wrapping(kappa_c, func_c, grad_c, h_diag_c, &
-                                              hess_x_c_funptr)
+        error_c = update_orbs_funptr(kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr)
 
         ! convert arguments to Fortran kind
         func = real(func_c, kind=rp)
@@ -315,13 +404,27 @@ contains
         ! associate procedure pointer to wrapper function
         hess_x => hess_x_f_wrapper
 
-    end subroutine update_orbs_f_wrapper
+    end subroutine update_orbs_f_wrapper_impl
 
     subroutine hess_x_f_wrapper(x, hess_x, error)
         !
         ! this subroutine exposes a C-implemented Hessian linear transformation to
         ! Fortran
         !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+
+        call hess_x_f_wrapper_impl(hess_x_before_wrapping, x, hess_x, error)
+
+    end subroutine hess_x_f_wrapper
+
+    subroutine hess_x_f_wrapper_impl(hess_x_funptr, x, hess_x, error)
+        !
+        ! this subroutine wraps the Hessian linear transformation subroutine to convert
+        ! Fortran variables to C variables for a given function pointer
+        !
+        procedure(hess_x_c_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -340,7 +443,7 @@ contains
         end if
 
         ! call C function
-        error_c = hess_x_before_wrapping(x_c, hess_x_c)
+        error_c = hess_x_funptr(x_c, hess_x_c)
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)
@@ -350,7 +453,7 @@ contains
             deallocate(hess_x_c)
         end if
 
-    end subroutine hess_x_f_wrapper
+    end subroutine hess_x_f_wrapper_impl
 
     function obj_func_f_wrapper(kappa, error) result(obj_func)
         !
@@ -421,6 +524,41 @@ contains
 
     end subroutine precond_f_wrapper
 
+    subroutine precond_pd_f_wrapper(residual, precond_residual, error)
+        !
+        ! this subroutine exposes a C-implemented positive-definite preconditioner
+        ! function to Fortran
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        real(c_rp), pointer :: residual_c(:), precond_residual_c(:)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            residual_c => residual
+            precond_residual_c => precond_residual
+        else
+            allocate(residual_c(size(residual)))
+            allocate(precond_residual_c(size(residual)))
+            residual_c = real(residual, kind=c_rp)
+        end if
+
+        ! call precond_pd C function
+        error_c = precond_pd_before_wrapping(residual_c, precond_residual_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            precond_residual = real(precond_residual_c, kind=rp)
+            deallocate(residual_c)
+            deallocate(precond_residual_c)
+        end if
+
+    end subroutine precond_pd_f_wrapper
+
     subroutine project_f_wrapper(vector, error)
         !
         ! this subroutine exposes a C-implemented projection function to Fortran
@@ -451,6 +589,36 @@ contains
 
     end subroutine project_f_wrapper
 
+    subroutine modify_step_f_wrapper(kappa, error)
+        !
+        ! this subroutine exposes a C-implemented step modification function to Fortran
+        !
+        real(rp), intent(inout), target :: kappa(:)
+        integer(ip), intent(out) :: error
+
+        real(c_rp), pointer :: kappa_c(:)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            kappa_c => kappa
+        else
+            allocate(kappa_c(size(kappa)))
+            kappa_c = real(kappa, kind=c_rp)
+        end if
+
+        ! call modify_step C function
+        error_c = modify_step_before_wrapping(kappa_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            kappa = real(kappa_c, kind=rp)
+            deallocate(kappa_c)
+        end if
+
+    end subroutine modify_step_f_wrapper
+
     function conv_check_f_wrapper(error) result(converged)
         !
         ! this function exposes a C-implemented convergence check function to Fortran
@@ -469,6 +637,96 @@ contains
         error = int(error_c, kind=ip)
 
     end function conv_check_f_wrapper
+
+    subroutine stability_hess_x_f_wrapper(x, hess_x, error)
+        !
+        ! this subroutine exposes a C-implemented stability check Hessian linear
+        ! transformation to Fortran
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+
+        call hess_x_f_wrapper_impl(stability_hess_x_before_wrapping, x, hess_x, error)
+
+    end subroutine stability_hess_x_f_wrapper
+
+    subroutine approx_hess_x_f_wrapper(x, hess_x, error)
+        !
+        ! this subroutine exposes a C-implemented approximate Hessian linear
+        ! transformation to Fortran
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+
+        call hess_x_f_wrapper_impl(approx_hess_x_before_wrapping, x, hess_x, error)
+
+    end subroutine approx_hess_x_f_wrapper
+
+    subroutine init_trial_space_f_wrapper(trial_space, error)
+        !
+        ! this subroutine exposes a C-implemented trial space initialization function
+        ! to Fortran
+        !
+        real(rp), intent(out), target :: trial_space(:, :)
+        integer(ip), intent(out) :: error
+
+        real(c_rp), pointer :: trial_space_c(:, :)
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            trial_space_c => trial_space
+        else
+            allocate(trial_space_c(size(trial_space, 1), size(trial_space, 2)))
+            trial_space_c = real(trial_space, kind=c_rp)
+        end if
+
+        ! call init_trial_space C function
+        error_c = init_trial_space_before_wrapping(trial_space_c)
+
+        ! convert arguments to Fortran kind
+        error = int(error_c, kind=ip)
+        if (rp /= c_rp) then
+            trial_space = real(trial_space_c, kind=rp)
+            deallocate(trial_space_c)
+        end if
+
+    end subroutine init_trial_space_f_wrapper
+
+    function conv_check_stability_f_wrapper(residual, eigval, error) result(converged)
+        !
+        ! this function exposes a C-implemented convergence check function to Fortran
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: eigval
+        integer(ip), intent(out) :: error
+        logical :: converged
+
+        real(c_rp), pointer :: residual_c(:)
+        real(c_rp) :: eigval_c
+        logical(c_bool) :: converged_c
+        integer(c_ip) :: error_c
+
+        ! convert arguments to C kind
+        if (rp == c_rp) then
+            residual_c => residual
+        else
+            allocate(residual_c(size(residual)))
+            residual_c = real(residual, kind=c_rp)
+        end if
+        eigval_c = real(eigval, kind=c_rp)
+
+        ! call conv_check C function
+        error_c = &
+            conv_check_stability_before_wrapping(residual_c, eigval_c, converged_c)
+
+        ! convert arguments to Fortran kind
+        converged = logical(converged_c)
+        error = int(error_c, kind=ip)
+
+    end function conv_check_stability_f_wrapper
 
     subroutine logger_f_wrapper(message)
         !
@@ -534,6 +792,13 @@ contains
             else
                 settings%precond => null()
             end if
+            if (c_associated(settings_c%precond_pd)) then
+                call c_f_procpointer(cptr=settings_c%precond_pd, &
+                                     fptr=precond_pd_before_wrapping)
+                settings%precond_pd => precond_pd_f_wrapper
+            else
+                settings%precond_pd => null()
+            end if
             if (c_associated(settings_c%project)) then
                 call c_f_procpointer(cptr=settings_c%project, &
                                      fptr=project_before_wrapping)
@@ -541,12 +806,26 @@ contains
             else
                 settings%project => null()
             end if
+            if (c_associated(settings_c%modify_step)) then
+                call c_f_procpointer(cptr=settings_c%modify_step, &
+                                     fptr=modify_step_before_wrapping)
+                settings%modify_step => modify_step_f_wrapper
+            else
+                settings%modify_step => null()
+            end if
             if (c_associated(settings_c%conv_check)) then
                 call c_f_procpointer(cptr=settings_c%conv_check, &
                                      fptr=conv_check_before_wrapping)
                 settings%conv_check => conv_check_f_wrapper
             else
                 settings%conv_check => null()
+            end if
+            if (c_associated(settings_c%stability_hess_x)) then
+                call c_f_procpointer(cptr=settings_c%stability_hess_x, &
+                                     fptr=stability_hess_x_before_wrapping)
+                settings%stability_hess_x => stability_hess_x_f_wrapper
+            else
+                settings%stability_hess_x => null()
             end if
             if (c_associated(settings_c%logger)) then
                 call c_f_procpointer(cptr=settings_c%logger, &
@@ -559,6 +838,7 @@ contains
             ! convert logicals
             settings%stability = logical(settings_c%stability)
             settings%line_search = logical(settings_c%line_search)
+            settings%hess_symm = logical(settings_c%hess_symm)
 
             ! convert reals
             settings%conv_tol = real(settings_c%conv_tol, kind=rp)
@@ -578,6 +858,8 @@ contains
 
             ! convert characters
             settings%subsystem_solver = character_from_c(settings_c%subsystem_solver)
+            settings%trust_region_shape = &
+                character_from_c(settings_c%trust_region_shape)
 
             ! convert objects
             settings%stability_settings = settings_c%stability_settings
@@ -613,6 +895,27 @@ contains
             else
                 settings%project => null()
             end if
+            if (c_associated(settings_c%approx_hess_x)) then
+                call c_f_procpointer(cptr=settings_c%approx_hess_x, &
+                                     fptr=approx_hess_x_before_wrapping)
+                settings%approx_hess_x => approx_hess_x_f_wrapper
+            else
+                settings%approx_hess_x => null()
+            end if
+            if (c_associated(settings_c%init_trial_space)) then
+                call c_f_procpointer(cptr=settings_c%init_trial_space, &
+                                     fptr=init_trial_space_before_wrapping)
+                settings%init_trial_space => init_trial_space_f_wrapper
+            else
+                settings%init_trial_space => null()
+            end if
+            if (c_associated(settings_c%conv_check)) then
+                call c_f_procpointer(cptr=settings_c%conv_check, &
+                                     fptr=conv_check_stability_before_wrapping)
+                settings%conv_check => conv_check_stability_f_wrapper
+            else
+                settings%conv_check => null()
+            end if
             if (c_associated(settings_c%logger)) then
                 call c_f_procpointer(cptr=settings_c%logger, &
                                      fptr=logger_before_wrapping)
@@ -621,12 +924,17 @@ contains
                 settings%logger => null()
             end if
 
+            ! convert logicals
+            settings%hess_symm = logical(settings_c%hess_symm)
+            settings%stop_on_instability = logical(settings_c%stop_on_instability)
+
             ! convert reals
             settings%conv_tol = real(settings_c%conv_tol, kind=rp)
 
             ! convert integers
             settings%n_random_trial_vectors = &
                 int(settings_c%n_random_trial_vectors, kind=ip)
+            settings%n_trial_vectors = int(settings_c%n_trial_vectors, kind=ip)
             settings%n_iter = int(settings_c%n_iter, kind=ip)
             settings%jacobi_davidson_start = &
                 int(settings_c%jacobi_davidson_start, kind=ip)
@@ -654,13 +962,17 @@ contains
         if (settings%initialized) then
             ! callback functions cannot be converted
             settings_c%precond = c_null_funptr
+            settings_c%precond_pd = c_null_funptr
             settings_c%project = c_null_funptr
+            settings_c%modify_step = c_null_funptr
             settings_c%conv_check = c_null_funptr
+            settings_c%stability_hess_x = c_null_funptr
             settings_c%logger = c_null_funptr
 
             ! convert logicals
             settings_c%stability = logical(settings%stability, kind=c_bool)
             settings_c%line_search = logical(settings%line_search, kind=c_bool)
+            settings_c%hess_symm = logical(settings%hess_symm, kind=c_bool)
 
             ! convert reals
             settings_c%conv_tol = real(settings%conv_tol, kind=c_rp)
@@ -680,6 +992,7 @@ contains
 
             ! convert characters
             settings_c%subsystem_solver = character_to_c(settings%subsystem_solver)
+            settings_c%trust_region_shape = character_to_c(settings%trust_region_shape)
 
             ! convert objects
             settings_c%stability_settings = settings%stability_settings
@@ -703,7 +1016,15 @@ contains
             ! callback functions cannot be converted
             settings_c%precond = c_null_funptr
             settings_c%project = c_null_funptr
+            settings_c%approx_hess_x = c_null_funptr
+            settings_c%init_trial_space = c_null_funptr
+            settings_c%conv_check = c_null_funptr
             settings_c%logger = c_null_funptr
+
+            ! convert logicals
+            settings_c%hess_symm = logical(settings%hess_symm, kind=c_bool)
+            settings_c%stop_on_instability = &
+                logical(settings%stop_on_instability, kind=c_bool)
 
             ! convert reals
             settings_c%conv_tol = real(settings%conv_tol, kind=c_rp)
@@ -711,6 +1032,7 @@ contains
             ! convert integers
             settings_c%n_random_trial_vectors = &
                 int(settings%n_random_trial_vectors, kind=c_ip)
+            settings_c%n_trial_vectors = int(settings%n_trial_vectors, kind=c_ip)
             settings_c%n_iter = int(settings%n_iter, kind=c_ip)
             settings_c%jacobi_davidson_start = &
                 int(settings%jacobi_davidson_start, kind=c_ip)
