@@ -183,18 +183,28 @@ solver(update_orbs, obj_func, n_param, settings)
 ### Optional Settings
 The optimization process can be fine-tuned using the following settings:
 
-- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
-- **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for optimization using non-redundant parameters. When this is used, all other passed routines (`update_orbs`, `hess_x`, and `precond`) must be self-projecting.
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector, given a level shift `mu`. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Used by the Davidson-family subsystem solvers to approximate `(H - mu * I)^-1`; `mu` legitimately ranges over any real value, including exactly `0.0`, so `precond` is not guaranteed to be positive definite (e.g. near a saddle point).
+- **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for optimization using non-redundant parameters. When this is used, all other passed routines (`update_orbs`, `hess_x`, `precond`, and `precond_pd`) must be self-projecting.
+- **`precond_pd`** (subroutine): Applies a positive-definite preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Used by the `"tcg"` and `"gltr"` subsystem solvers to define the ellipsoidal trust-region metric (see `trust_region_shape` below); unlike `precond`, this callback takes no level shift and must always return a positive-definite result.
+- **`modify_step`** (subroutine): Modifies a proposed step in-place and returns an integer error code (0 for success, positive integers < 100 for errors). Can for example be used to apply gauge transformations which improve convergence.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`stability_hess_x`** (subroutine): Applies a different Hessian linear transformation to a trial vector for the stability check than the one `update_orbs` returns for the optimization, and returns an integer error code (0 for success, positive integers < 100 for errors). Intended for optimization with an approximate Hessian, where the stability of a converged solution has to be decided with the exact Hessian. When `hess_symm` is set, the approximate Hessian is passed on as the stability check's `approx_hess_x` so it can still be used for the cheap part of the Jacobi-Davidson correction equations.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
+- **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`line_search`** (boolean): Determines whether a line search is performed after every macro iteration.
 - **`subsystem_solver`** (string): Specifies which subsystem solver to use. Options include:
-  - `"davidson"`: standard Davidson method,
-  - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
-  - `"tcg"`: truncated conjugate gradient method.
+  - `"davidson_ls"`: generalized Davidson method applied to linear system,
+  - `"jacobi-davidson_ls"`: generalized Davidson method applied to linear system with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
+  - `"davidson_ah"`: Davidson method applied diagonalization of augmented Hessian,
+  - `"jacobi-davidson_ah"`: Davidson method applied diagonalization of augmented Hessian with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
+  - `"tcg"`: truncated conjugate gradient method,
+  - `"gltr"`: generalized Lanczos trust region method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations.
 - **`start_trust_radius`** (real): Initial trust radius.
+- **`trust_region_shape`** (string): Only used by the `"tcg"` and `"gltr"` subsystem solvers (the Davidson-family solvers always use a spherical trust region). Options include:
+  - `"ellipsoidal"` (default): the trust region is measured in the norm induced by the positive-definite preconditioner `precond_pd` (or, by default, shaped by the absolute value of the (approximate) Hessian diagonal). This also accelerates convergence of the underlying Krylov iteration.
+  - `"spherical"`: the trust region is a Euclidean sphere. For `"tcg"` this is combined with the preconditioned search direction at no extra cost. For `"gltr"`, obtaining an exact solution to the Euclidean-sphere subproblem requires falling back to no preconditioning at all, so this option sacrifices the preconditioner's acceleration of the Krylov iteration in exchange for a genuinely spherical trust region.
 - **`n_macro`** (integer): Maximum number of macro iterations.
 - **`n_micro`** (integer): Maximum number of micro iterations.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
@@ -317,17 +327,24 @@ stable = stability_check(h_diag, hess_x, n_param, settings, kappa=kappa)
 - Stability settings are initialized via the `StabilitySettings` class, which returns an object with default values; individual settings (here, `conv_tol`) can then be overridden.
 - The `stable` output receives the result of the stability check and errors can be caught in pythonic fashion in the form of a `RuntimeException`.
 - The descent direction `kappa` is optional and is only returned if provided.
+- The minimum eigenvalue `min_eigval` is optional and is only returned if provided.
 
 ### Optional Settings
 The stability check can be fine-tuned using the following settings:
 
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for stability check using non-redundant parameters. When this is used, all other passed routines (`hess_x` and `precond`) must be self-projecting.
+- **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion based on the provided residual vector and current eigenvalue estimate. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`approx_hess_x`** (subroutine): Applies an approximate Hessian linear transformation to a trial vector and returns an integer error code (0 for success, positive integers < 100 for errors). Used for the Jacobi-Davidson correction equations, which are solved iteratively and would otherwise consume exact Hessian linear transformations, and to obtain the non-random starting vectors counted by `n_trial_vectors`. Set automatically when the solver is run with `stability_hess_x` and a symmetric Hessian.
+- **`init_trial_space`** (subroutine): Returns an initial trial space which does not need to be orthonormalized or projected and is written in-place to the provided matrix. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
+- **`stop_on_instability`** (boolean): When no `conv_check` is supplied, lets the default convergence policy accept a Ritz pair as soon as its eigenvalue drops below the instability threshold, without waiting for the residual to converge, since a Ritz value is an upper bound on the true lowest eigenvalue and the sign is then already certain. Off by default.
 - **`diag_solver`** (string): Specifies which diagonalization solver to use. Options include:
   - `"davidson"`: standard Davidson method,
   - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations.
-- **`conv_tol`** (real): Convergence criterion for the residual norm.
+- **`conv_tol`** (real): Convergence criterion for the RMS residual.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.
+- **`n_trial_vectors`** (integer): Number of non-random trial vectors used to start the Davidson iterations, on top of the `n_random_trial_vectors` random ones (the total trial space size is `n_trial_vectors + n_random_trial_vectors`). When `init_trial_space` is provided this is instead the number of vectors that callback supplies, and no random vectors are added on top. Otherwise, these non-random vectors are the lowest eigenvectors of the approximate Hessian, obtained from `approx_hess_x`, or unit vectors along the lowest Hessian diagonal elements if no approximate Hessian is passed.
 - **`n_iter`** (integer): Maximum number of Davidson iterations.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
@@ -359,6 +376,9 @@ The library uses structured integer return codes to indicate whether a function 
 | `14`               | `precond`           |
 | `15`               | `conv_check`        |
 | `16`               | `project`           |
+| `17`               | `modify_step`       |
+| `18`               | `init_trial_space`  |
+| `19`               | `precond_pd`        |
 
 ### Error Codes (`EE`)
 
@@ -379,4 +399,3 @@ Future versions may define more specific codes for other actionable failure mode
 |------------|---------------------------|
 | `0101`     | General error in `solver` |
 | `1201`     | Error in `update_orbs`    |
-

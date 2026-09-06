@@ -28,8 +28,7 @@ contains
         !
         use opentrustregion, only: solver_settings_type
         use test_reference, only: test_update_orbs_funptr, test_obj_func_funptr, &
-                                  test_precond_funptr, test_project_funptr, &
-                                  test_conv_check_funptr
+                                  test_mock_solver_funptr, test_mock_stability_funptr
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
@@ -60,47 +59,9 @@ contains
         ! set output quantities
         error = 0
 
-        ! check if optional preconditioner subroutine is correctly passed
-        if (.not. associated(settings%precond)) then
+        ! check optional function pointers
+        if (.not. test_mock_solver_funptr(settings, "solver_c_wrapper", " given")) &
             test_passed = .false.
-            write (stderr, *) "test_solver_c_wrapper failed: Passed preconditioner "// &
-                "function not associated with value."
-        else
-            test_passed = test_passed .and. &
-            test_precond_funptr(settings%precond, "solver_c_wrapper", &
-                                " by given preconditioner subroutine")
-        end if
-
-        ! check if optional projection subroutine is correctly passed
-        if (.not. associated(settings%project)) then
-            test_passed = .false.
-            write (stderr, *) "test_solver_c_wrapper failed: Passed projection "// &
-                "function not associated with value."
-        else
-            test_passed = test_passed .and. &
-            test_project_funptr(settings%project, "solver_c_wrapper", &
-                                " by given projection subroutine")
-        end if
-
-        ! check if optional convergence check function is correctly passed
-        if (.not. associated(settings%conv_check)) then
-            test_passed = .false.
-            write (stderr, *) "test_solver_c_wrapper failed: Passed convergence "// &
-                "check function not associated with value."
-        else
-            test_passed = test_passed .and. &
-            test_conv_check_funptr(settings%conv_check, "solver_c_wrapper", &
-                                   " by given convergence check function")
-        end if
-
-        ! check if optional logging function is correctly passed
-        if (.not. associated(settings%logger)) then
-            test_passed = .false.
-            write (stderr, *) "test_solver_c_wrapper failed: Passed logging "// &
-                "function not associated with value."
-        else
-            call settings%logger("test")
-        end if
 
         ! check if optional settings are correctly passed
         if (settings /= ref_settings) then
@@ -112,21 +73,20 @@ contains
     end subroutine mock_solver
 
     subroutine mock_stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                                    kappa)
+                                    kappa, min_eigval)
         !
         ! this subroutine is a mock routine for the stability check to test the C 
         ! interface
         !
         use opentrustregion, only: stability_settings_type
-        use test_reference, only: test_hess_x_funptr, test_precond_funptr, &
-                                  test_project_funptr
+        use test_reference, only: test_hess_x_funptr, test_mock_stability_funptr
 
         real(rp), intent(in) :: h_diag(:)
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable
         integer(ip), intent(out) :: error
         type(stability_settings_type), intent(inout) :: settings
-        real(rp), intent(out), optional :: kappa(:)
+        real(rp), intent(out), optional :: kappa(:), min_eigval
 
         ! initialize logical
         test_passed = .true.
@@ -146,38 +106,12 @@ contains
         ! set output quantities
         stable = .false.
         if (present(kappa)) kappa = 1.0_rp
+        if (present(min_eigval)) min_eigval = -1.0_rp
         error = 0
 
-        ! check if optional preconditioner subroutine is correctly passed
-        if (.not. associated(settings%precond)) then
-            test_passed = .false.
-            write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
-                "preconditioner function not associated with value."
-        else
-            test_passed = test_passed .and. &
-            test_precond_funptr(settings%precond, "stability_check_c_wrapper", &
-                                " by given preconditioner subroutine")
-        end if
-
-        ! check if optional projection subroutine is correctly passed
-        if (.not. associated(settings%project)) then
-            test_passed = .false.
-            write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
-                "projection function not associated with value."
-        else
-            test_passed = test_passed .and. &
-            test_project_funptr(settings%project, "stability_check_c_wrapper", &
-                                " by given projection subroutine")
-        end if
-
-        ! check if optional logging function is correctly passed
-        if (.not. associated(settings%logger)) then
-            test_passed = .false.
-            write (stderr, *) "test_stability_check_c_wrapper failed: Passed "// &
-                "logging function not associated with value."
-        else
-            call settings%logger("test")
-        end if
+        ! check optional function pointers
+        if (.not. test_mock_stability_funptr(settings, "stability_check_c_wrapper", &
+                                             " given")) test_passed = .false.
 
         ! check if optional settings are correctly passed
         if (settings /= ref_settings) then

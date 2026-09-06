@@ -123,9 +123,28 @@ obj_func_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 precond_interface_type = CFUNCTYPE(
     c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
+precond_pd_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 project_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
+modify_step_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
+init_trial_space_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 conv_check_interface_type = CFUNCTYPE(c_int, POINTER(c_bool))
+conv_check_stability_interface_type = CFUNCTYPE(
+    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_bool)
+)
 logger_interface_type = CFUNCTYPE(None, c_char_p)
+
+
+def adopt_collector(*callbacks: Any) -> "Dict[str, Exception]":
+    """
+    this function returns the exception collector to use for a run
+    """
+    for callback in callbacks:
+        collector = getattr(callback, "_otr_exception", None)
+        if collector is not None:
+            collector.clear()
+            return collector
+
+    return {}
 
 
 # define interface factories
@@ -244,6 +263,35 @@ class PrecondInterface:
 
 
 @dataclass
+class PrecondPDInterface:
+    """
+    this class provides the interface to the positive-definite preconditioning function
+    used to define the ellipsoidal trust-region metric for the TCG and GLTR subsystem
+    solvers
+    """
+
+    precond_pd: Callable[[np.ndarray, np.ndarray], None]
+    n_param: int
+    exception: Dict[str, Exception]
+
+    def __call__(self, residual_ptr, precond_residual_ptr) -> int:
+        # convert pointers to numpy arrays
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+        precond_residual = np.ctypeslib.as_array(
+            precond_residual_ptr, shape=(self.n_param,)
+        )
+
+        # call positive-definite preconditioner
+        try:
+            self.precond_pd(residual, precond_residual)
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
+@dataclass
 class ProjectInterface:
     """
     this class provides the interface to the projection function
@@ -260,6 +308,30 @@ class ProjectInterface:
         # call projection function
         try:
             self.project(vector)
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
+@dataclass
+class ModifyStepInterface:
+    """
+    this class provides the interface to the step modification function
+    """
+
+    modify_step: Callable[[np.ndarray], None]
+    n_param: int
+    exception: Dict[str, Exception]
+
+    def __call__(self, kappa_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
+
+        # call step modification function
+        try:
+            self.modify_step(kappa)
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -288,6 +360,58 @@ class ConvCheckInterface:
 
 
 @dataclass
+class InitTrialSpaceInterface:
+    """
+    this class provides the interface to the trial space initialization function
+    """
+
+    init_trial_space: Callable[[np.ndarray], None]
+    n_trial_vectors: int
+    n_param: int
+    exception: Dict[str, Exception]
+
+    def __call__(self, trial_space_ptr) -> int:
+        # convert matrix pointers to numpy arrays
+        trial_space = np.ctypeslib.as_array(
+            trial_space_ptr, shape=(self.n_trial_vectors, self.n_param)
+        )
+
+        # call trial space initialization function
+        try:
+            self.init_trial_space(trial_space)
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
+@dataclass
+class ConvCheckStabilityInterface:
+    """
+    this class provides the interface to the stability check convergence check function
+    """
+
+    conv_check: Callable[[np.ndarray, float], bool]
+    n_param: int
+    exception: Dict[str, Exception]
+
+    def __call__(self, residual_ptr, eigval_ptr, conv_ptr) -> int:
+        # convert pointers to numpy arrays and float
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+        eigval = eigval_ptr[0]
+
+        # call convergence check
+        try:
+            conv_ptr[0] = self.conv_check(residual, eigval)
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
+@dataclass
 class LoggerInterface:
     """
     this class provides the interface to the logging function
@@ -305,10 +429,16 @@ class StabilitySettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
         ("project", c_void_p),
+        ("approx_hess_x", c_void_p),
+        ("init_trial_space", c_void_p),
+        ("conv_check", c_void_p),
         ("logger", c_void_p),
+        ("hess_symm", c_bool),
+        ("stop_on_instability", c_bool),
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("n_random_trial_vectors", c_int),
+        ("n_trial_vectors", c_int),
         ("n_iter", c_int),
         ("jacobi_davidson_start", c_int),
         ("seed", c_int),
@@ -320,11 +450,15 @@ class StabilitySettingsC(Structure):
 class SolverSettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
+        ("precond_pd", c_void_p),
         ("project", c_void_p),
+        ("modify_step", c_void_p),
         ("conv_check", c_void_p),
+        ("stability_hess_x", c_void_p),
         ("logger", c_void_p),
         ("stability", c_bool),
         ("line_search", c_bool),
+        ("hess_symm", c_bool),
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("start_trust_radius", c_real),
@@ -337,6 +471,7 @@ class SolverSettingsC(Structure):
         ("seed", c_int),
         ("verbose", c_int),
         ("subsystem_solver", c_char * (kw_len + 1)),
+        ("trust_region_shape", c_char * (kw_len + 1)),
         ("stability_settings", StabilitySettingsC),
     ]
 
@@ -396,12 +531,18 @@ class SolverSettings(Settings):
     init_c_struct = lib.init_solver_settings
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
+    precond_pd: Optional[Callable[[np.ndarray, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
+    modify_step: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
+    stability_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
+    precond_pd_interface: Any
     project_interface: Any
+    modify_step_interface: Any
     conv_check_interface: Any
+    stability_hess_x_interface: Any
     logger_interface: Any
 
     def __init__(self):
@@ -411,7 +552,7 @@ class SolverSettings(Settings):
         )
 
     @property
-    def stability_settings(self) -> "StabilitySettings":
+    def stability_settings(self) -> StabilitySettings:
         return self._stability_settings
 
     def set_optional_callbacks(self, n_param: int, exception: Dict[str, Exception]):
@@ -427,6 +568,14 @@ class SolverSettings(Settings):
             exception,
         )
         self.set_optional_callback(
+            "precond_pd",
+            self.precond_pd,
+            PrecondPDInterface,
+            precond_pd_interface_type,
+            n_param,
+            exception,
+        )
+        self.set_optional_callback(
             "project",
             self.project,
             ProjectInterface,
@@ -435,10 +584,26 @@ class SolverSettings(Settings):
             exception,
         )
         self.set_optional_callback(
+            "modify_step",
+            self.modify_step,
+            ModifyStepInterface,
+            modify_step_interface_type,
+            n_param,
+            exception,
+        )
+        self.set_optional_callback(
             "conv_check",
             self.conv_check,
             ConvCheckInterface,
             conv_check_interface_type,
+            exception,
+        )
+        self.set_optional_callback(
+            "stability_hess_x",
+            self.stability_hess_x,
+            HessXInterface,
+            hess_x_interface_type,
+            n_param,
             exception,
         )
         self.set_optional_callback(
@@ -454,10 +619,17 @@ class StabilitySettings(Settings):
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
+    approx_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
+    init_trial_space: Optional[Callable[[np.ndarray], None]]
+    conv_check: Optional[Callable[[np.ndarray, float], bool]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
     project_interface: Any
+    approx_hess_x_interface: Any
+    init_trial_space_interface: Any
+    conv_check_interface: Any
     logger_interface: Any
+    n_trial_vectors: int
 
     def set_optional_callbacks(self, n_param: int, exception: Dict[str, Exception]):
         """
@@ -476,6 +648,31 @@ class StabilitySettings(Settings):
             self.project,
             ProjectInterface,
             project_interface_type,
+            n_param,
+            exception,
+        )
+        self.set_optional_callback(
+            "approx_hess_x",
+            self.approx_hess_x,
+            HessXInterface,
+            hess_x_interface_type,
+            n_param,
+            exception,
+        )
+        self.set_optional_callback(
+            "init_trial_space",
+            self.init_trial_space,
+            InitTrialSpaceInterface,
+            init_trial_space_interface_type,
+            self.n_trial_vectors,
+            n_param,
+            exception,
+        )
+        self.set_optional_callback(
+            "conv_check",
+            self.conv_check,
+            ConvCheckStabilityInterface,
+            conv_check_stability_interface_type,
             n_param,
             exception,
         )
@@ -558,8 +755,9 @@ def solver(
     n_param: int,
     settings: SolverSettings,
 ):
-    # variable to capture exceptions in the callback interfaces
-    exception: Dict[str, Exception] = {}
+    # collector for exceptions raised inside the callback interfaces, adopted from a
+    # factory-produced callback when there is one so its exceptions are chained too
+    exception = adopt_collector(update_orbs, obj_func)
 
     # define interfaces for callback functions
     obj_func_interface = obj_func_interface_type(
@@ -580,16 +778,16 @@ def solver(
         update_orbs_interface_type,
         obj_func_interface_type,
         c_int,
-        SolverSettingsC,
+        POINTER(SolverSettingsC),
     ]
 
     # call Fortran function
     error = lib.solver(
-        update_orbs_interface, obj_func_interface, n_param, settings.settings_c
+        update_orbs_interface, obj_func_interface, n_param, byref(settings.settings_c)
     )
 
     if error:
-        if exception is not None and "exc" in exception:
+        if "exc" in exception:
             raise RuntimeError(
                 f"OpenTrustRegion solver produced error (code {error})."
             ) from exception["exc"]
@@ -603,9 +801,10 @@ def stability_check(
     n_param: int,
     settings: StabilitySettings,
     kappa: Optional[np.ndarray] = None,
-) -> bool:
-    # variable to capture exceptions in the callback interfaces
-    exception: Dict[str, Exception] = {}
+) -> Tuple[bool, float]:
+    # collector for exceptions raised inside the callback interfaces, adopted from a
+    # factory-produced callback when there is one so its exceptions are chained too
+    exception = adopt_collector(hess_x)
 
     # define interfaces for callback functions
     hess_x_interface = hess_x_interface_type(HessXInterface(hess_x, n_param, exception))
@@ -622,12 +821,14 @@ def stability_check(
         hess_x_interface_type,
         c_int,
         POINTER(c_bool),
-        StabilitySettingsC,
-        c_void_p,
+        POINTER(StabilitySettingsC),
+        POINTER(c_real),
+        POINTER(c_real),
     ]
 
     # initialize return variables
     stable = c_bool(False)
+    min_eigval = c_real(float("nan"))
 
     # call Fortran function
     error = lib.stability_check(
@@ -635,12 +836,13 @@ def stability_check(
         hess_x_interface,
         n_param,
         byref(stable),
-        settings.settings_c,
-        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else kappa,
+        byref(settings.settings_c),
+        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
+        byref(min_eigval),
     )
 
     if error:
-        if exception is not None and "exc" in exception:
+        if "exc" in exception:
             raise RuntimeError(
                 f"OpenTrustRegion stability check produced error (code {error})."
             ) from exception["exc"]
@@ -649,4 +851,4 @@ def stability_check(
                 f"OpenTrustRegion stability check produced error (code {error})."
             )
 
-    return bool(stable)
+    return stable.value, min_eigval.value

@@ -141,6 +141,10 @@ if(BLA_SIZEOF_INTEGER EQUAL 8)
         if(LAPACK_64)
             add_compile_definitions("dsyev=dsyev_64")
             add_compile_definitions("dsysv=dsysv_64")
+            add_compile_definitions("dgeev=dgeev_64")
+            add_compile_definitions("dgelss=dgelss_64")
+            add_compile_definitions("dgesv=dgesv_64")
+            add_compile_definitions("dpttrf=dpttrf_64")
             add_compile_definitions("zheev=zheev_64")
         endif()
     else()
@@ -168,7 +172,7 @@ set_target_properties(
     VERSION ${PROJECT_VERSION}
     # interface version
     SOVERSION ${PROJECT_VERSION_MAJOR}
-    # position-independent code - not automatically enabled for static libraries, but
+    # position-independent code - not automatically enabled for static libraries, but 
     # required when linking a static library into a shared library
     POSITION_INDEPENDENT_CODE ON
 )
