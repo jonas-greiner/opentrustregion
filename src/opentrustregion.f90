@@ -285,14 +285,14 @@ contains
         type(solver_settings_type), intent(inout) :: settings
 
         real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, n_kappa, kappa_norm, &
-                    lambda, grad_kappa, min_eigval
+                    lambda, min_eigval
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:), precond_kappa(:)
         logical :: max_precision_reached, macro_converged, stable, &
                    jacobi_davidson_started, conv_check_passed
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson
         character(300) :: msg
         procedure(hess_x_type), pointer :: hess_x_funptr, stability_hess_x_funptr
-        real(rp), external :: dnrm2, ddot
+        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
@@ -447,13 +447,8 @@ contains
                     if (.not. stable) then
                         ! move far enough so that gradient is increased by one order of 
                         ! magnitude
-                        grad_kappa = ddot(n_param, kappa, 1_ip, grad, 1_ip)
-                        n_kappa = (-grad_kappa + sign(1.0_rp, grad_kappa) * &
-                                   sqrt(grad_kappa**2 + real(n_param, kind=rp) * &
-                                        ((10 * settings%conv_tol)**2 - grad_rms**2))) &
-                                   / min_eigval
-                        kappa = n_kappa * kappa
-                        kappa_norm = dnrm2(n_param, kappa, 1_ip)
+                        call saddle_point_step(grad, grad_rms, min_eigval, settings, &
+                                               kappa, kappa_norm)
                         if (imacro == 1) then
                             call settings%log("Started at saddle point. The "// &
                                               "algorithm will continue by moving "// &
@@ -649,6 +644,46 @@ contains
         flush (stderr)
 
     end subroutine stability_check
+
+    subroutine saddle_point_step(grad, grad_rms, min_eigval, settings, kappa, &
+                                 kappa_norm)
+        !
+        ! this subroutine determines the step along the direction of negative curvature
+        ! such that the (linearized) gradient RMS increases to one order of magnitude
+        ! above its current value, or above the convergence threshold if the gradient 
+        ! is already converged
+        !
+        real(rp), intent(in) :: grad(:), grad_rms, min_eigval
+        type(solver_settings_type), intent(in) :: settings
+        real(rp), intent(inout) :: kappa(:)
+        real(rp), intent(out) :: kappa_norm
+
+        integer(ip) :: n_param
+        real(rp) :: grad_kappa, n_kappa, target_grad_rms
+        real(rp), external :: ddot, dnrm2
+
+        ! number of parameters
+        n_param = size(grad)
+
+        ! project gradient onto direction of negative curvature
+        grad_kappa = ddot(n_param, kappa, 1_ip, grad, 1_ip)
+
+        ! target gradient RMS is one order of magnitude above the current value, or 
+        ! above the convergence threshold if the gradient is already converged, to 
+        ! ensure the step is always large enough to escape the stationary point
+        target_grad_rms = 10 * max(settings%conv_tol, grad_rms)
+
+        ! determine step length that reaches the target gradient RMS in the linearized
+        ! model along the direction of negative curvature
+        n_kappa = (-grad_kappa + sign(1.0_rp, grad_kappa) * &
+                   sqrt(grad_kappa**2 + real(n_param, kind=rp) * &
+                        (target_grad_rms**2 - grad_rms**2))) / min_eigval
+
+        ! scale step
+        kappa = n_kappa * kappa
+        kappa_norm = dnrm2(n_param, kappa, 1_ip)
+
+    end subroutine saddle_point_step
 
     subroutine newton_step(grad_norm, red_space_basis, red_space_hess_eigvals, &
                            red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &

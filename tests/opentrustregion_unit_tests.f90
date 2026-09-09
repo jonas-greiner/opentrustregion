@@ -1244,6 +1244,74 @@ contains
 
     end function test_stability_check
 
+    logical(c_bool) function test_saddle_point_step() bind(C)
+        !
+        ! this function tests the saddle-point step subroutine
+        !
+        use opentrustregion, only: solver_settings_type, saddle_point_step
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
+
+        real(rp) :: grad_dir(n_param), kappa_dir(n_param), grad(n_param), &
+                    kappa(n_param), kappa_norm, min_eigval, grad_rms, target_grad_rms, &
+                    predicted_grad_rms
+        integer(ip) :: error, i
+        type(solver_settings_type) :: settings
+
+        ! assume tests pass
+        test_saddle_point_step = .true.
+
+        ! initialize settings and set convergence threshold
+        call settings%init(error)
+        settings%conv_tol = 1e-6_rp
+
+        ! generate a random gradient direction and a random direction of negative
+        ! curvature orthogonal to it, mimicking a (near-)saddle point where the 
+        ! negative-curvature eigenvector has no overlap with the gradient
+        call random_number(grad_dir)
+        grad_dir = grad_dir / norm2(grad_dir)
+        call random_number(kappa_dir)
+        kappa_dir = kappa_dir - dot_product(kappa_dir, grad_dir) * grad_dir
+        kappa_dir = kappa_dir / norm2(kappa_dir)
+        min_eigval = -0.5_rp
+
+        ! test both a gradient RMS below and well above the convergence threshold
+        do i = 1, 2
+            if (i == 1) then
+                ! below threshold, as when starting exactly at a stationary point
+                grad = 0.1_rp * settings%conv_tol * sqrt(real(n_param, kind=rp)) * &
+                       grad_dir
+            else
+                ! well above threshold, as when redirected while the trust radius has
+                ! collapsed but the gradient has not yet converged
+                grad = 50.0_rp * settings%conv_tol * sqrt(real(n_param, kind=rp)) * &
+                       grad_dir
+            end if
+            grad_rms = norm2(grad) / sqrt(real(n_param, kind=rp))
+            target_grad_rms = 10.0_rp * max(settings%conv_tol, grad_rms)
+
+            kappa = kappa_dir
+            call saddle_point_step(grad, grad_rms, min_eigval, settings, kappa, &
+                                   kappa_norm)
+
+            ! the linearized gradient after taking the step should have exactly the
+            ! targeted gradient RMS
+            predicted_grad_rms = norm2(grad + min_eigval * kappa) / &
+                                 sqrt(real(n_param, kind=rp))
+            if (ieee_is_nan(predicted_grad_rms) .or. &
+                abs(predicted_grad_rms - target_grad_rms) > tol) then
+                write (stderr, *) "test_saddle_point_step failed: Step does not "// &
+                    "reach targeted gradient RMS."
+                test_saddle_point_step = .false.
+            end if
+            if (abs(kappa_norm - norm2(kappa)) > tol) then
+                write (stderr, *) "test_saddle_point_step failed: Returned norm "// &
+                    "does not match step."
+                test_saddle_point_step = .false.
+            end if
+        end do
+
+    end function test_saddle_point_step
+
     logical(c_bool) function test_newton_step() bind(C)
         !
         ! this function tests the Newton step subroutine
@@ -1361,6 +1429,7 @@ contains
         ! this function tests the augmented Hessian bisection subroutine
         !
         use opentrustregion, only: solver_settings_type, bisection_ah
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
         type(solver_settings_type) :: settings
         integer(ip), parameter :: n_trial = 3
@@ -1574,8 +1643,7 @@ contains
                 "degenerate hard case."
             test_bisection_ah = .false.
         end if
-        if (any(solution /= solution) .or. &
-            any(red_space_solution /= red_space_solution)) then
+        if (any(ieee_is_nan(solution)) .or. any(ieee_is_nan(red_space_solution))) then
             write (stderr, *) "test_bisection_ah failed: Degenerate hard case "// &
                 "solution contains NaN."
             test_bisection_ah = .false.
@@ -1616,6 +1684,7 @@ contains
         ! this function tests the level-shift bisection subroutine
         !
         use opentrustregion, only: solver_settings_type, bisection_mu
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
         type(solver_settings_type) :: settings
         integer(ip), parameter :: n_trial = 3, lwork = 12
@@ -1994,8 +2063,7 @@ contains
                 "degenerate hard case."
             test_bisection_mu = .false.
         end if
-        if (any(solution /= solution) .or. &
-            any(red_space_solution /= red_space_solution)) then
+        if (any(ieee_is_nan(solution)) .or. any(ieee_is_nan(red_space_solution))) then
             write (stderr, *) "test_bisection_mu failed: Degenerate hard case "// &
                 "solution contains NaN."
             test_bisection_mu = .false.
