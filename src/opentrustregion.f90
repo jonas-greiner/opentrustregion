@@ -1091,15 +1091,15 @@ contains
             
             ! find an lower bound for mu where the step falls within the trust region
             do while (current_norm > trust_radius)
-                lower_mu = lower_mu * 2.0_rp
-                call get_level_shifted_step(lower_mu, .false.)
-                if (error /= 0) return
                 if (lower_mu < -1e15_rp) then
                     call settings%log("Unable to find lower bound for mu in "// &
-                                      "asymmetric bisection.", verbosity_error, .true.)
+                                      "bisection.", verbosity_error, .true.)
                     error = 1
                     return
                 end if
+                lower_mu = lower_mu * 2.0_rp
+                call get_level_shifted_step(lower_mu, .false.)
+                if (error /= 0) return
             end do
             
             ! perform direct bisection on the shift parameter mu
