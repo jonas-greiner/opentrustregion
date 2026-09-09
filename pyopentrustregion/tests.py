@@ -137,6 +137,7 @@ fortran_tests = {
         "orthogonal_projection",
         "print_results",
         "rel_floor_diag_precond",
+        "saddle_point_step",
         "solver",
         "solver_sanity_check",
         "split_string_by_space",
