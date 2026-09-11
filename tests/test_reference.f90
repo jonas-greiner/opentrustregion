@@ -8,7 +8,8 @@ module test_reference
 
     use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
+                                           c_associated
 
     implicit none
 
@@ -98,6 +99,14 @@ contains
         ! assume tests pass
         test_passed = .true.
 
+        ! check if function pointer is associated
+        if (.not. associated(update_orbs_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Orbital updating "// &
+                "function provided"//message//" not associated with value."
+            return
+        end if
+
         ! allocate arrays
         allocate(kappa(n_param), grad(n_param), h_diag(n_param))
 
@@ -138,10 +147,13 @@ contains
         ! deallocate arrays
         deallocate(kappa, grad, h_diag)
 
-        ! test returned Hessian linear transformation
-        test_passed = test_passed .and. &
-            test_hess_x_funptr(hess_x_funptr, test_name, " by Hessian linear "// &
-                               "transformation function returned"//message)
+        ! test returned Hessian linear transformation, the function pointer is only
+        ! defined if the orbital update did not produce an error
+        if (error == 0) then
+            test_passed = test_passed .and. &
+                test_hess_x_funptr(hess_x_funptr, test_name, " by Hessian linear "// &
+                                   "transformation function returned"//message)
+        end if
 
     end function test_update_orbs_funptr
 
@@ -164,6 +176,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(update_orbs_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Orbital updating "// &
+                "function provided"//message//" not associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=update_orbs_c_funptr, fptr=update_orbs_funptr)
@@ -208,10 +228,14 @@ contains
         ! deallocate arrays
         deallocate(kappa, grad, h_diag)
 
-        ! test returned Hessian linear transformation
-        test_passed = test_passed .and. &
-            test_hess_x_c_funptr(hess_x_c_funptr, test_name, " by Hessian linear "// &
-                                 "transformation function returned"//message)
+        ! test returned Hessian linear transformation, the function pointer is only
+        ! defined if the orbital update did not produce an error
+        if (error == 0) then
+            test_passed = test_passed .and. &
+                test_hess_x_c_funptr(hess_x_c_funptr, test_name, " by Hessian "// &
+                                     "linear transformation function returned"// &
+                                     message)
+        end if
 
     end function test_update_orbs_c_funptr
 
@@ -230,6 +254,15 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(hess_x_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Hessian linear "// &
+                "transformation function provided"//message//" not associated "// &
+                "with value."
+            return
+        end if
 
         ! allocate arrays
         allocate(x(n_param), hess_x(n_param))
@@ -277,6 +310,15 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(hess_x_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Hessian linear "// &
+                "transformation function provided"//message//" not associated "// &
+                "with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=hess_x_funptr_c)
@@ -327,6 +369,14 @@ contains
         ! assume tests pass
         test_passed = .true.
 
+        ! check if function pointer is associated
+        if (.not. associated(obj_func_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Objective function "// &
+                "provided"//message//" not associated with value."
+            return
+        end if
+
         ! allocate arrays
         allocate(kappa(n_param))
 
@@ -373,6 +423,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(obj_func_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Objective function "// &
+                "provided"//message//" not associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=obj_func_c_funptr, fptr=obj_func_funptr)
@@ -422,6 +480,14 @@ contains
         ! assume tests pass
         test_passed = .true.
 
+        ! check if function pointer is associated
+        if (.not. associated(precond_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Preconditioner "// &
+                "function provided"//message//" not associated with value."
+            return
+        end if
+
         ! allocate arrays
         allocate(residual(n_param), precond_residual(n_param))
 
@@ -467,6 +533,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(precond_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Preconditioner "// &
+                "function provided"//message//" not associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=precond_c_funptr, fptr=precond_funptr)
@@ -515,6 +589,14 @@ contains
         ! assume tests pass
         test_passed = .true.
 
+        ! check if function pointer is associated
+        if (.not. associated(project_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Project function "// &
+                "provided"//message//" not associated with value."
+            return
+        end if
+
         ! allocate arrays
         allocate(vector(n_param))
 
@@ -560,6 +642,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(project_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Project function "// &
+                "provided"//message//" not associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=project_c_funptr, fptr=project_funptr)
@@ -609,6 +699,14 @@ contains
         ! assume tests pass
         test_passed = .true.
 
+        ! check if function pointer is associated
+        if (.not. associated(conv_check_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Convergence check "// &
+                "function provided"//message//" not associated with value."
+            return
+        end if
+
         ! call convergence check function
         converged = conv_check_funptr(error)
 
@@ -645,6 +743,14 @@ contains
 
         ! assume tests pass
         test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(conv_check_c_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Convergence check "// &
+                "function provided"//message//" not associated with value."
+            return
+        end if
 
         ! convert to Fortran function pointer
         call c_f_procpointer(cptr=conv_check_c_funptr, fptr=conv_check_funptr)
