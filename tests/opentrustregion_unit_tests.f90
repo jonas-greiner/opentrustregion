@@ -3469,8 +3469,8 @@ contains
         ! check if step is rejected and trust radius is correctly reduced if micro
         ! iterations have not converged
         trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), 1.0_rp, &
-                                               1.0_rp, .false., settings, &
+        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
+                                               1.0_rp, 1.0_rp, .false., settings, &
                                                trust_radius, max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
@@ -3483,8 +3483,8 @@ contains
         ! negative
         trust_radius = 1.0_rp
         accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1.0_rp, .true., settings, trust_radius, &
-                                               max_precision_reached)
+                                               -1.0_rp, 1.0_rp, .true., settings, &
+                                               trust_radius, max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
                 "or trust radius not correctly reduced when ratio is negative."
@@ -3495,9 +3495,9 @@ contains
         ! rotations are too large
         trust_radius = 1.0_rp
         solution(1) = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), 1.0_rp, &
-                                               1.0_rp, .true., settings, trust_radius, &
-                                               max_precision_reached)
+        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
+                                               1.0_rp, 1.0_rp, .true., settings, &
+                                               trust_radius, max_precision_reached)
         if (accept_step .or. abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
                 "or trust radius not correctly reduced when individual rotations "// &
@@ -3510,8 +3510,8 @@ contains
         ! too small
         trust_radius = 1.0_rp
         accept_step = accept_trust_region_step( &
-            solution, norm2(solution), 0.9_rp * trust_radius_shrink_ratio, 1.0_rp, &
-            .true., settings, trust_radius, max_precision_reached)
+            solution, norm2(solution), -1.0_rp, 0.9_rp * trust_radius_shrink_ratio, &
+            1.0_rp, .true., settings, trust_radius, max_precision_reached)
         if (.not. accept_step .or. &
             abs(trust_radius - trust_radius_shrink_factor) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
@@ -3525,7 +3525,7 @@ contains
         start_trust_radius = 1.0_rp
         trust_radius = start_trust_radius
         accept_step = accept_trust_region_step( &
-            solution, norm2(solution), &
+            solution, norm2(solution), -1.0_rp, &
             0.5_rp * (trust_radius_shrink_ratio + trust_radius_expand_ratio), 1.0_rp, &
             .true., settings, trust_radius, max_precision_reached)
         if (.not. accept_step .or. abs(trust_radius - start_trust_radius) > tol) then
@@ -3539,8 +3539,8 @@ contains
         start_trust_radius = 0.5_rp
         trust_radius = start_trust_radius
         accept_step = accept_trust_region_step( &
-            solution, norm2(solution), 1.1_rp * trust_radius_expand_ratio, 1.0_rp, &
-            .true., settings, trust_radius, max_precision_reached)
+            solution, norm2(solution), -1.0_rp, 1.1_rp * trust_radius_expand_ratio, &
+            1.0_rp, .true., settings, trust_radius, max_precision_reached)
         if (.not. accept_step .or. &
             abs(trust_radius - trust_radius_expand_factor * start_trust_radius) > tol) &
             then
@@ -3555,8 +3555,8 @@ contains
         start_trust_radius = 1.0_rp
         trust_radius = start_trust_radius
         accept_step = accept_trust_region_step( &
-            solution, norm2(solution), 1.1_rp * trust_radius_expand_ratio, 1.0_rp, &
-            .true., settings, trust_radius, max_precision_reached)
+            solution, norm2(solution), -1.0_rp, 1.1_rp * trust_radius_expand_ratio, &
+            1.0_rp, .true., settings, trust_radius, max_precision_reached)
         if (.not. accept_step .or. abs(trust_radius - start_trust_radius) > tol) then
             write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
                 "accepted or trust radius incorrectly expanded when ratio is too "// &
@@ -3567,9 +3567,9 @@ contains
         ! check if maximum precision is correctly handled for numerically vanishing
         ! function improvement
         trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), 0.0_rp, &
-                                               0.0_rp, .true., settings, trust_radius, &
-                                               max_precision_reached)
+        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
+                                               0.0_rp, 0.0_rp, .true., settings, &
+                                               trust_radius, max_precision_reached)
         if (.not. max_precision_reached) then
             write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
                 "precision not correctly handled for numerically vanishing "// &
@@ -3577,16 +3577,48 @@ contains
             test_accept_trust_region_step = .false.
         end if
 
-        ! check if maximum precision is correctly handled for numerically vanishing
-        ! trust radius
-        trust_radius = 0.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), 1.0_rp, &
-                                               1.0_rp, .false., settings, &
+        ! check that the resolution scales with the objective magnitude
+        trust_radius = 1.0_rp
+        accept_step = accept_trust_region_step(solution, norm2(solution), -2000.0_rp, &
+                                               1e-13_rp, 1e-13_rp, .true., settings, &
                                                trust_radius, max_precision_reached)
         if (.not. max_precision_reached) then
             write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
-                "precision not correctly handled for numerically vanishing trust "// &
-                "radius."
+                "precision not detected for a function change below the resolution "// &
+                "of a large objective function value."
+            test_accept_trust_region_step = .false.
+        end if
+
+        trust_radius = 1.0_rp
+        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
+                                               1e-13_rp, 1e-13_rp, .true., settings, &
+                                               trust_radius, max_precision_reached)
+        if (max_precision_reached) then
+            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
+                "precision incorrectly detected for a function change well above "// &
+                "the resolution of a small objective function value."
+            test_accept_trust_region_step = .false.
+        end if
+
+        ! check that both changes have to be unresolvable
+        trust_radius = 1.0_rp
+        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
+                                               1e-3_rp, 1e-20_rp, .true., settings, &
+                                               trust_radius, max_precision_reached)
+        if (max_precision_reached) then
+            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
+                "precision detected although only the predicted function change is "// &
+                "below the resolution."
+            test_accept_trust_region_step = .false.
+        end if
+        trust_radius = 1.0_rp
+        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
+                                               1e-20_rp, 1e-3_rp, .true., settings, &
+                                               trust_radius, max_precision_reached)
+        if (max_precision_reached) then
+            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
+                "precision detected although only the actual function change is "// &
+                "below the resolution."
             test_accept_trust_region_step = .false.
         end if
 

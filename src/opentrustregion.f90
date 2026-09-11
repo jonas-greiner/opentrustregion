@@ -3001,7 +3001,7 @@ contains
             ! explicitly rather than reused from solution_norm, which is only set
             ! once after this loop exits
             accept_step = accept_trust_region_step( &
-                solution, dnrm2(n_param, solution, 1_ip), new_func - func, &
+                solution, dnrm2(n_param, solution, 1_ip), func, new_func - func, &
                 ddot(n_param, solution, 1_ip, grad + 0.5_rp * h_solution, 1_ip), &
                 micro_converged, settings, trust_radius, max_precision_reached)
             if (max_precision_reached) exit
@@ -3240,7 +3240,7 @@ contains
 
             ! decide whether to accept step and modify trust radius
             accept_step = accept_trust_region_step( &
-                solution, solution_norm, new_func - func, pred_func - func, &
+                solution, solution_norm, func, new_func - func, pred_func - func, &
                 micro_converged, settings, trust_radius, max_precision_reached)
             if (max_precision_reached) exit
 
@@ -3425,7 +3425,7 @@ contains
 
             ! decide whether to accept step and modify trust radius
             accept_step = accept_trust_region_step( &
-                solution, solution_norm, new_func - func, pred_func - func, &
+                solution, solution_norm, func, new_func - func, pred_func - func, &
                 micro_converged, settings, trust_radius, max_precision_reached)
             if (max_precision_reached) exit
 
@@ -3442,27 +3442,29 @@ contains
     end subroutine generalized_lanczos_trust_region
 
     logical function accept_trust_region_step( &
-        solution, solution_norm, actual_func_diff, pred_func_diff, micro_converged, &
-        settings, trust_radius, max_precision_reached)
+        solution, solution_norm, func, actual_func_diff, pred_func_diff, &
+        micro_converged, settings, trust_radius, max_precision_reached)
         !
         ! this function checks whether the trust region step is accepted and modifies
         ! the trust region accordingly
         !
-        real(rp), intent(in) :: solution(:), solution_norm, actual_func_diff, &
+        real(rp), intent(in) :: solution(:), solution_norm, func, actual_func_diff, &
                                 pred_func_diff
         logical, intent(in) :: micro_converged
         type(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: trust_radius
         logical, intent(out) :: max_precision_reached
 
-        real(rp) :: ratio
+        real(rp), parameter :: func_resolution_safety_factor = 10.0_rp
+        real(rp) :: ratio, func_resolution
 
         ! default to maximum precision not yet reached
         max_precision_reached = .false.
 
         ! check if function value has not decreased up to floating point precision
-        if (abs(actual_func_diff) < numerical_zero .and. &
-            abs(pred_func_diff) < numerical_zero) then
+        func_resolution = func_resolution_safety_factor * abs(func) * epsilon(1.0_rp)
+        if (abs(actual_func_diff) < func_resolution .and. &
+            abs(pred_func_diff) < func_resolution) then
             call settings%log("No further improvement of cost function possible. "// &
                               "Convergence criterion is not fulfilled but "// &
                               "calculation should be converged up to floating "// &
@@ -3480,14 +3482,6 @@ contains
             any(abs(solution) > pi / 4)) then
             trust_radius = trust_radius_shrink_factor * trust_radius
             accept_trust_region_step = .false.
-            if (trust_radius < numerical_zero) then
-                call settings%log("Trust radius too small. Convergence criterion "// &
-                                  "is not fulfilled but calculation should be "// &
-                                  "converged up to floating point precision.", &
-                                  verbosity_error, .true.)
-                max_precision_reached = .true.
-                return
-            end if
         ! check if step is too long
         else if (ratio < trust_radius_shrink_ratio) then
             trust_radius = trust_radius_shrink_factor * trust_radius
