@@ -6,7 +6,7 @@
 //
 // Pure-C system test for the public C interface declared in opentrustregion_oao.h.
 //
-// The Fortran-side oao_c_interface_unit_tests cover the bind(C) wrappers but never 
+// The Fortran-side oao_c_interface_unit_tests cover the bind(C) wrappers but never
 // compile against the C header itself. This test does, so any drift between
 // oao_settings_type_c (Fortran) and oao_settings_type (C) is caught here.
 //
@@ -21,49 +21,45 @@
 // ---------------------------------------------------------------------------
 // Compile-time layout checks for the C struct.
 //
-// These only verify that the C header is self-consistent: each field sits where the 
-// field order claims it does, with no surprise padding before the pointer block. 
-// Cross-language drift (Fortran vs. C) is caught at runtime by the default-value test 
+// These only verify that the C header is self-consistent: each field sits where the
+// field order claims it does, with no surprise padding before the pointer block.
+// Cross-language drift (Fortran vs. C) is caught at runtime by the default-value test
 // below.
 // ---------------------------------------------------------------------------
 
 _Static_assert(offsetof(oao_settings_type, logger) == 0,
                "oao_settings_type: logger must be the first field");
-_Static_assert(offsetof(oao_settings_type, initialized) == 1 * sizeof(void*),
+_Static_assert(offsetof(oao_settings_type, initialized) == 1 * sizeof(void *),
                "oao_settings_type: initialized must follow logger");
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-bool test_oao_settings_init(void)
-{
-    // get defaults
-    void get_default_oao_values(oao_settings_type *settings);
-    oao_settings_type defaults = {0};
-    get_default_oao_values(&defaults);
+bool test_oao_settings_init(void) {
+  // get defaults
+  void get_default_oao_values(oao_settings_type * settings);
+  oao_settings_type defaults = {0};
+  get_default_oao_values(&defaults);
 
-    // call function
-    oao_settings_type s = oao_settings_init();
+  // call function
+  oao_settings_type s = oao_settings_init();
 
-    // compare values
-    bool ok = true;
-    if (!s.initialized) {
-        fprintf(stderr,
-                "test_oao_settings_init failed: Settings not initialized.\n");
-        ok = false;
-    }
-    if (s.verbose != defaults.verbose) {
-        fprintf(stderr,
-                "test_oao_settings_init failed: Verbosity parameter wrong.\n");
-        ok = false;
-    }
-    if (s.logger) {
-        fprintf(stderr,
-                "test_oao_settings_init failed: Callback pointers should be "
-                "NULL.\n");
-        ok = false;
-    }
+  // compare values
+  bool ok = true;
+  if (!s.initialized) {
+    fprintf(stderr, "test_oao_settings_init failed: Settings not initialized.\n");
+    ok = false;
+  }
+  if (s.verbose != defaults.verbose) {
+    fprintf(stderr, "test_oao_settings_init failed: Verbosity parameter wrong.\n");
+    ok = false;
+  }
+  if (s.logger) {
+    fprintf(stderr, "test_oao_settings_init failed: Callback pointers should be "
+                    "NULL.\n");
+    ok = false;
+  }
 
-    return ok;
+  return ok;
 }
