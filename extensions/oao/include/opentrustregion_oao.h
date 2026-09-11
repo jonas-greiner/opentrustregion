@@ -26,22 +26,17 @@ typedef c_int get_response_fn(const c_real *dm_ao_c, c_real *response_c);
 typedef get_response_fn *get_response_fp;
 
 /* Density matrix updating callback */
-typedef c_int update_dm_fn(
-    const c_real *dm_ao_c,
-    c_real *energy_c,
-    c_real *fock_c,
-    get_response_fp *get_response_ptr
-);
+typedef c_int update_dm_fn(const c_real *dm_ao_c, c_real *energy_c, c_real *fock_c,
+                           get_response_fp *get_response_ptr);
 typedef update_dm_fn *update_dm_fp;
 
 /* ------------------------------------------------------------------
  * Struct corresponding to Fortran type(oao_settings_type_c)
  * ------------------------------------------------------------------ */
-typedef struct
-{
-    logger_fp logger;
-    c_bool initialized;
-    c_int verbose;
+typedef struct {
+  logger_fp logger;
+  c_bool initialized;
+  c_int verbose;
 } oao_settings_type;
 
 // Fortran-callable init routine for OAO settings
@@ -71,20 +66,13 @@ void init_oao_settings(oao_settings_type *settings);
  *
  * @return                           Integer error code from Fortran
  */
-c_int oao_factory(
-    const c_real *dm_ao_c,
-    const c_real *ao_overlap_c,
-    c_int n_particle_c,
-    c_int n_ao_c,
-    get_energy_fp get_energy_c_funptr,
-    update_dm_fp update_dm_c_funptr,
-    obj_func_fp *obj_func_oao_c_funptr,
-    update_orbs_fp *update_orbs_oao_c_funptr,
-    precond_fp *precond_oao_c_funptr,
-    precond_pd_fp *precond_pd_oao_c_funptr,
-    project_fp *project_oao_c_funptr,
-    oao_settings_type *settings_c
-);
+c_int oao_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
+                  c_int n_ao_c, get_energy_fp get_energy_c_funptr,
+                  update_dm_fp update_dm_c_funptr, obj_func_fp *obj_func_oao_c_funptr,
+                  update_orbs_fp *update_orbs_oao_c_funptr,
+                  precond_fp *precond_oao_c_funptr,
+                  precond_pd_fp *precond_pd_oao_c_funptr,
+                  project_fp *project_oao_c_funptr, oao_settings_type *settings_c);
 
 /**
  * Fortran-callable OAO deconstructor.
@@ -99,11 +87,10 @@ void oao_deconstructor();
  * Small C helper functions to mimic Fortran settings%init()
  * ------------------------------------------------------------------ */
 
-static inline oao_settings_type oao_settings_init(void)
-{
-    oao_settings_type s = {0};
-    init_oao_settings(&s);
-    return s;
+static inline oao_settings_type oao_settings_init(void) {
+  oao_settings_type s = {0};
+  init_oao_settings(&s);
+  return s;
 }
 
 #endif
