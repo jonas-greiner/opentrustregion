@@ -341,7 +341,12 @@ class PyInterfaceTests(unittest.TestCase):
                     print(" Field initialized not initialized correctly.")
                     test_passed = False
             elif issubclass(field_type, Structure):
-                test_passed = self.equal_settings_to_ref(getattr(settings, field_name))
+                # the nested check comes first so it is not short-circuited away
+                # when an earlier field has already failed
+                test_passed = (
+                    self.equal_settings_to_ref(getattr(settings, field_name))
+                    and test_passed
+                )
             else:
                 ref_value = getattr(self, field_name + "_ref")
                 if field_type == c_real:
