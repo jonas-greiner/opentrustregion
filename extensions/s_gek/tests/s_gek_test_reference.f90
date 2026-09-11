@@ -73,8 +73,8 @@ contains
         ! check if function pointer is associated
         if (.not. associated(change_reference_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name// &
-                " failed: Change reference function not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Change reference "// &
+                "function provided"//message//" not associated with value."
             return
         end if
 
@@ -149,8 +149,8 @@ contains
         ! check if function pointer is associated
         if (.not. c_associated(change_reference_c_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name// &
-                " failed: Change reference function not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Change reference "// &
+                "function provided"//message//" not associated with value."
             return
         end if
 

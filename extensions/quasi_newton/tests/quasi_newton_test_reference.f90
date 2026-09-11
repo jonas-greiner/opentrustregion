@@ -71,8 +71,8 @@ contains
         ! check if function pointer is associated
         if (.not. associated(transport_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name// &
-                " failed: Transport function not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Transport function "// &
+                "provided"//message//" not associated with value."
             return
         end if
 
@@ -125,8 +125,8 @@ contains
         ! check if function pointer is associated
         if (.not. c_associated(transport_c_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name// &
-                " failed: Transport function not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Transport function "// &
+                "provided"//message//" not associated with value."
             return
         end if
 
@@ -181,8 +181,8 @@ contains
         ! check if function pointer is associated
         if (.not. associated(init_hess_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name// &
-                " failed: Initial Hessian function not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Initial Hessian "// &
+                "function provided"//message//" not associated with value."
             return
         end if
 
@@ -234,8 +234,8 @@ contains
         ! check if function pointer is associated
         if (.not. c_associated(init_hess_c_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name// &
-                " failed: Initial Hessian function not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Initial Hessian "// &
+                "function provided"//message//" not associated with value."
             return
         end if
 
