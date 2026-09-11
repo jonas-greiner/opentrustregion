@@ -78,7 +78,7 @@ contains
         if (.not. associated(get_energy_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Energy function for "// &
-                "closed-shell case not associated with value."
+                "closed-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -135,7 +135,7 @@ contains
         if (.not. c_associated(get_energy_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Energy function for "// &
-                "closed-shell case not associated with value."
+                "closed-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -193,7 +193,7 @@ contains
         if (.not. associated(get_energy_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Energy function for "// &
-                "open-shell case not associated with value."
+                "open-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -250,7 +250,7 @@ contains
         if (.not. c_associated(get_energy_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Energy function for "// &
-                "open-shell case not associated with value."
+                "open-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -310,7 +310,8 @@ contains
         if (.not. associated(update_dm_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function for closed-shell case not associated with value."
+                "updating function for closed-shell case provided"//message// &
+                " not associated with value."
             return
         end if
 
@@ -347,10 +348,13 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, fock)
 
-        ! test returned response function
-        test_passed = test_passed .and. &
-            test_get_response_cs_funptr(get_response_funptr, test_name, " by "// &
-                                        "response function returned"//message)
+        ! test returned response function, the function pointer is only
+        ! defined if the density matrix update did not produce an error
+        if (error == 0) then
+            test_passed = test_passed .and. &
+                test_get_response_cs_funptr(get_response_funptr, test_name, " by "// &
+                                            "response function returned"//message)
+        end if
 
     end function test_update_dm_cs_funptr
 
@@ -380,7 +384,8 @@ contains
         if (.not. c_associated(update_dm_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function for closed-shell case not associated with value."
+                "updating function for closed-shell case provided"//message// &
+                " not associated with value."
             return
         end if
 
@@ -420,10 +425,14 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, fock)
 
-        ! test returned response function
-        test_passed = test_passed .and. &
-            test_get_response_cs_c_funptr(get_response_c_funptr, test_name, " by "// &
-                                          "response function returned"//message)
+        ! test returned response function, the function pointer is only
+        ! defined if the density matrix update did not produce an error
+        if (error == 0) then
+            test_passed = test_passed .and. &
+                test_get_response_cs_c_funptr(get_response_c_funptr, test_name, &
+                                              " by response function "// &
+                                              "returned"//message)
+        end if
 
     end function test_update_dm_cs_c_funptr
 
@@ -452,7 +461,8 @@ contains
         if (.not. associated(update_dm_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function for open-shell case not associated with value."
+                "updating function for open-shell case provided"//message// &
+                " not associated with value."
             return
         end if
 
@@ -489,10 +499,13 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, fock)
 
-        ! test returned response function
-        test_passed = test_passed .and. &
-            test_get_response_os_funptr(get_response_funptr, test_name, " by "// &
-                                        "response function returned"//message)
+        ! test returned response function, the function pointer is only
+        ! defined if the density matrix update did not produce an error
+        if (error == 0) then
+            test_passed = test_passed .and. &
+                test_get_response_os_funptr(get_response_funptr, test_name, " by "// &
+                                            "response function returned"//message)
+        end if
 
     end function test_update_dm_os_funptr
 
@@ -522,7 +535,8 @@ contains
         if (.not. c_associated(update_dm_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function for open-shell case not associated with value."
+                "updating function for open-shell case provided"//message// &
+                " not associated with value."
             return
         end if
 
@@ -562,10 +576,14 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, fock)
 
-        ! test returned response function
-        test_passed = test_passed .and. &
-            test_get_response_os_c_funptr(get_response_c_funptr, test_name, " by "// &
-                                          "response function returned"//message)
+        ! test returned response function, the function pointer is only
+        ! defined if the density matrix update did not produce an error
+        if (error == 0) then
+            test_passed = test_passed .and. &
+                test_get_response_os_c_funptr(get_response_c_funptr, test_name, &
+                                              " by response function "// &
+                                              "returned"//message)
+        end if
 
     end function test_update_dm_os_c_funptr
 
@@ -592,7 +610,7 @@ contains
         if (.not. associated(get_response_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Response function for "// &
-                "closed-shell case not associated with value."
+                "closed-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -648,7 +666,7 @@ contains
         if (.not. c_associated(get_response_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Response function for "// &
-                "closed-shell case not associated with value."
+                "closed-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -706,7 +724,7 @@ contains
         if (.not. associated(get_response_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Response function for "// &
-                "open-shell case not associated with value."
+                "open-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -762,7 +780,7 @@ contains
         if (.not. c_associated(get_response_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Response function for "// &
-                "open-shell case not associated with value."
+                "open-shell case provided"//message//" not associated with value."
             return
         end if
 

@@ -74,7 +74,7 @@ contains
         if (.not. associated(change_reference_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Change reference "// &
-                "function not associated with value."
+                "function provided"//message//" not associated with value."
             return
         end if
 
@@ -151,7 +151,7 @@ contains
         if (.not. c_associated(change_reference_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Change reference "// &
-                "function not associated with value."
+                "function provided"//message//" not associated with value."
             return
         end if
 

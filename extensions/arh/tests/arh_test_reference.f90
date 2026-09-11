@@ -77,7 +77,7 @@ contains
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
                 "updating function with non-linear potential contribution for "// &
-                "closed-shell case not associated with value."
+                "closed-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -149,7 +149,7 @@ contains
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
                 "updating function with non-linear potential contribution for "// &
-                "closed-shell case not associated with value."
+                "closed-shell case provided"//message//" not associated with value."
             return
         end if
 
@@ -224,7 +224,7 @@ contains
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
                 "updating function with same- and opposite-spin potential "// &
-                "contributions not associated with value."
+                "contributions provided"//message//" not associated with value."
             return
         end if
 
@@ -316,7 +316,7 @@ contains
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
                 "updating function with same- and opposite-spin potential "// &
-                "contributions not associated with value."
+                "contributions provided"//message//" not associated with value."
             return
         end if
 
