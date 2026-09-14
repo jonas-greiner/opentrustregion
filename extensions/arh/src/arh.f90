@@ -13,8 +13,7 @@ module otr_arh
     implicit none
 
     ! define useful parameters
-    real(rp), parameter :: rel_regularization_thresh = 1e-10_rp, &
-                           symm_noise_safety_margin = 5.0_rp
+    real(rp), parameter :: ms_sr1_skip_thresh = 0.05_rp, eig_val_noise_factor = 10.0_rp
 
     type, extends(oao_settings_type) :: arh_settings_type
         character(kw_len) :: arh_type
@@ -62,10 +61,9 @@ module otr_arh
                              energy => null(), grad(:) => null(), h_diag(:) => null()
         real(rp), allocatable :: fock_oao(:, :, :), v_same_spin_oao(:, :, :), &
                                  v_opposite_spin_oao(:, :, :), &
-                                 v_nonlinear_oao(:, :, :), metric_inv(:, :), &
-                                 a_sym(:, :), a_inv(:, :), a_inv_comb(:, :), &
-                                 dm_list(:, :, :, :), fock_list(:, :, :, :), &
-                                 v_same_spin_list(:, :, :, :), &
+                                 v_nonlinear_oao(:, :, :), a_sym(:, :), a_inv(:, :), &
+                                 a_inv_comb(:, :), dm_list(:, :, :, :), &
+                                 fock_list(:, :, :, :), v_same_spin_list(:, :, :, :), &
                                  v_opposite_spin_list(:, :, :, :), &
                                  v_nonlinear_list(:, :, :, :), &
                                  linear_potential_dirs(:, :), &
@@ -277,10 +275,12 @@ module otr_arh
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, i, n_list
+        integer(ip) :: n_ao, n_particle, i, n_list, n_accepted
         real(rp), allocatable :: fock_ao(:, :, :), v_nonlinear_ao(:, :, :), &
                                  dm_diff(:, :, :, :), fock_diff(:, :, :, :), &
-                                 v_linear_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :)
+                                 v_linear_diff(:, :, :, :), &
+                                 v_nonlinear_diff(:, :, :, :), chol(:, :)
+        integer(ip), allocatable :: map(:)
 
         external :: dgemm
 
@@ -362,6 +362,13 @@ module otr_arh
                 dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - arh_object%dm_oao
             end do
 
+            ! factorize the density-matrix-difference history which resolves linear 
+            ! dependencies in the history; the coupling formulas below never need an 
+            ! explicit metric inverse since everything is expressed in the resulting 
+            ! orthonormalized basis via a single triangular solve
+            call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_list]), chol, &
+                                   map, n_accepted)
+
             ! for MS-SR1 and cache the direction vectors
             if (arh_object%settings%arh_type == "ms_sr1") then
                 ! prepare the linear and non-linear potential differences
@@ -379,26 +386,24 @@ module otr_arh
                 ! get inverted A matrix
                 ! linear part: this is exact since Coulomb and exact exchange are
                 ! linear in the density matrix
-                call get_ms_a_inv_cs(dm_diff, v_linear_diff, .true., arh_object%a_inv, &
-                                     n_ao, arh_object%settings, error)
+                call get_ms_a_inv_cs(dm_diff, v_linear_diff, .true., map, chol, &
+                                     arh_object%a_inv, arh_object%settings, error)
                 if (error /= 0) return
-                ! non-linear part: kept on a dedicated, separately regularized
-                ! multisecant SR1 system, since the exact linear secant relationship
-                ! and the non-linear one cannot be represented well by a single
-                ! regularized eigenbasis
-                call get_ms_a_inv_cs(dm_diff, v_nonlinear_diff, .false., &
-                                     arh_object%a_inv_comb, n_ao, arh_object%settings, &
-                                     error)
+                ! non-linear part: kept on its own system so that it contracts against
+                ! its own inverse and the exact linear secant relationship is not
+                ! averaged with the approximate one
+                call get_ms_a_inv_cs(dm_diff, v_nonlinear_diff, .false., map, chol, &
+                                     arh_object%a_inv_comb, arh_object%settings, error)
                 if (error /= 0) return
 
                 ! cache the packed history-projection directions the low-rank Hessian 
-                ! factors are assembled from; kept in the original packed basis
-                call cache_history_projections(v_linear_diff, arh_object%dm_oao, &
-                                               n_list, arh_object%n_param, &
-                                               arh_object%linear_potential_dirs)
-                call cache_history_projections(v_nonlinear_diff, arh_object%dm_oao, &
-                                               n_list, arh_object%n_param, &
-                                               arh_object%nonlinear_potential_dirs)
+                ! factors are assembled from, rebased into the orthonormalized S-basis
+                call cache_history_dirs(v_linear_diff, arh_object%dm_oao, n_list, &
+                                        arh_object%n_param, map, chol, &
+                                        arh_object%linear_potential_dirs)
+                call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, n_list, &
+                                        arh_object%n_param, map, chol, &
+                                        arh_object%nonlinear_potential_dirs)
             ! ARH and related methods
             else
                 ! prepare the Fock matrix differences
@@ -408,23 +413,33 @@ module otr_arh
                                             arh_object%fock_oao
                 end do
 
-                ! get inverse of metric
-                call get_arh_metric_inv(dm_diff, arh_object%metric_inv)
-
                 ! cache the packed history-projection directions the low-rank Hessian 
-                ! factors are assembled from; kept in the original packed basis
-                call cache_history_projections(dm_diff, arh_object%dm_oao, n_list, &
-                                               arh_object%n_param, arh_object%dm_dirs)
+                ! factors are assembled from, rebased into the orthonormalized S-basis
+                call cache_history_dirs(dm_diff, arh_object%dm_oao, n_list, &
+                                        arh_object%n_param, map, chol, &
+                                        arh_object%dm_dirs)
                 if (arh_object%settings%arh_type /= "ms_sp") &
-                    call cache_history_projections(fock_diff, arh_object%dm_oao, &
-                                                   n_list, arh_object%n_param, &
-                                                   arh_object%potential_dirs)
+                    call cache_history_dirs(fock_diff, arh_object%dm_oao, n_list, &
+                                            arh_object%n_param, map, chol, &
+                                            arh_object%potential_dirs)
 
-                ! construct A = S^T Y
+                ! construct A = S^T Y, congruence-transformed into the orthonormalized 
+                ! S-basis
                 if (arh_object%settings%arh_type == "ms_sp" .or. &
                     arh_object%settings%arh_type == "ms_psb") then
                     if (n_list > 0) then
-                        arh_object%a_sym = build_a_sym_cs(dm_diff, fock_diff, n_ao)
+                        ! split the potential difference into its linear (Coulomb and 
+                        ! exact exchange) and non-linear (XC) parts
+                        allocate(v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
+                        do i = 1, n_list
+                            v_nonlinear_diff(:, :, :, i) = &
+                                arh_object%v_nonlinear_list(:, :, :, i) - &
+                                arh_object%v_nonlinear_oao
+                        end do
+                        arh_object%a_sym = build_a_sym_cs( &
+                            dm_diff, fock_diff - v_nonlinear_diff, v_nonlinear_diff, &
+                            map, chol)
+                        deallocate(v_nonlinear_diff)
                     else
                         if (allocated(arh_object%a_sym)) deallocate(arh_object%a_sym)
                         allocate(arh_object%a_sym(0, 0))
@@ -460,14 +475,16 @@ module otr_arh
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, i, n_list
+        integer(ip) :: n_ao, n_particle, i, n_list, n_acc1, n_acc2, n_acc_nl
         real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :), &
                                  v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
                                  v_nonlinear_ao(:, :, :), dm_diff(:, :, :, :), &
                                  v_same_spin_diff(:, :, :, :), &
                                  v_opposite_spin_diff(:, :, :, :), &
                                  v_nonlinear_diff(:, :, :, :), &
-                                 v_same_spin_diff_eff(:, :, :, :)
+                                 v_same_spin_diff_eff(:, :, :, :), chol1(:, :), &
+                                 chol2(:, :), chol_comb(:, :), chol_nl(:, :)
+        integer(ip), allocatable :: map1(:), map2(:), map_comb(:), map_nl(:)
 
         external :: dgemm
 
@@ -565,6 +582,22 @@ module otr_arh
                     arh_object%v_opposite_spin_oao
             end do
 
+            ! factorize the density-matrix-difference history once per channel which 
+            ! resolves linear dependencies in the history; the coupling formulas below 
+            ! never need an explicit metric inverse since everything is expressed in 
+            ! the resulting orthonormalized basis via a single triangular solve; the 
+            ! two channels never mix in this factorization (the metric itself is
+            ! block-diagonal across channels), so they are factorized independently
+            ! and then combined into one block-diagonal (chol, map) pair wherever the 
+            ! coupled types or the linear multisecant system need to act on both 
+            ! channels together
+            call factorize_history(reshape(dm_diff(:, :, 1, :), &
+                                           [n_ao * n_ao, n_list]), chol1, map1, n_acc1)
+            call factorize_history(reshape(dm_diff(:, :, 2, :), &
+                                           [n_ao * n_ao, n_list]), chol2, map2, n_acc2)
+            call combine_channels(chol1, map1, chol2, map2, n_list, chol_comb, &
+                                 map_comb)
+
             ! MS-SR1
             if (arh_object%settings%arh_type == "ms_sr1") then
                 ! prepare the same-spin and non-linear potential differences
@@ -584,26 +617,33 @@ module otr_arh
                 ! separation is exact since Coulomb and exact exchange are linear in 
                 ! the density matrix
                 call get_ms_a_inv_os_linear(dm_diff, v_same_spin_diff, &
-                                            v_opposite_spin_diff, arh_object%a_inv, &
-                                            n_ao, arh_object%settings, error)
+                                            v_opposite_spin_diff, map_comb, chol_comb, &
+                                            arh_object%a_inv, n_ao, &
+                                            arh_object%settings, error)
                 if (error /= 0) return
-                ! non-linear part: get spin-combined multisecant SR1 matrix
-                call get_ms_a_inv_os_nonlinear(dm_diff, v_nonlinear_diff, &
-                                               arh_object%a_inv_comb, &
+                ! non-linear part: get spin-combined multisecant SR1 matrix; the
+                ! non-linear response mixes both channels at once, so this needs its
+                ! own, separate combined-flat factorization of the same history
+                call factorize_history(reshape(dm_diff, [n_ao * n_ao * n_particle, &
+                                                         n_list]), chol_nl, map_nl, &
+                                       n_acc_nl)
+                call get_ms_a_inv_os_nonlinear(dm_diff, v_nonlinear_diff, map_nl, &
+                                               chol_nl, arh_object%a_inv_comb, &
                                                arh_object%settings, error)
                 if (error /= 0) return
 
                 ! cache the packed history-projection directions the low-rank Hessian 
                 ! factors are assembled from; the linear potential directions combine 
                 ! the same-/opposite-spin channels, while the non-linear potential 
-                ! directions need no channel-splitting
-                call cache_combined_channel_projections( &
+                ! directions need no channel-splitting; rebased into the
+                ! orthonormalized S-basis
+                call cache_combined_channel_dirs( &
                     v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, &
-                    n_list, arh_object%n_param, n_particle, &
+                    n_list, arh_object%n_param, n_particle, map_comb, chol_comb, &
                     arh_object%linear_potential_dirs)
-                call cache_history_projections(v_nonlinear_diff, arh_object%dm_oao, &
-                                               n_list, arh_object%n_param, &
-                                               arh_object%nonlinear_potential_dirs)
+                call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, n_list, &
+                                        arh_object%n_param, map_nl, chol_nl, &
+                                        arh_object%nonlinear_potential_dirs)
             ! ARH and related methods
             else
                 ! fold in non-linear potantial into same-spin potential
@@ -616,28 +656,42 @@ module otr_arh
                         arh_object%v_nonlinear_oao
                 end do
 
-                ! get inverse of metric which is block-diagonal accross channels
-                call get_arh_metric_inv(dm_diff, arh_object%metric_inv)
-
                 ! cache the packed history-projection directions the low-rank Hessian 
                 ! factors are assembled from; the density matrix directions isolate
                 ! each channel separately, the effective potential directions combine 
-                ! channels
-                call cache_channel_split_projections( &
-                    dm_diff, arh_object%dm_oao, n_list, &
-                    arh_object%n_param, n_particle, arh_object%dm_dirs)
+                ! channels rebased into the combined orthonormalized S-basis
+                call cache_channel_split_dirs(dm_diff, arh_object%dm_oao, n_list, &
+                                              arh_object%n_param, n_particle, &
+                                              map_comb, chol_comb, arh_object%dm_dirs)
                 if (arh_object%settings%arh_type /= "ms_sp") &
-                    call cache_combined_channel_projections( &
+                    call cache_combined_channel_dirs( &
                         v_same_spin_diff_eff, v_opposite_spin_diff, &
                         arh_object%dm_oao, n_list, arh_object%n_param, n_particle, &
-                        arh_object%potential_dirs)
+                        map_comb, chol_comb, arh_object%potential_dirs)
 
-                ! construct A = S^T Y which is cross-channel symmetrized
+                ! construct A = S^T Y which is cross-channel symmetrized, 
+                ! congruence-transformed into the combined orthonormalized S-basis
                 if (arh_object%settings%arh_type == "ms_sp" .or. &
                     arh_object%settings%arh_type == "ms_psb") then
                     if (n_list > 0) then
+                        ! split the same-spin potential difference into its linear 
+                        ! (Coulomb and exact exchange) and non-linear (XC) parts so 
+                        ! that each can be symmetrized separately; the opposite-spin 
+                        ! potential difference is already purely linear
+                        allocate(v_nonlinear_diff(n_ao, n_ao, n_particle, n_list), &
+                                 v_same_spin_diff(n_ao, n_ao, n_particle, n_list))
+                        do i = 1, n_list
+                            v_nonlinear_diff(:, :, :, i) = &
+                                arh_object%v_nonlinear_list(:, :, :, i) - &
+                                arh_object%v_nonlinear_oao
+                            v_same_spin_diff(:, :, :, i) = &
+                                arh_object%v_same_spin_list(:, :, :, i) - &
+                                arh_object%v_same_spin_oao
+                        end do
                         arh_object%a_sym = build_a_block_sym_os( &
-                            dm_diff, v_same_spin_diff_eff, v_opposite_spin_diff, n_ao)
+                            dm_diff, v_same_spin_diff, v_nonlinear_diff, &
+                            v_opposite_spin_diff, n_ao, map_comb, chol_comb)
+                        deallocate(v_nonlinear_diff, v_same_spin_diff)
                     else
                         if (allocated(arh_object%a_sym)) deallocate(arh_object%a_sym)
                         allocate(arh_object%a_sym(0, 0))
@@ -900,101 +954,107 @@ module otr_arh
 
     end subroutine arh_deconstructor
 
-    subroutine cache_history_projections(v_diff, dm_oao, n_list, n_param, dirs)
+    subroutine cache_history_dirs(v_diff, dm_oao, n_list, n_param, map, chol, dirs)
         !
         ! this subroutine caches the packed history-projection directions the
         ! low-rank part of the approximate Hessian is built from: each history entry
         ! is projected onto the occupied-virtual/virtual-occupied subspace and packed
-        ! into the same antisymmetric parameter space as a trial vector
+        ! into the same antisymmetric parameter space as a trial vector, then rebased
+        ! into the orthonormalized basis defined by map and chol
         !
         use otr_oao, only: project_asymm, pack_asymm
 
-        real(rp), intent(in) :: v_diff(:, :, :, :), dm_oao(:, :, :)
-        integer(ip), intent(in) :: n_list, n_param
+        real(rp), intent(in) :: v_diff(:, :, :, :), dm_oao(:, :, :), chol(:, :)
+        integer(ip), intent(in) :: n_list, n_param, map(:)
         real(rp), intent(out), allocatable :: dirs(:, :)
 
         integer(ip) :: k
-        real(rp), allocatable :: projected(:, :, :)
+        real(rp), allocatable :: projected(:, :, :), raw(:, :)
 
-        allocate(dirs(n_param, n_list))
+        allocate(raw(n_param, n_list))
         do k = 1, n_list
             projected = project_asymm(v_diff(:, :, :, k), dm_oao)
-            dirs(:, k) = pack_asymm(projected, n_param)
+            raw(:, k) = pack_asymm(projected, n_param)
         end do
+        dirs = rebase_dirs(raw, map, chol)
 
-    end subroutine cache_history_projections
+    end subroutine cache_history_dirs
 
     subroutine cache_history_projections_channel(v_diff, channel, dm_oao, n_list, &
-                                                 n_param, n_particle, dirs)
+                                                 n_param, n_particle, projections)
         !
-        ! this subroutine caches the packed history-projection directions the low-rank 
-        ! part of the approximate Hessian is built from for open-shell systems; each 
-        ! history column is embedded into only the given channel (the other channels 
-        ! zeroed) before projecting and packing, since the open-shell response 
-        ! contracts a channel's own difference against only that channel's density 
-        ! response
+        ! this subroutine caches the packed, projected history columns of a single spin 
+        ! channel for open-shell systems; each history column is embedded into only the 
+        ! given channel (the other channels zeroed) before projecting and packing, 
+        ! since the open-shell response contracts a channel's own difference against 
+        ! only that channel's density response
         !
         use otr_oao, only: project_asymm, pack_asymm
 
         real(rp), intent(in) :: v_diff(:, :, :, :), dm_oao(:, :, :)
         integer(ip), intent(in) :: channel, n_list, n_param, n_particle
-        real(rp), intent(out), allocatable :: dirs(:, :)
+        real(rp), intent(out), allocatable :: projections(:, :)
 
         integer(ip) :: k, n_ao
         real(rp), allocatable :: embedded(:, :, :), projected(:, :, :)
 
         n_ao = size(dm_oao, 1)
-        allocate(dirs(n_param, n_list), embedded(n_ao, n_ao, n_particle))
+        allocate(projections(n_param, n_list), embedded(n_ao, n_ao, n_particle))
         embedded = 0.0_rp
         do k = 1, n_list
             embedded(:, :, channel) = v_diff(:, :, channel, k)
             projected = project_asymm(embedded, dm_oao)
-            dirs(:, k) = pack_asymm(projected, n_param)
+            projections(:, k) = pack_asymm(projected, n_param)
         end do
         deallocate(embedded)
 
     end subroutine cache_history_projections_channel
 
-    subroutine cache_channel_split_projections(v_diff, dm_oao, n_list, n_param, &
-                                               n_particle, dirs)
+    subroutine cache_channel_split_dirs(v_diff, dm_oao, n_list, n_param, n_particle, &
+                                        map, chol, dirs)
         !
         ! this subroutine caches the open-shell history projections one spin channel
         ! at a time: column i holds channel 1 of entry i, column n_list+i holds
         ! channel 2; the two are never summed, since the per-channel metric
-        ! contraction does not mix channels
+        ! contraction does not mix channels; the concatenated columns are then rebased 
+        ! into the orthonormalized basis defined by map and chol
         !
-        real(rp), intent(in) :: v_diff(:, :, :, :), dm_oao(:, :, :)
-        integer(ip), intent(in) :: n_list, n_param, n_particle
+        real(rp), intent(in) :: v_diff(:, :, :, :), dm_oao(:, :, :), chol(:, :)
+        integer(ip), intent(in) :: n_list, n_param, n_particle, map(:)
         real(rp), intent(out), allocatable :: dirs(:, :)
 
-        real(rp), allocatable :: channel1(:, :), channel2(:, :)
+        real(rp), allocatable :: channel1(:, :), channel2(:, :), raw(:, :)
 
         call cache_history_projections_channel(v_diff, 1_ip, dm_oao, n_list, n_param, &
                                                n_particle, channel1)
         call cache_history_projections_channel(v_diff, 2_ip, dm_oao, n_list, n_param, &
                                                n_particle, channel2)
 
-        allocate(dirs(n_param, 2 * n_list))
-        dirs(:, 1:n_list) = channel1
-        dirs(:, n_list + 1:2 * n_list) = channel2
+        allocate(raw(n_param, 2 * n_list))
+        raw(:, 1:n_list) = channel1
+        raw(:, n_list + 1:2 * n_list) = channel2
         deallocate(channel1, channel2)
+        dirs = rebase_dirs(raw, map, chol)
 
-    end subroutine cache_channel_split_projections
+    end subroutine cache_channel_split_dirs
 
-    subroutine cache_combined_channel_projections(v_same, v_opp, dm_oao, n_list, &
-                                                  n_param, n_particle, dirs)
+    subroutine cache_combined_channel_dirs(v_same, v_opp, dm_oao, n_list, n_param, &
+                                           n_particle, map, chol, dirs)
         !
         ! this subroutine caches the open-shell history projections two channels at a
-        ! time: column i sums channel 1 of the same-spin potential with channel 2 of 
-        ! the opposite-spin potential, column n_list+i the mirror image; every caller 
-        ! pairs a same-spin difference with the opposite-spin one, differing only in 
-        ! what is passed as the same-spin potential
+        ! time: column i sums channel 1 of the same-spin potential with channel 2 of
+        ! the opposite-spin potential, column n_list+i the mirror image; every caller
+        ! pairs a same-spin difference with the opposite-spin one, differing only in
+        ! what is passed as the same-spin potential; the combined columns are then
+        ! rebased into the orthonormalized basis defined by map and chol
         !
-        real(rp), intent(in) :: v_same(:, :, :, :), v_opp(:, :, :, :), dm_oao(:, :, :)
-        integer(ip), intent(in) :: n_list, n_param, n_particle
+        real(rp), intent(in) :: v_same(:, :, :, :), v_opp(:, :, :, :), &
+                                dm_oao(:, :, :), chol(:, :)
+        integer(ip), intent(in) :: n_list, n_param, n_particle, map(:)
         real(rp), intent(out), allocatable :: dirs(:, :)
 
-        real(rp), allocatable :: same1(:, :), same2(:, :), opp1(:, :), opp2(:, :)
+        real(rp), allocatable :: same1(:, :), same2(:, :), opp1(:, :), opp2(:, :), &
+                                 raw(:, :)
 
         call cache_history_projections_channel(v_same, 1_ip, dm_oao, n_list, n_param, &
                                                n_particle, same1)
@@ -1005,12 +1065,13 @@ module otr_arh
         call cache_history_projections_channel(v_opp, 2_ip, dm_oao, n_list, n_param, &
                                                n_particle, opp2)
 
-        allocate(dirs(n_param, 2 * n_list))
-        dirs(:, 1:n_list) = same1 + opp2
-        dirs(:, n_list + 1:2 * n_list) = same2 + opp1
+        allocate(raw(n_param, 2 * n_list))
+        raw(:, 1:n_list) = same1 + opp2
+        raw(:, n_list + 1:2 * n_list) = same2 + opp1
         deallocate(same1, same2, opp1, opp2)
+        dirs = rebase_dirs(raw, map, chol)
 
-    end subroutine cache_combined_channel_projections
+    end subroutine cache_combined_channel_dirs
 
     subroutine get_low_rank_hess_factors()
         !
@@ -1034,9 +1095,8 @@ module otr_arh
         ! 8: the factor of 2 above, times a factor of 4 (or 2) for the closed- (or
         ! open-)shell scaling of the Hessian linear transformation
         !
-        integer(ip) :: n_linear, n_nonlinear, n_total, n_diff
+        integer(ip) :: n_linear, n_nonlinear, n_total, n_diff, i
         real(rp) :: shell_scale
-        real(rp), allocatable :: metric_weighted_a_sym(:, :)
 
         ! discard the factors assembled for the previous history
         if (allocated(arh_object%expansion_dirs)) deallocate(arh_object%expansion_dirs)
@@ -1050,7 +1110,8 @@ module otr_arh
 
         select case (arh_object%settings%arh_type)
         ! multisecant SR1: the linear and non-linear parts of the potential enter as
-        ! independent blocks, each with its own separately regularized system
+        ! independent blocks, each contracted against its own inverse rather than
+        ! against a single inverse of the summed potential
         case ("ms_sr1")
             if (.not. allocated(arh_object%linear_potential_dirs) .or. &
                 .not. allocated(arh_object%nonlinear_potential_dirs)) return
@@ -1077,10 +1138,8 @@ module otr_arh
             n_diff = size(arh_object%dm_dirs, 2)
             if (n_diff == 0) return
 
-            metric_weighted_a_sym = matmul( &
-                arh_object%metric_inv, matmul(arh_object%a_sym, arh_object%metric_inv))
             arh_object%expansion_dirs = arh_object%dm_dirs
-            arh_object%coupling_matrix = 8.0_rp * shell_scale * metric_weighted_a_sym
+            arh_object%coupling_matrix = 8.0_rp * shell_scale * arh_object%a_sym
 
         ! symmetrized ARH: the density and potential difference histories couple in
         ! both directions, so the coupling matrix is purely off-diagonal; also 
@@ -1094,11 +1153,12 @@ module otr_arh
                      arh_object%coupling_matrix(2 * n_diff, 2 * n_diff))
             arh_object%expansion_dirs(:, :n_diff) = arh_object%dm_dirs
             arh_object%expansion_dirs(:, n_diff + 1:) = arh_object%potential_dirs
+            ! the metric scaling collapses in the orthonormalized S-basis
             arh_object%coupling_matrix = 0.0_rp
-            arh_object%coupling_matrix(:n_diff, n_diff + 1:) = &
-                4.0_rp * shell_scale * arh_object%metric_inv
-            arh_object%coupling_matrix(n_diff + 1:, :n_diff) = &
-                4.0_rp * shell_scale * arh_object%metric_inv
+            do i = 1, n_diff
+                arh_object%coupling_matrix(i, n_diff + i) = 4.0_rp * shell_scale
+                arh_object%coupling_matrix(n_diff + i, i) = 4.0_rp * shell_scale
+            end do
 
         ! multisecant PSB: the symmetrized ARH coupling with an additional
         ! density-density block subtracting the doubly counted curvature
@@ -1107,19 +1167,19 @@ module otr_arh
             n_diff = size(arh_object%dm_dirs, 2)
             if (n_diff == 0) return
 
-            metric_weighted_a_sym = matmul( &
-                arh_object%metric_inv, matmul(arh_object%a_sym, arh_object%metric_inv))
             allocate(arh_object%expansion_dirs(arh_object%n_param, 2 * n_diff), &
                      arh_object%coupling_matrix(2 * n_diff, 2 * n_diff))
             arh_object%expansion_dirs(:, :n_diff) = arh_object%dm_dirs
             arh_object%expansion_dirs(:, n_diff + 1:) = arh_object%potential_dirs
             arh_object%coupling_matrix = 0.0_rp
             arh_object%coupling_matrix(:n_diff, :n_diff) = &
-                -8.0_rp * shell_scale * metric_weighted_a_sym
-            arh_object%coupling_matrix(:n_diff, n_diff + 1:) = &
-                8.0_rp * shell_scale * arh_object%metric_inv
-            arh_object%coupling_matrix(n_diff + 1:, :n_diff) = &
-                8.0_rp * shell_scale * arh_object%metric_inv
+                -8.0_rp * shell_scale * arh_object%a_sym
+            ! the metric scaling in the off-diagonal blocks collapses in the 
+            ! orthonormalized S-basis
+            do i = 1, n_diff
+                arh_object%coupling_matrix(i, n_diff + i) = 8.0_rp * shell_scale
+                arh_object%coupling_matrix(n_diff + i, i) = 8.0_rp * shell_scale
+            end do
 
         ! standard ARH: the response expands in the potential difference history
         ! while contracting against the density difference history, so unlike every
@@ -1131,7 +1191,12 @@ module otr_arh
 
             arh_object%expansion_dirs = arh_object%potential_dirs
             arh_object%projection_dirs = arh_object%dm_dirs
-            arh_object%coupling_matrix = 8.0_rp * shell_scale * arh_object%metric_inv
+            allocate(arh_object%coupling_matrix(n_diff, n_diff))
+            arh_object%coupling_matrix = 0.0_rp
+            ! the metric scaling collapses in the orthonormalized S-basis
+            do i = 1, n_diff
+                arh_object%coupling_matrix(i, i) = 8.0_rp * shell_scale
+            end do
 
         case default
             return
@@ -1145,100 +1210,140 @@ module otr_arh
 
     end subroutine get_low_rank_hess_factors
 
-    function build_a_sym_cs(dm_diff, v_diff, n_ao) result(a_sym)
+    subroutine build_a_part(dm_diff, v_diff, linear, a)
         !
-        ! this function builds the dense, weighted-symmetrized A = S^T Y matrix shared 
-        ! by the MS-SP and MS_PSB response contributions for the closed-shell case
+        ! this subroutine constructs A = S^T Y for a single (linear or non-linear)
+        ! part of a coupled potential-difference response and symmetrizes it; for the
+        ! linear (Coulomb and exact exchange) part, any observed asymmetry is
+        ! exactly zero in exact arithmetic and is discarded via an unweighted
+        ! symmetrization; for the non-linear (XC) part, no such exact relationship
+        ! holds, so the symmetrization is instead weighted
         !
         real(rp), intent(in) :: dm_diff(:, :, :, :), v_diff(:, :, :, :)
-        integer(ip), intent(in) :: n_ao
-        real(rp), allocatable :: a_sym(:, :)
+        logical, intent(in) :: linear
+        real(rp), intent(out) :: a(:, :)
 
-        integer(ip) :: n_diff, i
+        integer(ip) :: n_dm, i, flat_len
         real(rp), allocatable :: step_norms(:)
         external :: dgemm
         real(rp), external :: dnrm2
 
+        ! A = S^T Y on the full history, flattened over the AO and particle
+        ! dimensions
+        n_dm = size(dm_diff, 4)
+        flat_len = size(dm_diff, 1) * size(dm_diff, 2) * size(dm_diff, 3)
+        call dgemm("T", "N", n_dm, n_dm, flat_len, 1.0_rp, dm_diff, flat_len, &
+                   v_diff, flat_len, 0.0_rp, a, n_dm)
+
+        ! symmetrize A
+        if (linear) then
+            call symmetrize_exact(a)
+        else
+            ! calculate step norms for weighing
+            allocate(step_norms(n_dm))
+            do i = 1, n_dm
+                step_norms(i) = dnrm2(flat_len, dm_diff(:, :, :, i), 1_ip)
+            end do
+            call symmetrize_weighted(a, step_norms)
+            deallocate(step_norms)
+        end if
+
+    end subroutine build_a_part
+
+    function build_a_sym_cs(dm_diff, v_linear_diff, v_nonlinear_diff, map, chol) &
+        result(a_sym)
+        !
+        ! this function builds the dense A = S^T Y matrix shared by the MS-SP and
+        ! MS-PSB response contributions for the closed-shell case; the matrix is then
+        ! congruence-transformed to the orthonormalized, rank-independent S-basis
+        !
+        real(rp), intent(in) :: dm_diff(:, :, :, :), v_linear_diff(:, :, :, :), &
+                                v_nonlinear_diff(:, :, :, :), chol(:, :)
+        integer(ip), intent(in) :: map(:)
+        real(rp), allocatable :: a_sym(:, :)
+
+        integer(ip) :: n_diff
+        real(rp), allocatable :: a_linear(:, :), a_nonlinear(:, :), a_full(:, :)
+
         n_diff = size(dm_diff, 4)
-        allocate(a_sym(n_diff, n_diff), step_norms(n_diff))
+        allocate(a_linear(n_diff, n_diff), a_nonlinear(n_diff, n_diff))
+        call build_a_part(dm_diff, v_linear_diff, .true., a_linear)
+        call build_a_part(dm_diff, v_nonlinear_diff, .false., a_nonlinear)
 
-        ! build A = S^T Y
-        call dgemm("T", "N", n_diff, n_diff, n_ao * n_ao, 1.0_rp, dm_diff, &
-                   n_ao * n_ao, v_diff, n_ao * n_ao, 0.0_rp, a_sym, n_diff)
-
-        ! symmetrize
-        do i = 1, n_diff
-            step_norms(i) = dnrm2(n_ao * n_ao, dm_diff(:, :, 1, i), 1_ip)
-        end do
-        call symmetrize_weighted(a_sym, step_norms)
-        deallocate(step_norms)
+        a_full = a_linear + a_nonlinear
+        deallocate(a_linear, a_nonlinear)
+        a_sym = congruence_transform(a_full, map, chol)
+        deallocate(a_full)
 
     end function build_a_sym_cs
 
-    function build_a_block_sym_os(dm_diff, v_same_eff, v_opp, n_ao) result(a_block)
+    function build_a_block_sym_os(dm_diff, v_same_linear, v_nonlinear, v_opp, n_ao, &
+                                  map, chol) result(a_block)
         !
-        ! this function builds the dense, cross-channel- and weighted-symmetrized 
-        ! open-shell A = S^T Y matrix entering the MS-SP and MS-PSB response 
-        ! contributions for the open-shell case: each diagonal block is a 
-        ! within-channel weighted symmetrization, while the two off-diagonal blocks are 
-        ! cross-symmetrized together
+        ! this function builds the dense, cross-channel-symmetrized open-shell A =S^T Y 
+        ! matrix entering the MS-SP and MS-PSB response; the matrix is then
+        ! congruence-transformed to the orthonormalized, rank-independent S-basis
         !
-        real(rp), intent(in) :: dm_diff(:, :, :, :), v_same_eff(:, :, :, :), &
-                                v_opp(:, :, :, :)
-        integer(ip), intent(in) :: n_ao
+        real(rp), intent(in) :: dm_diff(:, :, :, :), v_same_linear(:, :, :, :), &
+                                v_nonlinear(:, :, :, :), v_opp(:, :, :, :), chol(:, :)
+        integer(ip), intent(in) :: n_ao, map(:)
         real(rp), allocatable :: a_block(:, :)
 
-        integer(ip) :: n_diff, i, j
-        real(rp), allocatable :: step_norms(:, :), a_same(:, :, :), a_opp(:, :, :), &
-                                 dm_diff_j(:, :, :), v_same_eff_j(:, :, :), &
-                                 v_opp_j(:, :, :)
+        integer(ip) :: n_diff, j
+        real(rp), allocatable :: a_same_linear(:, :, :), a_same_nonlinear(:, :, :), &
+                                 a_opp(:, :, :), a_full(:, :)
         external :: dgemm
-        real(rp), external :: dnrm2
 
         n_diff = size(dm_diff, 4)
-        allocate(step_norms(n_diff, 2), a_same(n_diff, n_diff, 2), &
-                 a_opp(n_diff, n_diff, 2))
-
-        do j = 1, 2
-            do i = 1, n_diff
-                step_norms(i, j) = dnrm2(n_ao * n_ao, dm_diff(:, :, j, i), 1_ip)
-            end do
-        end do
+        allocate(a_same_linear(n_diff, n_diff, 2), &
+                 a_same_nonlinear(n_diff, n_diff, 2), a_opp(n_diff, n_diff, 2))
 
         ! build A = S^T Y and symmetrize diagonal blocks
         do j = 1, 2
-            dm_diff_j = dm_diff(:, :, j, :)
-            v_same_eff_j = v_same_eff(:, :, j, :)
-            v_opp_j = v_opp(:, :, j, :)
-            call dgemm("T", "N", n_diff, n_diff, n_ao * n_ao, 1.0_rp, dm_diff_j, &
-                       n_ao * n_ao, v_same_eff_j, n_ao * n_ao, 0.0_rp, &
-                       a_same(:, :, j), n_diff)
-            call symmetrize_weighted(a_same(:, :, j), step_norms(:, j))
-            call dgemm("T", "N", n_diff, n_diff, n_ao * n_ao, 1.0_rp, dm_diff_j, &
-                       n_ao * n_ao, v_opp_j, n_ao * n_ao, 0.0_rp, a_opp(:, :, j), &
-                       n_diff)
+            call build_a_part(reshape(dm_diff(:, :, j, :), &
+                                      [n_ao, n_ao, 1_ip, n_diff]), &
+                              reshape(v_same_linear(:, :, j, :), &
+                                      [n_ao, n_ao, 1_ip, n_diff]), .true., &
+                              a_same_linear(:, :, j))
+            call build_a_part(reshape(dm_diff(:, :, j, :), &
+                                      [n_ao, n_ao, 1_ip, n_diff]), &
+                              reshape(v_nonlinear(:, :, j, :), &
+                                      [n_ao, n_ao, 1_ip, n_diff]), .false., &
+                              a_same_nonlinear(:, :, j))
+            call dgemm("T", "N", n_diff, n_diff, n_ao * n_ao, 1.0_rp, &
+                       reshape(dm_diff(:, :, j, :), [n_ao * n_ao, n_diff]), &
+                       n_ao * n_ao, reshape(v_opp(:, :, j, :), [n_ao * n_ao, n_diff]), &
+                       n_ao * n_ao, 0.0_rp, a_opp(:, :, j), n_diff)
         end do
-        deallocate(dm_diff_j, v_same_eff_j, v_opp_j)
 
-        ! cross-symmetrize off-diagonal blocks
-        call cross_symmetrize_weighted(a_opp(:, :, 1), a_opp(:, :, 2), &
-                                       step_norms(:, 1), step_norms(:, 2))
-        deallocate(step_norms)
+        ! cross-symmetrize off-diagonal blocks exactly, since the opposite-spin
+        ! potential difference is purely linear
+        call cross_symmetrize_exact(a_opp(:, :, 1), a_opp(:, :, 2))
 
-        allocate(a_block(2 * n_diff, 2 * n_diff))
-        a_block(1:n_diff, 1:n_diff) = a_same(:, :, 1)
-        a_block(1:n_diff, n_diff + 1:2 * n_diff) = a_opp(:, :, 1)
-        a_block(n_diff + 1:2 * n_diff, 1:n_diff) = a_opp(:, :, 2)
-        a_block(n_diff + 1:2 * n_diff, n_diff + 1:2 * n_diff) = a_same(:, :, 2)
-        deallocate(a_same, a_opp)
+        allocate(a_full(2 * n_diff, 2 * n_diff))
+        a_full(1:n_diff, 1:n_diff) = a_same_linear(:, :, 1) + a_same_nonlinear(:, :, 1)
+        a_full(1:n_diff, n_diff + 1:2 * n_diff) = a_opp(:, :, 1)
+        a_full(n_diff + 1:2 * n_diff, 1:n_diff) = a_opp(:, :, 2)
+        a_full(n_diff + 1:2 * n_diff, n_diff + 1:2 * n_diff) = &
+            a_same_linear(:, :, 2) + a_same_nonlinear(:, :, 2)
+        deallocate(a_same_linear, a_same_nonlinear, a_opp)
+        a_block = congruence_transform(a_full, map, chol)
+        deallocate(a_full)
 
     end function build_a_block_sym_os
 
     subroutine symmetrize_weighted(a, step_norms)
         !
-        ! this subroutine performs a weighted symmetrization of a square matrix 
-        ! a(i, k), blending a(i, k) with a(k, i) using a weight biased toward the entry 
-        ! associated with the larger step norm
+        ! this subroutine performs a weighted symmetrization of a square matrix with
+        ! entries a(i, k) = <history_i, response_k>, appropriate when the response is
+        ! not an exact linear function of the history step (e.g. the non-linear XC
+        ! potential), so that a(i, k) /= a(k, i) carries genuine higher-order content
+        ! rather than noise; response_k averages the Hessian over an excursion of
+        ! length step_norms(k), so each off-diagonal pair is blended toward whichever
+        ! entry draws its response from the shorter, more local step; the weight is
+        ! a sign-safe Richardson weight step_norms(k) / (step_norms(k) - step_norms(i)),
+        ! whose interpolating denominator keeps the blend bounded where that
+        ! extrapolation would be unstable
         !
         use opentrustregion, only: numerical_zero
 
@@ -1263,34 +1368,6 @@ module otr_arh
 
     end subroutine symmetrize_weighted
 
-    subroutine cross_symmetrize_weighted(a12, a21, step_norms1, step_norms2)
-        !
-        ! this subroutine performs a weighted symmetrization between two related 
-        ! off-diagonal blocks a12(i, k) and a21(k, i) of a larger matrix, analogous to
-        ! symmetrize_weighted but for blocks that are not self-transposed
-        !
-        use opentrustregion, only: numerical_zero
-
-        real(rp), intent(inout) :: a12(:, :), a21(:, :)
-        real(rp), intent(in) :: step_norms1(:), step_norms2(:)
-
-        integer(ip) :: i, k
-        real(rp) :: weight
-
-        do k = 1, size(a12, 2)
-            do i = 1, size(a12, 1)
-                if (step_norms1(i) + step_norms2(k) > numerical_zero) then
-                    weight = step_norms2(k) / (step_norms1(i) + step_norms2(k))
-                else
-                    weight = 0.5_rp
-                end if
-                a12(i, k) = weight * a21(k, i) + (1.0_rp - weight) * a12(i, k)
-                a21(k, i) = a12(i, k)
-            end do
-        end do
-
-    end subroutine cross_symmetrize_weighted
-
     subroutine symmetrize_exact(a)
         !
         ! this subroutine performs a plain, unweighted symmetrization of a square
@@ -1304,74 +1381,26 @@ module otr_arh
 
     end subroutine symmetrize_exact
 
-    function noise_threshold(a, settings, error) result(thresh)
+    subroutine cross_symmetrize_exact(a12, a21)
         !
-        ! this function estimates the numerical noise floor of a matrix a that is
-        ! exactly symmetric in exact arithmetic, using the spectral norm (largest
-        ! singular value) of its observed antisymmetric part as a direct measurement of 
-        ! that noise
+        ! this subroutine performs a plain, unweighted cross-symmetrization
+        ! between two related off-diagonal blocks a12(i, k) and a21(k, i) of a
+        ! larger matrix, appropriate when a12 and transpose(a21) are
+        ! exactly equal in exact arithmetic so that any observed mismatch is pure
+        ! numerical noise rather than a genuine inconsistency to average over
         !
-        use opentrustregion, only: numerical_zero, verbosity_error
+        real(rp), intent(inout) :: a12(:, :), a21(:, :)
 
-        real(rp), intent(in) :: a(:, :)
-        type(arh_settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
-        real(rp) :: thresh
+        real(rp), allocatable :: averaged(:, :)
 
-        real(rp), allocatable :: anti(:, :), s(:), work(:)
-        real(rp) :: dummy(1, 1)
-        integer(ip) :: n, lwork, info
-        character(300) :: msg
-        external :: dgesvd
+        averaged = 0.5_rp * (a12 + transpose(a21))
+        a12 = averaged
+        a21 = transpose(averaged)
+        deallocate(averaged)
 
-        ! initialize error flag and threshold in case of error
-        error = 0
-        thresh = 0.0_rp
+    end subroutine cross_symmetrize_exact
 
-        n = size(a, 1)
 
-        ! get antisymmetric part
-        allocate (anti(n, n), s(n))
-        anti = 0.5_rp * (a - transpose(a))
-
-        ! workspace query
-        allocate (work(1))
-        call dgesvd('N', 'N', n, n, anti, n, s, dummy, 1_ip, dummy, 1_ip, work, &
-                    -1_ip, info)
-        lwork = int(work(1), kind=ip)
-        deallocate (work)
-        allocate (work(lwork))
-
-        ! compute singular values only
-        call dgesvd('N', 'N', n, n, anti, n, s, dummy, 1_ip, dummy, 1_ip, work, &
-                    lwork, info)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write (msg, '(A, I0)') "Singular value decomposition failed: Error in "// &
-                "DGESVD, info = ", info
-            call settings%log(msg, verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
-        ! set threshold to largest singular value times safety margin
-        thresh = symm_noise_safety_margin * max(s(1), numerical_zero)
-        deallocate (anti, s, work)
-
-    end function noise_threshold
-
-    function regularized_eigval_inv(eig_vals, eig_val_thresh) result(eig_vals_inv)
-        !
-        ! this function returns Tikhonov-regularized pseudoinverse eigenvalues, damping
-        ! directions close to numerical noise relative to the given threshold
-        !
-        real(rp), intent(in) :: eig_vals(:), eig_val_thresh
-        real(rp) :: eig_vals_inv(size(eig_vals))
-
-        eig_vals_inv = eig_vals / (eig_vals**2 + eig_val_thresh**2)
-
-    end function regularized_eigval_inv
 
     function truncated_eigval_inv(eig_vals, eig_val_thresh) result(eig_vals_inv)
         !
@@ -1390,202 +1419,223 @@ module otr_arh
 
     end function truncated_eigval_inv
 
-    subroutine get_arh_metric_inv(dm_diff, metric_inv)
+    subroutine factorize_history(vecs, chol, map, n_accepted)
         !
-        ! this subroutine calculates the pseudoinverse of the augmented Roothaan-Hall
-        ! metric, block-diagonal across particle channels since the channels never mix
-        ! when the metric itself is inverted (only the response's input and output
-        ! directions do); the metric is factorized via an unpivoted Cholesky
-        ! decomposition and, since the density matrix differences are saved in reverse
-        ! order, linearly dependent older vectors are skipped while preserving the
-        ! chronological sequence for the active basis; the accepted block is then
-        ! inverted directly from its Cholesky factor and scattered back to the original
-        ! history ordering, so that rejected directions carry zero rows and columns
+        ! this subroutine performs a pivoted, rank-revealing Cholesky factorization
+        ! of the Gram matrix of a set of history vectors: the magnitude decides which 
+        ! of two dependent columns survives, since keeping the larger-magnitude one is 
+        ! beneficial: the linear (Coulomb/exact-exchange) part of the coupled potential 
+        ! difference has no truncation-error penalty from a larger step and less noise, 
+        ! while the non-linear (XC) part's truncation-error benefit from a smaller step 
+        ! vanishes cubically with step length, exactly the regime in which 
+        ! near-duplicate directions arise in the first place; the accepted columns are 
+        ! exactly S in S = Q R with Q orthonormal and R (chol) upper triangular; 
+        ! together with the map back to original column indices, this lets any set of 
+        ! vectors (e.g. a potential-difference history) be re-expressed in the same 
+        ! orthonormalized basis via a single triangular solve without ever forming an 
+        ! explicit metric inverse, which matters because several coupling formulas 
+        ! would otherwise apply that inverse more than once, squaring any 
+        ! ill-conditioning it carries
         !
         use opentrustregion, only: numerical_zero
 
-        real(rp), intent(in) :: dm_diff(:, :, :, :)
-        real(rp), intent(out), allocatable :: metric_inv(:, :)
+        real(rp), intent(in) :: vecs(:, :)
+        real(rp), intent(out), allocatable :: chol(:, :)
+        integer(ip), intent(out), allocatable :: map(:)
+        integer(ip), intent(out) :: n_accepted
 
-        integer(ip) :: n_ao, n_particle, n_dm, i, j, k, offset, info
-        integer(ip) :: n_accepted, n_rejected
-        integer(ip), allocatable :: map(:)
-        real(rp) :: raw_diagonal, tol
-        real(rp), allocatable :: metric(:, :), chol(:, :), work(:)
-        external :: dtrsv, dpotri
-        real(rp), external :: ddot
+        integer(ip) :: vec_len, n_vecs, j, info
+        real(rp) :: tol
+        real(rp), allocatable :: metric(:, :), work(:)
+        integer(ip), allocatable :: piv(:)
+        external :: dsyrk, dpstrf
 
-        n_ao = size(dm_diff, 1)
-        n_particle = size(dm_diff, 3)
-        n_dm = size(dm_diff, 4)
+        vec_len = size(vecs, 1)
+        n_vecs = size(vecs, 2)
 
-        ! allocate the block-diagonal pseudoinverse and handle an empty history
-        allocate(metric_inv(n_particle * n_dm, n_particle * n_dm))
-        metric_inv = 0.0_rp
-        if (n_dm == 0) return
+        n_accepted = 0
+        if (n_vecs == 0) then
+            allocate(chol(0, 0), map(0))
+            return
+        end if
 
-        allocate(metric(n_dm, n_dm), chol(n_dm, n_dm), map(n_dm), work(n_dm))
+        ! generate the Gram matrix
+        allocate(metric(n_vecs, n_vecs))
+        metric = 0.0_rp
+        call dsyrk("U", "T", n_vecs, vec_len, 1.0_rp, vecs, vec_len, 0.0_rp, metric, &
+                   n_vecs)
 
-        do k = 1, n_particle
-            ! initialize tolerance with maximum diagonal element
-            chol = 0.0_rp
-            tol = 0.0_rp
+        ! tolerance for linear dependencies, from the maximum diagonal element
+        tol = 0.0_rp
+        do j = 1, n_vecs
+            tol = max(tol, metric(j, j))
+        end do
+        tol = n_vecs * numerical_zero * tol
 
-            ! generate full Gram matrix
-            do j = 1, n_dm
-                do i = 1, j
-                    ! compute Tr(dm_diff_i * dm_diff_j)
-                    metric(i, j) = ddot(n_ao * n_ao, dm_diff(:, :, k, j), 1_ip, &
-                                        dm_diff(:, :, k, i), 1_ip)
-                    metric(j, i) = metric(i, j)
-                end do
-                tol = max(tol, metric(j, j))
-            end do
+        ! perform pivoted rank-revealing Cholesky
+        allocate(piv(n_vecs), work(2 * n_vecs))
+        call dpstrf("U", n_vecs, metric, n_vecs, piv, n_accepted, tol, work, info)
 
-            ! tolerance for linear dependencies
-            tol = n_dm * numerical_zero * tol
+        ! shrink to the accepted block only
+        allocate(chol(n_accepted, n_accepted), map(n_accepted))
+        chol = metric(1:n_accepted, 1:n_accepted)
+        map = piv(1:n_accepted)
+        deallocate(metric, piv, work)
 
-            ! loop chronologically through history
-            n_accepted = 0
-            n_rejected = 0
-            do i = 1, n_dm
-                raw_diagonal = metric(i, i)
+    end subroutine factorize_history
 
-                ! project current column onto the accepted columns
-                if (n_accepted > 0) then
-                    do j = 1, n_accepted
-                        work(j) = metric(map(j), i)
-                    end do
+    function rebase_dirs(dirs, map, chol) result(rebased)
+        !
+        ! this function re-expresses a set of packed history-direction columns in the 
+        ! orthonormalized basis by selecting and reordering the accepted columns via 
+        ! map, then applying a single triangular solve by the Cholesky factor, 
+        ! equivalent to right-multiplying by the inverse of the (implicit) 
+        ! upper-triangular factor without ever forming that inverse explicitly
+        !
+        real(rp), intent(in) :: dirs(:, :), chol(:, :)
+        integer(ip), intent(in) :: map(:)
+        real(rp), allocatable :: rebased(:, :)
 
-                    ! solve R_accepted^T * work = T_accepted_vs_current
-                    call dtrsv("U", "T", "N", n_accepted, chol, n_dm, work, 1_ip)
+        integer(ip) :: n_param, n_accepted, j
+        external :: dtrsm
 
-                    ! subtract projections to find remaining orthogonal magnitude
-                    raw_diagonal = raw_diagonal - &
-                                   ddot(n_accepted, work(1:n_accepted), 1_ip, &
-                                        work(1:n_accepted), 1_ip)
-                end if
+        n_param = size(dirs, 1)
+        n_accepted = size(map)
+        allocate(rebased(n_param, n_accepted))
+        do j = 1, n_accepted
+            rebased(:, j) = dirs(:, map(j))
+        end do
 
-                ! check for linear dependency
-                if (raw_diagonal < tol) then
-                    ! dependency found: store index at the back of map and skip
-                    ! column
-                    n_rejected = n_rejected + 1
-                    map(n_dm - n_rejected + 1) = i
-                else
-                    ! independent: accept column and append to the active factors
-                    n_accepted = n_accepted + 1
-                    map(n_accepted) = i
+        if (n_accepted > 0) &
+            call dtrsm("R", "U", "N", "N", n_param, n_accepted, 1.0_rp, chol, &
+                       n_accepted, rebased, n_param)
 
-                    if (n_accepted > 1) then
-                        chol(1:n_accepted-1, n_accepted) = work(1:n_accepted-1)
-                    end if
-                    chol(n_accepted, n_accepted) = sqrt(max(0.0_rp, raw_diagonal))
-                end if
-            end do
-            if (n_accepted == 0) cycle
+    end function rebase_dirs
 
-            ! invert the accepted block in place from its Cholesky factor; a failed
-            ! inversion means the block is singular despite the dependency screening,
-            ! in which case the channel simply contributes nothing
-            call dpotri("U", n_accepted, chol, n_dm, info)
-            if (info /= 0) cycle
+    function congruence_transform(a, map, chol) result(a_tilde)
+        !
+        ! this function applies the congruence transformation A -> R^-T (P A P^T) R^-1, 
+        ! where P selects and reorders the rows/columns of A according to map and R is 
+        ! the Cholesky factor
+        !
+        real(rp), intent(in) :: a(:, :), chol(:, :)
+        integer(ip), intent(in) :: map(:)
+        real(rp), allocatable :: a_tilde(:, :)
 
-            ! scatter the inverted upper triangle back to the original history
-            ! ordering, leaving the rejected directions as zero rows and columns
-            offset = (k - 1) * n_dm
-            do j = 1, n_accepted
-                do i = 1, j
-                    metric_inv(offset + map(i), offset + map(j)) = chol(i, j)
-                    metric_inv(offset + map(j), offset + map(i)) = chol(i, j)
-                end do
+        integer(ip) :: n_accepted, i, j
+        external :: dtrsm
+
+        n_accepted = size(map)
+        allocate(a_tilde(n_accepted, n_accepted))
+        do j = 1, n_accepted
+            do i = 1, n_accepted
+                a_tilde(i, j) = a(map(i), map(j))
             end do
         end do
-        deallocate(metric, chol, map, work)
 
-    end subroutine get_arh_metric_inv
+        if (n_accepted > 0) then
+            call dtrsm("R", "U", "N", "N", n_accepted, n_accepted, 1.0_rp, chol, &
+                       n_accepted, a_tilde, n_accepted)
+            call dtrsm("L", "U", "T", "N", n_accepted, n_accepted, 1.0_rp, chol, &
+                       n_accepted, a_tilde, n_accepted)
+        end if
 
-    subroutine get_ms_a_inv_cs(dm_diff, v_diff, linear, a_inv, n_ao, settings, error)
+    end function congruence_transform
+
+    subroutine combine_channels(chol1, map1, chol2, map2, n_offset, chol_comb, map_comb)
         !
-        ! this subroutine computes the pseudoinverse multisecant SR1 matrix for the 
-        ! closed-shell case; for the linear (Coulomb and exact exchange) part; for the 
-        ! linear part, A is exactly symmetric in exact arithmetic, so its observed 
-        ! asymmetry is used directly as a calibrated numerical noise floor to form the 
-        ! pseudoinverse; for the non-linear part, no such exact relationship holds, so 
-        ! a weighted symmetrization is used with a relative threshold for the 
-        ! regularization
+        ! this subroutine assembles a block-diagonal Cholesky factor and concatenated, 
+        ! offset index map from two independent per-channel history factorizations, 
+        ! so that a single rebase or congruence-transform call can act on data that 
+        ! combines both channels
+        !
+        real(rp), intent(in) :: chol1(:, :), chol2(:, :)
+        integer(ip), intent(in) :: map1(:), map2(:), n_offset
+        real(rp), intent(out), allocatable :: chol_comb(:, :)
+        integer(ip), intent(out), allocatable :: map_comb(:)
+
+        integer(ip) :: n1, n2, n_total
+
+        n1 = size(map1)
+        n2 = size(map2)
+        n_total = n1 + n2
+        allocate(chol_comb(n_total, n_total), map_comb(n_total))
+        chol_comb = 0.0_rp
+        chol_comb(1:n1, 1:n1) = chol1
+        chol_comb(n1 + 1:n_total, n1 + 1:n_total) = chol2
+        map_comb(1:n1) = map1
+        map_comb(n1 + 1:n_total) = n_offset + map2
+
+    end subroutine combine_channels
+
+    subroutine get_ms_a_inv_cs(dm_diff, v_diff, linear, map, chol, a_inv, settings, &
+                               error)
+        !
+        ! this subroutine computes the pseudoinverse multisecant SR1 matrix for the
+        ! closed-shell case; the linear (Coulomb and exact exchange) part of A is
+        ! exactly symmetric and is symmetrized as such, while the non-linear (XC) part
+        ! is symmetrized with a step-norm weighting
         !
         use opentrustregion, only: symm_mat_diag, numerical_zero
 
         real(rp), intent(in) :: dm_diff(:, :, :, :), v_diff(:, :, :, :)
         logical, intent(in) :: linear
+        integer(ip), intent(in) :: map(:)
+        real(rp), intent(in) :: chol(:, :)
         real(rp), intent(out), allocatable :: a_inv(:, :)
-        integer(ip), intent(in) :: n_ao
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_dm, i
-        real(rp), allocatable :: a(:, :), eig_vecs(:, :), eig_vals(:), &
-                                 eig_vals_inv(:), step_norms(:)
+        integer(ip) :: n_dm, n_accepted
+        real(rp), allocatable :: a(:, :), a_tilde(:, :), eig_vecs(:, :), eig_vals(:), &
+                                 eig_vals_inv(:)
+        real(rp), allocatable :: y_gram(:, :)
         real(rp) :: eig_val_thresh
-        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
 
         ! handle empty history
         n_dm = size(dm_diff, 4)
-        if (n_dm == 0) then
-            allocate(a_inv(0, 0))
+        n_accepted = size(map)
+        if (n_dm == 0 .or. n_accepted == 0) then
+            allocate(a_inv(n_accepted, n_accepted))
+            a_inv = 0.0_rp
             return
         end if
 
-        ! A = S^T Y
-        allocate(eig_vecs(n_dm, n_dm), eig_vals_inv(n_dm), a(n_dm, n_dm), &
-                 eig_vals(n_dm))
-        call dgemm("T", "N", n_dm, n_dm, n_ao * n_ao, 1.0_rp, dm_diff, &
-                   n_ao * n_ao, v_diff, n_ao * n_ao, 0.0_rp, a, n_dm)
+        ! build and symmetrize A = S^T Y
+        allocate(a(n_dm, n_dm))
+        call build_a_part(dm_diff, v_diff, linear, a)
 
-        ! symmetrize
-        if (linear) then
-            ! measure the numerical noise floor from the observed asymmetry before
-            ! enforcing symmetry
-            eig_val_thresh = noise_threshold(a, settings, error)
-            if (error /= 0) return
-            call symmetrize_exact(a)
-        else
-            ! calculate step norms for weighing
-            allocate(step_norms(n_dm))
-            do i = 1, n_dm
-                step_norms(i) = dnrm2(n_ao * n_ao, dm_diff(:, :, 1, i), 1_ip)
-            end do
-
-            ! enforce symmetry
-            call symmetrize_weighted(a, step_norms)
-            deallocate(step_norms)
-        end if
+        ! congruence-transform to the orthonormalized, rank-independent S-basis
+        a_tilde = congruence_transform(a, map, chol)
+        deallocate(a)
 
         ! perform spectral decomposition
-        call symm_mat_diag(a, eig_vals, eig_vecs, settings, error)
+        allocate(eig_vecs(n_accepted, n_accepted), eig_vals(n_accepted))
+        call symm_mat_diag(a_tilde, eig_vals, eig_vecs, settings, error)
         if (error /= 0) return
 
-        ! construct inverse
-        if (linear) then
-            eig_vals_inv = truncated_eigval_inv(eig_vals, eig_val_thresh)
-        else
-            eig_val_thresh = max(rel_regularization_thresh * maxval(abs(eig_vals)), &
-                                 numerical_zero)
-            eig_vals_inv = regularized_eigval_inv(eig_vals, eig_val_thresh)
-        end if
+        ! construct inverse, discarding only eigenvalues at the level of numerical 
+        ! noise relative to the largest one
+        allocate(eig_vals_inv(n_accepted))
+        eig_val_thresh = eig_val_noise_factor * maxval(abs(eig_vals)) * epsilon(1.0_rp)
+        eig_vals_inv = truncated_eigval_inv(eig_vals, eig_val_thresh)
+
+        ! discard directions failing the MS-SR1 skipping criterion
+        y_gram = response_gram(v_diff, map, chol)
+        call apply_ms_sr1_skip(eig_vals, eig_vecs, y_gram, eig_vals_inv)
+        deallocate(y_gram)
 
         ! reassemble the pseudoinverse
         a_inv = spectral_to_dense(eig_vecs, eig_vals_inv)
-        deallocate(a, eig_vecs, eig_vals, eig_vals_inv)
+        deallocate(a_tilde, eig_vecs, eig_vals, eig_vals_inv)
 
     end subroutine get_ms_a_inv_cs
 
     subroutine get_ms_a_inv_os_linear(dm_diff, v_same_spin_diff, v_opposite_spin_diff, &
-                                      a_inv, n_ao, settings, error)
+                                      map, chol, a_inv, n_ao, settings, error)
         !
         ! this subroutine computes the pseudoinverse multisecant SR1 matrix in a
         ! spin-separated manner for the linear (Coulomb and exact exchange) part in the 
@@ -1597,14 +1647,17 @@ module otr_arh
 
         real(rp), intent(in) :: dm_diff(:, :, :, :), v_same_spin_diff(:, :, :, :), &
                                 v_opposite_spin_diff(:, :, :, :)
+        integer(ip), intent(in) :: map(:)
+        real(rp), intent(in) :: chol(:, :)
         real(rp), intent(out), allocatable :: a_inv(:, :)
         integer(ip), intent(in) :: n_ao
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_dm, i, k
-        real(rp), allocatable :: a(:, :), eig_vecs(:, :), eig_vals(:), &
+        integer(ip) :: n_dm, n_accepted, i, k
+        real(rp), allocatable :: a(:, :), a_tilde(:, :), eig_vecs(:, :), eig_vals(:), &
                                  eig_vals_inv(:)
+        real(rp), allocatable :: y_gram(:, :)
         real(rp) :: eig_val_thresh
 
         real(rp), external :: ddot
@@ -1614,8 +1667,10 @@ module otr_arh
 
         ! handle empty history
         n_dm = size(dm_diff, 4)
-        if (n_dm == 0) then
-            allocate(a_inv(0, 0))
+        n_accepted = size(map)
+        if (n_dm == 0 .or. n_accepted == 0) then
+            allocate(a_inv(n_accepted, n_accepted))
+            a_inv = 0.0_rp
             return
         end if
 
@@ -1635,93 +1690,189 @@ module otr_arh
             end do
         end do
 
-        ! measure the numerical noise floor from the observed asymmetry before
-        ! enforcing symmetry
-        eig_val_thresh = noise_threshold(a, settings, error)
-        if (error /= 0) return
-        call symmetrize_exact(a)
+        ! congruence-transform to the orthonormalized, rank-independent S-basis
+        a_tilde = congruence_transform(a, map, chol)
+        deallocate(a)
+
+        ! enforce the symmetry A has in exact arithmetic
+        call symmetrize_exact(a_tilde)
 
         ! perform spectral decomposition
-        allocate(eig_vecs(2 * n_dm, 2 * n_dm), eig_vals(2 * n_dm))
-        call symm_mat_diag(a, eig_vals, eig_vecs, settings, error)
+        allocate(eig_vecs(n_accepted, n_accepted), eig_vals(n_accepted))
+        call symm_mat_diag(a_tilde, eig_vals, eig_vecs, settings, error)
         if (error /= 0) return
 
-        ! construct regularized inverse
-        allocate(eig_vals_inv(2 * n_dm))
+        ! construct inverse, discarding only eigenvalues at the level of numerical 
+        ! noise relative to the largest one
+        allocate(eig_vals_inv(n_accepted))
+        eig_val_thresh = eig_val_noise_factor * maxval(abs(eig_vals)) * epsilon(1.0_rp)
         eig_vals_inv = truncated_eigval_inv(eig_vals, eig_val_thresh)
+
+        ! discard directions failing the multisecant SR1 skipping criterion
+        y_gram = response_gram_os_linear(v_same_spin_diff, v_opposite_spin_diff, n_ao, &
+                                         map, chol)
+        call apply_ms_sr1_skip(eig_vals, eig_vecs, y_gram, eig_vals_inv)
+        deallocate(y_gram)
 
         ! reassemble the pseudoinverse
         a_inv = spectral_to_dense(eig_vecs, eig_vals_inv)
-        deallocate(a, eig_vecs, eig_vals, eig_vals_inv)
+        deallocate(a_tilde, eig_vecs, eig_vals, eig_vals_inv)
 
     end subroutine get_ms_a_inv_os_linear
 
-    subroutine get_ms_a_inv_os_nonlinear(dm_diff, v_diff, a_inv, settings, error)
+    subroutine get_ms_a_inv_os_nonlinear(dm_diff, v_diff, map, chol, a_inv, settings, &
+                                         error)
         !
-        ! this subroutine computes the pseudoinverse multisecant SR1 matrix in a
-        ! spin-combined manner for the non-linear part in the open-shell case; a 
-        ! weighted symmetrization is used with a relative threshold for the 
-        ! regularization
+        ! this subroutine computes the pseudoinverse multisecant SR1 matrix in a spin-
+        ! combined manner for the non-linear part in the open-shell case, since the non-
+        ! linear response mixes both spin channels at once; no exact symmetry holds, so
+        ! a step-norm weighted symmetrization is used
         !
         use opentrustregion, only: symm_mat_diag, numerical_zero
 
         real(rp), intent(in) :: dm_diff(:, :, :, :), v_diff(:, :, :, :)
+        integer(ip), intent(in) :: map(:)
+        real(rp), intent(in) :: chol(:, :)
         real(rp), intent(out), allocatable :: a_inv(:, :)
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_dm, flat_len, i, j
-        real(rp), allocatable :: a(:, :), eig_vecs(:, :), eig_vals(:), &
-                                 eig_vals_inv(:), step_norms(:)
+        integer(ip) :: n_dm, n_accepted
+        real(rp), allocatable :: a(:, :), a_tilde(:, :), eig_vecs(:, :), eig_vals(:), &
+                                 eig_vals_inv(:)
+        real(rp), allocatable :: y_gram(:, :)
         real(rp) :: eig_val_thresh
-        real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
         error = 0
 
         ! handle empty history
         n_dm = size(dm_diff, 4)
-        if (n_dm == 0) then
-            allocate(a_inv(0, 0))
+        n_accepted = size(map)
+        if (n_dm == 0 .or. n_accepted == 0) then
+            allocate(a_inv(n_accepted, n_accepted))
+            a_inv = 0.0_rp
             return
         end if
 
         ! A = S^T Y
         allocate(a(n_dm, n_dm))
-        flat_len = size(dm_diff, 1) * size(dm_diff, 2) * size(dm_diff, 3)
-        do j = 1, n_dm
-            do i = 1, n_dm
-                a(i, j) = ddot(flat_len, dm_diff(:, :, :, i), 1_ip, &
-                               v_diff(:, :, :, j), 1_ip)
-            end do
-        end do
+        call build_a_part(dm_diff, v_diff, .false., a)
 
-        ! calculate step norms for weighing
-        allocate(step_norms(n_dm))
-        do i = 1, n_dm
-            step_norms(i) = dnrm2(flat_len, dm_diff(:, :, :, i), 1_ip)
-        end do
-
-        ! enforce symmetry
-        call symmetrize_weighted(a, step_norms)
-        deallocate(step_norms)
+        ! congruence-transform to the orthonormalized, rank-independent S-basis
+        a_tilde = congruence_transform(a, map, chol)
+        deallocate(a)
 
         ! perform spectral decomposition
-        allocate(eig_vecs(n_dm, n_dm), eig_vals(n_dm))
-        call symm_mat_diag(a, eig_vals, eig_vecs, settings, error)
+        allocate(eig_vecs(n_accepted, n_accepted), eig_vals(n_accepted))
+        call symm_mat_diag(a_tilde, eig_vals, eig_vecs, settings, error)
         if (error /= 0) return
 
-        ! construct regularized inverse
-        allocate(eig_vals_inv(n_dm))
-        eig_val_thresh = max(rel_regularization_thresh * maxval(abs(eig_vals)), &
-                             numerical_zero)
-        eig_vals_inv = regularized_eigval_inv(eig_vals, eig_val_thresh)
+        ! construct inverse, discarding only eigenvalues at the level of numerical noise
+        ! relative to the largest one
+        allocate(eig_vals_inv(n_accepted))
+        eig_val_thresh = eig_val_noise_factor * maxval(abs(eig_vals)) * epsilon(1.0_rp)
+        eig_vals_inv = truncated_eigval_inv(eig_vals, eig_val_thresh)
+
+        ! discard directions failing the multisecant SR1 skipping criterion
+        y_gram = response_gram(v_diff, map, chol)
+        call apply_ms_sr1_skip(eig_vals, eig_vecs, y_gram, eig_vals_inv)
+        deallocate(y_gram)
 
         ! reassemble the pseudoinverse
         a_inv = spectral_to_dense(eig_vecs, eig_vals_inv)
-        deallocate(a, eig_vecs, eig_vals, eig_vals_inv)
+        deallocate(a_tilde, eig_vecs, eig_vals, eig_vals_inv)
 
     end subroutine get_ms_a_inv_os_nonlinear
+
+    function response_gram(v_diff, map, chol) result(y_gram)
+        !
+        ! this function returns the Gram matrix of the response history rebased into
+        ! the orthonormalized S-basis, so that the squared norm of the response along
+        ! an eigenvector v of the congruence-transformed A is v^T y_gram v
+        !
+        real(rp), intent(in) :: v_diff(:, :, :, :), chol(:, :)
+        integer(ip), intent(in) :: map(:)
+        real(rp), allocatable :: y_gram(:, :)
+
+        integer(ip) :: n_dm, flat_len
+        real(rp), allocatable :: gram(:, :)
+        external :: dgemm
+
+        n_dm = size(v_diff, 4)
+        flat_len = size(v_diff, 1) * size(v_diff, 2) * size(v_diff, 3)
+        allocate(gram(n_dm, n_dm))
+        call dgemm("T", "N", n_dm, n_dm, flat_len, 1.0_rp, v_diff, flat_len, v_diff, &
+                   flat_len, 0.0_rp, gram, n_dm)
+        y_gram = congruence_transform(gram, map, chol)
+        deallocate(gram)
+
+    end function response_gram
+
+    function response_gram_os_linear(v_same_spin_diff, v_opposite_spin_diff, n_ao, &
+                                     map, chol) result(y_gram)
+        !
+        ! this function returns the Gram matrix of the open-shell linear response
+        ! history rebased into the orthonormalized S-basis; the same-spin and
+        ! opposite-spin potentials are interleaved exactly as the rows of A pair them, 
+        ! so that column k of the implicit response matrix stacks the alpha and beta 
+        ! blocks that A(:, k) contracts against
+        !
+        real(rp), intent(in) :: v_same_spin_diff(:, :, :, :), &
+                                v_opposite_spin_diff(:, :, :, :), chol(:, :)
+        integer(ip), intent(in) :: n_ao, map(:)
+        real(rp), allocatable :: y_gram(:, :)
+
+        integer(ip) :: n_dm, n_ao2, k
+        real(rp), allocatable :: y_full(:, :), gram(:, :)
+        external :: dgemm
+
+        n_dm = size(v_same_spin_diff, 4)
+        n_ao2 = n_ao * n_ao
+        allocate(y_full(2 * n_ao2, 2 * n_dm), gram(2 * n_dm, 2 * n_dm))
+        do k = 1, n_dm
+            y_full(:n_ao2, k) = reshape(v_same_spin_diff(:, :, 1, k), [n_ao2])
+            y_full(n_ao2 + 1:, k) = reshape(v_opposite_spin_diff(:, :, 2, k), [n_ao2])
+            y_full(:n_ao2, n_dm + k) = reshape(v_opposite_spin_diff(:, :, 1, k), &
+                                               [n_ao2])
+            y_full(n_ao2 + 1:, n_dm + k) = reshape(v_same_spin_diff(:, :, 2, k), &
+                                                   [n_ao2])
+        end do
+        call dgemm("T", "N", 2 * n_dm, 2 * n_dm, 2 * n_ao2, 1.0_rp, y_full, 2 * n_ao2, &
+                   y_full, 2 * n_ao2, 0.0_rp, gram, 2 * n_dm)
+        y_gram = congruence_transform(gram, map, chol)
+        deallocate(y_full, gram)
+
+    end function response_gram_os_linear
+
+    subroutine apply_ms_sr1_skip(eig_vals, eig_vecs, y_gram, eig_vals_inv)
+        !
+        ! this subroutine applies the multisecant analogue of the SR1 skipping
+        ! criterion: an eigenvalue of the congruence-transformed A plays the role of 
+        ! the classical denominator s^T (y - H s), and a direction is discarded when it 
+        ! is small against the norm of the response it divides; the direction has unit 
+        ! norm in the orthonormalized S-basis, so the ratio is a dimensionless angle
+        !
+        real(rp), intent(in) :: eig_vals(:), eig_vecs(:, :), y_gram(:, :)
+        real(rp), intent(inout) :: eig_vals_inv(:)
+
+        integer(ip) :: i, n
+        real(rp) :: y_norm
+        real(rp), allocatable :: temp(:)
+        real(rp), external :: ddot
+        external :: dgemv
+
+        n = size(eig_vals)
+        allocate(temp(n))
+        do i = 1, n
+            call dgemv("N", n, n, 1.0_rp, y_gram, n, eig_vecs(:, i), 1_ip, 0.0_rp, &
+                       temp, 1_ip)
+            y_norm = sqrt(max(ddot(n, eig_vecs(:, i), 1_ip, temp, 1_ip), 0.0_rp))
+            if (abs(eig_vals(i)) < ms_sr1_skip_thresh * y_norm) eig_vals_inv(i) = 0.0_rp
+        end do
+        deallocate(temp)
+
+    end subroutine apply_ms_sr1_skip
 
     function spectral_to_dense(eigvecs, inv_eigvals) result(mat)
         !
