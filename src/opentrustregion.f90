@@ -1148,7 +1148,7 @@ contains
             integer(ip), allocatable :: ipiv(:)
             integer(ip) :: k, info, rank, lwork
             character(300) :: msg
-            external :: dgesv
+            external :: dgesv, dgelss
             
             ! construct level-shifted Hessian
             level_shifted_hess = red_space_hess
