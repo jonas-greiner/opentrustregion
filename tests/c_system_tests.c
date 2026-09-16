@@ -184,6 +184,17 @@ static c_int precond(const c_real *residual, const c_real *mu,
   return 0;
 }
 
+// contributes no direction, so the solve is unaffected, while the assignment in
+// test_solver_c below makes the compiler check the callback signature
+static c_int get_extra_trial_vectors(c_real *trial_vectors,
+                                     c_int n_extra_trial_vectors) {
+  for (c_int i = 0; i < n_extra_trial_vectors * N_PARAM; ++i) {
+    trial_vectors[i] = 0.0;
+  }
+
+  return 0;
+}
+
 static int logger_called = 0;
 
 static void logger(const char *message) {
