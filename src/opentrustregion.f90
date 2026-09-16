@@ -1812,7 +1812,6 @@ contains
         integer(ip), intent(out) :: error
         real(rp), intent(in), optional :: res_tol
 
-        procedure(hess_x_type), pointer :: approx_hess_x_funptr
         integer(ip) :: n_param, n_trial, n_target, n_added, n_unconverged, iter, i
         real(rp), allocatable :: h_basis(:, :), red_space_hess(:, :), red_eigvals(:), &
                                  red_eigvecs(:, :), solution(:, :), h_solution(:, :), &
@@ -1840,14 +1839,6 @@ contains
         ! increment number of Hessian linear transformations, which is skipped for
         ! transformations that are cheap relative to the exact Hessian
         if (count_hess_x) tot_hess_x = tot_hess_x + n_trial
-
-        ! check if an approximate Hessian linear transformation is available for the
-        ! Jacobi-Davidson correction equation
-        if (associated(settings%approx_hess_x)) then
-            approx_hess_x_funptr => settings%approx_hess_x
-        else
-            approx_hess_x_funptr => hess_x_funptr
-        end if
 
         allocate(basis_vec(n_param), h_basis_vec(n_param))
 
@@ -1926,7 +1917,7 @@ contains
                     iter > settings%jacobi_davidson_start) then
                     ! solve Jacobi-Davidson correction equations
                     minres_tol = 3.0_rp**(-(iter - settings%jacobi_davidson_start - 1))
-                    call minres(-residual(:, i), approx_hess_x_funptr, solution(:, i), &
+                    call minres(-residual(:, i), hess_x_funptr, solution(:, i), &
                                 red_eigvals(i), minres_tol, basis_vec, h_basis_vec, &
                                 settings, error)
                     call add_error_origin(error, error_stability_check, settings)
@@ -1939,12 +1930,10 @@ contains
                     call add_error_origin(error, error_stability_check, settings)
                     if (error /= 0) return
 
-                    ! check if approximate linear transformation is used or if the
-                    ! resulting exact linear transformation still respects Hessian
-                    ! symmetry, which can not be the case due to numerical noise
-                    ! accumulation
-                    if (associated(settings%approx_hess_x) .or. &
-                        abs(ddot(n_param, red_space_basis(:, n_trial), 1_ip, &
+                    ! check whether the returned linear transformation still
+                    ! respects Hessian symmetry, which can not be the case due to
+                    ! numerical noise accumulation
+                    if (abs(ddot(n_param, red_space_basis(:, n_trial), 1_ip, &
                                  h_basis_vec, 1_ip) &
                             - ddot(n_param, basis_vec, 1_ip, h_basis(:, n_trial), &
                                    1_ip)) > hess_symm_thres) then
@@ -2040,7 +2029,7 @@ contains
                 call add_error_origin(error, error_stability_check, settings)
                 if (error /= 0) return
                 call block_davidson(settings%approx_hess_x, h_diag, start_space, &
-                                    .true., n_extra, approx_hess_trial_max_iter, &
+                                    .false., n_extra, approx_hess_trial_max_iter, &
                                     .false., eigvals, leading_block, converged, &
                                     settings, error, res_tol=approx_hess_trial_conv)
                 call add_error_origin(error, error_stability_check, settings)
@@ -2446,7 +2435,7 @@ contains
                     g_min, tmp, rhs2, a_norm, vec_norm, qr_norm
         real(rp), allocatable :: matvec(:), r1(:), r2(:), y(:), w(:), hw(:), w1(:), &
                                  hw1(:), w2(:), hw2(:), v(:), hv(:)
-        logical :: increment_hess_x, stop_iteration
+        logical :: stop_iteration
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
@@ -2462,21 +2451,13 @@ contains
         allocate(matvec(n), r1(n), r2(n), y(n), w(n), hw(n), w1(n), hw1(n), w2(n), &
                  hw2(n), v(n), hv(n))
 
-        ! increment Hessian-vector product count logical
-        select type(settings)
-            type is (solver_settings_type)
-                increment_hess_x = .true.
-            type is (stability_settings_type)
-                increment_hess_x = .not. associated(settings%approx_hess_x)
-        end select
-
         ! initial guess
         if (present(guess)) then
             vec = guess
             call jacobi_davidson_correction(hess_x_funptr, vec, solution, eigval, &
                                             matvec, hvec, settings, error)
             if (error /= 0) return
-            if (increment_hess_x) tot_hess_x = tot_hess_x + 1
+            tot_hess_x = tot_hess_x + 1
         else
             vec = 0.0_rp
             hvec = 0.0_rp
@@ -2532,7 +2513,7 @@ contains
             call jacobi_davidson_correction(hess_x_funptr, v, solution, eigval, y, hv, &
                                             settings, error)
             if (error /= 0) return
-            if (increment_hess_x) tot_hess_x = tot_hess_x + 1
+            tot_hess_x = tot_hess_x + 1
 
             ! get new trial vector
             if (iteration >= 2) y = y - (beta / old_beta) * r1
