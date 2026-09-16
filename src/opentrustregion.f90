@@ -421,13 +421,9 @@ contains
             if (conv_check_passed .or. max_precision_reached) then
                 ! always perform stability check if starting at stationary point
                 if (settings%stability .or. imacro == 1) then
-                    ! set real Hessian if approximate Hessian is used for optimization
+                    ! use the separate Hessian for the check if one is provided
                     if (associated(settings%stability_hess_x)) then
                         stability_hess_x_funptr => settings%stability_hess_x
-                        ! only set approximate Hessian for Jacobi-Davidson correction 
-                        ! equations if it is symmetric
-                        if (settings%hess_symm) &
-                            settings%stability_settings%approx_hess_x => hess_x_funptr
                     else
                         stability_hess_x_funptr => hess_x_funptr
                     end if
