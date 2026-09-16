@@ -23,16 +23,16 @@ module test_reference
         n_param_c = int(n_param, kind=c_ip)
 
     ! number of trial vectors
-    integer(ip), parameter :: n_trial_vectors = 2_ip
-    integer(c_ip), protected, bind(C, name="test_n_trial_vectors") :: &
-        n_trial_vectors_c = int(n_trial_vectors, kind=c_ip)
+    integer(ip), parameter :: n_extra_trial_vectors = 2_ip
+    integer(c_ip), protected, bind(C, name="test_n_extra_trial_vectors") :: &
+        n_extra_trial_vectors_c = int(n_extra_trial_vectors, kind=c_ip)
 
     ! derived types for solver settings
     type ref_settings_type
         logical :: stability, line_search, hess_symm, stop_on_instability
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
-        integer(ip) :: n_random_trial_vectors, n_macro, n_micro, &
-                       jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
+        integer(ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
+                       n_micro, jacobi_davidson_start, seed, verbose, n_iter
         character(kw_len, c_char) :: subsystem_solver, trust_region_shape, diag_solver
     end type
 
@@ -40,8 +40,8 @@ module test_reference
         logical(c_bool) :: stability, line_search, hess_symm, stop_on_instability
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, &
                       local_red_factor
-        integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
-                         jacobi_davidson_start, seed, verbose, n_trial_vectors, n_iter
+        integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
+                         n_micro, jacobi_davidson_start, seed, verbose, n_iter
         character(c_char) :: subsystem_solver(kw_len + 1), &
                              trust_region_shape(kw_len + 1), diag_solver(kw_len + 1)
     end type
@@ -52,10 +52,10 @@ module test_reference
                           hess_symm = .false., stop_on_instability = .true., &
                           conv_tol = 1e-3_rp, start_trust_radius = 0.2_rp, &
                           global_red_factor = 1e-2_rp, local_red_factor = 1e-3_rp, &
-                          n_random_trial_vectors = 5, n_macro = 300, n_micro = 200, &
-                          jacobi_davidson_start = 10, seed = 33, verbose = 3, &
-                          n_trial_vectors = 2, n_iter = 50, subsystem_solver = "tcg", &
-                          diag_solver = "jacobi-davidson", &
+                          n_random_trial_vectors = 5, n_extra_trial_vectors = 2, &
+                          n_macro = 300, n_micro = 200, jacobi_davidson_start = 10, &
+                          seed = 33, verbose = 3, n_iter = 50, &
+                          subsystem_solver = "tcg", diag_solver = "jacobi-davidson", &
                           trust_region_shape = "spherical")
 
     interface assignment(=)
@@ -916,37 +916,38 @@ contains
 
     end function test_modify_step_c_funptr
 
-    function test_init_trial_space_funptr(init_trial_space_funptr, test_name, message) &
+    function test_get_extra_trial_vectors_funptr(get_extra_trial_vectors_funptr, &
+                                                 test_name, message) &
         result(test_passed)
         !
-        ! this function tests a provided trial space initialization function pointer
+        ! this function tests a provided extra trial vector function pointer
         !
-        use opentrustregion, only: init_trial_space_type
+        use opentrustregion, only: get_extra_trial_vectors_type
 
-        procedure(init_trial_space_type), intent(in), pointer :: init_trial_space_funptr
+        procedure(get_extra_trial_vectors_type), intent(in), pointer :: &
+            get_extra_trial_vectors_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
         
-        real(rp), allocatable :: trial_space(:, :)
+        real(rp), allocatable :: trial_vectors(:, :)
         integer(ip) :: error, i
 
         ! assume tests pass
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. associated(init_trial_space_funptr)) then
+        if (.not. associated(get_extra_trial_vectors_funptr)) then
             test_passed = .false.
-            write (stderr, *) "test_"//test_name//" failed: Trial space "// &
-                "initialization function provided"//message//" not associated "// &
-                "with value."
+            write (stderr, *) "test_"//test_name//" failed: Extra trial vector "// &
+                "function provided"//message//" not associated with value."
             return
         end if
 
         ! allocate arrays
-        allocate(trial_space(n_param, n_trial_vectors))
+        allocate(trial_vectors(n_param, n_extra_trial_vectors))
 
-        ! call trial space initialization function
-        call init_trial_space_funptr(trial_space, error)
+        ! call extra trial vector function
+        call get_extra_trial_vectors_funptr(trial_vectors, error)
 
         ! check for error
         if (error /= 0) then
@@ -956,51 +957,53 @@ contains
         end if
 
         ! check returned trial space
-        if (any(abs(trial_space - spread([(real(i, rp), i = 1, n_trial_vectors)], 1, &
-                                         n_param)) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Returned trial space"// &
+        if (any(abs(trial_vectors - spread([(real(i, rp), i = 1, &
+                                             n_extra_trial_vectors)], 1, n_param)) > &
+                tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Returned trial vectors"// &
                 message//" wrong."
             test_passed = .false.
         end if
 
-    end function test_init_trial_space_funptr
+    end function test_get_extra_trial_vectors_funptr
 
-    function test_init_trial_space_c_funptr(init_trial_space_c_funptr, test_name, &
-                                            message) result(test_passed)
+    function test_get_extra_trial_vectors_c_funptr(get_extra_trial_vectors_c_funptr, &
+                                                   test_name, message) &
+        result(test_passed)
         !
-        ! this function tests a provided trial space initialization C function pointer
+        ! this function tests a provided extra trial vector C function pointer
         !
-        use c_interface, only: init_trial_space_c_type
+        use c_interface, only: get_extra_trial_vectors_c_type
 
-        type(c_funptr), intent(in) :: init_trial_space_c_funptr
+        type(c_funptr), intent(in) :: get_extra_trial_vectors_c_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
         
-        procedure(init_trial_space_c_type), pointer :: init_trial_space_funptr
-        real(c_rp), allocatable :: trial_space(:, :)
+        procedure(get_extra_trial_vectors_c_type), pointer :: &
+            get_extra_trial_vectors_funptr
+        real(c_rp), allocatable :: trial_vectors(:, :)
         integer(ip) :: error, i
 
         ! assume tests pass
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. c_associated(init_trial_space_c_funptr)) then
+        if (.not. c_associated(get_extra_trial_vectors_c_funptr)) then
             test_passed = .false.
-            write (stderr, *) "test_"//test_name//" failed: Trial space "// &
-                "initialization function provided"//message//" not associated "// &
-                "with value."
+            write (stderr, *) "test_"//test_name//" failed: Extra trial vector "// &
+                "function provided"//message//" not associated with value."
             return
         end if
 
         ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=init_trial_space_c_funptr, &
-                             fptr=init_trial_space_funptr)
+        call c_f_procpointer(cptr=get_extra_trial_vectors_c_funptr, &
+                             fptr=get_extra_trial_vectors_funptr)
 
         ! allocate arrays
-        allocate(trial_space(n_param, n_trial_vectors))
+        allocate(trial_vectors(n_param, n_extra_trial_vectors))
 
-        ! call trial space initialization function
-        error = init_trial_space_funptr(trial_space)
+        ! call extra trial vector function
+        error = get_extra_trial_vectors_funptr(trial_vectors, n_extra_trial_vectors_c)
 
         ! check for error
         if (error /= 0) then
@@ -1010,14 +1013,15 @@ contains
         end if
 
         ! check returned trial space
-        if (any(abs(trial_space - spread([(real(i, c_rp), i = 1, n_trial_vectors)], 1, &
-                                         n_param)) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Returned trial space"// &
+        if (any(abs(trial_vectors - spread([(real(i, c_rp), i = 1, &
+                                             n_extra_trial_vectors)], 1, n_param)) > &
+                tol_c)) then
+            write (stderr, *) "test_"//test_name//" failed: Returned trial vectors"// &
                 message//" wrong."
             test_passed = .false.
         end if
 
-    end function test_init_trial_space_c_funptr
+    end function test_get_extra_trial_vectors_c_funptr
 
     function test_conv_check_funptr(conv_check_funptr, test_name, message) &
         result(test_passed)
@@ -1261,6 +1265,12 @@ contains
             test_modify_step_funptr(settings%modify_step, test_name, " by"//message// &
                                     " step modification subroutine")
 
+        ! test passed extra trial vector subroutine
+        test_passed = test_passed .and. &
+            test_get_extra_trial_vectors_funptr(settings%get_extra_trial_vectors, &
+                                                test_name, " by"//message//" extra "// &
+                                                "trial vector subroutine")
+
         ! test passed convergence check function
         test_passed = test_passed .and. &
             test_conv_check_funptr(settings%conv_check, test_name, " by"//message// &
@@ -1323,6 +1333,12 @@ contains
             test_modify_step_c_funptr(settings_c%modify_step, test_name, " by"// &
                                       message//" step modification function")
 
+        ! test passed extra trial vector function
+        test_passed = test_passed .and. &
+            test_get_extra_trial_vectors_c_funptr(settings_c%get_extra_trial_vectors, &
+                                                  test_name, " by"//message// &
+                                                  " extra trial vector function")
+
         ! test passed convergence check function
         test_passed = test_passed .and. &
             test_conv_check_c_funptr(settings_c%conv_check, test_name, " by"// &
@@ -1380,11 +1396,11 @@ contains
             test_hess_x_funptr(settings%approx_hess_x, test_name, " by"//message// &
                                " approximate Hessian linear transformation subroutine")
 
-        ! test passed trial space initialization subroutine
+        ! test passed extra trial vector subroutine
         test_passed = test_passed .and. &
-            test_init_trial_space_funptr(settings%init_trial_space, test_name, " by"// &
-                                         message//" trial space initialization "// &
-                                         "subroutine")
+            test_get_extra_trial_vectors_funptr(settings%get_extra_trial_vectors, &
+                                                test_name, " by"//message//" extra "// &
+                                                "trial vector subroutine")
 
         ! test passed convergence check subroutine
         test_passed = test_passed .and. &
@@ -1434,11 +1450,11 @@ contains
             test_hess_x_c_funptr(settings_c%approx_hess_x, test_name, " by"//message// &
                                  "approximate Hessian linear transformation function")
 
-        ! test passed trial space initialization function
+        ! test passed extra trial vector function
         test_passed = test_passed .and. &
-            test_init_trial_space_c_funptr(settings_c%init_trial_space, test_name, &
-                                           " by"//message//" trial space "// &
-                                           "initialization function")
+            test_get_extra_trial_vectors_c_funptr(settings_c%get_extra_trial_vectors, &
+                                                  test_name, " by"//message// &
+                                                  " extra trial vector function")
 
         ! test passed convergence check function
         test_passed = test_passed .and. &
@@ -1488,6 +1504,11 @@ contains
         if (associated(settings%modify_step)) then
             test_passed = .false.
             write (stderr, *) test_name//" failed: Step modification function "// &
+                "associated."
+        end if
+        if (associated(settings%get_extra_trial_vectors)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Extra trial vector function "// &
                 "associated."
         end if
         if (associated(settings%conv_check)) then
@@ -1545,6 +1566,11 @@ contains
             write (stderr, *) test_name//" failed: Step modification function "// &
                 "associated."
         end if
+        if (c_associated(settings_c%get_extra_trial_vectors)) then
+            test_passed = .false.
+            write (stderr, *) test_name//" failed: Extra trial vector function "// &
+                "associated."
+        end if
         if (c_associated(settings_c%conv_check)) then
             test_passed = .false.
             write (stderr, *) test_name//" failed: Convergence check function "// &
@@ -1595,10 +1621,10 @@ contains
             write (stderr, *) test_name//" failed: Approximate Hessian linear "// &
                 "transformation function associated."
         end if
-        if (associated(settings%init_trial_space)) then
+        if (associated(settings%get_extra_trial_vectors)) then
             test_passed = .false.
-            write (stderr, *) test_name//" failed: Trial space initialization "// &
-                "function associated."
+            write (stderr, *) test_name//" failed: Extra trial vector function "// &
+                "associated."
         end if
         if (associated(settings%conv_check)) then
             test_passed = .false.
@@ -1641,10 +1667,10 @@ contains
             write (stderr, *) test_name//" failed: Approximate Hessian linear "// &
                 "transformation function associated."
         end if
-        if (c_associated(settings_c%init_trial_space)) then
+        if (c_associated(settings_c%get_extra_trial_vectors)) then
             test_passed = .false.
-            write (stderr, *) test_name//" failed: Trial space initialization "// &
-                "function associated."
+            write (stderr, *) test_name//" failed: Extra trial vector function "// &
+                "associated."
         end if
         if (c_associated(settings_c%conv_check)) then
             test_passed = .false.
@@ -1709,6 +1735,7 @@ contains
         lhs%precond_pd => null()
         lhs%project => null()
         lhs%modify_step => null()
+        lhs%get_extra_trial_vectors => null()
         lhs%conv_check => null()
         lhs%stability_hess_x => null()
         lhs%logger => null()
@@ -1722,6 +1749,7 @@ contains
         lhs%global_red_factor = rhs%global_red_factor
         lhs%local_red_factor  = rhs%local_red_factor
         lhs%n_random_trial_vectors = rhs%n_random_trial_vectors
+        lhs%n_extra_trial_vectors = rhs%n_extra_trial_vectors
         lhs%n_macro = rhs%n_macro
         lhs%n_micro = rhs%n_micro
         lhs%jacobi_davidson_start = rhs%jacobi_davidson_start
@@ -1750,7 +1778,7 @@ contains
         lhs%precond => null()
         lhs%project => null()
         lhs%approx_hess_x => null()
-        lhs%init_trial_space => null()
+        lhs%get_extra_trial_vectors => null()
         lhs%conv_check => null()
         lhs%logger => null()
 
@@ -1759,7 +1787,7 @@ contains
         lhs%stop_on_instability = rhs%stop_on_instability
         lhs%conv_tol = rhs%conv_tol
         lhs%n_random_trial_vectors = rhs%n_random_trial_vectors
-        lhs%n_trial_vectors = rhs%n_trial_vectors
+        lhs%n_extra_trial_vectors = rhs%n_extra_trial_vectors
         lhs%n_iter = rhs%n_iter
         lhs%jacobi_davidson_start = rhs%jacobi_davidson_start
         lhs%seed = rhs%seed
@@ -1826,12 +1854,12 @@ contains
         lhs%global_red_factor = real(rhs%global_red_factor, kind=c_rp)
         lhs%local_red_factor  = real(rhs%local_red_factor, kind=c_rp)
         lhs%n_random_trial_vectors = int(rhs%n_random_trial_vectors, kind=c_ip)
+        lhs%n_extra_trial_vectors = int(rhs%n_extra_trial_vectors, kind=c_ip)
         lhs%n_macro = int(rhs%n_macro, kind=c_ip)
         lhs%n_micro = int(rhs%n_micro, kind=c_ip)
         lhs%jacobi_davidson_start = int(rhs%jacobi_davidson_start, kind=c_ip)
         lhs%seed = int(rhs%seed, kind=c_ip)
         lhs%verbose = int(rhs%verbose, kind=c_ip)
-        lhs%n_trial_vectors = int(rhs%n_trial_vectors, kind=c_ip)
         lhs%n_iter = int(rhs%n_iter, kind=c_ip)
         lhs%subsystem_solver = character_to_c(rhs%subsystem_solver)
         lhs%trust_region_shape = character_to_c(rhs%trust_region_shape)
@@ -1857,6 +1885,7 @@ contains
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
             abs(lhs%local_red_factor - rhs%local_red_factor) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
+            lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
@@ -1894,7 +1923,7 @@ contains
             (lhs%stop_on_instability .eqv. rhs%stop_on_instability) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
-            lhs%n_trial_vectors == rhs%n_trial_vectors .and. &
+            lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_iter == rhs%n_iter .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
@@ -1998,6 +2027,7 @@ contains
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
             abs(lhs%local_red_factor - rhs%local_red_factor) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
+            lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
@@ -2032,7 +2062,7 @@ contains
         equal_stability = (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
-            lhs%n_trial_vectors == rhs%n_trial_vectors .and. &
+            lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_iter == rhs%n_iter .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &

@@ -166,14 +166,15 @@ contains
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &
-                                  test_project_c_funptr
+                                  test_project_c_funptr, &
+                                  test_get_extra_trial_vectors_c_funptr
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
         type(c_funptr) :: get_energy_c_funptr, update_dm_c_funptr, &
                           obj_func_oao_c_funptr, update_orbs_oao_c_funptr, &
                           precond_oao_c_funptr, precond_pd_oao_c_funptr, &
-                          project_oao_c_funptr
+                          project_oao_c_funptr, get_extra_trial_vectors_oao_c_funptr
         type(oao_settings_type_c) :: settings_c
         integer(c_ip) :: n_particle_c, error_c
 
@@ -209,7 +210,9 @@ contains
                                         update_dm_c_funptr, obj_func_oao_c_funptr, &
                                         update_orbs_oao_c_funptr, &
                                         precond_oao_c_funptr, precond_pd_oao_c_funptr, &
-                                        project_oao_c_funptr, settings_c)
+                                        project_oao_c_funptr, &
+                                        get_extra_trial_vectors_oao_c_funptr, &
+                                        settings_c)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -260,6 +263,12 @@ contains
             test_project_c_funptr(project_oao_c_funptr, "oao_factory_c_wrapper", &
                                   " by returned projection function")
 
+        ! test returned extra trial vector function
+        test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. &
+            test_get_extra_trial_vectors_c_funptr( &
+                get_extra_trial_vectors_oao_c_funptr, "oao_factory_c_wrapper", &
+                " by returned extra trial vector function")
+
         ! check if test has passed
         test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. test_passed
 
@@ -280,7 +289,9 @@ contains
                                         update_dm_c_funptr, obj_func_oao_c_funptr, &
                                         update_orbs_oao_c_funptr, &
                                         precond_oao_c_funptr, precond_pd_oao_c_funptr, &
-                                        project_oao_c_funptr, settings_c)
+                                        project_oao_c_funptr, &
+                                        get_extra_trial_vectors_oao_c_funptr, &
+                                        settings_c)
 
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
@@ -538,6 +549,30 @@ contains
                                   "project_oao_c_wrapper", "")
 
     end function test_project_oao_c_wrapper
+
+    logical(c_bool) function test_get_extra_trial_vectors_oao_c_wrapper() bind(C)
+        !
+        ! this function tests the C wrapper for the OAO extra trial vector subroutine
+        !
+        use otr_common_c_interface, only: n_param_global => n_param
+        use otr_oao_c_interface, only: get_extra_trial_vectors_oao_before_wrapping, &
+                                       get_extra_trial_vectors_oao_c_wrapper
+        use otr_oao_mock, only: mock_get_extra_trial_vectors_oao
+        use test_reference, only: test_get_extra_trial_vectors_c_funptr, n_param
+
+        ! set global number of parameters for assumed size arrays
+        n_param_global = n_param
+
+        ! inject mock subroutine
+        get_extra_trial_vectors_oao_before_wrapping => mock_get_extra_trial_vectors_oao
+
+        ! test extra trial vector function
+        test_get_extra_trial_vectors_oao_c_wrapper = &
+            test_get_extra_trial_vectors_c_funptr( &
+                c_funloc(get_extra_trial_vectors_oao_c_wrapper), &
+                "get_extra_trial_vectors_oao_c_wrapper", "")
+
+    end function test_get_extra_trial_vectors_oao_c_wrapper
 
     logical(c_bool) function test_init_oao_settings_c() bind(C)
         !

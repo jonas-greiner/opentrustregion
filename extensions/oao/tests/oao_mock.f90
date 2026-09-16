@@ -7,7 +7,8 @@
 module otr_oao_mock
 
     use opentrustregion, only: rp, ip, stderr, obj_func_type, precond_type, &
-                               precond_pd_type, project_type
+                               precond_pd_type, project_type, &
+                               get_extra_trial_vectors_type
     use otr_oao, only: oao_factory_cs, oao_factory_os, oao_deconstructor
     use test_reference, only: tol
     use otr_oao_test_reference, only: ref_oao_settings, operator(/=)
@@ -27,6 +28,8 @@ module otr_oao_mock
     procedure(precond_pd_type), pointer :: mock_precond_pd_oao_ptr => &
         mock_precond_pd_oao
     procedure(project_type), pointer ::  mock_project_oao_ptr => mock_project_oao
+    procedure(get_extra_trial_vectors_type), pointer :: &
+        mock_get_extra_trial_vectors_oao_ptr => mock_get_extra_trial_vectors_oao
 
 contains
 
@@ -53,7 +56,8 @@ contains
                                    get_energy_funptr, update_dm_funptr, &
                                    obj_func_oao_funptr, update_orbs_oao_funptr, &
                                    precond_oao_funptr, precond_pd_oao_funptr, &
-                                   project_oao_funptr, error, settings)
+                                   project_oao_funptr, &
+                                   get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
@@ -73,6 +77,8 @@ contains
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
         procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
+            get_extra_trial_vectors_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -138,6 +144,7 @@ contains
         precond_oao_funptr => mock_precond_oao
         precond_pd_oao_funptr => mock_precond_pd_oao
         project_oao_funptr => mock_project_oao
+        get_extra_trial_vectors_oao_funptr => mock_get_extra_trial_vectors_oao
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
 
     end subroutine mock_oao_factory_cs
@@ -146,7 +153,8 @@ contains
                                    get_energy_funptr, update_dm_funptr, &
                                    obj_func_oao_funptr, update_orbs_oao_funptr, &
                                    precond_oao_funptr, precond_pd_oao_funptr, &
-                                   project_oao_funptr, error, settings)
+                                   project_oao_funptr, &
+                                   get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
@@ -166,6 +174,8 @@ contains
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
         procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
+            get_extra_trial_vectors_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -231,6 +241,7 @@ contains
         precond_oao_funptr => mock_precond_oao
         precond_pd_oao_funptr => mock_precond_pd_oao
         project_oao_funptr => mock_project_oao
+        get_extra_trial_vectors_oao_funptr => mock_get_extra_trial_vectors_oao
         dm_ao_3d => dm_ao
 
     end subroutine mock_oao_factory_os
@@ -300,5 +311,22 @@ contains
         error = 0
 
     end subroutine mock_project_oao
+
+    subroutine mock_get_extra_trial_vectors_oao(trial_vectors, error)
+        !
+        ! this function is a test function for the OAO extra trial vector function
+        !
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: i
+
+        do i = 1, size(trial_vectors, 2)
+            trial_vectors(:, i) = real(i, kind=rp)
+        end do
+
+        error = 0
+
+    end subroutine mock_get_extra_trial_vectors_oao
 
 end module otr_oao_mock

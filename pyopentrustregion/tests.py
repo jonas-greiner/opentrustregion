@@ -128,6 +128,7 @@ fortran_tests = {
         "jacobi_davidson_correction",
         "level_shifted_davidson",
         "level_shifted_diag_precond",
+        "lowest_h_diag_unit_vectors",
         "mat_lowest_eigpairs",
         "mat_min_eig",
         "print_message",
@@ -158,10 +159,10 @@ fortran_tests = {
         "character_to_c",
         "conv_check_f_wrapper",
         "conv_check_stability_f_wrapper",
+        "get_extra_trial_vectors_f_wrapper",
         "hess_x_f_wrapper",
         "init_solver_settings_c",
         "init_stability_settings_c",
-        "init_trial_space_f_wrapper",
         "logger_f_wrapper",
         "modify_step_f_wrapper",
         "obj_func_f_wrapper",
@@ -212,8 +213,8 @@ tol = c_real.in_dll(lib, "test_tol").value
 # number of parameters
 n_param = c_int.in_dll(lib, "test_n_param").value
 
-# number of trial vectors
-n_trial_vectors = c_int.in_dll(lib, "test_n_trial_vectors").value
+# number of extra trial vectors
+n_extra_trial_vectors = c_int.in_dll(lib, "test_n_extra_trial_vectors").value
 
 
 @add_tests
@@ -416,11 +417,11 @@ class PyInterfaceTests(unittest.TestCase):
     mock_approx_hess_x = mock_hess_x
     mock_stability_hess_x = mock_hess_x
 
-    def mock_init_trial_space(self, trial_space):
+    def mock_get_extra_trial_vectors(self, trial_vectors):
         """
-        this function is a mock function for the trial space initialization function
+        this function is a mock function for the extra trial vector function
         """
-        trial_space[:] = np.arange(1, len(trial_space) + 1).reshape(-1, 1)
+        trial_vectors[:] = np.arange(1, len(trial_vectors) + 1).reshape(-1, 1)
 
     def mock_conv_check_stability(self, residual, eigval):
         """

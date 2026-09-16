@@ -308,24 +308,37 @@ contains
 
     end subroutine mock_approx_hess_x
 
-    subroutine mock_init_trial_space(trial_space, error)
+    subroutine mock_get_extra_trial_vectors(trial_vectors, error)
         !
-        ! this subroutine is a test subroutine for the trial space initialization 
-        ! subroutine
+        ! this subroutine is a test subroutine for the extra trial vector subroutine
         !
-        real(rp), intent(out), target :: trial_space(:, :)
+        real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
 
         integer(ip) :: i
 
-        trial_space = 0.0_rp
-        do i = 1, size(trial_space, 2)
-            trial_space(i, i) = 1.0_rp
+        trial_vectors = 0.0_rp
+        do i = 1, size(trial_vectors, 2)
+            trial_vectors(i, i) = real(i, kind=rp)
         end do
 
         error = 0
 
-    end subroutine mock_init_trial_space
+    end subroutine mock_get_extra_trial_vectors
+
+    subroutine mock_vanishing_extra_trial_vectors(trial_vectors, error)
+        !
+        ! this subroutine is a test subroutine for an extra trial vector subroutine
+        ! which has no direction to contribute
+        !
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+
+        trial_vectors = 0.0_rp
+
+        error = 0
+
+    end subroutine mock_vanishing_extra_trial_vectors
 
     subroutine logger(message)
         !
@@ -811,10 +824,62 @@ contains
         ! assume tests pass
         test_get_stability_trial_space = .true.
 
-        ! setup settings object
+        ! without a projector the leading block is exactly the unit vectors along the
+        ! lowest Hessian diagonal elements, whatever their sign
         call setup_settings(settings)
-        settings%n_trial_vectors = 2
+        settings%n_extra_trial_vectors = 2
         settings%n_random_trial_vectors = 1
+
+        ! the two lowest elements are deliberately neither the first two nor adjacent
+        h_diag = [4.0_rp, 1.0_rp, 3.0_rp, 2.0_rp]
+
+        ! independently determine which directions the leading block should hold
+        hess_diag_copy = h_diag
+        do k = 1, settings%n_extra_trial_vectors
+            ref_idx(k) = minloc(hess_diag_copy, dim=1)
+            hess_diag_copy(ref_idx(k)) = huge(1.0_rp)
+        end do
+
+        ! generate trial space and check size, the leading directions and orthonormality
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_get_stability_trial_space failed: Produced "// &
+                "error for the Hessian diagonal leading block."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        if (size(red_space_basis, 2) /= settings%n_extra_trial_vectors + &
+            settings%n_random_trial_vectors) then
+            write (stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
+                "number of trial vectors for the Hessian diagonal leading block."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        do i = 1, settings%n_extra_trial_vectors
+            do k = 1, n_param
+                if (abs(red_space_basis(k, i) - &
+                        merge(1.0_rp, 0.0_rp, k == ref_idx(i))) > tol) then
+                    write (stderr, *) "test_get_stability_trial_space failed: "// &
+                        "Leading block is not along the lowest Hessian diagonal "// &
+                        "elements."
+                    test_get_stability_trial_space = .false.
+                end if
+            end do
+        end do
+        do i = 1, size(red_space_basis, 2)
+            do j = 1, size(red_space_basis, 2)
+                overlap = dot_product(red_space_basis(:, i), red_space_basis(:, j))
+                if (i == j) overlap = overlap - 1.0_rp
+                if (abs(overlap) > tol) then
+                    write (stderr, *) "test_get_stability_trial_space failed: "// &
+                        "Returned trial space for the Hessian diagonal leading "// &
+                        "block is not orthonormal."
+                    test_get_stability_trial_space = .false.
+                end if
+            end do
+        end do
+
+        ! add projector
         settings%project => mock_project
 
         ! construct Hessian diagonal whose two lowest elements are the first two, so 
@@ -829,8 +894,7 @@ contains
             test_get_stability_trial_space = .false.
             return
         end if
-        if (size(red_space_basis, 2) /= settings%n_trial_vectors + &
-            settings%n_random_trial_vectors) then
+        if (size(red_space_basis, 2) /= 1 + settings%n_random_trial_vectors) then
             write (stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
                 "number of trial vectors when the projector introduces a linear "// &
                 "dependency."
@@ -849,10 +913,8 @@ contains
             end do
         end do
 
-        ! use an approximate Hessian linear transformation to construct leading block
-        call setup_settings(settings)
-        settings%n_trial_vectors = 2
-        settings%n_random_trial_vectors = 1
+        ! add approximate Hessian linear transformation
+        settings%project => null()
         call hartmann6d_hessian(minimum1)
 
         ! the Hessian diagonal preconditioner is given the opposite ranking of the
@@ -871,7 +933,7 @@ contains
             test_get_stability_trial_space = .false.
             return
         end if
-        if (size(red_space_basis, 2) /= settings%n_trial_vectors + &
+        if (size(red_space_basis, 2) /= settings%n_extra_trial_vectors + &
             settings%n_random_trial_vectors) then
             write (stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
                 "number of trial vectors with approximate Hessian linear "// &
@@ -885,7 +947,7 @@ contains
             hess_diag_copy(ref_idx(k)) = huge(1.0_rp)
         end do
         ref_eigvals = [(hess(ref_idx(k), ref_idx(k)), k = 1, 2)]
-        do i = 1, settings%n_trial_vectors
+        do i = 1, settings%n_extra_trial_vectors
             hv = [(hess(k, k) * red_space_basis(k, i), k = 1, n_param)]
             lambda = dot_product(red_space_basis(:, i), hv)
             if (norm2(hv - lambda * red_space_basis(:, i)) > tol) then
@@ -914,37 +976,33 @@ contains
             end do
         end do
 
-        ! a supplied trial space initialization callback fully replaces the leading
-        ! block and short-circuits the routine, so the random fill count has to be
-        ! ignored entirely rather than added to the requested number of trial vectors
-        call setup_settings(settings)
-        settings%n_trial_vectors = 3
-        settings%n_random_trial_vectors = 2
-        settings%init_trial_space => mock_init_trial_space
+        ! supplied extra trial vectors take precedence over the approximate Hessian 
+        ! branch exercised above
+        settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
 
-        ! generate trial space and check size, whether the leading block is exactly
-        ! the callback output and orthonormality
+        ! generate trial space and check size, whether the leading block is exactly the 
+        ! supplied vectors and orthonormality
         call get_stability_trial_space(h_diag, red_space_basis, settings, error)
         if (error /= 0) then
             write (stderr, *) "test_get_stability_trial_space failed: Produced "// &
-                "error with trial space initialization."
+                "error with supplied extra trial vectors."
             test_get_stability_trial_space = .false.
             return
         end if
-        if (size(red_space_basis, 2) /= settings%n_trial_vectors) then
-            write (stderr, *) "test_get_stability_trial_space failed: Trial space "// &
-                "initialization callback result was padded with random vectors "// &
-                "instead of being used as is."
+        if (size(red_space_basis, 2) /= settings%n_extra_trial_vectors + &
+            settings%n_random_trial_vectors) then
+            write (stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
+                "number of trial vectors with supplied extra trial vectors."
             test_get_stability_trial_space = .false.
             return
         end if
-        do i = 1, size(red_space_basis, 2)
+        do i = 1, settings%n_extra_trial_vectors
             do k = 1, n_param
                 if (abs(red_space_basis(k, i) - merge(1.0_rp, 0.0_rp, k == i)) > tol) &
                     then
                     write (stderr, *) "test_get_stability_trial_space failed: "// &
-                        "Returned trial space does not match the trial space "// &
-                        "initialization callback output."
+                        "Leading block does not match the supplied extra trial "// &
+                        "vectors."
                     test_get_stability_trial_space = .false.
                 end if
             end do
@@ -955,12 +1013,54 @@ contains
                 if (i == j) overlap = overlap - 1.0_rp
                 if (abs(overlap) > tol) then
                     write (stderr, *) "test_get_stability_trial_space failed: "// &
-                        "Returned trial space with trial space initialization is "// &
+                        "Returned trial space with supplied extra trial vectors is "// &
                         "not orthonormal."
                     test_get_stability_trial_space = .false.
                 end if
             end do
         end do
+
+        ! supplied extra trial vectors which all vanish leave the leading block
+        ! empty, and the trial space then only includes random vectors
+        settings%approx_hess_x => null()
+        settings%get_extra_trial_vectors => mock_vanishing_extra_trial_vectors
+
+        ! generate trial space and check size and orthonormality
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_get_stability_trial_space failed: Produced "// &
+                "error with vanishing extra trial vectors."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        if (size(red_space_basis, 2) /= settings%n_random_trial_vectors) then
+            write (stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
+                "number of trial vectors with vanishing extra trial vectors."
+            test_get_stability_trial_space = .false.
+            return
+        end if
+        do i = 1, size(red_space_basis, 2)
+            do j = 1, size(red_space_basis, 2)
+                overlap = dot_product(red_space_basis(:, i), red_space_basis(:, j))
+                if (i == j) overlap = overlap - 1.0_rp
+                if (abs(overlap) > tol) then
+                    write (stderr, *) "test_get_stability_trial_space failed: "// &
+                        "Returned trial space with vanishing extra trial vectors "// &
+                        "is not orthonormal."
+                    test_get_stability_trial_space = .false.
+                end if
+            end do
+        end do
+
+        ! with no random vectors requested either, dropping every leading vector
+        ! leaves nothing to start the Davidson iterations from
+        settings%n_random_trial_vectors = 0
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        if (error == 0) then
+            write (stderr, *) "test_get_stability_trial_space failed: Error not "// &
+                "thrown when every trial vector is dropped."
+            test_get_stability_trial_space = .false.
+        end if
 
     end function test_get_stability_trial_space
 
@@ -970,7 +1070,7 @@ contains
         !
         use opentrustregion, only: hess_x_type, stability_settings_type, &
                                    stability_check, error_stability_check_max_iter
-        use test_reference, only: n_trial_vectors
+        use test_reference, only: n_extra_trial_vectors
 
         real(rp) :: vars(n_param), h_diag(n_param), direction(n_param), min_eigval, &
                     eigval_vec(n_param)
@@ -1020,9 +1120,9 @@ contains
         ! initialize settings
         call settings%init(error)
 
-        ! set initial trial space
-        settings%n_trial_vectors = n_trial_vectors
-        settings%init_trial_space => mock_init_trial_space
+        ! supply the extra trial vectors
+        settings%n_extra_trial_vectors = n_extra_trial_vectors
+        settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
 
         ! run stability, check if error has occured check and determine whether minimum 
         ! is stable and the returned direction vanishes
@@ -1030,26 +1130,26 @@ contains
                              direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error with "// &
-                "custom trial space initialization."
+                "supplied extra trial vectors."
             test_stability_check = .false.
         end if
         if (.not. stable) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization incorrectly classifies "// &
-                "stability of minimum."
+                "supplied extra trial vectors incorrectly classifies stability of "// &
+                "minimum."
             test_stability_check = .false.
         end if
         if (min_eigval <= 0.0_rp) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization does not return correct "// &
-                "eigenvalue for minimum."
+                "supplied extra trial vectors does not return correct eigenvalue "// &
+                "for minimum."
             test_stability_check = .false.
         end if
         call hess_x_funptr(direction, eigval_vec, error)
         if (dot_product(direction, eigval_vec) - min_eigval > tol) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization does not return correct "// &
-                "eigenvector direction for minimum."
+                "supplied extra trial vectors does not return correct eigenvector "// &
+                "direction for minimum."
             test_stability_check = .false.
         end if
 
@@ -1138,9 +1238,9 @@ contains
         ! initialize settings
         call settings%init(error)
 
-        ! set initial trial space
-        settings%n_trial_vectors = n_trial_vectors
-        settings%init_trial_space => mock_init_trial_space
+        ! supply the extra trial vectors
+        settings%n_extra_trial_vectors = n_extra_trial_vectors
+        settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
 
         ! run stability check, check if error has occured and determine whether saddle 
         ! point is unstable and the returned direction is correct
@@ -1148,26 +1248,26 @@ contains
                              direction, min_eigval)
         if (error /= 0) then
             write (stderr, *) "test_stability_check failed: Produced error with "// &
-                "custom trial space initialization."
+                "supplied extra trial vectors."
             test_stability_check = .false.
         end if
         if (stable) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization incorrectly classifies "// &
-                "stability of saddle point."
+                "supplied extra trial vectors incorrectly classifies stability of "// &
+                "saddle point."
             test_stability_check = .false.
         end if
         if (min_eigval >= 0.0_rp) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization does not return correct "// &
-                "eigenvalue for saddle point."
+                "supplied extra trial vectors does not return correct eigenvalue "// &
+                "for saddle point."
             test_stability_check = .false.
         end if
         call hess_x_funptr(direction, eigval_vec, error)
         if (dot_product(direction, eigval_vec) - min_eigval > tol) then
             write (stderr, *) "test_stability_check failed: Stability check with "// &
-                "custom trial space initialization does not return correct "// &
-                "eigenvector direction for saddle point."
+                "supplied extra trial vectors does not return correct eigenvector "// &
+                "direction for saddle point."
             test_stability_check = .false.
         end if
 
@@ -1210,7 +1310,7 @@ contains
         call settings%init(error)
 
         ! request a purely random trial space
-        settings%n_trial_vectors = 0
+        settings%n_extra_trial_vectors = 0
         settings%n_random_trial_vectors = 3
 
         ! run stability check, check if error has occured and determine whether saddle 
@@ -2541,6 +2641,57 @@ contains
 
     end function test_init_rng
 
+    logical(c_bool) function test_lowest_h_diag_unit_vectors() bind(C)
+        !
+        ! this function tests the subroutine which fills columns with unit vectors
+        ! along the lowest Hessian diagonal elements, both when any sign is accepted
+        ! and when only negative curvature is wanted
+        !
+        use opentrustregion, only: lowest_h_diag_unit_vectors
+
+        integer(ip), parameter :: n_param = 4, n_vectors = 3
+        real(rp), parameter :: h_diag(n_param) = [1.0_rp, -2.0_rp, 3.0_rp, -4.0_rp]
+        integer(ip), parameter :: ref_idx(n_vectors) = [4_ip, 2_ip, 1_ip]
+
+        real(rp) :: unit_vectors(n_param, n_vectors), expected(n_param)
+        integer(ip) :: i
+
+        ! assume tests pass
+        test_lowest_h_diag_unit_vectors = .true.
+
+        ! every column is filled when the sign is not restricted, in order of
+        ! increasing diagonal element
+        call lowest_h_diag_unit_vectors(h_diag, .false., unit_vectors)
+        do i = 1, n_vectors
+            expected = 0.0_rp
+            expected(ref_idx(i)) = 1.0_rp
+            if (norm2(unit_vectors(:, i) - expected) > tol) then
+                write (stderr, *) "test_lowest_h_diag_unit_vectors failed: "// &
+                    "Incorrect unit vector when any sign is accepted."
+                test_lowest_h_diag_unit_vectors = .false.
+            end if
+        end do
+
+        ! only the two negative elements produce a vector when negative curvature is
+        ! required, leaving the trailing column vanishing
+        call lowest_h_diag_unit_vectors(h_diag, .true., unit_vectors)
+        do i = 1, count(h_diag < 0.0_rp)
+            expected = 0.0_rp
+            expected(ref_idx(i)) = 1.0_rp
+            if (norm2(unit_vectors(:, i) - expected) > tol) then
+                write (stderr, *) "test_lowest_h_diag_unit_vectors failed: "// &
+                    "Incorrect unit vector when negative curvature is required."
+                test_lowest_h_diag_unit_vectors = .false.
+            end if
+        end do
+        if (norm2(unit_vectors(:, count(h_diag < 0.0_rp) + 1:)) > tol) then
+            write (stderr, *) "test_lowest_h_diag_unit_vectors failed: Column "// &
+                "without a negative diagonal element does not vanish."
+            test_lowest_h_diag_unit_vectors = .false.
+        end if
+
+    end function test_lowest_h_diag_unit_vectors
+
     logical(c_bool) function test_generate_trial_vectors() bind(C)
         !
         ! this function tests the function which generates trial vectors for the
@@ -2638,6 +2789,55 @@ contains
         ! deallocate reduced space basis
         deallocate(red_space_basis)
 
+        ! supplied extra trial vectors replace the Hessian diagonal heuristic, are
+        ! added alongside the gradient direction, and are still padded with the 
+        ! requested random vectors
+        settings%n_extra_trial_vectors = 2
+        settings%n_random_trial_vectors = 1
+        settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+
+        ! generate trial vectors and determine whether the gradient direction still
+        ! leads the returned orthonormal space and the extra vectors were added
+        red_space_basis = generate_trial_vectors(grad, grad_norm, h_diag, settings, &
+                                                 error)
+        if (error /= 0) then
+            write (stderr, *) "test_generate_trial_vectors failed: Produced error "// &
+                "with supplied extra trial vectors."
+            test_generate_trial_vectors = .false.
+        end if
+        if (.not. allocated(red_space_basis)) then
+            write (stderr, *) "test_generate_trial_vectors failed: Reduced space "// &
+                "basis not allocated with supplied extra trial vectors."
+            test_generate_trial_vectors = .false.
+            return
+        end if
+        if (size(red_space_basis, 2) /= 1 + settings%n_extra_trial_vectors + &
+            settings%n_random_trial_vectors) then
+            write (stderr, *) "test_generate_trial_vectors failed: Incorrect "// &
+                "number of vectors with supplied extra trial vectors."
+            test_generate_trial_vectors = .false.
+        end if
+        if (any(abs(red_space_basis(:, 1) - grad / grad_norm) > tol)) then
+            write (stderr, *) "test_generate_trial_vectors failed: Gradient "// &
+                "direction does not lead the trial space with supplied extra "// &
+                "trial vectors."
+            test_generate_trial_vectors = .false.
+        end if
+        do i = 1, size(red_space_basis, 2)
+            do j = i + 1, size(red_space_basis, 2)
+                if (abs(dot_product(red_space_basis(:, i), red_space_basis(:, j))) > &
+                    tol) then
+                    write (stderr, *) "test_generate_trial_vectors failed: "// &
+                        "Generated vectors are not orthonormal with supplied "// &
+                        "extra trial vectors."
+                    test_generate_trial_vectors = .false.
+                end if
+            end do
+        end do
+
+        ! deallocate reduced space basis
+        deallocate(red_space_basis)
+
     end function test_generate_trial_vectors
 
     logical(c_bool) function test_generate_random_trial_vectors() bind(C)
@@ -2721,12 +2921,13 @@ contains
         ! setup settings object
         call setup_settings(settings)
 
-        ! allocate reduced space basis with 3 vectors, where the third vector is 
-        ! linearly dependent
-        allocate(red_space_basis(4, 3))
+        ! allocate reduced space basis with 4 vectors, where the third vector is 
+        ! linearly dependent and the fourth vanishes
+        allocate(red_space_basis(4, 4))
         red_space_basis(:, 1) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
         red_space_basis(:, 2) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
         red_space_basis(:, 3) = [1.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
+        red_space_basis(:, 4) = [0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
 
         ! orthogonalize trial vectors
         call orthogonalize_trial_vectors(red_space_basis, settings, error)
@@ -2736,7 +2937,7 @@ contains
         end if
         if (size(red_space_basis, 2) /= 2) then
             write (stderr, *) "test_orthogonalize_trial_vectors failed: Linearly "// &
-                "dependent vector was not removed."
+                "dependent or vanishing vector was not removed."
             test_orthogonalize_trial_vectors = .false.
         end if
         if (any(abs(norm2(red_space_basis, dim=1) - 1.0_rp) > tol)) then
@@ -2749,6 +2950,25 @@ contains
                 "are not orthogonal."
             test_orthogonalize_trial_vectors = .false.
             end if
+        deallocate(red_space_basis)
+
+        ! a block whose vectors all vanish leaves no vector space behind, which is a
+        ! legitimate outcome for a caller that has no direction to contribute
+        allocate(red_space_basis(4, 2))
+        red_space_basis = 0.0_rp
+
+        ! orthogonalize trial vectors
+        call orthogonalize_trial_vectors(red_space_basis, settings, error)
+        if (error /= 0) then
+            write (stderr, *) "test_orthogonalize_trial_vectors failed: Produced "// &
+                "error for a block of vanishing vectors."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (size(red_space_basis, 2) /= 0) then
+            write (stderr, *) "test_orthogonalize_trial_vectors failed: Block of "// &
+                "vanishing vectors did not produce an empty vector space."
+            test_orthogonalize_trial_vectors = .false.
+        end if
         deallocate(red_space_basis)
 
     end function test_orthogonalize_trial_vectors
@@ -3906,6 +4126,18 @@ contains
                 "of random trial vectors not resolved."
             test_stability_sanity_check = .false.
         end if
+
+        ! check that an empty trial space is rejected
+        settings%n_extra_trial_vectors = 0
+        settings%n_random_trial_vectors = 0
+        call stability_sanity_check(settings, 3_ip, error)
+        if (error == 0) then
+            write(stderr, *) "test_stability_sanity_check failed: Error not thrown "// &
+                "for vanishing number of trial vectors."
+            test_stability_sanity_check = .false.
+        end if
+        settings%n_extra_trial_vectors = 1
+        settings%n_random_trial_vectors = 1
 
         ! check if subsystem solver is correctly checked
         settings%diag_solver = "davidson"

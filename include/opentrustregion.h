@@ -68,9 +68,10 @@ typedef modify_step_fn *modify_step_fp;
 typedef c_int conv_check_fn(c_bool *converged);
 typedef conv_check_fn *conv_check_fp;
 
-/* Trial space initialization callback */
-typedef c_int init_trial_space_fn(c_real *trial_space);
-typedef init_trial_space_fn *init_trial_space_fp;
+/* Extra trial vector callback */
+typedef c_int get_extra_trial_vectors_fn(c_real *trial_vectors,
+                                         c_int n_extra_trial_vectors);
+typedef get_extra_trial_vectors_fn *get_extra_trial_vectors_fp;
 
 /* Stability check convergence check callback */
 typedef c_int conv_check_stability_fn(const c_real *residual, const c_real *eigval,
@@ -90,7 +91,7 @@ typedef struct {
   precond_fp precond;
   project_fp project;
   hess_x_fp approx_hess_x;
-  init_trial_space_fp init_trial_space;
+  get_extra_trial_vectors_fp get_extra_trial_vectors;
   conv_check_stability_fp conv_check;
   logger_fp logger;
 
@@ -101,7 +102,7 @@ typedef struct {
   c_real conv_tol;
 
   c_int n_random_trial_vectors;
-  c_int n_trial_vectors;
+  c_int n_extra_trial_vectors;
   c_int n_iter;
   c_int jacobi_davidson_start;
   c_int seed;
@@ -119,6 +120,7 @@ typedef struct {
   precond_pd_fp precond_pd;
   project_fp project;
   modify_step_fp modify_step;
+  get_extra_trial_vectors_fp get_extra_trial_vectors;
   conv_check_fp conv_check;
   hess_x_fp stability_hess_x;
   logger_fp logger;
@@ -134,6 +136,7 @@ typedef struct {
   c_real local_red_factor;
 
   c_int n_random_trial_vectors;
+  c_int n_extra_trial_vectors;
   c_int n_macro;
   c_int n_micro;
   c_int jacobi_davidson_start;

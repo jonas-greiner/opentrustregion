@@ -154,22 +154,22 @@ contains
         
     end function mock_conv_check
 
-    function mock_init_trial_space(trial_space) result(error) bind(C)
+    function mock_get_extra_trial_vectors(trial_vectors, n_extra_trial_vectors_c) &
+        result(error) bind(C)
         !
-        ! this function is a test function for the trial space initialization function
+        ! this function is a test function for the extra trial vector function
         !
-        use test_reference, only: n_trial_vectors
-
-        real(c_rp), intent(out), target :: trial_space(*)
+        real(c_rp), intent(out), target :: trial_vectors(*)
+        integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
         integer(c_ip) :: i, error
 
-        do i = 1, n_trial_vectors
-            trial_space((i - 1) * n_param + 1:i * n_param) = real(i, kind=c_rp)
+        do i = 1, n_extra_trial_vectors_c
+            trial_vectors((i - 1) * n_param + 1:i * n_param) = real(i, kind=c_rp)
         end do
 
         error = 0
         
-    end function mock_init_trial_space
+    end function mock_get_extra_trial_vectors
 
     function mock_conv_check_stability(residual, eigval, converged) result(error) &
         bind(C)
@@ -212,6 +212,7 @@ contains
         settings%precond_pd = c_funloc(mock_precond_pd)
         settings%project = c_funloc(mock_project)
         settings%modify_step = c_funloc(mock_modify_step)
+        settings%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
         settings%conv_check = c_funloc(mock_conv_check)
         settings%stability_hess_x = c_funloc(mock_hess_x)
         settings%logger = c_funloc(mock_logger)
@@ -230,7 +231,7 @@ contains
         settings%precond = c_funloc(mock_precond)
         settings%project = c_funloc(mock_project)
         settings%approx_hess_x = c_funloc(mock_hess_x)
-        settings%init_trial_space = c_funloc(mock_init_trial_space)
+        settings%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
         settings%conv_check = c_funloc(mock_conv_check_stability)
         settings%logger = c_funloc(mock_logger)
 
@@ -640,30 +641,31 @@ contains
 
     end function test_approx_hess_x_f_wrapper
 
-    logical(c_bool) function test_init_trial_space_f_wrapper() bind(C)
+    logical(c_bool) function test_get_extra_trial_vectors_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the trial space initialization 
+        ! this function tests the Fortran wrapper for the extra trial vector 
         ! function
         !
-        use opentrustregion, only: init_trial_space_type
-        use c_interface, only: init_trial_space_before_wrapping, &
-                               init_trial_space_f_wrapper
-        use test_reference, only: test_init_trial_space_funptr
+        use opentrustregion, only: get_extra_trial_vectors_type
+        use c_interface, only: get_extra_trial_vectors_before_wrapping, &
+                               get_extra_trial_vectors_f_wrapper
+        use test_reference, only: test_get_extra_trial_vectors_funptr
 
-        procedure(init_trial_space_type), pointer :: init_trial_space_funptr
+        procedure(get_extra_trial_vectors_type), pointer :: &
+            get_extra_trial_vectors_funptr
 
         ! inject mock function
-        init_trial_space_before_wrapping => mock_init_trial_space
+        get_extra_trial_vectors_before_wrapping => mock_get_extra_trial_vectors
 
         ! get pointer to subroutine
-        init_trial_space_funptr => init_trial_space_f_wrapper
+        get_extra_trial_vectors_funptr => get_extra_trial_vectors_f_wrapper
 
-        ! test trial space initialization wrapper
-        test_init_trial_space_f_wrapper = &
-            test_init_trial_space_funptr(init_trial_space_funptr, &
-                                         "init_trial_space_f_wrapper", "")
+        ! test extra trial vector wrapper
+        test_get_extra_trial_vectors_f_wrapper = &
+            test_get_extra_trial_vectors_funptr(get_extra_trial_vectors_funptr, &
+                                                "get_extra_trial_vectors_f_wrapper", "")
 
-    end function test_init_trial_space_f_wrapper
+    end function test_get_extra_trial_vectors_f_wrapper
 
     logical(c_bool) function test_conv_check_stability_f_wrapper() bind(C)
         !

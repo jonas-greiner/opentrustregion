@@ -40,7 +40,8 @@ module opentrustregion
                               error_obj_func = 1100, error_update_orbs = 1200, &
                               error_hess_x = 1300, error_precond = 1400, &
                               error_conv_check = 1500, error_project = 1600, &
-                              error_modify_step = 1700, error_init_trial_space = 1800, &
+                              error_modify_step = 1700, &
+                              error_get_extra_trial_vectors = 1800, &
                               error_precond_pd = 1900
 
     ! define useful parameters
@@ -160,12 +161,12 @@ module opentrustregion
     end interface
 
     abstract interface
-        subroutine init_trial_space_type(trial_space, error)
+        subroutine get_extra_trial_vectors_type(trial_vectors, error)
             import :: rp, ip
 
-            real(rp), intent(out), target :: trial_space(:, :)
+            real(rp), intent(out), target :: trial_vectors(:, :)
             integer(ip), intent(out) :: error
-        end subroutine init_trial_space_type
+        end subroutine get_extra_trial_vectors_type
     end interface
 
     abstract interface
@@ -207,17 +208,19 @@ module opentrustregion
     type, abstract, extends(settings_type) :: optimizer_settings_type
         logical :: hess_symm
         real(rp) :: conv_tol
-        integer(ip) :: n_random_trial_vectors, jacobi_davidson_start, seed
+        integer(ip) :: n_random_trial_vectors, n_extra_trial_vectors, &
+                       jacobi_davidson_start, seed
         procedure(precond_type), pointer, nopass :: precond => null()
         procedure(project_type), pointer, nopass :: project => null()
+        procedure(get_extra_trial_vectors_type), pointer, nopass :: &
+            get_extra_trial_vectors => null()
     end type
 
     type, extends(optimizer_settings_type) :: stability_settings_type
         logical :: stop_on_instability
-        integer(ip) :: n_trial_vectors, n_iter
+        integer(ip) :: n_iter
         character(kw_len) :: diag_solver
         procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
-        procedure(init_trial_space_type), pointer, nopass :: init_trial_space => null()
         procedure(conv_check_stability_type), pointer, nopass :: conv_check => null()
     contains
         procedure :: init => init_stability_settings
@@ -240,22 +243,26 @@ module opentrustregion
     ! default settings
     type(stability_settings_type), parameter :: default_stability_settings = &
         stability_settings_type(precond = null(), project = null(), &
-                                approx_hess_x = null(), init_trial_space = null(), &
+                                approx_hess_x = null(), &
+                                get_extra_trial_vectors = null(), &
                                 conv_check = null(), logger = null(), &
                                 hess_symm = .true., initialized = .true., &
                                 stop_on_instability = .false., conv_tol = 1e-9_rp, &
-                                n_random_trial_vectors = -1, n_trial_vectors = 1, &
-                                n_iter = 100, jacobi_davidson_start = 50, seed = 42, &
+                                n_random_trial_vectors = -1, &
+                                n_extra_trial_vectors = 1, n_iter = 100, &
+                                jacobi_davidson_start = 50, seed = 42, &
                                 verbose = 0, diag_solver = "davidson")
     type(solver_settings_type), parameter :: default_solver_settings = &
         solver_settings_type(precond = null(), precond_pd = null(), project = null(), &
                              modify_step = null(), conv_check = null(), &
+                             get_extra_trial_vectors = null(), &
                              stability_hess_x = null(), logger = null(), &
                              stability = .false., line_search = .false., &
                              hess_symm = .true., initialized = .true., &
                              conv_tol = 1e-5_rp, start_trust_radius = -1.0_rp, &
                              global_red_factor = 1e-3_rp, local_red_factor = 1e-4_rp, &
-                             n_random_trial_vectors = 1, n_macro = 150, n_micro = 50, &
+                             n_random_trial_vectors = 1, n_extra_trial_vectors = 1, &
+                             n_macro = 150, n_micro = 50, &
                              jacobi_davidson_start = 30, seed = 42, verbose = 0, &
                              subsystem_solver = "davidson_ls", &
                              trust_region_shape = "none", &
@@ -1646,6 +1653,36 @@ contains
 
     end subroutine init_rng
 
+    subroutine lowest_h_diag_unit_vectors(h_diag, require_negative, unit_vectors)
+        !
+        ! this subroutine fills the provided columns with unit vectors along the
+        ! successively lowest Hessian diagonal elements, which are the cheapest
+        ! available guess at the directions of lowest curvature; when only negative
+        ! curvature is wanted, the columns for which no negative element is left are
+        ! returned vanishing
+        !
+        real(rp), intent(in) :: h_diag(:)
+        logical, intent(in) :: require_negative
+        real(rp), intent(out) :: unit_vectors(:, :)
+
+        integer(ip) :: i, min_idx
+        real(rp), allocatable :: h_diag_copy(:)
+
+        ! start from vanishing columns so that any column left unfilled below stays so
+        unit_vectors = 0.0_rp
+
+        ! place one unit vector per column at the lowest remaining diagonal element
+        h_diag_copy = h_diag
+        do i = 1, size(unit_vectors, 2, kind=ip)
+            min_idx = minloc(h_diag_copy, dim=1)
+            if (require_negative .and. h_diag_copy(min_idx) >= 0.0_rp) exit
+            unit_vectors(min_idx, i) = 1.0_rp
+            h_diag_copy(min_idx) = huge(1.0_rp)
+        end do
+        deallocate(h_diag_copy)
+
+    end subroutine lowest_h_diag_unit_vectors
+
     function generate_trial_vectors(grad, grad_norm, h_diag, settings, error) &
         result(red_space_basis)
         !
@@ -1657,41 +1694,51 @@ contains
 
         real(rp), allocatable :: red_space_basis(:, :)
 
-        real(rp), allocatable :: neg_curv_vec(:)
-        integer(ip) :: min_idx, n_vectors
-        real(rp), external :: dnrm2
+        real(rp), allocatable :: leading_block(:, :)
+        integer(ip) :: n_param, n_extra, n_leading
 
         ! initialize error flag
         error = 0
 
-        ! get minimum Hessian diagonal element
-        min_idx = minloc(h_diag, dim=1)
+        ! number of parameters
+        n_param = size(grad)
 
-        ! add direction if minimum Hessian diagonal element is negative
-        n_vectors = 1
-        if (h_diag(min_idx) < 0.0_rp .and. size(grad) > 2) then
-            allocate(neg_curv_vec(size(grad)))
-            neg_curv_vec = 0.0_rp
-            neg_curv_vec(min_idx) = 1.0_rp
-            call gram_schmidt(neg_curv_vec, &
-                              reshape(grad / grad_norm, [size(grad), 1]), settings, &
-                              error, silent_on_error=.true.)
-            ! if the negative curvature direction is linearly dependent on the gradient 
-            ! direction it cannot usefully be added as a separate trial vector, so fall 
-            ! back to using only the gradient direction
-            if (error == error_gram_schmidt_lin_dep) then
-                error = 0
-            else if (error /= 0) then
-                return
+        ! number of extra trial vectors that fit alongside the gradient direction
+        n_extra = max(min(settings%n_extra_trial_vectors, n_param - 1), 0_ip)
+
+        ! the gradient direction always leads the trial space
+        allocate(leading_block(n_param, 1 + n_extra))
+        leading_block(:, 1) = grad / grad_norm
+
+        if (n_extra > 0) then
+            ! check if extra trial vectors are supplied
+            if (associated(settings%get_extra_trial_vectors)) then
+                ! extra trial vectors supplied by the caller
+                call settings%get_extra_trial_vectors(leading_block(:, 2:), error)
+                call add_error_origin(error, error_get_extra_trial_vectors, settings)
             else
-                n_vectors = 2
+                ! unit vectors along the lowest Hessian diagonal elements
+                call lowest_h_diag_unit_vectors(h_diag, .true., leading_block(:, 2:))
             end if
         end if
 
-        allocate(red_space_basis(size(grad), n_vectors + &
-                 settings%n_random_trial_vectors))
-        red_space_basis(:, 1) = grad / grad_norm
-        if (n_vectors == 2) red_space_basis(:, 2) = neg_curv_vec
+        ! orthonormalize and project the leading block, dropping vanishing vectors and 
+        ! vectors that are linearly dependent on the gradient direction
+        if (error == 0) call orthogonalize_trial_vectors(leading_block, settings, error)
+
+        ! the caller assigns the function result before it inspects the error flag, so
+        ! the result has to be allocated on every path out of here
+        if (error /= 0) then
+            allocate(red_space_basis(n_param, 0))
+            deallocate(leading_block)
+            return
+        end if
+
+        ! fill the trailing columns with random vectors
+        n_leading = size(leading_block, 2)
+        allocate(red_space_basis(n_param, n_leading + settings%n_random_trial_vectors))
+        red_space_basis(:, :n_leading) = leading_block
+        deallocate(leading_block)
 
         call generate_random_trial_vectors(red_space_basis, &
                                            settings%n_random_trial_vectors, settings, &
@@ -1962,9 +2009,8 @@ contains
         real(rp), parameter :: approx_hess_trial_conv = 1e-5_rp
         integer(ip), parameter :: approx_hess_trial_extra = 3, &
                                   approx_hess_trial_max_iter = 100
-        integer(ip) :: n_param, n_total, n_trial_vectors, i, min_idx
-        real(rp), allocatable :: start_space(:, :), eigvals(:), h_diag_copy(:), &
-                                 leading_block(:, :)
+        integer(ip) :: n_param, n_total, n_extra
+        real(rp), allocatable :: start_space(:, :), eigvals(:), leading_block(:, :)
         logical :: converged
 
         ! initialize error flag
@@ -1973,83 +2019,77 @@ contains
         ! number of parameters
         n_param = size(h_diag)
 
-        ! a supplied trial space is used as it is
-        if (associated(settings%init_trial_space)) then
-            allocate(red_space_basis(n_param, settings%n_trial_vectors))
-            call settings%init_trial_space(red_space_basis, error)
-            call add_error_origin(error, error_init_trial_space, settings)
-            if (error /= 0) return
-            call orthogonalize_trial_vectors(red_space_basis, settings, error)
+        ! number of extra trial vectors requested
+        n_extra = max(min(settings%n_extra_trial_vectors, n_param), 0_ip)
+
+        allocate(leading_block(n_param, n_extra))
+        if (n_extra > 0) then
+            ! check if extra trial vectors are supplied
+            if (associated(settings%get_extra_trial_vectors)) then
+                ! extra trial vectors supplied by the caller take precedence
+                call settings%get_extra_trial_vectors(leading_block, error)
+                call add_error_origin(error, error_get_extra_trial_vectors, settings)
+                if (error /= 0) return
+            ! check if approximate Hessian is supplied
+            else if (associated(settings%approx_hess_x)) then
+                ! extract the lowest approximate Hessian eigenvectors starting from a 
+                ! random space slightly larger than the requested block since the 
+                ! lowest eigenvectors emerge more reliably when a few extra directions 
+                ! are carried along
+                allocate(start_space(n_param, min(n_extra + approx_hess_trial_extra, &
+                                                  n_param - 1)), eigvals(n_extra))
+                call generate_random_trial_vectors(start_space, &
+                                                   size(start_space, 2, kind=ip), &
+                                                   settings, error)
+                call add_error_origin(error, error_stability_check, settings)
+                if (error /= 0) return
+                call block_davidson(settings%approx_hess_x, h_diag, start_space, &
+                                    .true., n_extra, approx_hess_trial_max_iter, &
+                                    .false., eigvals, leading_block, converged, &
+                                    settings, error, res_tol=approx_hess_trial_conv)
+                call add_error_origin(error, error_stability_check, settings)
+                if (error /= 0) return
+
+                ! trial vectors remain usable even if the block did not fully converge
+                if (.not. converged) &
+                    call settings%log("Approximate Hessian eigenvectors for the "// &
+                                      "initial trial space did not fully converge. "// &
+                                      "The resulting trial vectors are still used.", &
+                                      verbosity_warning)
+                deallocate(start_space, eigvals)
+            else
+                ! unit vectors along the lowest Hessian diagonal elements
+                call lowest_h_diag_unit_vectors(h_diag, .false., leading_block)
+            end if
+
+            ! orthonormalize and project the whole leading block, dropping vanishing 
+            ! and linearly dependent vectors
+            call orthogonalize_trial_vectors(leading_block, settings, error)
             call add_error_origin(error, error_stability_check, settings)
+            if (error /= 0) return
+            n_extra = size(leading_block, 2)
+        end if
+
+        ! the trial space holds the leading vectors that survived plus the requested
+        ! random ones
+        n_total = min(n_extra + settings%n_random_trial_vectors, n_param)
+
+        ! the Davidson iterations need something to start from, which the checks above
+        ! no longer guarantee once every leading vector has been dropped
+        if (n_total == 0) then
+            call settings%log("All extra trial vectors were dropped and no random "// &
+                              "trial vectors are requested, leaving no trial space "// &
+                              "for the stability check.", verbosity_error, .true.)
+            error = 1
             return
         end if
 
-        ! get total number of trial vectors
-        n_total = min(settings%n_trial_vectors + settings%n_random_trial_vectors, &
-                      n_param)
-        n_trial_vectors = min(settings%n_trial_vectors, n_param)
-        allocate(red_space_basis(n_param, n_total))
-
-        ! check if approximate Hessian is supplied
-        if (n_trial_vectors > 0 .and. associated(settings%approx_hess_x)) then
-            ! extract the lowest approximate Hessian eigenvectors starting from a 
-            ! random space slightly larger than the requested block since the lowest 
-            ! eigenvectors emerge more reliably when a few extra directions are carried 
-            ! along
-            allocate(start_space(n_param, min(n_trial_vectors + &
-                                              approx_hess_trial_extra, n_param - 1)), &
-                     eigvals(n_trial_vectors))
-            call generate_random_trial_vectors(start_space, &
-                                               size(start_space, 2, kind=ip), &
-                                               settings, error)
-            call add_error_origin(error, error_stability_check, settings)
-            if (error /= 0) return
-            call block_davidson(settings%approx_hess_x, h_diag, start_space, .true., &
-                                n_trial_vectors, approx_hess_trial_max_iter, .false., &
-                                eigvals, red_space_basis(:, :n_trial_vectors), &
-                                converged, settings, error, &
-                                res_tol=approx_hess_trial_conv)
-            call add_error_origin(error, error_stability_check, settings)
-            if (error /= 0) return
-
-            ! trial vectors remain usable even if the block did not fully converge
-            if (.not. converged) &
-                call settings%log("Approximate Hessian eigenvectors for the "// &
-                                  "initial trial space did not fully converge. The "// &
-                                  "resulting trial vectors are still used.", &
-                                  verbosity_warning)
-            deallocate(start_space, eigvals)
-        else if (n_trial_vectors > 0) then
-            ! unit vectors along the lowest Hessian diagonal elements
-            h_diag_copy = h_diag
-            red_space_basis(:, :n_trial_vectors) = 0.0_rp
-            do i = 1, n_trial_vectors
-                min_idx = minloc(h_diag_copy, dim=1)
-                red_space_basis(min_idx, i) = 1.0_rp
-                h_diag_copy(min_idx) = huge(1.0_rp)
-            end do
-            deallocate(h_diag_copy)
-
-            ! a diagonal unit vector does not generally satisfy an arbitrary projector,
-            ! so project and re-orthogonalize the whole leading block together
-            if (associated(settings%project)) then
-                leading_block = red_space_basis(:, :n_trial_vectors)
-                call orthogonalize_trial_vectors(leading_block, settings, error)
-                call add_error_origin(error, error_stability_check, settings)
-                if (error /= 0) return
-                n_trial_vectors = size(leading_block, 2)
-                red_space_basis(:, :n_trial_vectors) = leading_block
-                deallocate(leading_block)
-            end if
-        end if
-
         ! fill the trailing columns with random vectors and remove any linear
-        ! dependencies within the resulting space; the fill count is based on the
-        ! actual number of leading vectors present (n_trial_vectors) rather than the 
-        ! originally requested settings%n_trial_vectors, so that any leading vectors 
-        ! dropped as linearly dependent above are compensated for with additional 
-        ! random ones rather than left as unfilled zero columns
-        call generate_random_trial_vectors(red_space_basis, n_total - n_trial_vectors, &
+        ! dependencies within the resulting space
+        allocate(red_space_basis(n_param, n_total))
+        red_space_basis(:, :n_extra) = leading_block
+        deallocate(leading_block)
+        call generate_random_trial_vectors(red_space_basis, n_total - n_extra, &
                                            settings, error)
         call add_error_origin(error, error_stability_check, settings)
 
@@ -2058,21 +2098,33 @@ contains
     subroutine orthogonalize_trial_vectors(red_space_basis, settings, error)
         !
         ! this subroutine orthogonalizes the trial vectors using Gram-Schmidt and 
-        ! removes linearly dependent vectors
+        ! removes linearly dependent and vanishing vectors
         !
         real(rp), intent(inout), allocatable :: red_space_basis(:, :)
-        type(stability_settings_type), intent(in) :: settings
+        class(optimizer_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: i, num_valid
+        integer(ip) :: n_param, i, num_valid
         real(rp), allocatable :: tmp_red_space_basis(:, :)
+        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
 
+        ! number of parameters
+        n_param = size(red_space_basis, 1)
+
         ! orthonormalize vectors while removing linearly dependent and vanishing vectors
         num_valid = 0
         do i = 1, size(red_space_basis, 2)
+            ! a vanishing vector carries no direction and is how a caller signals that 
+            ! it has nothing to contribute for this slot, so it is dropped before 
+            ! Gram-Schmidt, whose own zero-vector guard is an unconditional error
+            if (dnrm2(n_param, red_space_basis(:, i), 1_ip) < numerical_zero) then
+                call settings%log("Provided trial vector is vanishing and is being "// &
+                                  "removed.", verbosity_warning, .false.)
+                cycle
+            end if
             call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :num_valid), &
                               settings, error, silent_on_error=.true.)
             if (error == error_gram_schmidt_lin_dep) then
@@ -2088,12 +2140,6 @@ contains
             end if
         end do
         if (num_valid < size(red_space_basis, 2)) then
-            if (num_valid == 0) then
-                call settings%log("All trial vectors are vanishing.", verbosity_error, &
-                                  .true.)
-                error = 1
-                return
-            end if
             tmp_red_space_basis = red_space_basis(:, :num_valid)
             call move_alloc(tmp_red_space_basis, red_space_basis)
         end if
@@ -3607,6 +3653,16 @@ contains
             call settings%log(msg, verbosity_warning)
         end if
 
+        ! check whether the extra trial vector function has anything to fill
+        if (associated(settings%get_extra_trial_vectors) .and. &
+            settings%n_extra_trial_vectors <= 0) then
+            call settings%log("Number of extra trial vectors should be larger than "// &
+                              "zero when extra trial vector function is passed.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
         ! sanity check for gradient size
         if (size(grad) /= n_param) then
             call settings%log("Size of gradient array returned by subroutine "// &
@@ -3690,28 +3746,31 @@ contains
         if (settings%n_random_trial_vectors < 0) &
             settings%n_random_trial_vectors = standalone_n_random_trial_vectors
 
-        ! check whether initial trial space function is passed
-        if (associated(settings%init_trial_space)) then
-            if (settings%n_trial_vectors <= 0) then
-                call settings%log("Number of trial vectors should be larger than "// &
-                                  "zero when trial space initialization function "// &
-                                  "is passed.", verbosity_error, .true.)
-                error = 1
-                return
-            end if
+        ! check whether the extra trial vector function has anything to fill
+        if (associated(settings%get_extra_trial_vectors) .and. &
+            settings%n_extra_trial_vectors <= 0) then
+            call settings%log("Number of extra trial vectors should be larger than "// &
+                              "zero when extra trial vector function is passed.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that the trial space is not empty
+        if (settings%n_extra_trial_vectors == 0 .and. &
+            settings%n_random_trial_vectors == 0) then
+            call settings%log("Vanishing number of trial vectors for stability "// &
+                              "check.", verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
         ! check that number of random trial vectors is below number of parameters
-        else if (settings%n_random_trial_vectors > n_param/2) then
+        if (settings%n_random_trial_vectors > n_param/2) then
             settings%n_random_trial_vectors = n_param/2
             write (msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
                 settings%n_random_trial_vectors, "."
             call settings%log(msg, verbosity_warning)
-        ! check that number of trial vectors is not vanishing
-        else if (settings%n_trial_vectors == 0 .and. &
-                 settings%n_random_trial_vectors == 0) then
-            settings%n_random_trial_vectors = n_param/2
-            write (msg, '(A, I0, A)') "Vanishing number of trial vectors for "// &
-                                      "stability check."
-            call settings%log(msg, verbosity_error)
         end if
 
         ! check for character options

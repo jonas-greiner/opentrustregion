@@ -12,8 +12,8 @@ module c_interface
                                update_orbs_type, hess_x_type, obj_func_type, &
                                precond_type, precond_pd_type, project_type, &
                                modify_step_type, conv_check_type, &
-                               init_trial_space_type, conv_check_stability_type, &
-                               logger_type
+                               get_extra_trial_vectors_type, &
+                               conv_check_stability_type, logger_type
     use, intrinsic :: iso_c_binding, only: c_double, c_int64_t, c_int32_t, c_bool, &
                                            c_ptr, c_funptr, c_f_pointer, &
                                            c_f_procpointer, c_associated, c_char, &
@@ -44,8 +44,8 @@ module c_interface
     procedure(conv_check_c_type), pointer :: conv_check_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: stability_hess_x_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: approx_hess_x_before_wrapping => null()
-    procedure(init_trial_space_c_type), pointer :: init_trial_space_before_wrapping => &
-        null()
+    procedure(get_extra_trial_vectors_c_type), pointer :: &
+        get_extra_trial_vectors_before_wrapping => null()
     procedure(conv_check_stability_c_type), pointer :: &
         conv_check_stability_before_wrapping => null()
     procedure(logger_c_type), pointer :: logger_before_wrapping => null()
@@ -135,12 +135,15 @@ module c_interface
     end interface
 
     abstract interface
-        function init_trial_space_c_type(trial_space_c) result(error) bind(C)
+        function get_extra_trial_vectors_c_type(trial_vectors_c, &
+                                                n_extra_trial_vectors_c) &
+            result(error) bind(C)
             import :: c_rp, c_ip
 
-            real(c_rp), intent(out), target :: trial_space_c(*)
+            real(c_rp), intent(out), target :: trial_vectors_c(*)
+            integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
             integer(c_ip) :: error
-        end function init_trial_space_c_type
+        end function get_extra_trial_vectors_c_type
     end interface
 
     abstract interface
@@ -165,23 +168,23 @@ module c_interface
 
     ! derived type for stability check settings
     type, bind(C) :: stability_settings_type_c
-        type(c_funptr) :: precond, project, approx_hess_x, init_trial_space, &
+        type(c_funptr) :: precond, project, approx_hess_x, get_extra_trial_vectors, &
                           conv_check, logger
         logical(c_bool) :: hess_symm, stop_on_instability, initialized
         real(c_rp) :: conv_tol
-        integer(c_ip) :: n_random_trial_vectors, n_trial_vectors, n_iter, &
+        integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_iter, &
                          jacobi_davidson_start, seed, verbose
         character(c_char) :: diag_solver(kw_len + 1)
     end type
 
     ! derived type for solver settings
     type, bind(C) :: solver_settings_type_c
-        type(c_funptr) :: precond, precond_pd, project, modify_step, conv_check, &
-                          stability_hess_x, logger
+        type(c_funptr) :: precond, precond_pd, project, modify_step, &
+                          get_extra_trial_vectors, conv_check, stability_hess_x, logger
         logical(c_bool) :: stability, line_search, hess_symm, initialized
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
-        integer(c_ip) :: n_random_trial_vectors, n_macro, n_micro, &
-                         jacobi_davidson_start, seed, verbose
+        integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
+                         n_micro, jacobi_davidson_start, seed, verbose
         character(c_char) :: subsystem_solver(kw_len + 1)
         character(c_char) :: trust_region_shape(kw_len + 1)
         type(stability_settings_type_c) :: stability_settings
@@ -208,8 +211,8 @@ module c_interface
                                        stability_hess_x_f_wrapper
     procedure(hess_x_type), pointer :: approx_hess_x_f_wrapper_ptr => &
                                        approx_hess_x_f_wrapper
-    procedure(init_trial_space_type), pointer :: init_trial_space_f_wrapper_ptr => &
-                                                 init_trial_space_f_wrapper
+    procedure(get_extra_trial_vectors_type), pointer :: &
+        get_extra_trial_vectors_f_wrapper_ptr => get_extra_trial_vectors_f_wrapper
     procedure(conv_check_stability_type), pointer :: &
         conv_check_stability_f_wrapper_ptr => conv_check_stability_f_wrapper
     procedure(logger_type), pointer :: logger_f_wrapper_ptr => logger_f_wrapper
@@ -669,36 +672,36 @@ contains
 
     end subroutine approx_hess_x_f_wrapper
 
-    subroutine init_trial_space_f_wrapper(trial_space, error)
+    subroutine get_extra_trial_vectors_f_wrapper(trial_vectors, error)
         !
-        ! this subroutine exposes a C-implemented trial space initialization function 
-        ! to Fortran
+        ! this subroutine exposes a C-implemented extra trial vector function to Fortran
         !
-        real(rp), intent(out), target :: trial_space(:, :)
+        real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
 
-        real(c_rp), pointer :: trial_space_c(:, :)
+        real(c_rp), pointer :: trial_vectors_c(:, :)
         integer(c_ip) :: error_c
 
         ! convert arguments to C kind
         if (rp == c_rp) then
-            trial_space_c => trial_space
+            trial_vectors_c => trial_vectors
         else
-            allocate(trial_space_c(size(trial_space, 1), size(trial_space, 2)))
-            trial_space_c = real(trial_space, kind=c_rp)
+            allocate(trial_vectors_c(size(trial_vectors, 1), size(trial_vectors, 2)))
+            trial_vectors_c = real(trial_vectors, kind=c_rp)
         end if
 
-        ! call init_trial_space C function
-        error_c = init_trial_space_before_wrapping(trial_space_c)
+        ! call get_extra_trial_vectors C function
+        error_c = get_extra_trial_vectors_before_wrapping( &
+            trial_vectors_c, size(trial_vectors, 2, kind=c_ip))
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)
         if (rp /= c_rp) then
-            trial_space = real(trial_space_c, kind=rp)
-            deallocate(trial_space_c)
+            trial_vectors = real(trial_vectors_c, kind=rp)
+            deallocate(trial_vectors_c)
         end if
 
-    end subroutine init_trial_space_f_wrapper
+    end subroutine get_extra_trial_vectors_f_wrapper
 
     function conv_check_stability_f_wrapper(residual, eigval, error) result(converged)
         !
@@ -818,6 +821,13 @@ contains
             else
                 settings%modify_step => null()
             end if
+            if (c_associated(settings_c%get_extra_trial_vectors)) then
+                call c_f_procpointer(cptr=settings_c%get_extra_trial_vectors, &
+                                     fptr=get_extra_trial_vectors_before_wrapping)
+                settings%get_extra_trial_vectors => get_extra_trial_vectors_f_wrapper
+            else
+                settings%get_extra_trial_vectors => null()
+            end if
             if (c_associated(settings_c%conv_check)) then
                 call c_f_procpointer(cptr=settings_c%conv_check, &
                                      fptr=conv_check_before_wrapping)
@@ -854,6 +864,8 @@ contains
             ! convert integers
             settings%n_random_trial_vectors = int(settings_c%n_random_trial_vectors, &
                                                   kind=ip)
+            settings%n_extra_trial_vectors = int(settings_c%n_extra_trial_vectors, &
+                                                 kind=ip)
             settings%n_macro = int(settings_c%n_macro, kind=ip)
             settings%n_micro = int(settings_c%n_micro, kind=ip)
             settings%jacobi_davidson_start = int(settings_c%jacobi_davidson_start, &
@@ -907,12 +919,12 @@ contains
             else
                 settings%approx_hess_x => null()
             end if
-            if (c_associated(settings_c%init_trial_space)) then
-                call c_f_procpointer(cptr=settings_c%init_trial_space, &
-                                     fptr=init_trial_space_before_wrapping)
-                settings%init_trial_space => init_trial_space_f_wrapper
+            if (c_associated(settings_c%get_extra_trial_vectors)) then
+                call c_f_procpointer(cptr=settings_c%get_extra_trial_vectors, &
+                                     fptr=get_extra_trial_vectors_before_wrapping)
+                settings%get_extra_trial_vectors => get_extra_trial_vectors_f_wrapper
             else
-                settings%init_trial_space => null()
+                settings%get_extra_trial_vectors => null()
             end if
             if (c_associated(settings_c%conv_check)) then
                 call c_f_procpointer(cptr=settings_c%conv_check, &
@@ -939,7 +951,8 @@ contains
             ! convert integers
             settings%n_random_trial_vectors = int(settings_c%n_random_trial_vectors, &
                                                   kind=ip)
-            settings%n_trial_vectors = int(settings_c%n_trial_vectors, kind=ip)
+            settings%n_extra_trial_vectors = int(settings_c%n_extra_trial_vectors, &
+                                                 kind=ip)
             settings%n_iter = int(settings_c%n_iter, kind=ip)
             settings%jacobi_davidson_start = int(settings_c%jacobi_davidson_start, &
                                                  kind=ip)
@@ -970,6 +983,7 @@ contains
             settings_c%precond_pd = c_null_funptr
             settings_c%project = c_null_funptr
             settings_c%modify_step = c_null_funptr
+            settings_c%get_extra_trial_vectors = c_null_funptr
             settings_c%conv_check = c_null_funptr
             settings_c%stability_hess_x = c_null_funptr
             settings_c%logger = c_null_funptr
@@ -988,6 +1002,8 @@ contains
             ! convert integers
             settings_c%n_random_trial_vectors = int(settings%n_random_trial_vectors, &
                                                     kind=c_ip)
+            settings_c%n_extra_trial_vectors = int(settings%n_extra_trial_vectors, &
+                                                   kind=c_ip)
             settings_c%n_macro = int(settings%n_macro, kind=c_ip)
             settings_c%n_micro = int(settings%n_micro, kind=c_ip)
             settings_c%jacobi_davidson_start = int(settings%jacobi_davidson_start, &
@@ -1023,7 +1039,7 @@ contains
             settings_c%precond = c_null_funptr
             settings_c%project = c_null_funptr
             settings_c%approx_hess_x = c_null_funptr
-            settings_c%init_trial_space = c_null_funptr
+            settings_c%get_extra_trial_vectors = c_null_funptr
             settings_c%conv_check = c_null_funptr
             settings_c%logger = c_null_funptr
 
@@ -1038,7 +1054,8 @@ contains
             ! convert integers
             settings_c%n_random_trial_vectors = int(settings%n_random_trial_vectors, &
                                                     kind=c_ip)
-            settings_c%n_trial_vectors = int(settings%n_trial_vectors, kind=c_ip)
+            settings_c%n_extra_trial_vectors = int(settings%n_extra_trial_vectors, &
+                                                   kind=c_ip)
             settings_c%n_iter = int(settings%n_iter, kind=c_ip)
             settings_c%jacobi_davidson_start = int(settings%jacobi_davidson_start, &
                                                    kind=c_ip)

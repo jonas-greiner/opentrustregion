@@ -54,6 +54,30 @@ contains
 
     end function generate_random_symm_matrix
 
+    function generate_random_orthogonal_matrix(n) result(matrix)
+        !
+        ! this function returns a random orthogonal matrix, obtained as the
+        ! eigenvectors of a random symmetric matrix
+        !
+        integer(ip), intent(in) :: n
+        real(rp) :: matrix(n, n)
+
+        integer(ip) :: lwork, info
+        real(rp) :: eigvals(n)
+        real(rp), allocatable :: work(:)
+        external :: dsyev
+
+        matrix = generate_random_symm_matrix(n)
+        allocate(work(1))
+        call dsyev("V", "U", n, matrix, n, eigvals, work, -1_ip, info)
+        lwork = int(work(1))
+        deallocate(work)
+        allocate(work(lwork))
+        call dsyev("V", "U", n, matrix, n, eigvals, work, lwork, info)
+        deallocate(work)
+
+    end function generate_random_orthogonal_matrix
+
     function generate_random_density_matrix(n, n_electrons) result(dm)
         !
         ! this function generates a random valid density matrix by first generating a
@@ -2121,6 +2145,151 @@ contains
 
     end function test_get_hess_eigval_pairs
 
+    logical(c_bool) function test_get_extra_trial_vectors_oao() bind(C)
+        !
+        ! this function tests the subroutine which returns curvature-informed extra
+        ! trial vectors, for the closed-shell and the open-shell case
+        !
+        use otr_oao, only: get_extra_trial_vectors_oao, oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        integer(ip), parameter :: ref_idx_cs(1) = [2_ip], &
+                                  ref_idx_os(4) = [6_ip, 2_ip, 1_ip, 5_ip], &
+                                  n_occ_os(2) = [1_ip, 2_ip]
+        integer(ip) :: n_param, n_extra, i, k, error
+        real(rp) :: eigvals_cs(n_ao, 1), eigvals_os(n_ao, n_particle)
+        real(rp), allocatable :: eigvecs(:, :, :), dm_oao(:, :, :), &
+                                 trial_vectors(:, :), unit_vector(:), expected(:)
+
+        ! assume tests pass
+        test_get_extra_trial_vectors_oao = .true.
+
+        ! closed-shell case: the first two eigenvectors span the occupied space, so the
+        ! pairwise sums are -3.0 for the redundant occupied-occupied pair (1, 2) at
+        ! packed index 1, -0.5 for (1, 3) at index 2 and +0.5 for (2, 3) at index 3;
+        ! only one non-redundant sum is negative while the other is positive, so the
+        ! trailing slot can only be left vanishing by rejecting a positive sum rather
+        ! than by running out of candidates
+        eigvals_cs(:, 1) = [-2.0_rp, -1.0_rp, 1.5_rp]
+        n_param = n_ao * (n_ao - 1) / 2
+        n_extra = size(ref_idx_cs, kind=ip) + 1
+
+        ! random eigenbasis, with the leading eigenvectors spanning the occupied space
+        ! so that the density matrix is their projector and the occupied-virtual split
+        ! of the eigenvectors is known
+        allocate(eigvecs(n_ao, n_ao, 1), dm_oao(n_ao, n_ao, 1))
+        eigvecs(:, :, 1) = generate_random_orthogonal_matrix(n_ao)
+        dm_oao(:, :, 1) = matmul(eigvecs(:, :2, 1), transpose(eigvecs(:, :2, 1)))
+
+        ! set up the OAO object with the eigendecomposition injected directly
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = 1
+        oao_object%n_param = n_param
+        oao_object%hess_eigvecs = eigvecs
+        oao_object%hess_eigvals = eigvals_cs
+        oao_object%dm_oao = dm_oao
+        oao_object%hess_eigen_stale = .false.
+
+        ! call routine and determine if an error is produced
+        allocate(trial_vectors(n_param, n_extra), unit_vector(n_param))
+        call get_extra_trial_vectors_oao(trial_vectors, error)
+        if (error /= 0) then
+            write (stderr, *) "test_get_extra_trial_vectors_oao failed: Produced "// &
+                "error for the closed-shell case."
+            test_get_extra_trial_vectors_oao = .false.
+        end if
+
+        ! the expected vectors are the rotations of the unit vectors at the expected
+        ! packed indices, ordered by increasing eigenvalue sum
+        do i = 1, size(ref_idx_cs, kind=ip)
+            unit_vector = 0.0_rp
+            unit_vector(ref_idx_cs(i)) = 1.0_rp
+            expected = ref_rotate_from_eigenbasis(unit_vector, eigvecs, 1_ip, n_ao)
+            if (norm2(trial_vectors(:, i) - expected) > tol) then
+                write (stderr, *) "test_get_extra_trial_vectors_oao failed: "// &
+                    "Incorrect extra trial vector for the closed-shell case."
+                test_get_extra_trial_vectors_oao = .false.
+            end if
+        end do
+
+        ! the remaining non-redundant sum is positive, so the trailing slot stays empty
+        if (norm2(trial_vectors(:, n_extra)) > tol) then
+            write (stderr, *) "test_get_extra_trial_vectors_oao failed: Slot "// &
+                "without a negative eigenvalue sum does not vanish for the "// &
+                "closed-shell case."
+            test_get_extra_trial_vectors_oao = .false.
+        end if
+        deallocate(eigvecs, dm_oao, trial_vectors, unit_vector, expected, oao_object)
+
+        ! open-shell case: the two channels are given a different number of occupied
+        ! eigenvectors, so that the redundant pair of the first channel is
+        ! virtual-virtual while that of the second is occupied-occupied; the four 
+        ! remaining negative sums are all distinct, so their expected order is 
+        ! unambiguous and spans both channels, and the trailing slot stays empty 
+        ! because only the two redundant pairs are left
+        eigvals_os(:, 1) = [0.5_rp, -1.0_rp, -2.0_rp]
+        eigvals_os(:, 2) = [-1.1_rp, -2.3_rp, 0.7_rp]
+        n_param = n_particle * n_ao * (n_ao - 1) / 2
+        n_extra = size(ref_idx_os, kind=ip) + 1
+
+        ! random eigenbasis per channel, with the leading eigenvectors spanning the
+        ! occupied space so that the density matrix is their projector and the
+        ! occupied-virtual split of the eigenvectors is known
+        allocate(eigvecs(n_ao, n_ao, n_particle), dm_oao(n_ao, n_ao, n_particle))
+        do k = 1, n_particle
+            eigvecs(:, :, k) = generate_random_orthogonal_matrix(n_ao)
+            dm_oao(:, :, k) = matmul(eigvecs(:, :n_occ_os(k), k), &
+                                     transpose(eigvecs(:, :n_occ_os(k), k)))
+        end do
+
+        ! set up the OAO object with the eigendecomposition injected directly
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%hess_eigvecs = eigvecs
+        oao_object%hess_eigvals = eigvals_os
+        oao_object%dm_oao = dm_oao
+        oao_object%hess_eigen_stale = .false.
+
+        ! call routine and determine if an error is produced
+        allocate(trial_vectors(n_param, n_extra), unit_vector(n_param))
+        call get_extra_trial_vectors_oao(trial_vectors, error)
+        if (error /= 0) then
+            write (stderr, *) "test_get_extra_trial_vectors_oao failed: Produced "// &
+                "error for the open-shell case."
+            test_get_extra_trial_vectors_oao = .false.
+        end if
+
+        ! the expected vectors are the rotations of the unit vectors at the expected
+        ! packed indices, ordered by increasing eigenvalue sum
+        do i = 1, size(ref_idx_os, kind=ip)
+            unit_vector = 0.0_rp
+            unit_vector(ref_idx_os(i)) = 1.0_rp
+            expected = ref_rotate_from_eigenbasis(unit_vector, eigvecs, n_particle, &
+                                                  n_ao)
+            if (norm2(trial_vectors(:, i) - expected) > tol) then
+                write (stderr, *) "test_get_extra_trial_vectors_oao: Incorrect "// &
+                    "extra trial vector failed for the open-shell case."
+                test_get_extra_trial_vectors_oao = .false.
+            end if
+        end do
+
+        ! only the two redundant pairs are left, so the trailing slot stays empty
+        if (norm2(trial_vectors(:, n_extra)) > tol) then
+            write (stderr, *) "test_get_extra_trial_vectors_oao: Slot without a "// &
+                "negative eigenvalue sum does not vanish failed for the open-shell "// &
+                "case."
+            test_get_extra_trial_vectors_oao = .false.
+        end if
+        deallocate(eigvecs, dm_oao, trial_vectors, unit_vector, expected, oao_object)
+
+    end function test_get_extra_trial_vectors_oao
+
     logical(c_bool) function test_oao_factory_cs() bind(C)
         !
         ! this function tests the subroutine which returns the modified OAO orbital
@@ -2129,9 +2298,10 @@ contains
         use otr_oao, only: oao_factory_cs, oao_object, oao_settings_type, &
                            get_energy_cs_type, update_dm_cs_type, obj_func_oao_ptr, &
                            update_orbs_oao_ptr, precond_oao_ptr, precond_pd_oao_ptr, &
-                           project_oao_ptr
+                           project_oao_ptr, get_extra_trial_vectors_oao_ptr
         use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
-                                   precond_pd_type, project_type
+                                   precond_pd_type, project_type, &
+                                   get_extra_trial_vectors_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_ao, operator(==)
 
@@ -2149,6 +2319,8 @@ contains
         procedure(precond_type), pointer :: precond_oao_funptr
         procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
         procedure(project_type), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_type), pointer :: &
+            get_extra_trial_vectors_oao_funptr
 
         ! assume tests pass
         test_oao_factory_cs = .true.
@@ -2170,7 +2342,9 @@ contains
                                       get_energy_funptr, update_dm_funptr, &
                                       obj_func_oao_funptr, update_orbs_oao_funptr, &
                                       precond_oao_funptr, precond_pd_oao_funptr, &
-                                      project_oao_funptr, error, settings)
+                                      project_oao_funptr, &
+                                      get_extra_trial_vectors_oao_funptr, error, &
+                                      settings)
         if (error /= 0) then
             write (stderr, *) "test_oao_factory_cs failed: Produced error."
             test_oao_factory_cs = .false.
@@ -2255,6 +2429,12 @@ contains
                 "function is wrong."
             test_oao_factory_cs = .false.
         end if
+        if (.not. associated(get_extra_trial_vectors_oao_funptr, &
+                             get_extra_trial_vectors_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_cs failed: Returned extra trial "// &
+                "vector function is wrong."
+            test_oao_factory_cs = .false.
+        end if
         deallocate(oao_object)
 
     end function test_oao_factory_cs
@@ -2267,9 +2447,10 @@ contains
         use otr_oao, only: oao_factory_os, oao_object, oao_settings_type, &
                            get_energy_os_type, update_dm_os_type, obj_func_oao_ptr, &
                            update_orbs_oao_ptr, precond_oao_ptr, precond_pd_oao_ptr, &
-                           project_oao_ptr
+                           project_oao_ptr, get_extra_trial_vectors_oao_ptr
         use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
-                                   precond_pd_type, project_type
+                                   precond_pd_type, project_type, &
+                                   get_extra_trial_vectors_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_ao, n_particle, n_param, operator(==)
 
@@ -2286,6 +2467,8 @@ contains
         procedure(precond_type), pointer :: precond_oao_funptr
         procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
         procedure(project_type), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_type), pointer :: &
+            get_extra_trial_vectors_oao_funptr
 
         ! assume tests pass
         test_oao_factory_os = .true.
@@ -2308,7 +2491,8 @@ contains
         call oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
                             update_dm_funptr, obj_func_oao_funptr, &
                             update_orbs_oao_funptr, precond_oao_funptr, &
-                            precond_pd_oao_funptr, project_oao_funptr, error, settings)
+                            precond_pd_oao_funptr, project_oao_funptr, &
+                            get_extra_trial_vectors_oao_funptr, error, settings)
         if (error /= 0) then
             write (stderr, *) "test_oao_factory_os failed: Produced error."
             test_oao_factory_os = .false.
@@ -2381,6 +2565,12 @@ contains
         if (.not. associated(project_oao_funptr, project_oao_ptr)) then
             write (stderr, *) "test_oao_factory_os failed: Returned projection "// &
                 "function is wrong."
+            test_oao_factory_os = .false.
+        end if
+        if (.not. associated(get_extra_trial_vectors_oao_funptr, &
+                             get_extra_trial_vectors_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_os failed: Returned extra trial "// &
+                "vector function is wrong."
             test_oao_factory_os = .false.
         end if
         deallocate(oao_object)

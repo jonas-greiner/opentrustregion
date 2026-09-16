@@ -7,7 +7,8 @@
 module otr_oao
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, precond_type, precond_pd_type, project_type
+                               hess_x_type, precond_type, precond_pd_type, &
+                               project_type, get_extra_trial_vectors_type
 
     implicit none
 
@@ -112,14 +113,16 @@ module otr_oao
     procedure(precond_type), pointer :: precond_oao_ptr => precond_oao
     procedure(precond_pd_type), pointer :: precond_pd_oao_ptr => precond_pd_oao
     procedure(project_type), pointer :: project_oao_ptr => project_oao
+    procedure(get_extra_trial_vectors_type), pointer :: &
+        get_extra_trial_vectors_oao_ptr => get_extra_trial_vectors_oao
 
     contains
 
     subroutine oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, &
                               update_dm_cs, obj_func_oao_funptr, &
                               update_orbs_oao_funptr, precond_oao_funptr, &
-                              precond_pd_oao_funptr, project_oao_funptr, error, &
-                              settings)
+                              precond_pd_oao_funptr, project_oao_funptr, &
+                              get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function returns a modified OAO orbital updating function for the
         ! closed-shell case
@@ -134,6 +137,8 @@ module otr_oao
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
         procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
+            get_extra_trial_vectors_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -158,14 +163,15 @@ module otr_oao
         precond_oao_funptr => precond_oao
         precond_pd_oao_funptr => precond_pd_oao
         project_oao_funptr => project_oao
+        get_extra_trial_vectors_oao_funptr => get_extra_trial_vectors_oao
 
     end subroutine oao_factory_cs
 
     subroutine oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, &
                               update_dm_os, obj_func_oao_funptr, &
                               update_orbs_oao_funptr, precond_oao_funptr, &
-                              precond_pd_oao_funptr, project_oao_funptr, error, &
-                              settings)
+                              precond_pd_oao_funptr, project_oao_funptr, &
+                              get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function returns a modified OAO orbital updating function for the
         ! open-shell case
@@ -180,6 +186,8 @@ module otr_oao
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
         procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
         procedure(project_type), intent(out), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
+            get_extra_trial_vectors_oao_funptr
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -200,6 +208,7 @@ module otr_oao
         precond_oao_funptr => precond_oao
         precond_pd_oao_funptr => precond_pd_oao
         project_oao_funptr => project_oao
+        get_extra_trial_vectors_oao_funptr => get_extra_trial_vectors_oao
 
     end subroutine oao_factory_os
 
@@ -598,6 +607,85 @@ module otr_oao
         precond_residual = rotate_from_hess_eigenbasis(rotated_residual)
 
     end subroutine precond_pd_oao
+
+    subroutine get_extra_trial_vectors_oao(trial_vectors, error)
+        !
+        ! this subroutine returns curvature-informed extra trial vectors for the
+        ! solver's initial trial space: the orbital rotations between those
+        ! occupied-virtual eigenvector pairs of the static Hessian part whose
+        ! eigenvalue sums are most negative
+        !
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_ao, n_particle, n_extra, i, j, k, idx, ivec, min_idx
+        real(rp), allocatable :: eigval_pairs(:), dm_eigvecs(:, :), unit_vector(:)
+        logical, allocatable :: is_occupied(:, :)
+        real(rp), external :: ddot
+        external :: dgemm
+
+        ! initialize error flag
+        error = 0
+
+        ! a vanishing vector tells the solver that no direction is contributed for that
+        ! slot, which is what is returned for every slot left unfilled below
+        trial_vectors = 0.0_rp
+
+        ! number of AOs, particles and requested vectors
+        n_ao = oao_object%n_ao
+        n_particle = oao_object%n_particle
+        n_extra = size(trial_vectors, 2, kind=ip)
+
+        ! refresh the eigendecomposition if the static Hessian part has changed
+        if (oao_object%hess_eigen_stale) then
+            call refresh_hess_eigen(error)
+            if (error /= 0) return
+        end if
+
+        ! determine which eigenvectors span the occupied space; the eigenspaces of the
+        ! static Hessian part coincide with the occupied and virtual subspaces, so the
+        ! density matrix expectation value of each eigenvector is either one or zero
+        allocate(is_occupied(n_ao, n_particle), dm_eigvecs(n_ao, n_ao))
+        do k = 1, n_particle
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, oao_object%dm_oao(:, :, k), &
+                       n_ao, oao_object%hess_eigvecs(:, :, k), n_ao, 0.0_rp, &
+                       dm_eigvecs, n_ao)
+            do i = 1, n_ao
+                is_occupied(i, k) = ddot(n_ao, oao_object%hess_eigvecs(:, i, k), 1_ip, &
+                                         dm_eigvecs(:, i), 1_ip) > 0.5_rp
+            end do
+        end do
+        deallocate(dm_eigvecs)
+
+        ! get pairwise sums of eigenvalues and exclude the redundant pairs, which are
+        ! the ones whose two eigenvectors lie in the same subspace
+        eigval_pairs = get_hess_eigval_pairs()
+        idx = 1
+        do k = 1, n_particle
+            do j = 1, n_ao
+                do i = 1, j - 1
+                    if (is_occupied(i, k) .eqv. is_occupied(j, k)) &
+                        eigval_pairs(idx) = huge(1.0_rp)
+                    idx = idx + 1
+                end do
+            end do
+        end do
+        deallocate(is_occupied)
+
+        ! fill the requested slots with the rotations belonging to the most negative
+        ! remaining eigenvalue pairs, stopping as soon as none is negative any more
+        allocate(unit_vector(oao_object%n_param))
+        do ivec = 1, n_extra
+            min_idx = minloc(eigval_pairs, dim=1)
+            if (eigval_pairs(min_idx) >= 0.0_rp) exit
+            unit_vector = 0.0_rp
+            unit_vector(min_idx) = 1.0_rp
+            trial_vectors(:, ivec) = rotate_from_hess_eigenbasis(unit_vector)
+            eigval_pairs(min_idx) = huge(1.0_rp)
+        end do
+        deallocate(eigval_pairs, unit_vector)
+
+    end subroutine get_extra_trial_vectors_oao
 
     subroutine refresh_hess_eigen(error)
         !

@@ -20,6 +20,7 @@ from pyopentrustregion.python_interface import (
     precond_interface_type,
     precond_pd_interface_type,
     project_interface_type,
+    get_extra_trial_vectors_interface_type,
     logger_interface_type,
     LoggerInterface,
     adopt_collector,
@@ -214,7 +215,7 @@ class ObjFuncPyInterface:
         # get pointers to arrays
         kappa_ptr = kappa.ctypes.data_as(POINTER(c_real))
 
-        # update orbital function
+        # objective function
         error = self.obj_func_funptr(kappa_ptr, byref(func))
         if error != 0:
             if self._otr_exception is not None and "exc" in self._otr_exception:
@@ -239,7 +240,7 @@ class ProjectPyInterface:
         # get pointers to arrays
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
 
-        # update orbital function
+        # projection function
         error = self.project_funptr(vector_ptr)
         if error != 0:
             if self._otr_exception is not None and "exc" in self._otr_exception:
@@ -247,6 +248,33 @@ class ProjectPyInterface:
                     "Projection function raised error."
                 ) from self._otr_exception["exc"]
             raise RuntimeError("Projection function raised error.")
+
+        return
+
+
+@dataclass
+class GetExtraTrialVectorsPyInterface:
+    """
+    this class provides the Python interface to the extra trial vector function
+    """
+
+    get_extra_trial_vectors_funptr: Any
+    _otr_exception: Optional[Dict[str, Exception]] = None
+
+    def __call__(self, trial_vectors: np.ndarray):
+        # get pointers to arrays
+        trial_vectors_ptr = trial_vectors.ctypes.data_as(POINTER(c_real))
+
+        # extra trial vector function
+        error = self.get_extra_trial_vectors_funptr(
+            trial_vectors_ptr, trial_vectors.shape[0]
+        )
+        if error != 0:
+            if self._otr_exception is not None and "exc" in self._otr_exception:
+                raise RuntimeError(
+                    "Extra trial vector function raised error."
+                ) from self._otr_exception["exc"]
+            raise RuntimeError("Extra trial vector function raised error.")
 
         return
 
@@ -324,6 +352,7 @@ def oao_factory(
     Callable[[np.ndarray, float, np.ndarray], None],
     Callable[[np.ndarray, np.ndarray], None],
     Callable[[np.ndarray], None],
+    Callable[[np.ndarray], None],
 ]:
     # get pointers to arrays
     dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
@@ -378,6 +407,7 @@ def oao_factory(
         POINTER(precond_interface_type),
         POINTER(precond_pd_interface_type),
         POINTER(project_interface_type),
+        POINTER(get_extra_trial_vectors_interface_type),
         POINTER(OAOSettingsC),
     ]
 
@@ -387,6 +417,7 @@ def oao_factory(
     precond_oao_funptr = precond_interface_type()
     precond_pd_oao_funptr = precond_pd_interface_type()
     project_oao_funptr = project_interface_type()
+    get_extra_trial_vectors_oao_funptr = get_extra_trial_vectors_interface_type()
     error = lib.oao_factory(
         dm_ao_ptr,
         ao_overlap_ptr,
@@ -399,6 +430,7 @@ def oao_factory(
         byref(precond_oao_funptr),
         byref(precond_pd_oao_funptr),
         byref(project_oao_funptr),
+        byref(get_extra_trial_vectors_oao_funptr),
         byref(settings.settings_c),
     )
 
@@ -431,6 +463,10 @@ def oao_factory(
             precond_pd_funptr=precond_pd_oao_funptr, _otr_exception=exception
         ),
         ProjectPyInterface(project_funptr=project_oao_funptr, _otr_exception=exception),
+        GetExtraTrialVectorsPyInterface(
+            get_extra_trial_vectors_funptr=get_extra_trial_vectors_oao_funptr,
+            _otr_exception=exception,
+        ),
     )
 
 

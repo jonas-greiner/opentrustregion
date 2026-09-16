@@ -7,10 +7,11 @@
 module otr_oao_c_interface
 
     use opentrustregion, only: ip, rp, obj_func_type, update_orbs_type, hess_x_type, &
-                               precond_type, precond_pd_type, project_type
+                               precond_type, precond_pd_type, project_type, &
+                               get_extra_trial_vectors_type
     use c_interface, only: c_ip, c_rp, obj_func_c_type, update_orbs_c_type, &
                            hess_x_c_type, precond_c_type, precond_pd_c_type, &
-                           project_c_type
+                           project_c_type, get_extra_trial_vectors_c_type
     use otr_oao, only: standard_oao_factory_cs => oao_factory_cs, &
                        standard_oao_factory_os => oao_factory_os, &
                        standard_oao_deconstructor => oao_deconstructor, &
@@ -32,6 +33,8 @@ module otr_oao_c_interface
     procedure(precond_type), pointer :: precond_oao_before_wrapping => null()
     procedure(precond_pd_type), pointer :: precond_pd_oao_before_wrapping => null()
     procedure(project_type), pointer :: project_oao_before_wrapping => null()
+    procedure(get_extra_trial_vectors_type), pointer :: &
+        get_extra_trial_vectors_oao_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
@@ -110,6 +113,9 @@ module otr_oao_c_interface
         precond_pd_oao_c_wrapper
     procedure(project_c_type), pointer :: project_oao_c_wrapper_ptr => &
         project_oao_c_wrapper
+    procedure(get_extra_trial_vectors_c_type), pointer :: &
+        get_extra_trial_vectors_oao_c_wrapper_ptr => &
+        get_extra_trial_vectors_oao_c_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -123,8 +129,9 @@ contains
                                    get_energy_c_funptr, update_dm_c_funptr, &
                                    obj_func_oao_c_funptr, update_orbs_oao_c_funptr, &
                                    precond_oao_c_funptr, precond_pd_oao_c_funptr, &
-                                   project_oao_c_funptr, settings_c) result(error_c) &
-        bind(C, name="oao_factory")
+                                   project_oao_c_funptr, &
+                                   get_extra_trial_vectors_oao_c_funptr, settings_c) &
+        result(error_c) bind(C, name="oao_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C
         ! variables to Fortran variables
@@ -138,7 +145,9 @@ contains
         type(oao_settings_type_c), intent(inout) :: settings_c
         type(c_funptr), intent(out) :: obj_func_oao_c_funptr, &
                                        update_orbs_oao_c_funptr, precond_oao_c_funptr, &
-                                       project_oao_c_funptr, precond_pd_oao_c_funptr
+                                       project_oao_c_funptr, &
+                                       precond_pd_oao_c_funptr, &
+                                       get_extra_trial_vectors_oao_c_funptr
         integer(c_ip) :: error_c
 
         real(rp), pointer, contiguous :: dm_ao_2d(:, :)
@@ -153,6 +162,8 @@ contains
         procedure(precond_type), pointer :: precond_oao_funptr
         procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
         procedure(project_type), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_type), pointer :: &
+            get_extra_trial_vectors_oao_funptr
         type(oao_settings_type) :: settings
         integer(ip) :: error
 
@@ -206,13 +217,15 @@ contains
                                 get_energy_cs_funptr, update_dm_cs_funptr, &
                                 obj_func_oao_funptr, update_orbs_oao_funptr, &
                                 precond_oao_funptr, precond_pd_oao_funptr, &
-                                project_oao_funptr, error, settings)
+                                project_oao_funptr, &
+                                get_extra_trial_vectors_oao_funptr, error, settings)
         else
             call oao_factory_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
                                 get_energy_os_funptr, update_dm_os_funptr, &
                                 obj_func_oao_funptr, update_orbs_oao_funptr, &
                                 precond_oao_funptr, precond_pd_oao_funptr, &
-                                project_oao_funptr, error, settings)
+                                project_oao_funptr, &
+                                get_extra_trial_vectors_oao_funptr, error, settings)
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
@@ -221,6 +234,8 @@ contains
         precond_oao_before_wrapping => precond_oao_funptr
         precond_pd_oao_before_wrapping => precond_pd_oao_funptr
         project_oao_before_wrapping => project_oao_funptr
+        get_extra_trial_vectors_oao_before_wrapping => &
+            get_extra_trial_vectors_oao_funptr
 
         ! get a C function pointer to the C wrapper functions
         obj_func_oao_c_funptr = c_funloc(obj_func_oao_c_wrapper)
@@ -228,6 +243,8 @@ contains
         precond_oao_c_funptr = c_funloc(precond_oao_c_wrapper)
         precond_pd_oao_c_funptr = c_funloc(precond_pd_oao_c_wrapper)
         project_oao_c_funptr = c_funloc(project_oao_c_wrapper)
+        get_extra_trial_vectors_oao_c_funptr = &
+            c_funloc(get_extra_trial_vectors_oao_c_wrapper)
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
@@ -588,6 +605,45 @@ contains
         end if
 
     end function project_oao_c_wrapper
+
+    function get_extra_trial_vectors_oao_c_wrapper(trial_vectors_c, &
+                                                   n_extra_trial_vectors_c) &
+        result(error_c) bind(C)
+        !
+        ! this function wraps the extra trial vector subroutine to convert Fortran
+        ! variables to C variables
+        !
+        use otr_common_c_interface, only: n_param
+
+        real(c_rp), intent(out), target :: trial_vectors_c(*)
+        integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
+        integer(c_ip) :: error_c
+
+        real(rp), pointer :: trial_vectors(:, :)
+        integer(ip) :: n_extra_trial_vectors, error
+
+        ! convert arguments to Fortran kind
+        n_extra_trial_vectors = int(n_extra_trial_vectors_c, kind=ip)
+        if (rp == c_rp) then
+            call c_f_pointer(c_loc(trial_vectors_c(1)), trial_vectors, &
+                             [n_param, n_extra_trial_vectors])
+        else
+            allocate(trial_vectors(n_param, n_extra_trial_vectors))
+        end if
+
+        ! call extra trial vector Fortran subroutine
+        call get_extra_trial_vectors_oao_before_wrapping(trial_vectors, error)
+
+        ! convert arguments to C kind
+        error_c = int(error, kind=c_ip)
+        if (rp /= c_rp) then
+            trial_vectors_c(:n_param * n_extra_trial_vectors) = &
+                real(reshape(trial_vectors, [n_param * n_extra_trial_vectors]), &
+                     kind=c_rp)
+            deallocate(trial_vectors)
+        end if
+
+    end function get_extra_trial_vectors_oao_c_wrapper
 
     subroutine init_oao_settings_c(settings_c) bind(C, name="init_oao_settings")
         !

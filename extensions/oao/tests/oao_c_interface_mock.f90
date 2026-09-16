@@ -55,7 +55,9 @@ contains
                                         obj_func_oao_c_funptr, &
                                         update_orbs_oao_c_funptr, &
                                         precond_oao_c_funptr, precond_pd_oao_c_funptr, &
-                                        project_oao_c_funptr, settings_c) &
+                                        project_oao_c_funptr, &
+                                        get_extra_trial_vectors_oao_c_funptr, &
+                                        settings_c) &
         result(error_c) bind(C, name="mock_oao_factory")
         !
         ! this subroutine is a mock routine for the OAO orbital updating factory C
@@ -63,7 +65,8 @@ contains
         !
         use otr_oao_c_interface, only: oao_settings_type_c
         use c_interface, only: obj_func_c_type, update_orbs_c_type, precond_c_type, &
-                               precond_pd_c_type, project_c_type, logger_c_type
+                               precond_pd_c_type, project_c_type, logger_c_type, &
+                               get_extra_trial_vectors_c_type
         use otr_oao_c_interface, only: dm_ao_3d_c
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: test_get_energy_cs_c_funptr, &
@@ -71,14 +74,16 @@ contains
                                           test_update_dm_cs_c_funptr, &
                                           test_update_dm_os_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
-                                          mock_precond_pd, mock_project
+                                          mock_precond_pd, mock_project, &
+                                          mock_get_extra_trial_vectors
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: get_energy_c_funptr, update_dm_c_funptr
         type(c_funptr), intent(out) :: obj_func_oao_c_funptr, &
                                        update_orbs_oao_c_funptr, precond_oao_c_funptr, &
-                                       precond_pd_oao_c_funptr, project_oao_c_funptr
+                                       precond_pd_oao_c_funptr, project_oao_c_funptr, &
+                                       get_extra_trial_vectors_oao_c_funptr
         type(oao_settings_type_c), intent(inout) :: settings_c
         integer(c_ip) :: error_c
 
@@ -89,6 +94,8 @@ contains
         procedure(precond_c_type), pointer :: precond_oao_funptr
         procedure(precond_pd_c_type), pointer :: precond_pd_oao_funptr
         procedure(project_c_type), pointer :: project_oao_funptr
+        procedure(get_extra_trial_vectors_c_type), pointer :: &
+            get_extra_trial_vectors_oao_funptr
 
         ! set global pointer to density matrix so that it can be accessed in the mock 
         ! orbital updating function
@@ -145,6 +152,8 @@ contains
             precond_oao_c_funptr = c_funloc(mock_precond)
             precond_pd_oao_c_funptr = c_funloc(mock_precond_pd)
             project_oao_c_funptr = c_funloc(mock_project)
+            get_extra_trial_vectors_oao_c_funptr = &
+                c_funloc(mock_get_extra_trial_vectors)
 
         ! open-shell case
         else if (n_particle_c == 2) then
