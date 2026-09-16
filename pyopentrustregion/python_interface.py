@@ -126,7 +126,7 @@ precond_interface_type = CFUNCTYPE(
 precond_pd_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 project_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 modify_step_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
-init_trial_space_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
+get_extra_trial_vectors_interface_type = CFUNCTYPE(c_int, POINTER(c_real), c_int)
 conv_check_interface_type = CFUNCTYPE(c_int, POINTER(c_bool))
 conv_check_stability_interface_type = CFUNCTYPE(
     c_int, POINTER(c_real), POINTER(c_real), POINTER(c_bool)
@@ -360,25 +360,24 @@ class ConvCheckInterface:
 
 
 @dataclass
-class InitTrialSpaceInterface:
+class GetExtraTrialVectorsInterface:
     """
-    this class provides the interface to the trial space initialization function
+    this class provides the interface to the extra trial vector function
     """
 
-    init_trial_space: Callable[[np.ndarray], None]
-    n_trial_vectors: int
+    get_extra_trial_vectors: Callable[[np.ndarray], None]
     n_param: int
     exception: Dict[str, Exception]
 
-    def __call__(self, trial_space_ptr) -> int:
+    def __call__(self, trial_vectors_ptr, n_extra_trial_vectors) -> int:
         # convert matrix pointers to numpy arrays
-        trial_space = np.ctypeslib.as_array(
-            trial_space_ptr, shape=(self.n_trial_vectors, self.n_param)
+        trial_vectors = np.ctypeslib.as_array(
+            trial_vectors_ptr, shape=(n_extra_trial_vectors, self.n_param)
         )
 
-        # call trial space initialization function
+        # call extra trial vector function
         try:
-            self.init_trial_space(trial_space)
+            self.get_extra_trial_vectors(trial_vectors)
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -430,7 +429,7 @@ class StabilitySettingsC(Structure):
         ("precond", c_void_p),
         ("project", c_void_p),
         ("approx_hess_x", c_void_p),
-        ("init_trial_space", c_void_p),
+        ("get_extra_trial_vectors", c_void_p),
         ("conv_check", c_void_p),
         ("logger", c_void_p),
         ("hess_symm", c_bool),
@@ -438,7 +437,7 @@ class StabilitySettingsC(Structure):
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("n_random_trial_vectors", c_int),
-        ("n_trial_vectors", c_int),
+        ("n_extra_trial_vectors", c_int),
         ("n_iter", c_int),
         ("jacobi_davidson_start", c_int),
         ("seed", c_int),
@@ -453,6 +452,7 @@ class SolverSettingsC(Structure):
         ("precond_pd", c_void_p),
         ("project", c_void_p),
         ("modify_step", c_void_p),
+        ("get_extra_trial_vectors", c_void_p),
         ("conv_check", c_void_p),
         ("stability_hess_x", c_void_p),
         ("logger", c_void_p),
@@ -465,6 +465,7 @@ class SolverSettingsC(Structure):
         ("global_red_factor", c_real),
         ("local_red_factor", c_real),
         ("n_random_trial_vectors", c_int),
+        ("n_extra_trial_vectors", c_int),
         ("n_macro", c_int),
         ("n_micro", c_int),
         ("jacobi_davidson_start", c_int),
@@ -534,6 +535,7 @@ class SolverSettings(Settings):
     precond_pd: Optional[Callable[[np.ndarray, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
     modify_step: Optional[Callable[[np.ndarray], None]]
+    get_extra_trial_vectors: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
     stability_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
@@ -541,6 +543,7 @@ class SolverSettings(Settings):
     precond_pd_interface: Any
     project_interface: Any
     modify_step_interface: Any
+    get_extra_trial_vectors_interface: Any
     conv_check_interface: Any
     stability_hess_x_interface: Any
     logger_interface: Any
@@ -592,6 +595,14 @@ class SolverSettings(Settings):
             exception,
         )
         self.set_optional_callback(
+            "get_extra_trial_vectors",
+            self.get_extra_trial_vectors,
+            GetExtraTrialVectorsInterface,
+            get_extra_trial_vectors_interface_type,
+            n_param,
+            exception,
+        )
+        self.set_optional_callback(
             "conv_check",
             self.conv_check,
             ConvCheckInterface,
@@ -620,16 +631,15 @@ class StabilitySettings(Settings):
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
     approx_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
-    init_trial_space: Optional[Callable[[np.ndarray], None]]
+    get_extra_trial_vectors: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[np.ndarray, float], bool]]
     logger: Optional[Callable[[str], None]]
     precond_interface: Any
     project_interface: Any
     approx_hess_x_interface: Any
-    init_trial_space_interface: Any
+    get_extra_trial_vectors_interface: Any
     conv_check_interface: Any
     logger_interface: Any
-    n_trial_vectors: int
 
     def set_optional_callbacks(self, n_param: int, exception: Dict[str, Exception]):
         """
@@ -660,11 +670,10 @@ class StabilitySettings(Settings):
             exception,
         )
         self.set_optional_callback(
-            "init_trial_space",
-            self.init_trial_space,
-            InitTrialSpaceInterface,
-            init_trial_space_interface_type,
-            self.n_trial_vectors,
+            "get_extra_trial_vectors",
+            self.get_extra_trial_vectors,
+            GetExtraTrialVectorsInterface,
+            get_extra_trial_vectors_interface_type,
             n_param,
             exception,
         )

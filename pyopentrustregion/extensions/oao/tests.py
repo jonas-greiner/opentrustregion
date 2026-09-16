@@ -20,6 +20,7 @@ from unittest.mock import patch
 from pyopentrustregion.tests import (
     lib,
     n_param,
+    n_extra_trial_vectors,
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
@@ -38,6 +39,7 @@ fortran_tests = {
     "oao_tests": [
         "calculate_grad_h_diag",
         "compute_sqrt_and_inv_sqrt",
+        "get_extra_trial_vectors_oao",
         "get_hess_eigval_pairs",
         "hess_x_oao",
         "init_oao_settings",
@@ -67,6 +69,7 @@ fortran_tests = {
         "assign_oao_c_f",
         "assign_oao_f_c",
         "get_energy_f_wrapper",
+        "get_extra_trial_vectors_oao_c_wrapper",
         "get_response_f_wrapper",
         "hess_x_oao_c_wrapper",
         "init_oao_settings_c",
@@ -215,16 +218,21 @@ class OAOPyInterfaceTests(unittest.TestCase):
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
         # call OAO factory python interface
-        obj_func_oao, update_orbs_oao, precond_oao, precond_pd_oao, project_oao = (
-            oao_factory(
-                dm_ao,
-                ao_overlap,
-                n_particle,
-                n_ao,
-                self.mock_get_energy,
-                self.mock_update_dm,
-                settings,
-            )
+        (
+            obj_func_oao,
+            update_orbs_oao,
+            precond_oao,
+            precond_pd_oao,
+            project_oao,
+            get_extra_trial_vectors_oao,
+        ) = oao_factory(
+            dm_ao,
+            ao_overlap,
+            n_particle,
+            n_ao,
+            self.mock_get_energy,
+            self.mock_update_dm,
+            settings,
         )
 
         # check if logger was called correctly
@@ -374,6 +382,28 @@ class OAOPyInterfaceTests(unittest.TestCase):
                 " test_oao_factory_py_interface failed: Returned preconditioned "
                 "residual of returned OAO positive-definite preconditioner function "
                 "wrong."
+            )
+            test_passed = False
+
+        # call returned OAO extra trial vector function
+        trial_vectors = np.empty((n_extra_trial_vectors, n_param), dtype=np.float64)
+        try:
+            get_extra_trial_vectors_oao(trial_vectors)
+        except RuntimeError:
+            print(
+                " test_oao_factory_py_interface failed: Returned OAO extra trial "
+                "vector function raises error."
+            )
+            test_passed = False
+
+        # check results
+        if not np.allclose(
+            trial_vectors,
+            np.arange(1, n_extra_trial_vectors + 1, dtype=np.float64)[:, None],
+        ):
+            print(
+                " test_oao_factory_py_interface failed: Returned trial vectors of "
+                "returned OAO extra trial vector function wrong."
             )
             test_passed = False
 

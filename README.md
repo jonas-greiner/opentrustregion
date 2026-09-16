@@ -187,6 +187,7 @@ The optimization process can be fine-tuned using the following settings:
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for optimization using non-redundant parameters. When this is used, all other passed routines (`update_orbs`, `hess_x`, `precond`, and `precond_pd`) must be self-projecting.
 - **`precond_pd`** (subroutine): Applies a positive-definite preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Used by the `"tcg"` and `"gltr"` subsystem solvers to define the ellipsoidal trust-region metric (see `trust_region_shape` below); unlike `precond`, this callback takes no level shift and must always return a positive-definite result.
 - **`modify_step`** (subroutine): Modifies a proposed step in-place and returns an integer error code (0 for success, positive integers < 100 for errors). Can for example be used to apply gauge transformations which improve convergence.
+- **`get_extra_trial_vectors`** (subroutine): Returns extra trial vectors that seed the leading part of the initial trial space, written in-place to the provided matrix, whose column count is `n_extra_trial_vectors` and is passed to the callback itself by the C and Python interfaces, since those only receive a flat pointer. The vectors do not need to be orthonormalized or projected, and a vanishing column is dropped, which is how the callback signals that it has no vector to contribute for that slot. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`stability_hess_x`** (subroutine): Applies a different Hessian linear transformation to a trial vector for the stability check than the one `update_orbs` returns for the optimization, and returns an integer error code (0 for success, positive integers < 100 for errors). Intended for optimization with an approximate Hessian, where the stability of a converged solution has to be decided with the exact Hessian. When `hess_symm` is set, the approximate Hessian is passed on as the stability check's `approx_hess_x` so it can still be used for the cheap part of the Jacobi-Davidson correction equations.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence.
@@ -201,6 +202,7 @@ The optimization process can be fine-tuned using the following settings:
   - `"gltr"`: generalized Lanczos trust region method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations.
+- **`n_extra_trial_vectors`** (integer): Number of non-random trial vectors added alongside the gradient direction to initialize the micro iterations, on top of the `n_random_trial_vectors` random ones. These are taken from `get_extra_trial_vectors` when that callback is provided, and are otherwise unit vectors along the lowest Hessian diagonal elements, added only where those indicate negative curvature. Vectors that vanish or are linearly dependent on the gradient direction are dropped.
 - **`start_trust_radius`** (real): Initial trust radius.
 - **`trust_region_shape`** (string): Only used by the `"tcg"` and `"gltr"` subsystem solvers (the Davidson-family solvers always use a spherical trust region). Options include:
   - `"ellipsoidal"` (default): the trust region is measured in the norm induced by the positive-definite preconditioner `precond_pd` (or, by default, shaped by the absolute value of the (approximate) Hessian diagonal). This also accelerates convergence of the underlying Krylov iteration.
@@ -335,8 +337,8 @@ The stability check can be fine-tuned using the following settings:
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors).
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for stability check using non-redundant parameters. When this is used, all other passed routines (`hess_x` and `precond`) must be self-projecting.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion based on the provided residual vector and current eigenvalue estimate. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
-- **`approx_hess_x`** (subroutine): Applies an approximate Hessian linear transformation to a trial vector and returns an integer error code (0 for success, positive integers < 100 for errors). Used for the Jacobi-Davidson correction equations, which are solved iteratively and would otherwise consume exact Hessian linear transformations, and to obtain the non-random starting vectors counted by `n_trial_vectors`. Set automatically when the solver is run with `stability_hess_x` and a symmetric Hessian.
-- **`init_trial_space`** (subroutine): Returns an initial trial space which does not need to be orthonormalized or projected and is written in-place to the provided matrix. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
+- **`approx_hess_x`** (subroutine): Applies an approximate Hessian linear transformation to a trial vector and returns an integer error code (0 for success, positive integers < 100 for errors). Used for the Jacobi-Davidson correction equations, which are solved iteratively and would otherwise consume exact Hessian linear transformations, and to obtain the non-random starting vectors counted by `n_extra_trial_vectors`. Set automatically when the solver is run with `stability_hess_x` and a symmetric Hessian.
+- **`get_extra_trial_vectors`** (subroutine): Returns extra trial vectors that seed the leading part of the initial trial space, written in-place to the provided matrix, whose column count is `n_extra_trial_vectors` and is passed to the callback itself by the C and Python interfaces, since those only receive a flat pointer. The vectors do not need to be orthonormalized or projected, and a vanishing column is dropped, which is how the callback signals that it has no vector to contribute for that slot. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`stop_on_instability`** (boolean): When no `conv_check` is supplied, lets the default convergence policy accept a Ritz pair as soon as its eigenvalue drops below the instability threshold, without waiting for the residual to converge, since a Ritz value is an upper bound on the true lowest eigenvalue and the sign is then already certain. Off by default.
 - **`diag_solver`** (string): Specifies which diagonalization solver to use. Options include:
@@ -344,7 +346,7 @@ The stability check can be fine-tuned using the following settings:
   - `"jacobi-davidson"`: Davidson method with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations.
 - **`conv_tol`** (real): Convergence criterion for the RMS residual.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations.
-- **`n_trial_vectors`** (integer): Number of non-random trial vectors used to start the Davidson iterations, on top of the `n_random_trial_vectors` random ones (the total trial space size is `n_trial_vectors + n_random_trial_vectors`). When `init_trial_space` is provided this is instead the number of vectors that callback supplies, and no random vectors are added on top. Otherwise, these non-random vectors are the lowest eigenvectors of the approximate Hessian, obtained from `approx_hess_x`, or unit vectors along the lowest Hessian diagonal elements if no approximate Hessian is passed.
+- **`n_extra_trial_vectors`** (integer): Number of non-random trial vectors used to start the Davidson iterations, on top of the `n_random_trial_vectors` random ones (the total trial space size is `n_extra_trial_vectors + n_random_trial_vectors`). These non-random vectors are taken from `get_extra_trial_vectors` when that callback is provided, otherwise they are the lowest eigenvectors of the approximate Hessian obtained from `approx_hess_x`, and otherwise unit vectors along the lowest Hessian diagonal elements. Vectors that vanish or are linearly dependent are dropped and replaced by additional random ones.
 - **`n_iter`** (integer): Maximum number of Davidson iterations.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
@@ -366,19 +368,19 @@ The library uses structured integer return codes to indicate whether a function 
 
 ### Origins (`OO`)
 
-| Code Prefix (`OO`) | Component           |
-|--------------------|---------------------|
-| `01`               | `solver`            |
-| `02`               | `stability_check`   |
-| `11`               | `obj_func`          |
-| `12`               | `update_orbs`       |
-| `13`               | `hess_x`            |
-| `14`               | `precond`           |
-| `15`               | `conv_check`        |
-| `16`               | `project`           |
-| `17`               | `modify_step`       |
-| `18`               | `init_trial_space`  |
-| `19`               | `precond_pd`        |
+| Code Prefix (`OO`) | Component                  |
+|--------------------|----------------------------|
+| `01`               | `solver`                   |
+| `02`               | `stability_check`          |
+| `11`               | `obj_func`                 |
+| `12`               | `update_orbs`              |
+| `13`               | `hess_x`                   |
+| `14`               | `precond`                  |
+| `15`               | `conv_check`               |
+| `16`               | `project`                  |
+| `17`               | `modify_step`              |
+| `18`               | `get_extra_trial_vectors`  |
+| `19`               | `precond_pd`               |
 
 ### Error Codes (`EE`)
 
@@ -422,11 +424,11 @@ or, when installing the Python package:
 CMAKE_FLAGS='-DENABLE_OAO=ON' pip install .
 ```
 
-This exposes an `oao_factory` function that prepares OAO-specific callbacks for energy, orbital updates, preconditioning, and projection.
+This exposes an `oao_factory` function that prepares OAO-specific callbacks for energy, orbital updates, preconditioning, projection, and extra trial vectors.
 
 #### Usage
 
-The routine `oao_factory` constructs and returns OAO versions of energy, orbital updating, preconditioning, and projection functions. This routine requires the following input arguments:
+The routine `oao_factory` constructs and returns OAO versions of energy, orbital updating, preconditioning, projection, and extra trial vector functions. This routine requires the following input arguments:
 
 #### Required Arguments
 
@@ -449,6 +451,7 @@ The routine `oao_factory` constructs and returns OAO versions of energy, orbital
 - **`precond_oao`** (subroutine): Returned OAO level-shifted preconditioner as defined for the `precond` setting of the `solver` subroutine, based on the exact eigendecomposition of the static part of the Hessian.
 - **`precond_pd_oao`** (subroutine): Returned OAO positive-definite preconditioner as defined for the `precond_pd` setting of the `solver` subroutine, based on the exact eigendecomposition of the static part of the Hessian.
 - **`project_oao`** (subroutine): Returned OAO projection subroutine as defined for the `solver` subroutine.
+- **`get_extra_trial_vectors_oao`** (subroutine): Returned OAO extra trial vector subroutine as defined for the `solver` subroutine. It returns the orbital rotations between those occupied-virtual eigenvector pairs of the static part of the Hessian whose eigenvalue sums are most negative.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 - **`oao_settings`** (oao_settings_type): Settings object which controls optional arguments as described below.
 
@@ -458,7 +461,8 @@ The following Fortran snippet demonstrates how to use the OAO interface:
 
 ```fortran
 use opentrustregion, only: settings_type, solver, obj_func_type, update_orbs_type, &
-                           precond_type, precond_pd_type, project_type
+                           precond_type, precond_pd_type, project_type, &
+                           get_extra_trial_vectors_type
 use opentrustregion_oao, only: oao_factory, oao_settings_type, init_oao_settings, &
                                oao_deconstructor
 
@@ -469,6 +473,7 @@ procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
 procedure(precond_type), pointer :: precond_oao_funptr
 procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
 procedure(project_type), pointer :: project_oao_funptr
+procedure(get_extra_trial_vectors_type), pointer :: get_extra_trial_vectors_oao_funptr
 integer(ip) :: n_particle, n_ao, n_param, error
 real(rp), allocatable, target :: dm_ao(:, :)
 real(rp), allocatable :: ao_overlap(:, :)
@@ -486,7 +491,8 @@ oao_settings%verbose = 1
 ! get OAO routines
 call oao_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy, update_dm, &
                  obj_func_oao_funptr, update_orbs_oao_funptr, precond_oao_funptr, &
-                 precond_pd_oao_funptr, project_oao_funptr, error, oao_settings)
+                 precond_pd_oao_funptr, project_oao_funptr, &
+                 get_extra_trial_vectors_oao_funptr, error, oao_settings)
 
 ! initialize settings
 call settings%init(error)
@@ -495,6 +501,7 @@ call settings%init(error)
 settings%precond => precond_oao_funptr
 settings%precond_pd => precond_pd_oao_funptr
 settings%project => project_oao_funptr
+settings%get_extra_trial_vectors => get_extra_trial_vectors_oao_funptr
 
 ! set number of parameters
 n_param = n_ao * (n_ao - 1) / 2

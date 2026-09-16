@@ -36,11 +36,14 @@ _Static_assert(offsetof(solver_settings_type, project) == 2 * sizeof(void *),
                "solver_settings_type: project must follow precond_pd");
 _Static_assert(offsetof(solver_settings_type, modify_step) == 3 * sizeof(void *),
                "solver_settings_type: modify_step must follow project");
-_Static_assert(offsetof(solver_settings_type, conv_check) == 4 * sizeof(void *),
-               "solver_settings_type: conv_check must follow modify_step");
-_Static_assert(offsetof(solver_settings_type, stability_hess_x) == 5 * sizeof(void *),
+_Static_assert(offsetof(solver_settings_type, get_extra_trial_vectors) ==
+                   4 * sizeof(void *),
+               "solver_settings_type: get_extra_trial_vectors must follow modify_step");
+_Static_assert(offsetof(solver_settings_type, conv_check) == 5 * sizeof(void *),
+               "solver_settings_type: conv_check must follow get_extra_trial_vectors");
+_Static_assert(offsetof(solver_settings_type, stability_hess_x) == 6 * sizeof(void *),
                "solver_settings_type: stability_hess_x must follow conv_check");
-_Static_assert(offsetof(solver_settings_type, logger) == 6 * sizeof(void *),
+_Static_assert(offsetof(solver_settings_type, logger) == 7 * sizeof(void *),
                "solver_settings_type: logger must follow stability_hess_x");
 
 _Static_assert(offsetof(stability_settings_type, precond) == 0,
@@ -49,11 +52,12 @@ _Static_assert(offsetof(stability_settings_type, project) == 1 * sizeof(void *),
                "stability_settings_type: project must follow precond");
 _Static_assert(offsetof(stability_settings_type, approx_hess_x) == 2 * sizeof(void *),
                "stability_settings_type: approx_hess_x must follow project");
-_Static_assert(offsetof(stability_settings_type, init_trial_space) ==
-                   3 * sizeof(void *),
-               "stability_settings_type: init_trial_space must follow approx_hess_x");
-_Static_assert(offsetof(stability_settings_type, conv_check) == 4 * sizeof(void *),
-               "stability_settings_type: conv_check must follow init_trial_space");
+_Static_assert(
+    offsetof(stability_settings_type, get_extra_trial_vectors) == 3 * sizeof(void *),
+    "stability_settings_type: get_extra_trial_vectors must follow approx_hess_x");
+_Static_assert(
+    offsetof(stability_settings_type, conv_check) == 4 * sizeof(void *),
+    "stability_settings_type: conv_check must follow get_extra_trial_vectors");
 _Static_assert(offsetof(stability_settings_type, logger) == 5 * sizeof(void *),
                "stability_settings_type: logger must follow conv_check");
 
@@ -261,6 +265,11 @@ bool test_solver_settings_init(void) {
                     "parameter wrong.\n");
     ok = false;
   }
+  if (s.n_extra_trial_vectors != defaults.n_extra_trial_vectors) {
+    fprintf(stderr, "test_solver_settings_init failed: Number of extra trial vectors "
+                    "parameter wrong.\n");
+    ok = false;
+  }
   if (s.seed != defaults.seed) {
     fprintf(stderr, "test_solver_settings_init failed: Seed parameter wrong.\n");
     ok = false;
@@ -274,8 +283,8 @@ bool test_solver_settings_init(void) {
                     "wrong.\n");
     ok = false;
   }
-  if (s.precond || s.precond_pd || s.project || s.modify_step || s.conv_check ||
-      s.stability_hess_x || s.logger) {
+  if (s.precond || s.precond_pd || s.project || s.modify_step ||
+      s.get_extra_trial_vectors || s.conv_check || s.stability_hess_x || s.logger) {
     fprintf(stderr, "test_solver_settings_init failed: Callback pointers should be "
                     "NULL.\n");
     ok = false;
@@ -310,7 +319,7 @@ bool test_solver_settings_init(void) {
                     "random trial vectors parameter wrong.\n");
     ok = false;
   }
-  if (ss.n_trial_vectors != stability_defaults.n_trial_vectors) {
+  if (ss.n_extra_trial_vectors != stability_defaults.n_extra_trial_vectors) {
     fprintf(stderr, "test_solver_settings_init failed: Nested stability number of "
                     "trial vectors parameter wrong.\n");
     ok = false;
@@ -341,7 +350,7 @@ bool test_solver_settings_init(void) {
                     "solver parameter wrong.\n");
     ok = false;
   }
-  if (ss.precond || ss.project || ss.approx_hess_x || ss.init_trial_space ||
+  if (ss.precond || ss.project || ss.approx_hess_x || ss.get_extra_trial_vectors ||
       ss.conv_check || ss.logger) {
     fprintf(stderr, "test_solver_settings_init failed: Nested stability callback "
                     "pointers should be NULL.\n");
@@ -375,6 +384,12 @@ bool test_stability_settings_init(void) {
   if (s.n_random_trial_vectors != defaults.n_random_trial_vectors) {
     fprintf(stderr,
             "test_stability_settings_init failed: Number of random trial vectors "
+            "parameter wrong.\n");
+    ok = false;
+  }
+  if (s.n_extra_trial_vectors != defaults.n_extra_trial_vectors) {
+    fprintf(stderr,
+            "test_stability_settings_init failed: Number of extra trial vectors "
             "parameter wrong.\n");
     ok = false;
   }
@@ -417,6 +432,7 @@ bool test_solver_c(void) {
 
   solver_settings_type settings = solver_settings_init();
   settings.precond = precond;
+  settings.get_extra_trial_vectors = get_extra_trial_vectors;
   settings.logger = logger;
   settings.verbose = 3; // ensure the logger callback is exercised
   logger_called = 0;

@@ -49,22 +49,29 @@ void init_oao_settings(oao_settings_type *settings);
 /**
  * Fortran-callable OAO factory interface.
  *
- * @param dm_ao_c                    Flattened AO density matrix (size n_ao^2)
- * @param ao_overlap_c               Flattened AO overlap matrix (size n_ao^2)
- * @param n_particle_c               Number of particles
- * @param n_ao_c                     Number of AO basis functions
- * @param get_energy_c_funptr        C pointer to get_energy callback
- * @param update_dm_c_funptr         C pointer to update_dm callback
- * @param settings_c                 OAO settings
- * @param obj_func_oao_c_funptr      Output: wrapped objective function pointer
- * @param update_orbs_oao_c_funptr   Output: wrapped update_orbs function pointer
- * @param precond_oao_c_funptr       Output: wrapped level-shifted preconditioner
- *                                   function pointer
- * @param precond_pd_oao_c_funptr    Output: wrapped positive-definite
- *                                   preconditioner function pointer
- * @param project_oao_c_funptr       Output: wrapped projection function pointer
+ * @param dm_ao_c                                 Flattened AO density matrix (size
+ *                                                n_ao^2)
+ * @param ao_overlap_c                            Flattened AO overlap matrix (size
+ *                                                n_ao^2)
+ * @param n_particle_c                            Number of particles
+ * @param n_ao_c                                  Number of AO basis functions
+ * @param get_energy_c_funptr                     C pointer to get_energy callback
+ * @param update_dm_c_funptr                      C pointer to update_dm callback
+ * @param settings_c                              OAO settings
+ * @param obj_func_oao_c_funptr                   Output: wrapped objective function
+ *                                                pointer
+ * @param update_orbs_oao_c_funptr                Output: wrapped update_orbs function
+ *                                                pointer
+ * @param precond_oao_c_funptr                    Output: wrapped level-shifted
+ *                                                preconditioner function pointer
+ * @param precond_pd_oao_c_funptr                 Output: wrapped positive-definite
+ *                                                preconditioner function pointer
+ * @param project_oao_c_funptr                    Output: wrapped projection function
+ *                                                pointer
+ * @param get_extra_trial_vectors_oao_c_funptr    Output: wrapped extra trial vector
+ *                                                function pointer
  *
- * @return                           Integer error code from Fortran
+ * @return                                        Integer error code from Fortran
  */
 c_int oao_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
                   c_int n_ao_c, get_energy_fp get_energy_c_funptr,
@@ -72,7 +79,9 @@ c_int oao_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_par
                   update_orbs_fp *update_orbs_oao_c_funptr,
                   precond_fp *precond_oao_c_funptr,
                   precond_pd_fp *precond_pd_oao_c_funptr,
-                  project_fp *project_oao_c_funptr, oao_settings_type *settings_c);
+                  project_fp *project_oao_c_funptr,
+                  get_extra_trial_vectors_fp *get_extra_trial_vectors_oao_c_funptr,
+                  oao_settings_type *settings_c);
 
 /**
  * Fortran-callable OAO deconstructor.
