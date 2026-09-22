@@ -16,8 +16,12 @@ module otr_arh_unit_tests
     ! functions, which differ between the first and any subsequent call, following the
     ! same convention as the shared multiplier for the Fock matrix
     real(rp), parameter :: mock_v_same_spin_factor(2) = [3.0_rp, 7.0_rp], &
-                           mock_v_opposite_spin_factor(2) = [4.0_rp, 9.0_rp], &
-                           mock_v_nonlinear_factor(2) = [6.0_rp, 11.0_rp]
+                           mock_v_opposite_spin_factor(2) = [4.0_rp, 9.0_rp]
+
+    ! the non-linear potential keeps a single multiplier across calls, unlike the
+    ! potentials above, so that it stays one consistent function of the density, which
+    ! is what the history screening measures and would otherwise reject as noise
+    real(rp), parameter :: mock_v_nonlinear_factor = 6.0_rp
 
     ! dispatch the mock potential by density matrix rank
     interface mock_potential
@@ -84,7 +88,7 @@ contains
         error = 0
         energy = sum(dm)
         fock = mock_potential(mock_factor(mock_fock_factor), dm)
-        v_nonlinear = mock_potential(mock_factor(mock_v_nonlinear_factor), dm)
+        v_nonlinear = mock_potential(mock_v_nonlinear_factor, dm)
 
     end subroutine mock_update_dm_cs
 
@@ -116,8 +120,7 @@ contains
                 mock_potential(mock_factor(mock_v_same_spin_factor), dm(:, :, i))
             v_opposite_spin(:, :, i) = &
                 mock_potential(mock_factor(mock_v_opposite_spin_factor), dm(:, :, i))
-            v_nonlinear(:, :, i) = &
-                mock_potential(mock_factor(mock_v_nonlinear_factor), dm(:, :, i))
+            v_nonlinear(:, :, i) = mock_potential(mock_v_nonlinear_factor, dm(:, :, i))
         end do
 
     end subroutine mock_update_dm_os
@@ -328,7 +331,7 @@ contains
 
     end function generate_nonredundant_vector
 
-    subroutine check_inv_hess_x_arh(hess, vector, mu, test_name, passed)
+    subroutine check_inv_hess_x_arh(hess, vector, mu, case_name, passed)
         !
         ! this subroutine checks the exact-inverse of the ARH Woodbury preconditioner 
         ! against a reference Hessian by applying the reference (B - mu*I) to the 
@@ -338,7 +341,7 @@ contains
         use otr_arh, only: inv_hess_x_arh
 
         real(rp), intent(in) :: hess(:, :), vector(:), mu
-        character(*), intent(in) :: test_name
+        character(*), intent(in) :: case_name
         logical, intent(inout) :: passed
 
         real(rp), allocatable :: actual(:)
@@ -350,14 +353,14 @@ contains
         ! vector has to recover the vector
         call inv_hess_x_arh(vector, actual, error, mu)
         if (error /= 0) then
-            write (stderr, *) test_name//" failed: Produced error for the shifted "// &
-                "inverse."
+            write (stderr, *) "test_inv_hess_x_arh failed: Shifted inverse "// &
+                "produced error for the "//case_name//" case."
             passed = .false.
         end if
         if (norm2(matmul(hess, actual) - mu * actual - vector) > tol * &
             (1.0_rp + norm2(hess) * norm2(actual))) then
-            write (stderr, *) test_name//" failed: Shifted inverse is not inverse "// &
-                "of shifted reference Hessian."
+            write (stderr, *) "test_inv_hess_x_arh failed: Shifted inverse is not "// &
+                "inverse of shifted reference Hessian for the "//case_name//" case."
             passed = .false.
         end if
 
@@ -365,14 +368,14 @@ contains
         ! reference Hessian itself, without a level shift
         call inv_hess_x_arh(vector, actual, error)
         if (error /= 0) then
-            write (stderr, *) test_name//" failed: Produced error for the "// &
-                "unshifted inverse."
+            write (stderr, *) "test_inv_hess_x_arh failed: Unshifted inverse "// &
+                "produced error for the "//case_name//" case."
             passed = .false.
         end if
         if (norm2(matmul(hess, actual) - vector) > tol * &
             (1.0_rp + norm2(hess) * norm2(actual))) then
-            write (stderr, *) test_name//" failed: Inverse is not inverse "// &
-                "of reference Hessian."
+            write (stderr, *) "test_inv_hess_x_arh failed: Inverse is not inverse "// &
+                "of reference Hessian for the "//case_name//" case."
             passed = .false.
         end if
 
@@ -606,7 +609,7 @@ contains
 
     end function ref_response_os
 
-    function check_inv_hess_x_arh_cs(arh_type, test_name) result(passed)
+    function check_inv_hess_x_arh_cs(arh_type, case_name) result(passed)
         !
         ! this function performs the exact-inverse check of the closed-shell ARH 
         ! Woodbury preconditioner for a single ARH type
@@ -617,7 +620,7 @@ contains
         use otr_oao_unit_tests, only: ref_unpack_asymm, ref_project_symm, ref_hess_x, &
                                       generate_random_symm_matrix
 
-        character(*), intent(in) :: arh_type, test_name
+        character(*), intent(in) :: arh_type, case_name
         logical :: passed
 
         integer(ip), parameter :: n_diff = 2, n_electrons = 2
@@ -633,7 +636,8 @@ contains
                     a_inv(n_diff, n_diff), a_inv_comb(n_diff, n_diff)
         integer(ip) :: n_param, i, k
         real(rp), allocatable :: x_full(:, :, :), delta_dm(:, :, :), &
-                                 response(:, :, :), hess(:, :), e_i(:), vector(:)
+                                 response(:, :, :), hess(:, :), e_i(:), vector(:), &
+                                 potential_dirs(:, :)
 
         ! assume test passes
         passed = .true.
@@ -668,7 +672,7 @@ contains
 
         ! populate the cached history projections
         arh_object%dm_dirs = ref_cache_dirs(dm_diff, dm_oao, n_param)
-        arh_object%potential_dirs = ref_cache_dirs(fock_diff, dm_oao, n_param)
+        potential_dirs = ref_cache_dirs(fock_diff, dm_oao, n_param)
         arh_object%linear_potential_dirs = ref_cache_dirs(v_linear_diff, dm_oao, &
                                                           n_param)
         arh_object%nonlinear_potential_dirs = ref_cache_dirs(v_nonlinear_diff, dm_oao, &
@@ -693,7 +697,7 @@ contains
             allocate(arh_object%expansion_dirs(n_param, 2 * n_diff), &
                      arh_object%coupling_matrix(2 * n_diff, 2 * n_diff))
             arh_object%expansion_dirs(:, :n_diff) = arh_object%dm_dirs
-            arh_object%expansion_dirs(:, n_diff + 1:) = arh_object%potential_dirs
+            arh_object%expansion_dirs(:, n_diff + 1:) = potential_dirs
             arh_object%coupling_matrix = 0.0_rp
             arh_object%coupling_matrix(:n_diff, n_diff + 1:) = 4.0_rp * metric_inv
             arh_object%coupling_matrix(n_diff + 1:, :n_diff) = 4.0_rp * metric_inv
@@ -701,14 +705,14 @@ contains
             allocate(arh_object%expansion_dirs(n_param, 2 * n_diff), &
                      arh_object%coupling_matrix(2 * n_diff, 2 * n_diff))
             arh_object%expansion_dirs(:, :n_diff) = arh_object%dm_dirs
-            arh_object%expansion_dirs(:, n_diff + 1:) = arh_object%potential_dirs
+            arh_object%expansion_dirs(:, n_diff + 1:) = potential_dirs
             arh_object%coupling_matrix = 0.0_rp
             arh_object%coupling_matrix(:n_diff, :n_diff) = &
                 -8.0_rp * matmul(metric_inv, matmul(a_sym, metric_inv))
             arh_object%coupling_matrix(:n_diff, n_diff + 1:) = 8.0_rp * metric_inv
             arh_object%coupling_matrix(n_diff + 1:, :n_diff) = 8.0_rp * metric_inv
         case default
-            arh_object%expansion_dirs = arh_object%potential_dirs
+            arh_object%expansion_dirs = potential_dirs
             arh_object%projection_dirs = arh_object%dm_dirs
             arh_object%coupling_matrix = 8.0_rp * metric_inv
         end select
@@ -733,14 +737,14 @@ contains
         ! generate a vector confined to the non-redundant subspace and check inverse 
         ! Hessian
         vector = generate_nonredundant_vector(n_param, 1_ip, n_ao, dm_oao)
-        call check_inv_hess_x_arh(hess, vector, mu, test_name, passed)
+        call check_inv_hess_x_arh(hess, vector, mu, case_name, passed)
 
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
 
     end function check_inv_hess_x_arh_cs
 
-    function check_inv_hess_x_arh_os(arh_type, test_name) result(passed)
+    function check_inv_hess_x_arh_os(arh_type, case_name) result(passed)
         !
         ! this function performs the exact-inverse check of the open-shell ARH Woodbury 
         ! preconditioner for a single ARH type
@@ -752,7 +756,7 @@ contains
                                       ref_project_asymm, ref_pack_asymm, ref_hess_x, &
                                       generate_random_symm_matrix
 
-        character(*), intent(in) :: arh_type, test_name
+        character(*), intent(in) :: arh_type, case_name
         logical :: passed
 
         integer(ip), parameter :: n_diff = 2, n_electrons = 1
@@ -772,7 +776,8 @@ contains
                     a_inv_lin(2 * n_diff, 2 * n_diff), a_inv_comb(n_diff, n_diff)
         integer(ip) :: i, j, k
         real(rp), allocatable :: x_full(:, :, :), delta_dm(:, :, :), &
-                                 response(:, :, :), hess(:, :), e_i(:), vector(:)
+                                 response(:, :, :), hess(:, :), e_i(:), vector(:), &
+                                 potential_dirs(:, :)
 
         ! assume test passes
         passed = .true.
@@ -819,7 +824,7 @@ contains
 
         ! populate the cached history projections
         allocate(arh_object%dm_dirs(n_param, 2 * n_diff), &
-                 arh_object%potential_dirs(n_param, 2 * n_diff), &
+                 potential_dirs(n_param, 2 * n_diff), &
                  arh_object%linear_potential_dirs(n_param, 2 * n_diff), &
                  arh_object%nonlinear_potential_dirs(n_param, n_diff))
         do k = 1, n_diff
@@ -828,11 +833,11 @@ contains
                     ref_project_asymm(embed_channel(dm_diff(:, :, j, k), j, n_ao, &
                                                     n_particle), dm_oao), n_param)
             end do
-            arh_object%potential_dirs(:, k) = ref_pack_asymm(ref_project_asymm( &
+            potential_dirs(:, k) = ref_pack_asymm(ref_project_asymm( &
                 embed_channel(v_same_eff(:, :, 1, k), 1_ip, n_ao, n_particle) + &
                 embed_channel(v_opp_diff(:, :, 2, k), 2_ip, n_ao, n_particle), &
                 dm_oao), n_param)
-            arh_object%potential_dirs(:, n_diff + k) = &
+            potential_dirs(:, n_diff + k) = &
                 ref_pack_asymm(ref_project_asymm( &
                     embed_channel(v_same_eff(:, :, 2, k), 2_ip, n_ao, n_particle) + &
                     embed_channel(v_opp_diff(:, :, 1, k), 1_ip, n_ao, n_particle), &
@@ -841,7 +846,7 @@ contains
                 ref_pack_asymm(ref_project_asymm(v_nl_diff(:, :, :, k), dm_oao), &
                                n_param)
         end do
-        arh_object%linear_potential_dirs = arh_object%potential_dirs
+        arh_object%linear_potential_dirs = potential_dirs
 
         ! assemble the low-rank factors
         select case (arh_type)
@@ -863,7 +868,7 @@ contains
             allocate(arh_object%expansion_dirs(n_param, 4 * n_diff), &
                      arh_object%coupling_matrix(4 * n_diff, 4 * n_diff))
             arh_object%expansion_dirs(:, :2 * n_diff) = arh_object%dm_dirs
-            arh_object%expansion_dirs(:, 2 * n_diff + 1:) = arh_object%potential_dirs
+            arh_object%expansion_dirs(:, 2 * n_diff + 1:) = potential_dirs
             arh_object%coupling_matrix = 0.0_rp
             arh_object%coupling_matrix(:2 * n_diff, 2 * n_diff + 1:) = 2.0_rp * &
                                                                        metric_inv
@@ -873,7 +878,7 @@ contains
             allocate(arh_object%expansion_dirs(n_param, 4 * n_diff), &
                      arh_object%coupling_matrix(4 * n_diff, 4 * n_diff))
             arh_object%expansion_dirs(:, :2 * n_diff) = arh_object%dm_dirs
-            arh_object%expansion_dirs(:, 2 * n_diff + 1:) = arh_object%potential_dirs
+            arh_object%expansion_dirs(:, 2 * n_diff + 1:) = potential_dirs
             arh_object%coupling_matrix = 0.0_rp
             arh_object%coupling_matrix(:2 * n_diff, :2 * n_diff) = &
                 -4.0_rp * matmul(metric_inv, matmul(a_block, metric_inv))
@@ -882,7 +887,7 @@ contains
             arh_object%coupling_matrix(2 * n_diff + 1:, :2 * n_diff) = 4.0_rp * &
                                                                        metric_inv
         case default
-            arh_object%expansion_dirs = arh_object%potential_dirs
+            arh_object%expansion_dirs = potential_dirs
             arh_object%projection_dirs = arh_object%dm_dirs
             arh_object%coupling_matrix = 4.0_rp * metric_inv
         end select
@@ -908,7 +913,7 @@ contains
         ! generate a vector confined to the non-redundant subspace and check inverse 
         ! Hessian
         vector = generate_nonredundant_vector(n_param, n_particle, n_ao, dm_oao)
-        call check_inv_hess_x_arh(hess, vector, mu, test_name, passed)
+        call check_inv_hess_x_arh(hess, vector, mu, case_name, passed)
 
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
@@ -919,9 +924,9 @@ contains
                                     full_dirs_check, chol_ref_check, info)
         !
         ! this subroutine independently reproduces, for a two-entry raw 
-        ! history-difference pair, the magnitude-based pivot order the history 
-        ! factorization would select, the resulting packed and projected columns in 
-        ! that order, and the Cholesky factor of the pivoted pair's raw Gram matrix
+        ! history-difference pair, the pivot order the history factorization would 
+        ! select, the resulting packed and projected columns in that order, and the 
+        ! Cholesky factor of the pivoted pair's raw Gram matrix
         !
         use otr_oao_unit_tests, only: ref_project_asymm, ref_pack_asymm
 
@@ -937,13 +942,8 @@ contains
         flats(:, 1) = reshape(diff1, [size(diff1)])
         flats(:, 2) = reshape(diff2, [size(diff2)])
 
-        ! magnitude decides which entry is pivoted first
-        if (dot_product(flats(:, 1), flats(:, 1)) >= &
-            dot_product(flats(:, 2), flats(:, 2))) then
-            pivot_order = [1, 2]
-        else
-            pivot_order = [2, 1]
-        end if
+        ! both normalized diagonals are one, so the lower index is pivoted first
+        pivot_order = [1, 2]
 
         do k = 1, 2
             if (pivot_order(k) == 1) then
@@ -968,44 +968,67 @@ contains
 
     end subroutine ref_pivoted_cholesky
 
-    function ref_build_a_part(dm_diff, v_diff, linear) result(a)
+    function ref_order_statistic(x, k) result(val)
+        !
+        ! this function independently reproduces the k-th smallest entry of an array by 
+        ! counting, for every entry, how many entries lie below and alongside it
+        !
+        real(rp), intent(in) :: x(:)
+        integer(ip), intent(in) :: k
+        real(rp) :: val
+
+        integer(ip) :: i, n_below, n_at_most
+
+        val = 0.0_rp
+        do i = 1, size(x)
+            n_below = count(x < x(i))
+            n_at_most = count(x <= x(i))
+            if (n_below < k .and. k <= n_at_most) then
+                val = x(i)
+                return
+            end if
+        end do
+
+    end function ref_order_statistic
+
+    function ref_median(x) result(med)
+        !
+        ! this function independently reproduces the median of an array from its order 
+        ! statistics
+        !
+        real(rp), intent(in) :: x(:)
+        real(rp) :: med
+
+        integer(ip) :: n
+
+        n = size(x)
+        if (n == 0) then
+            med = 0.0_rp
+        else if (mod(n, 2_ip) == 1) then
+            med = ref_order_statistic(x, (n + 1) / 2)
+        else
+            med = 0.5_rp * (ref_order_statistic(x, n / 2) + &
+                            ref_order_statistic(x, n / 2 + 1))
+        end if
+
+    end function ref_median
+
+    function ref_build_a_part(dm_diff, v_diff) result(a)
         !
         ! this function independently reproduces the raw product A = S^T Y over the 
-        ! flattened AO and particle dimensions, together with its symmetrization: 
-        ! unweighted for the linear part, and for the non-linear part blended toward 
-        ! whichever entry of each off-diagonal pair draws its response from the shorter 
-        ! step
+        ! flattened AO and particle dimensions, together with its symmetrization
         !
         real(rp), intent(in) :: dm_diff(:, :, :, :), v_diff(:, :, :, :)
-        logical, intent(in) :: linear
         real(rp), allocatable :: a(:, :)
 
-        integer(ip) :: n_diff, flat_len, i, k
-        real(rp) :: weight
-        real(rp), allocatable :: raw(:, :), step_norms(:)
+        integer(ip) :: n_diff, flat_len
+        real(rp), allocatable :: raw(:, :)
 
         n_diff = size(dm_diff, 4)
         flat_len = size(dm_diff, 1) * size(dm_diff, 2) * size(dm_diff, 3)
         raw = matmul(transpose(reshape(dm_diff, [flat_len, n_diff])), &
                      reshape(v_diff, [flat_len, n_diff]))
-
-        if (linear) then
-            a = 0.5_rp * (raw + transpose(raw))
-        else
-            allocate(step_norms(n_diff))
-            do i = 1, n_diff
-                step_norms(i) = norm2(dm_diff(:, :, :, i))
-            end do
-            a = raw
-            do k = 2, n_diff
-                do i = 1, k - 1
-                    weight = step_norms(k) / (step_norms(i) + step_norms(k))
-                    a(i, k) = weight * raw(k, i) + (1.0_rp - weight) * raw(i, k)
-                    a(k, i) = a(i, k)
-                end do
-            end do
-            deallocate(step_norms)
-        end if
+        a = 0.5_rp * (raw + transpose(raw))
         deallocate(raw)
 
     end function ref_build_a_part
@@ -1470,7 +1493,9 @@ contains
                                       generate_random_density_matrix
 
         integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
-                                  n_param = n_ao * (n_ao - 1) / 2
+                                  n_param = n_ao * (n_ao - 1) / 2, n_noisy = 3
+        real(rp), parameter :: noisy_scales(n_noisy) = &
+            [1e-3_rp, 3e-3_rp, 1e-2_rp], duplicate_offset = 1e-3_rp
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: dm_saved(n_ao, n_ao, n_particle), &
@@ -1481,8 +1506,9 @@ contains
                     v_nonlinear_saved_2(n_ao, n_ao, n_particle), &
                     kappa(n_param), grad(n_param), h_diag(n_param), func, &
                     dm_diff_check(n_ao, n_ao, n_particle, 2), &
-                    full_dirs_check(n_param, 2), chol_ref_check(2, 2)
-        integer(ip) :: n_diff, info, error, pivot_order(2)
+                    full_dirs_check(n_param, 2), chol_ref_check(2, 2), &
+                    perturbation(n_ao, n_ao)
+        integer(ip) :: i, n_diff, info, error, pivot_order(2)
         procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! assume tests pass
@@ -1549,7 +1575,7 @@ contains
             test_update_orbs_arh_cs = .false.
         end if
         if (norm2(arh_object%v_nonlinear_oao - &
-                  mock_potential(mock_v_nonlinear_factor(1), dm_ao)) > tol) then
+                  mock_potential(mock_v_nonlinear_factor, dm_ao)) > tol) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Incorrect "// &
                 "non-linear potential."
             test_update_orbs_arh_cs = .false.
@@ -1669,21 +1695,24 @@ contains
 
         ! determine if the quantities the density matrix and Fock matrix differences
         ! feed into are built from the history and the current quantities
-        if (.not. allocated(arh_object%a_sym)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized A "// &
-                "matrix not constructed."
+        if (.not. allocated(arh_object%a_sym) .or. &
+            .not. allocated(arh_object%a_sym_nonlinear)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Linear and "// &
+                "non-linear symmetrized A matrix not constructed."
             test_update_orbs_arh_cs = .false.
             return
         end if
-        if (.not. allocated(arh_object%dm_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Density matrix "// &
-                "difference directions not constructed."
+        if (.not. allocated(arh_object%dm_dirs) .or. &
+            .not. allocated(arh_object%dm_dirs_nonlinear)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Linear and "// &
+                "non-linear density matrix difference directions not constructed."
             test_update_orbs_arh_cs = .false.
             return
         end if
-        if (.not. allocated(arh_object%potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Potential "// &
-                "difference directions not constructed."
+        if (.not. allocated(arh_object%linear_potential_dirs) .or. &
+            .not. allocated(arh_object%nonlinear_potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Linear and "// &
+                "non-linear potential difference directions not both constructed."
             test_update_orbs_arh_cs = .false.
             return
         end if
@@ -1713,15 +1742,45 @@ contains
                 test_update_orbs_arh_cs = .false.
             end if
         end if
-        if (size(arh_object%potential_dirs, 2) /= n_diff) then
+        if (size(arh_object%linear_potential_dirs, 2) /= n_diff) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Potential "// &
                 "difference directions are not rebased onto the same basis as the "// &
                 "density matrix difference directions."
             test_update_orbs_arh_cs = .false.
         end if
+        if (size(arh_object%a_sym, 1) /= n_diff) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized A "// &
+                "matrix does not match the density matrix difference directions."
+            test_update_orbs_arh_cs = .false.
+        end if
         if (norm2(arh_object%a_sym - transpose(arh_object%a_sym)) > tol) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized A "// &
                 "matrix is not symmetric."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (size(arh_object%dm_dirs_nonlinear, 2) > n_diff) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear density "// &
+                "matrix difference directions outnumber the linear ones."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (size(arh_object%nonlinear_potential_dirs, 2) /= &
+            size(arh_object%dm_dirs_nonlinear, 2)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
+                "potential difference directions are not rebased onto the same "// &
+                "basis as the non-linear density matrix difference directions."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (size(arh_object%a_sym_nonlinear, 1) /= &
+            size(arh_object%dm_dirs_nonlinear, 2)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
+                "symmetrized A matrix does not match the non-linear density matrix "// &
+                "difference directions."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (norm2(arh_object%a_sym_nonlinear - &
+                  transpose(arh_object%a_sym_nonlinear)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
+                "symmetrized A matrix is not symmetric."
             test_update_orbs_arh_cs = .false.
         end if
 
@@ -1790,6 +1849,117 @@ contains
             test_update_orbs_arh_cs = .false.
         end if
 
+        ! replace the history with one step far from the current density, then rotate 
+        ! only slightly, so that the history spans two very different step lengths
+        arh_object%settings%arh_type = "ms_psb"
+        deallocate(arh_object%dm_list, arh_object%fock_list, &
+                   arh_object%v_nonlinear_list)
+        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 1), &
+                 arh_object%fock_list(n_ao, n_ao, n_particle, 1), &
+                 arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 1))
+        arh_object%dm_list(:, :, 1, 1) = &
+            generate_random_density_matrix(n_ao, n_electrons)
+        arh_object%fock_list(:, :, :, 1) = fock_saved
+        arh_object%v_nonlinear_list(:, :, :, 1) = v_nonlinear_saved
+        kappa = 1e-3_rp
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
+                "a history spanning very different step lengths."
+            test_update_orbs_arh_cs = .false.
+        else
+            ! the screen drops the single far entry, so the non-linear system keeps
+            ! one entry where the linear system keeps both
+            if (size(arh_object%dm_dirs, 2) /= 2 * n_particle) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: The linear "// &
+                    "system does not keep the entire history spanning very "// &
+                    "different step lengths."
+                test_update_orbs_arh_cs = .false.
+            end if
+            if (size(arh_object%dm_dirs_nonlinear, 2) /= n_particle) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: The non-linear "// &
+                    "system does not drop the history entry beyond the step-length "// &
+                    "cutoff."
+                test_update_orbs_arh_cs = .false.
+            end if
+            if (size(arh_object%dm_dirs, 2) == &
+                size(arh_object%dm_dirs_nonlinear, 2)) then
+                if (norm2(arh_object%dm_dirs - &
+                          arh_object%dm_dirs_nonlinear) <= tol) then
+                    write (stderr, *) "test_update_orbs_arh_cs failed: The "// &
+                        "non-linear system shares the linear system's basis even "// &
+                        "though the history spans very different step lengths."
+                    test_update_orbs_arh_cs = .false.
+                end if
+            end if
+            if (size(arh_object%nonlinear_potential_dirs, 2) /= &
+                size(arh_object%dm_dirs_nonlinear, 2)) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
+                    "potential difference directions follow the linear system's "// &
+                    "basis for a history spanning very different step lengths."
+                test_update_orbs_arh_cs = .false.
+            end if
+            if (size(arh_object%a_sym_nonlinear, 1) /= &
+                size(arh_object%dm_dirs_nonlinear, 2)) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
+                    "symmetrized A matrix follows the linear system's basis for a "// &
+                    "history spanning very different step lengths."
+                test_update_orbs_arh_cs = .false.
+            end if
+            if (size(arh_object%a_sym, 1) /= size(arh_object%dm_dirs, 2)) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized "// &
+                    "A matrix follows the non-linear system's basis for a history "// &
+                    "spanning very different step lengths."
+                test_update_orbs_arh_cs = .false.
+            end if
+        end if
+
+        ! replace the history with one whose non-linear response is not a function of
+        ! the density at all, while keeping the step lengths comparable so that the
+        ! step-length screen admits every entry: the noisy non-linear system directions 
+        ! then need to be dropped
+        deallocate(arh_object%dm_list, arh_object%fock_list, &
+                   arh_object%v_nonlinear_list)
+        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, n_noisy), &
+                 arh_object%fock_list(n_ao, n_ao, n_particle, n_noisy), &
+                 arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, n_noisy))
+        do i = 1, n_noisy
+            call random_number(perturbation)
+            arh_object%dm_list(:, :, 1, i) = &
+                oao_object%dm_oao(:, :, 1) + noisy_scales(i) * &
+                (perturbation + transpose(perturbation))
+            arh_object%fock_list(:, :, :, i) = fock_saved
+        end do
+
+        ! the last entry barely departs from the direction of the one before it, so
+        ! that it stays linearly independent but contributes a residual far below the
+        ! noise of the response, while still being admitted by the step-length screen
+        call random_number(perturbation)
+        arh_object%dm_list(:, :, 1, n_noisy) = &
+            arh_object%dm_list(:, :, 1, n_noisy - 1) + duplicate_offset * &
+            noisy_scales(n_noisy - 1) * (perturbation + transpose(perturbation))
+        call random_number(arh_object%v_nonlinear_list)
+        kappa = 1e-3_rp
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        n_diff = size(arh_object%dm_list, 4)
+        if (error /= 0) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
+                "a history whose non-linear response is noise."
+            test_update_orbs_arh_cs = .false.
+        else
+            if (size(arh_object%dm_dirs, 2) /= n_diff * n_particle) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: The linear "// &
+                    "system does not keep the entire history whose non-linear "// &
+                    "response is noise."
+                test_update_orbs_arh_cs = .false.
+            end if
+            if (size(arh_object%dm_dirs_nonlinear, 2) >= n_diff * n_particle) then
+                write (stderr, *) "test_update_orbs_arh_cs failed: The non-linear "// &
+                    "system does not drop any history entry whose response is noise."
+                test_update_orbs_arh_cs = .false.
+            end if
+        end if
+
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
 
@@ -1808,7 +1978,10 @@ contains
         use otr_oao_unit_tests, only: n_mock_calls, identity_matrix, &
                                       generate_random_density_matrix
 
-        integer(ip), parameter :: n_electrons = 2
+        integer(ip), parameter :: n_electrons = 2, n_noisy = 3
+        real(rp), parameter :: noisy_scales(n_noisy) = &
+            [1e-3_rp, 3e-3_rp, 1e-2_rp], duplicate_offset = 1e-3_rp
+        character(6), parameter :: case_types(2) = [character(6) :: "ms_psb", "ms_sr1"]
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: dm_saved(n_ao, n_ao, n_particle), &
@@ -1823,8 +1996,10 @@ contains
                     dm_diff_check(n_ao, n_ao, n_particle, 2), &
                     embedded_check(n_ao, n_ao, n_particle, 2), &
                     full_dirs_check(n_param, 2 * n_particle), &
-                    full_dirs_block(n_param, 2), chol_ref_check(2, 2)
-        integer(ip) :: i, j, col, n_diff, info, error, pivot_order(2)
+                    full_dirs_block(n_param, 2), chol_ref_check(2, 2), &
+                    perturbation(n_ao, n_ao)
+        integer(ip) :: i, j, col, n_diff, info, error, pivot_order(2), i_case, &
+                       i_noisy, n_linear, n_nonlinear, n_nonlinear_expected
         procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! assume tests pass
@@ -1900,7 +2075,7 @@ contains
             test_update_orbs_arh_os = .false.
         end if
         if (norm2(arh_object%v_nonlinear_oao - &
-                  mock_potential(mock_v_nonlinear_factor(1), dm_ao)) > tol) then
+                  mock_potential(mock_v_nonlinear_factor, dm_ao)) > tol) then
             write (stderr, *) "test_update_orbs_arh_os failed: Incorrect "// &
                 "non-linear potential."
             test_update_orbs_arh_os = .false.
@@ -2030,21 +2205,24 @@ contains
 
         ! determine if the quantities the density matrix and potential differences
         ! feed into are built from the history and the current quantities
-        if (.not. allocated(arh_object%a_sym)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized A "// &
-                "matrix not constructed."
+        if (.not. allocated(arh_object%a_sym) .or. &
+            .not. allocated(arh_object%a_sym_nonlinear)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Linear and "// &
+                "non-linear symmetrized A matrix not constructed."
             test_update_orbs_arh_os = .false.
             return
         end if
-        if (.not. allocated(arh_object%dm_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Density matrix "// &
-                "difference directions not constructed."
+        if (.not. allocated(arh_object%dm_dirs) .or. &
+            .not. allocated(arh_object%dm_dirs_nonlinear)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Linear and "// &
+                "non-linear density matrix difference directions not constructed."
             test_update_orbs_arh_os = .false.
             return
         end if
-        if (.not. allocated(arh_object%potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Potential "// &
-                "difference directions not constructed."
+        if (.not. allocated(arh_object%linear_potential_dirs) .or. &
+            .not. allocated(arh_object%nonlinear_potential_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Linear and "// &
+                "non-linear potential difference directions not both constructed."
             test_update_orbs_arh_os = .false.
             return
         end if
@@ -2081,15 +2259,45 @@ contains
                 end if
             end if
         end do
-        if (size(arh_object%potential_dirs, 2) /= col) then
+        if (size(arh_object%linear_potential_dirs, 2) /= col) then
             write (stderr, *) "test_update_orbs_arh_os failed: Potential "// &
                 "difference directions are not rebased onto the same basis as the "// &
                 "density matrix difference directions."
             test_update_orbs_arh_os = .false.
         end if
+        if (size(arh_object%a_sym, 1) /= col) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized A "// &
+                "matrix does not match the density matrix difference directions."
+            test_update_orbs_arh_os = .false.
+        end if
         if (norm2(arh_object%a_sym - transpose(arh_object%a_sym)) > tol) then
             write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized A "// &
                 "matrix is not symmetric."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (size(arh_object%dm_dirs_nonlinear, 2) > col) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear density "// &
+                "matrix difference directions outnumber the linear ones."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (size(arh_object%nonlinear_potential_dirs, 2) /= &
+            size(arh_object%dm_dirs_nonlinear, 2)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
+                "potential difference directions are not rebased onto the same "// &
+                "basis as the non-linear density matrix difference directions."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (size(arh_object%a_sym_nonlinear, 1) /= &
+            size(arh_object%dm_dirs_nonlinear, 2)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
+                "symmetrized A matrix does not match the non-linear density matrix "// &
+                "difference directions."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (norm2(arh_object%a_sym_nonlinear - &
+                  transpose(arh_object%a_sym_nonlinear)) > tol) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
+                "symmetrized A matrix is not symmetric."
             test_update_orbs_arh_os = .false.
         end if
 
@@ -2158,6 +2366,203 @@ contains
                 "the non-linear potential difference directions."
             test_update_orbs_arh_os = .false.
         end if
+
+        ! replace the history with one step far from the current density, then rotate 
+        ! only slightly, so that the history spans two very different step lengths; 
+        ! both multisecant families are driven through this since the open-shell 
+        ! non-linear response is factorized per channel for the ARH family but on the 
+        ! channel-combined history for multisecant SR1
+        do i_case = 1, 2
+            arh_object%settings%arh_type = case_types(i_case)
+            deallocate(arh_object%dm_list, arh_object%v_same_spin_list, &
+                       arh_object%v_opposite_spin_list, arh_object%v_nonlinear_list)
+            allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 1), &
+                     arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 1), &
+                     arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 1), &
+                     arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 1))
+            do i = 1, n_particle
+                arh_object%dm_list(:, :, i, 1) = &
+                    generate_random_density_matrix(n_ao, n_electrons)
+            end do
+            arh_object%v_same_spin_list(:, :, :, 1) = v_same_spin_saved
+            arh_object%v_opposite_spin_list(:, :, :, 1) = v_opposite_spin_saved
+            arh_object%v_nonlinear_list(:, :, :, 1) = v_nonlinear_saved
+            kappa = 1e-3_rp
+            call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+            if (error /= 0) then
+                write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &
+                    "for a history spanning very different step lengths for "// &
+                    trim(case_types(i_case))//"."
+                test_update_orbs_arh_os = .false.
+                cycle
+            end if
+
+            ! the screen drops the single far entry, so the non-linear system keeps
+            ! one entry where the linear system keeps both: multisecant SR1 factorizes 
+            ! the non-linear history with both channels flattened together and so keeps 
+            ! a single direction, while the ARH family factorizes each channel on its 
+            ! own and so keeps one per channel
+            if (case_types(i_case) == "ms_sr1") then
+                n_linear = size(arh_object%linear_potential_dirs, 2)
+                n_nonlinear = size(arh_object%nonlinear_potential_dirs, 2)
+                n_nonlinear_expected = 1
+            else
+                n_linear = size(arh_object%dm_dirs, 2)
+                n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+                n_nonlinear_expected = n_particle
+            end if
+            if (n_linear /= 2 * n_particle) then
+                write (stderr, *) "test_update_orbs_arh_os failed: The linear "// &
+                    "system does not keep the entire history spanning very "// &
+                    "different step lengths for "//trim(case_types(i_case))//"."
+                test_update_orbs_arh_os = .false.
+            end if
+            if (n_nonlinear /= n_nonlinear_expected) then
+                write (stderr, *) "test_update_orbs_arh_os failed: The non-linear "// &
+                    "system does not drop the history entry beyond the step-length "// &
+                    "cutoff in every channel for "//trim(case_types(i_case))//"."
+                test_update_orbs_arh_os = .false.
+            end if
+
+            ! the remaining quantities are those the respective family builds, each of
+            ! which has to follow its own system's basis
+            if (case_types(i_case) == "ms_sr1") then
+                if (size(arh_object%a_inv_comb, 1) /= n_nonlinear) then
+                    write (stderr, *) "test_update_orbs_arh_os failed: "// &
+                        "Spin-combined multisecant SR1 pseudoinverse follows the "// &
+                        "linear system's basis for a history spanning very "// &
+                        "different step lengths for "//trim(case_types(i_case))//"."
+                    test_update_orbs_arh_os = .false.
+                end if
+            else
+                if (size(arh_object%dm_dirs, 2) == &
+                    size(arh_object%dm_dirs_nonlinear, 2)) then
+                    if (norm2(arh_object%dm_dirs - &
+                              arh_object%dm_dirs_nonlinear) <= tol) then
+                        write (stderr, *) "test_update_orbs_arh_os failed: The "// &
+                            "non-linear system shares the linear system's basis "// &
+                            "even though the history spans very different step "// &
+                            "lengths for "//trim(case_types(i_case))//"."
+                        test_update_orbs_arh_os = .false.
+                    end if
+                end if
+                if (size(arh_object%nonlinear_potential_dirs, 2) /= &
+                    size(arh_object%dm_dirs_nonlinear, 2)) then
+                    write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
+                        "potential difference directions follow the linear "// &
+                        "system's basis for a history spanning very different step "// &
+                        "lengths for "//trim(case_types(i_case))//"."
+                    test_update_orbs_arh_os = .false.
+                end if
+                if (size(arh_object%a_sym_nonlinear, 1) /= &
+                    size(arh_object%dm_dirs_nonlinear, 2)) then
+                    write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
+                        "symmetrized A matrix follows the linear system's basis "// &
+                        "for a history spanning very different step lengths for "// &
+                        trim(case_types(i_case))//"."
+                    test_update_orbs_arh_os = .false.
+                end if
+                if (size(arh_object%a_sym, 1) /= size(arh_object%dm_dirs, 2)) then
+                    write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized "// &
+                        "A matrix follows the non-linear system's basis for a "// &
+                        "history spanning very different step lengths for "// &
+                        trim(case_types(i_case))//"."
+                    test_update_orbs_arh_os = .false.
+                end if
+            end if
+
+            ! replace the history with one whose non-linear response is not a function
+            ! of the density in a single channel, while keeping the step lengths
+            ! comparable so that the step-length screen admits every entry: the noisy 
+            ! non-linear system directions then need to be dropped, and putting it in 
+            ! one channel at a time covers the per-channel factorization of the ARH 
+            ! family as well as the spin-combined one of multisecant SR1
+            do i_noisy = 1, n_particle
+                deallocate(arh_object%dm_list, arh_object%v_same_spin_list, &
+                           arh_object%v_opposite_spin_list, arh_object%v_nonlinear_list)
+                allocate(arh_object%dm_list(n_ao, n_ao, n_particle, n_noisy), &
+                         arh_object%v_same_spin_list(n_ao, n_ao, n_particle, n_noisy), &
+                         arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, &
+                                                         n_noisy), &
+                         arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, n_noisy))
+                do j = 1, n_noisy
+                    do i = 1, n_particle
+                        call random_number(perturbation)
+                        arh_object%dm_list(:, :, i, j) = &
+                            oao_object%dm_oao(:, :, i) + noisy_scales(j) * &
+                            (perturbation + transpose(perturbation))
+                    end do
+                    arh_object%v_same_spin_list(:, :, :, j) = v_same_spin_saved
+                    arh_object%v_opposite_spin_list(:, :, :, j) = v_opposite_spin_saved
+                end do
+
+                ! the last entry barely departs from the direction of the one before 
+                ! it, so that it stays linearly independent but contributes a residual 
+                ! far below the noise of the response, while still being admitted by 
+                ! the step-length screen
+                do i = 1, n_particle
+                    call random_number(perturbation)
+                    arh_object%dm_list(:, :, i, n_noisy) = &
+                        arh_object%dm_list(:, :, i, n_noisy - 1) + duplicate_offset * &
+                        noisy_scales(n_noisy - 1) * &
+                        (perturbation + transpose(perturbation))
+                end do
+
+                ! only the channel under test carries a response that is not a
+                ! function of the density
+                do j = 1, n_noisy
+                    do i = 1, n_particle
+                        if (i == i_noisy) then
+                            call random_number(perturbation)
+                            arh_object%v_nonlinear_list(:, :, i, j) = perturbation
+                        else
+                            arh_object%v_nonlinear_list(:, :, i, j) = &
+                                mock_potential(mock_v_nonlinear_factor, &
+                                               arh_object%dm_list(:, :, i, j))
+                        end if
+                    end do
+                end do
+                kappa = 1e-3_rp
+                call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+                if (error /= 0) then
+                    write (stderr, *) "test_update_orbs_arh_os failed: Produced "// &
+                        "error for a history whose non-linear response is noise in "// &
+                        "one channel for "//trim(case_types(i_case))//"."
+                    test_update_orbs_arh_os = .false.
+                    cycle
+                end if
+                n_diff = size(arh_object%dm_list, 4)
+
+                ! multisecant SR1 flattens both channels into one factorization, and 
+                ! therefore noise in either channel leads to a residual far below the 
+                ! noise of the response, while the ARH family factorizes each channel 
+                ! on its own and only the residual in the noisy channel ends up being 
+                ! removed
+                if (case_types(i_case) == "ms_sr1") then
+                    n_linear = size(arh_object%linear_potential_dirs, 2)
+                    n_nonlinear = size(arh_object%nonlinear_potential_dirs, 2)
+                    n_nonlinear_expected = n_diff - 1
+                else
+                    n_linear = size(arh_object%dm_dirs, 2)
+                    n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+                    n_nonlinear_expected = n_diff * n_particle - 1
+                end if
+                if (n_linear /= n_diff * n_particle) then
+                    write (stderr, *) "test_update_orbs_arh_os failed: The linear "// &
+                        "system does not keep the entire history whose non-linear "// &
+                        "response is noise in one channel for "// &
+                        trim(case_types(i_case))//"."
+                    test_update_orbs_arh_os = .false.
+                end if
+                if (n_nonlinear > n_nonlinear_expected) then
+                    write (stderr, *) "test_update_orbs_arh_os failed: The "// &
+                        "non-linear system does not drop a history entry whose "// &
+                        "response is noise in the channel carrying it for "// &
+                        trim(case_types(i_case))//"."
+                    test_update_orbs_arh_os = .false.
+                end if
+            end do
+        end do
 
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
@@ -2350,10 +2755,10 @@ contains
         ! one case per ARH type
         do i = 1, size(arh_types)
             if (.not. check_inv_hess_x_arh_cs(arh_types(i), &
-                    "test_inv_hess_x_arh failed for "//trim(arh_types(i))//"_cs")) &
+                                              "closed-shell "//trim(arh_types(i)))) &
                 test_inv_hess_x_arh = .false.
             if (.not. check_inv_hess_x_arh_os(arh_types(i), &
-                    "test_inv_hess_x_arh failed for "//trim(arh_types(i))//"_os")) &
+                                              "open-shell "//trim(arh_types(i)))) &
                 test_inv_hess_x_arh = .false.
         end do
 
@@ -2754,14 +3159,17 @@ contains
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_unit_tests, only: generate_random_symm_matrix, identity_matrix
 
-        integer(ip), parameter :: n_param = 4, n_diff = 2
+        integer(ip), parameter :: n_param = 5, n_diff = 3, n_diff_nl = 2, &
+                                  n_both = n_diff + n_diff_nl, &
+                                  dm_nl_lo = 2 * n_diff + 1, &
+                                  dm_nl_hi = 2 * n_diff + n_diff_nl, &
+                                  pot_nl_lo = dm_nl_hi + 1
 
         integer(ip), target :: n_param_target, n_particle_target
-        real(rp) :: density(n_param, n_diff), potential(n_param, n_diff), &
-                    linear(n_param, n_diff), nonlinear(n_param, n_diff), &
-                    a_sym(n_diff, n_diff), a_inv(n_diff, n_diff), &
-                    a_inv_comb(n_diff, n_diff)
-        logical :: passed_eq
+        real(rp) :: density(n_param, n_diff), density_nl(n_param, n_diff_nl), &
+                    linear(n_param, n_diff), nonlinear(n_param, n_diff_nl), &
+                    a_sym(n_diff, n_diff), a_sym_nl(n_diff_nl, n_diff_nl), &
+                    a_inv(n_diff, n_diff), a_inv_comb(n_diff_nl, n_diff_nl)
 
         ! assume tests pass
         test_get_low_rank_hess_factors = .true.
@@ -2769,12 +3177,13 @@ contains
         ! generate the packed history directions and the small dense matrices the
         ! coupling matrices are assembled from
         call random_number(density)
-        call random_number(potential)
+        call random_number(density_nl)
         call random_number(linear)
         call random_number(nonlinear)
         a_sym = generate_random_symm_matrix(n_diff)
+        a_sym_nl = generate_random_symm_matrix(n_diff_nl)
         a_inv = generate_random_symm_matrix(n_diff)
-        a_inv_comb = generate_random_symm_matrix(n_diff)
+        a_inv_comb = generate_random_symm_matrix(n_diff_nl)
 
         ! set up the ARH object with the cached quantities the assembly requires
         allocate(arh_object)
@@ -2784,10 +3193,11 @@ contains
         n_particle_target = 1
         arh_object%n_particle => n_particle_target
         arh_object%dm_dirs = density
-        arh_object%potential_dirs = potential
+        arh_object%dm_dirs_nonlinear = density_nl
         arh_object%linear_potential_dirs = linear
         arh_object%nonlinear_potential_dirs = nonlinear
         arh_object%a_sym = a_sym
+        arh_object%a_sym_nonlinear = a_sym_nl
         arh_object%a_inv = a_inv
         arh_object%a_inv_comb = a_inv_comb
 
@@ -2817,55 +3227,93 @@ contains
             test_get_low_rank_hess_factors = .false.
         end if
 
-        ! subspace-projected multisecant expands in and contracts against the density
-        ! difference history alone, coupled directly through the (already
-        ! congruence-transformed) symmetrized A matrix
+        ! subspace-projected multisecant expands in and contracts against the
+        ! density difference history of each system, coupled through that system's own
+        ! (already congruence-transformed) symmetrized A matrix
         arh_object%settings%arh_type = "ms_sp"
         call get_low_rank_hess_factors()
-        if (any(abs(arh_object%expansion_dirs - density) > tol) .or. &
-            any(abs(arh_object%projection_dirs - density) > tol)) then
+        if (any(abs(arh_object%expansion_dirs(:, :n_diff) - density) > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, n_diff + 1:) - density_nl) > tol) &
+            .or. any(abs(arh_object%projection_dirs - &
+                         arh_object%expansion_dirs) > tol)) then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
                 "directions for subspace-projected multisecant."
             test_get_low_rank_hess_factors = .false.
         end if
-        if (any(abs(arh_object%coupling_matrix - 8.0_rp * a_sym) > tol)) then
+        if (any(abs(arh_object%coupling_matrix(:n_diff, :n_diff) - 8.0_rp * a_sym) &
+                > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, n_diff + 1:) - &
+                    8.0_rp * a_sym_nl) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:, :n_diff)) > tol)) then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
                 "coupling matrix for subspace-projected multisecant."
             test_get_low_rank_hess_factors = .false.
         end if
 
-        ! symmetrized ARH couples the density and potential difference histories in
-        ! both directions with a plain identity block, leaving the diagonal blocks empty
+        ! symmetrized ARH couples the density and potential difference histories of
+        ! each system in both directions with a plain identity block, leaving the
+        ! diagonal blocks and every block mixing the two systems empty
         arh_object%settings%arh_type = "symm_arh"
         call get_low_rank_hess_factors()
         if (any(abs(arh_object%expansion_dirs(:, :n_diff) - density) > tol) .or. &
-            any(abs(arh_object%expansion_dirs(:, n_diff + 1:) - potential) > tol)) then
+            any(abs(arh_object%expansion_dirs(:, n_diff + 1:2 * n_diff) - linear) &
+                > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, dm_nl_lo:dm_nl_hi) - density_nl) &
+                > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, pot_nl_lo:) - nonlinear) > tol)) then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
                 "expansion directions for symmetrized ARH."
             test_get_low_rank_hess_factors = .false.
         end if
-        if (any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:) - 4.0_rp * &
-                    identity_matrix(n_diff)) > tol) .or. &
-            any(abs(arh_object%coupling_matrix(n_diff + 1:, :n_diff) - 4.0_rp * &
-                    identity_matrix(n_diff)) > tol) .or. &
+        if (any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:2 * n_diff) - &
+                    4.0_rp * identity_matrix(n_diff)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:2 * n_diff, :n_diff) - &
+                    4.0_rp * identity_matrix(n_diff)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(dm_nl_lo:dm_nl_hi, pot_nl_lo:) - &
+                    4.0_rp * identity_matrix(n_diff_nl)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(pot_nl_lo:, dm_nl_lo:dm_nl_hi) - &
+                    4.0_rp * identity_matrix(n_diff_nl)) > tol) .or. &
             any(abs(arh_object%coupling_matrix(:n_diff, :n_diff)) > tol) .or. &
-            any(abs(arh_object%coupling_matrix(n_diff + 1:, n_diff + 1:)) > tol)) then
+            any(abs(arh_object%coupling_matrix(n_diff + 1:2 * n_diff, &
+                                               n_diff + 1:2 * n_diff)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(:2 * n_diff, dm_nl_lo:)) > tol) &
+            .or. any(abs(arh_object%coupling_matrix(dm_nl_lo:, :2 * n_diff)) &
+                     > tol)) then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
                 "coupling matrix for symmetrized ARH."
             test_get_low_rank_hess_factors = .false.
         end if
 
-        ! multisecant PSB adds a density-density block subtracting the doubly counted
-        ! curvature to the symmetrized ARH coupling
+        ! multisecant PSB adds, to each system, a density-density block subtracting
+        ! the doubly counted curvature of that system
         arh_object%settings%arh_type = "ms_psb"
         call get_low_rank_hess_factors()
-        if (any(abs(arh_object%coupling_matrix(:n_diff, :n_diff) + 8.0_rp * a_sym) > &
-                tol) .or. &
-            any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:) - 8.0_rp * &
-                    identity_matrix(n_diff)) > tol) .or. &
-            any(abs(arh_object%coupling_matrix(n_diff + 1:, :n_diff) - 8.0_rp * &
-                    identity_matrix(n_diff)) > tol) .or. &
-            any(abs(arh_object%coupling_matrix(n_diff + 1:, n_diff + 1:)) > tol)) then
+        if (any(abs(arh_object%expansion_dirs(:, :n_diff) - density) > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, n_diff + 1:2 * n_diff) - linear) &
+                > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, dm_nl_lo:dm_nl_hi) - density_nl) &
+                > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, pot_nl_lo:) - nonlinear) > tol)) then
+            write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
+                "expansion directions for multisecant PSB."
+            test_get_low_rank_hess_factors = .false.
+        end if
+        if (any(abs(arh_object%coupling_matrix(:n_diff, :n_diff) + 8.0_rp * a_sym) &
+                > tol) .or. &
+            any(abs(arh_object%coupling_matrix(dm_nl_lo:dm_nl_hi, dm_nl_lo:dm_nl_hi) + &
+                    8.0_rp * a_sym_nl) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(:n_diff, n_diff + 1:2 * n_diff) - &
+                    8.0_rp * identity_matrix(n_diff)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:2 * n_diff, :n_diff) - &
+                    8.0_rp * identity_matrix(n_diff)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(dm_nl_lo:dm_nl_hi, pot_nl_lo:) - &
+                    8.0_rp * identity_matrix(n_diff_nl)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(pot_nl_lo:, dm_nl_lo:dm_nl_hi) - &
+                    8.0_rp * identity_matrix(n_diff_nl)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(n_diff + 1:2 * n_diff, &
+                                               n_diff + 1:2 * n_diff)) > tol) .or. &
+            any(abs(arh_object%coupling_matrix(pot_nl_lo:, pot_nl_lo:)) > tol)) then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
                 "coupling matrix for multisecant PSB."
             test_get_low_rank_hess_factors = .false.
@@ -2873,17 +3321,20 @@ contains
 
         ! standard ARH is the only type whose expansion and projection directions
         ! differ, expanding in the potential and contracting against the density
-        ! difference history, coupled by a plain identity
+        ! difference history of each system, coupled by a plain identity
         arh_object%settings%arh_type = "arh"
         call get_low_rank_hess_factors()
-        if (any(abs(arh_object%expansion_dirs - potential) > tol) .or. &
-            any(abs(arh_object%projection_dirs - density) > tol)) then
+        if (any(abs(arh_object%expansion_dirs(:, :n_diff) - linear) > tol) .or. &
+            any(abs(arh_object%expansion_dirs(:, n_diff + 1:) - nonlinear) > tol) .or. &
+            any(abs(arh_object%projection_dirs(:, :n_diff) - density) > tol) .or. &
+            any(abs(arh_object%projection_dirs(:, n_diff + 1:) - density_nl) > tol)) &
+            then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
                 "directions for standard ARH."
             test_get_low_rank_hess_factors = .false.
         end if
-        if (any(abs(arh_object%coupling_matrix - 8.0_rp * identity_matrix(n_diff)) > &
-                tol)) then
+        if (any(abs(arh_object%coupling_matrix - 8.0_rp * identity_matrix(n_both)) &
+                > tol)) then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Incorrect "// &
                 "coupling matrix for standard ARH."
             test_get_low_rank_hess_factors = .false.
@@ -2893,8 +3344,8 @@ contains
         ! counterpart,
         n_particle_target = 2
         call get_low_rank_hess_factors()
-        if (any(abs(arh_object%coupling_matrix - 4.0_rp * identity_matrix(n_diff)) > &
-                tol)) then
+        if (any(abs(arh_object%coupling_matrix - 4.0_rp * identity_matrix(n_both)) &
+                > tol)) then
             write (stderr, *) "test_get_low_rank_hess_factors failed: Open-shell "// &
                 "coupling matrix is not half the closed-shell one."
             test_get_low_rank_hess_factors = .false.
@@ -2902,8 +3353,13 @@ contains
 
         ! an empty history has to leave every factor unallocated
         n_particle_target = 1
-        deallocate(arh_object%dm_dirs)
-        allocate(arh_object%dm_dirs(n_param, 0))
+        deallocate(arh_object%dm_dirs, arh_object%dm_dirs_nonlinear, &
+                   arh_object%linear_potential_dirs, &
+                   arh_object%nonlinear_potential_dirs)
+        allocate(arh_object%dm_dirs(n_param, 0), &
+                 arh_object%dm_dirs_nonlinear(n_param, 0), &
+                 arh_object%linear_potential_dirs(n_param, 0), &
+                 arh_object%nonlinear_potential_dirs(n_param, 0))
         call get_low_rank_hess_factors()
         if (allocated(arh_object%expansion_dirs) .or. &
             allocated(arh_object%projection_dirs) .or. &
@@ -2921,125 +3377,100 @@ contains
     logical(c_bool) function test_build_a_part() bind(C)
         !
         ! this function tests the subroutine which constructs A = S^T Y for a single
-        ! part of a coupled potential-difference response and symmetrizes it, for both
-        ! the linear and the non-linear case
+        ! part of a coupled potential-difference response and symmetrizes it
         !
         use otr_arh, only: build_a_part
         use otr_oao_test_reference, only: n_ao, n_particle
 
         integer(ip), parameter :: n_diff = 3
-        character(10), parameter :: case_names(2) = &
-            [character(10) :: "linear", "non-linear"]
-        integer(ip) :: i_case
         real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
                     v_diff(n_ao, n_ao, n_particle, n_diff), a(n_diff, n_diff), &
-                    a_linear(n_diff, n_diff), expected(n_diff, n_diff)
-        logical :: linear
+                    expected(n_diff, n_diff)
 
         ! assume tests pass
         test_build_a_part = .true.
 
         ! random history and response so that the raw product is generically asymmetric
-        ! and the two symmetrizations are distinguishable
+        ! and the symmetrization is exercised
         call random_number(dm_diff)
         call random_number(v_diff)
 
-        do i_case = 1, 2
-            linear = i_case == 1
+        ! get expected matrix
+        expected = ref_build_a_part(dm_diff, v_diff)
 
-            ! get expected matrix
-            expected = ref_build_a_part(dm_diff, v_diff, linear)
-
-            ! call routine and determine if the symmetrized matrix matches
-            call build_a_part(dm_diff, v_diff, linear, a)
-            if (maxval(abs(a - expected)) > tol) then
-                write (stderr, *) "test_build_a_part failed for the "// &
-                    trim(case_names(i_case))//" part: Incorrect symmetrized A matrix."
-                test_build_a_part = .false.
-            end if
-            if (linear) a_linear = a
-        end do
-
-        ! the weighting has to change the result, or the non-linear case has silently
-        ! reduced to the linear one and asserts nothing
-        if (maxval(abs(a - a_linear)) < tol) then
-            write (stderr, *) "test_build_a_part failed: Weighted symmetrization "// &
-                "reproduced the exact symmetrization."
+        ! call routine and determine if the symmetrized matrix matches
+        call build_a_part(dm_diff, v_diff, a)
+        if (maxval(abs(a - expected)) > tol) then
+            write (stderr, *) "test_build_a_part failed: Incorrect symmetrized A "// &
+                "matrix."
             test_build_a_part = .false.
         end if
 
     end function test_build_a_part
 
-    logical(c_bool) function test_build_a_sym_cs() bind(C)
+    logical(c_bool) function test_build_a_transformed() bind(C)
         !
-        ! this function tests the function which builds the A = S^T Y matrix,
-        ! symmetrizing its linear and non-linear contributions separately and then
-        ! congruence-transforming the result: undoing that transform by left- and
-        ! right-multiplying by chol again must reproduce the gathered, reordered
-        ! raw symmetrized matrix exactly
+        ! this function tests the function which builds the A = S^T Y matrix of a
+        ! single part of the response and congruence-transforms it into the 
+        ! orthonormalized basis of that part: undoing the transform by left- and 
+        ! right-multiplying by chol again must reproduce the gathered, reordered raw 
+        ! symmetrized matrix exactly
         !
-        use otr_arh, only: build_a_sym_cs
+        use otr_arh, only: build_a_transformed
         use otr_oao_test_reference, only: n_ao
 
         integer(ip), parameter :: n_particle = 1, n_diff = 3
 
         real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
-                    v_linear_diff(n_ao, n_ao, n_particle, n_diff), &
-                    v_nonlinear_diff(n_ao, n_ao, n_particle, n_diff), &
-                    expected_a_sym(n_diff, n_diff), chol(n_diff, n_diff)
-        real(rp), allocatable :: a_sym(:, :)
+                    v_diff(n_ao, n_ao, n_particle, n_diff), &
+                    expected(n_diff, n_diff), chol(n_diff, n_diff)
+        real(rp), allocatable :: a_t(:, :)
         integer(ip) :: map(n_diff)
 
         ! assume tests pass
-        test_build_a_sym_cs = .true.
+        test_build_a_transformed = .true.
 
-        ! random density matrix differences and linear and non-linear potential
-        ! differences, so that both symmetrizations act on generically asymmetric
-        ! contributions
+        ! random density matrix and potential differences, so that the symmetrization
+        ! acts on a generically asymmetric contribution
         call random_number(dm_diff)
-        call random_number(v_linear_diff)
-        call random_number(v_nonlinear_diff)
-
-        ! the two contributions are symmetrized separately and summed, reproduced here
-        ! independently of the routine
-        expected_a_sym = ref_build_a_part(dm_diff, v_linear_diff, .true.) + &
-                         ref_build_a_part(dm_diff, v_nonlinear_diff, .false.)
+        call random_number(v_diff)
+        expected = ref_build_a_part(dm_diff, v_diff)
 
         ! reorder and congruence-transform into an arbitrary orthonormalized basis
         map = [2, 3, 1]
         chol = generate_random_upper_triangular(n_diff)
 
-        ! generate A matrix and verify
-        a_sym = build_a_sym_cs(dm_diff, v_linear_diff, v_nonlinear_diff, map, chol)
-        if (size(a_sym, 1) /= n_diff .or. size(a_sym, 2) /= n_diff) then
-            write (stderr, *) "test_build_a_sym_cs failed: Incorrect dimensions."
-            test_build_a_sym_cs = .false.
+        a_t = build_a_transformed(dm_diff, v_diff, map, chol)
+        if (size(a_t, 1) /= n_diff .or. size(a_t, 2) /= n_diff) then
+            write (stderr, *) "test_build_a_transformed failed: Incorrect dimensions."
+            test_build_a_transformed = .false.
             return
         end if
-        if (norm2(matmul(transpose(chol), matmul(a_sym, chol)) - &
-                  expected_a_sym(map, map)) > tol) then
-            write (stderr, *) "test_build_a_sym_cs failed: Result does not "// &
+        if (norm2(matmul(transpose(chol), matmul(a_t, chol)) - &
+                  expected(map, map)) > tol) then
+            write (stderr, *) "test_build_a_transformed failed: Result does not "// &
                 "invert back to the gathered, reordered raw symmetrized matrix."
-            test_build_a_sym_cs = .false.
+            test_build_a_transformed = .false.
         end if
+        deallocate(a_t)
 
-    end function test_build_a_sym_cs
+    end function test_build_a_transformed
 
-    logical(c_bool) function test_build_a_block_sym_os() bind(C)
+    logical(c_bool) function test_build_a_block_linear_os() bind(C)
         !
         ! this function tests the function which builds the cross-channel-symmetrized 
-        ! open-shell A = S^T Y matrix and congruence-transforms it: undoing that
-        ! transform by left- and right-multiplying by chol again must reproduce the
-        ! gathered, reordered raw block matrix exactly
+        ! open-shell A = S^T Y matrix of the linear response and congruence-transforms
+        ! it: undoing that transform must reproduce the gathered, reordered raw block
+        ! matrix, whose diagonal blocks hold the symmetrized same-spin contributions
+        ! and whose off-diagonal blocks hold the cross-symmetrized opposite-spin ones
         !
-        use otr_arh, only: build_a_block_sym_os
+        use otr_arh, only: build_a_block_linear_os
         use otr_oao_test_reference, only: n_ao, n_particle
 
         integer(ip), parameter :: n_diff = 3, n_col = n_particle * n_diff
 
         real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
                     v_same_linear(n_ao, n_ao, n_particle, n_diff), &
-                    v_nonlinear(n_ao, n_ao, n_particle, n_diff), &
                     v_opp(n_ao, n_ao, n_particle, n_diff), &
                     expected_a_block(n_col, n_col), chol(n_col, n_col), &
                     a_opp(n_diff, n_diff, n_particle), averaged(n_diff, n_diff), &
@@ -3048,27 +3479,22 @@ contains
         integer(ip) :: map(n_col), j, lo, hi
 
         ! assume tests pass
-        test_build_a_block_sym_os = .true.
+        test_build_a_block_linear_os = .true.
 
-        ! random per-channel histories and same-spin, non-linear and opposite-spin
-        ! potentials, so that every block is generically asymmetric
+        ! random per-channel histories and same-spin and opposite-spin potentials, so
+        ! that every block is generically asymmetric
         call random_number(dm_diff)
         call random_number(v_same_linear)
-        call random_number(v_nonlinear)
         call random_number(v_opp)
 
-        ! each diagonal block sums the separately symmetrized linear and non-linear
-        ! same-spin contributions of one channel, while the raw opposite-spin products
-        ! form the off-diagonal blocks
+        ! each diagonal block holds the symmetrized same-spin contribution of one
+        ! channel, while the raw opposite-spin products form the off-diagonal blocks
         do j = 1, n_particle
             lo = (j - 1) * n_diff + 1
             hi = j * n_diff
             dm_j = reshape(dm_diff(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff])
             v_j = reshape(v_same_linear(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff])
-            expected_a_block(lo:hi, lo:hi) = ref_build_a_part(dm_j, v_j, .true.)
-            v_j = reshape(v_nonlinear(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff])
-            expected_a_block(lo:hi, lo:hi) = expected_a_block(lo:hi, lo:hi) + &
-                                             ref_build_a_part(dm_j, v_j, .false.)
+            expected_a_block(lo:hi, lo:hi) = ref_build_a_part(dm_j, v_j)
             a_opp(:, :, j) = matmul( &
                 transpose(reshape(dm_diff(:, :, j, :), [n_ao * n_ao, n_diff])), &
                 reshape(v_opp(:, :, j, :), [n_ao * n_ao, n_diff]))
@@ -3085,130 +3511,93 @@ contains
         chol = generate_random_upper_triangular(n_col)
 
         ! generate A matrix and verify
-        a_block = build_a_block_sym_os(dm_diff, v_same_linear, v_nonlinear, v_opp, &
-                                       n_ao, map, chol)
+        a_block = build_a_block_linear_os(dm_diff, v_same_linear, v_opp, n_ao, map, &
+                                          chol)
         if (size(a_block, 1) /= n_col .or. size(a_block, 2) /= n_col) then
-            write (stderr, *) "test_build_a_block_sym_os failed: Incorrect dimensions."
-            test_build_a_block_sym_os = .false.
+            write (stderr, *) "test_build_a_block_linear_os failed: Incorrect "// &
+                "dimensions."
+            test_build_a_block_linear_os = .false.
             return
         end if
         if (norm2(matmul(transpose(chol), matmul(a_block, chol)) - &
                   expected_a_block(map, map)) > tol) then
-            write (stderr, *) "test_build_a_block_sym_os failed: Result does not "// &
-                "invert back to the gathered, reordered raw block matrix."
-            test_build_a_block_sym_os = .false.
+            write (stderr, *) "test_build_a_block_linear_os failed: Result does "// &
+                "not invert back to the gathered, reordered raw block matrix."
+            test_build_a_block_linear_os = .false.
         end if
 
-    end function test_build_a_block_sym_os
+    end function test_build_a_block_linear_os
 
-    logical(c_bool) function test_symmetrize_weighted() bind(C)
+    logical(c_bool) function test_build_a_block_nonlinear_os() bind(C)
         !
-        ! this function tests the subroutine which performs a weighted symmetrization
-        ! of a square matrix
+        ! this function tests the function which builds the open-shell A = S^T Y matrix
+        ! of the non-linear response and congruence-transforms it: the non-linear
+        ! response has no opposite-spin counterpart, so the off-diagonal blocks must
+        ! vanish and only the symmetrized per-channel diagonal blocks survive
         !
-        use otr_arh, only: symmetrize_weighted
+        use otr_arh, only: build_a_block_nonlinear_os
+        use otr_oao_test_reference, only: n_ao, n_particle
 
-        real(rp) :: a(2, 2), expected(2, 2), step_norms(2)
+        integer(ip), parameter :: n_diff = 3, n_col = n_particle * n_diff
+
+        real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
+                    v_nonlinear(n_ao, n_ao, n_particle, n_diff), &
+                    expected_a_block(n_col, n_col), chol(n_col, n_col), &
+                    dm_j(n_ao, n_ao, 1, n_diff), v_j(n_ao, n_ao, 1, n_diff)
+        real(rp), allocatable :: a_block(:, :)
+        integer(ip) :: map(n_col), j, lo, hi
 
         ! assume tests pass
-        test_symmetrize_weighted = .true.
+        test_build_a_block_nonlinear_os = .true.
 
-        ! initialize matrix with an antisymmetric contribution and step norms which
-        ! bias the weight towards the element associated with the larger step norm
-        a = reshape([1.0_rp, 3.0_rp, &
-                     2.0_rp, 4.0_rp], [2, 2])
-        step_norms = [1.0_rp, 3.0_rp]
+        ! random per-channel histories and non-linear potentials, so that every
+        ! diagonal block is generically asymmetric
+        call random_number(dm_diff)
+        call random_number(v_nonlinear)
 
-        ! initialize expected matrix, where the off-diagonal elements are blended with
-        ! a weight of 3 / (1 + 3) on the element of the larger step norm
-        expected = reshape([1.0_rp, 2.75_rp, &
-                            2.75_rp, 4.0_rp], [2, 2])
+        ! only the diagonal blocks are populated, each holding the symmetrized
+        ! non-linear contribution of one channel
+        expected_a_block = 0.0_rp
+        do j = 1, n_particle
+            lo = (j - 1) * n_diff + 1
+            hi = j * n_diff
+            dm_j = reshape(dm_diff(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff])
+            v_j = reshape(v_nonlinear(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff])
+            expected_a_block(lo:hi, lo:hi) = ref_build_a_part(dm_j, v_j)
+        end do
 
-        ! call routine and determine if values of resulting matrix match
-        call symmetrize_weighted(a, step_norms)
-        if (norm2(a - expected) > tol) then
-            write (stderr, *) "test_symmetrize_weighted failed: Incorrect matrix "// &
-                "values after weighted symmetrization."
-            test_symmetrize_weighted = .false.
+        ! reorder and congruence-transform into an arbitrary orthonormalized basis
+        map = [4, 1, 6, 2, 5, 3]
+        chol = generate_random_upper_triangular(n_col)
+
+        ! generate A matrix and verify
+        a_block = build_a_block_nonlinear_os(dm_diff, v_nonlinear, n_ao, map, chol)
+        if (size(a_block, 1) /= n_col .or. size(a_block, 2) /= n_col) then
+            write (stderr, *) "test_build_a_block_nonlinear_os failed: Incorrect "// &
+                "dimensions."
+            test_build_a_block_nonlinear_os = .false.
+            return
+        end if
+        if (norm2(matmul(transpose(chol), matmul(a_block, chol)) - &
+                  expected_a_block(map, map)) > tol) then
+            write (stderr, *) "test_build_a_block_nonlinear_os failed: Result does "// &
+                "not invert back to the gathered, reordered raw block matrix."
+            test_build_a_block_nonlinear_os = .false.
         end if
 
-        ! initialize matrix and vanishing step norms
-        a = reshape([1.0_rp, 3.0_rp, &
-                     2.0_rp, 4.0_rp], [2, 2])
-        step_norms = [0.0_rp, 0.0_rp]
+    end function test_build_a_block_nonlinear_os
 
-        ! initialize expected matrix, where the off-diagonal elements are averaged
-        expected = reshape([1.0_rp, 2.5_rp, &
-                            2.5_rp, 4.0_rp], [2, 2])
-
-        ! call routine and determine if values of resulting matrix match
-        call symmetrize_weighted(a, step_norms)
-        if (norm2(a - expected) > tol) then
-            write (stderr, *) "test_symmetrize_weighted failed: Incorrect matrix "// &
-                "values after weighted symmetrization for vanishing step norms."
-            test_symmetrize_weighted = .false.
-        end if
-
-        ! initialize symmetric matrix and step norms
-        a = reshape([1.0_rp, 2.0_rp, &
-                     2.0_rp, 4.0_rp], [2, 2])
-        expected = a
-        step_norms = [1.0_rp, 3.0_rp]
-
-        ! call routine and determine if an already symmetric matrix is left unchanged
-        call symmetrize_weighted(a, step_norms)
-        if (norm2(a - expected) > tol) then
-            write (stderr, *) "test_symmetrize_weighted failed: Symmetric matrix "// &
-                "not left unchanged by weighted symmetrization."
-            test_symmetrize_weighted = .false.
-        end if
-
-    end function test_symmetrize_weighted
-
-    logical(c_bool) function test_symmetrize_exact() bind(C)
+    logical(c_bool) function test_cross_symmetrize() bind(C)
         !
-        ! this function tests the subroutine which performs a plain, unweighted
-        ! symmetrization of a square matrix
+        ! this function tests the subroutine which cross-symmetrizes two related
+        ! off-diagonal blocks of a larger matrix
         !
-        use otr_arh, only: symmetrize_exact
-
-        real(rp) :: a(3, 3), expected(3, 3)
-
-        ! assume tests pass
-        test_symmetrize_exact = .true.
-
-        ! initialize matrix with an antisymmetric contribution
-        a = reshape([1.0_rp, 4.0_rp, 5.0_rp, &
-                     2.0_rp, 6.0_rp, 9.0_rp, &
-                     3.0_rp, 7.0_rp, 8.0_rp], [3, 3])
-
-        ! initialize expected matrix, which averages each pair of off-diagonal elements
-        expected = reshape([1.0_rp, 3.0_rp, 4.0_rp, &
-                            3.0_rp, 6.0_rp, 8.0_rp, &
-                            4.0_rp, 8.0_rp, 8.0_rp], [3, 3])
-
-        ! call routine and determine if values of resulting matrix match
-        call symmetrize_exact(a)
-        if (norm2(a - expected) > tol) then
-            write (stderr, *) "test_symmetrize_exact failed: Incorrect matrix "// &
-                "values after symmetrization."
-            test_symmetrize_exact = .false.
-        end if
-
-    end function test_symmetrize_exact
-
-    logical(c_bool) function test_cross_symmetrize_exact() bind(C)
-        !
-        ! this function tests the subroutine which performs a plain, unweighted
-        ! cross-symmetrization between two related off-diagonal blocks of a larger 
-        ! matrix
-        !
-        use otr_arh, only: cross_symmetrize_exact
+        use otr_arh, only: cross_symmetrize
 
         real(rp) :: a12(2, 2), a21(2, 2), expected12(2, 2), expected21(2, 2)
 
         ! assume tests pass
-        test_cross_symmetrize_exact = .true.
+        test_cross_symmetrize = .true.
 
         ! initialize blocks which are not transposes of each other
         a12 = reshape([1.0_rp, 3.0_rp, &
@@ -3223,24 +3612,24 @@ contains
 
         ! call routine and determine if values of resulting blocks match and if
         ! these are transposes of each other
-        call cross_symmetrize_exact(a12, a21)
+        call cross_symmetrize(a12, a21)
         if (norm2(a12 - expected12) > tol) then
-            write (stderr, *) "test_cross_symmetrize_exact failed: Incorrect first "// &
+            write (stderr, *) "test_cross_symmetrize failed: Incorrect first "// &
                 "block values after cross-symmetrization."
-            test_cross_symmetrize_exact = .false.
+            test_cross_symmetrize = .false.
         end if
         if (norm2(a21 - expected21) > tol) then
-            write (stderr, *) "test_cross_symmetrize_exact failed: Incorrect "// &
+            write (stderr, *) "test_cross_symmetrize failed: Incorrect "// &
                 "second block values after cross-symmetrization."
-            test_cross_symmetrize_exact = .false.
+            test_cross_symmetrize = .false.
         end if
         if (norm2(a21 - transpose(a12)) > tol) then
-            write (stderr, *) "test_cross_symmetrize_exact failed: Blocks are not "// &
+            write (stderr, *) "test_cross_symmetrize failed: Blocks are not "// &
                 "transposes of each other after cross-symmetrization."
-            test_cross_symmetrize_exact = .false.
+            test_cross_symmetrize = .false.
         end if
 
-    end function test_cross_symmetrize_exact
+    end function test_cross_symmetrize
 
     logical(c_bool) function test_truncated_eigval_inv() bind(C)
         !
@@ -3272,6 +3661,214 @@ contains
 
     end function test_truncated_eigval_inv
 
+    logical(c_bool) function test_history_step_mask() bind(C)
+        !
+        ! this function tests the function which decides, from step length alone, which 
+        ! history entries the non-linear multisecant system is allowed to use
+        !
+        use otr_arh, only: history_step_mask
+
+        integer(ip), parameter :: n_ao = 2, n_particle = 1, n_diff = 3, &
+                                  n_particle_os = 2, n_diff_os = 2
+
+        real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
+                    dm_diff_os(n_ao, n_ao, n_particle_os, n_diff_os), &
+                    dm_diff_single(n_ao, n_ao, n_particle, 1)
+        logical, allocatable :: keep(:)
+
+        ! assume tests pass
+        test_history_step_mask = .true.
+
+        ! initialize a history whose third step is far longer than the shortest one, 
+        ! and whose second is comfortably within reach of it
+        dm_diff = 0.0_rp
+        dm_diff(1, 1, 1, 1) = 1.0_rp
+        dm_diff(1, 2, 1, 2) = 5.0_rp
+        dm_diff(2, 1, 1, 3) = 1e4_rp
+
+        ! call routine and determine that only the entry beyond the cutoff is dropped
+        keep = history_step_mask(dm_diff)
+        if (size(keep) /= n_diff) then
+            write (stderr, *) "test_history_step_mask failed: Incorrect number of "// &
+                "entries."
+            test_history_step_mask = .false.
+            return
+        end if
+        if (.not. (keep(1) .and. keep(2))) then
+            write (stderr, *) "test_history_step_mask failed: An entry within the "// &
+                "cutoff was not kept."
+            test_history_step_mask = .false.
+        end if
+        if (keep(3)) then
+            write (stderr, *) "test_history_step_mask failed: An entry beyond the "// &
+                "cutoff was not dropped."
+            test_history_step_mask = .false.
+        end if
+        deallocate(keep)
+
+        ! scaling the whole history leaves the decision unchanged, since the cutoff is
+        ! a ratio to the shortest step rather than an absolute length
+        dm_diff = 1e-6_rp * dm_diff
+        keep = history_step_mask(dm_diff)
+        if (.not. (keep(1) .and. keep(2)) .or. keep(3)) then
+            write (stderr, *) "test_history_step_mask failed: The decision is not "// &
+                "invariant under an overall scaling of the history."
+            test_history_step_mask = .false.
+        end if
+        deallocate(keep)
+
+        ! bringing the long step within the cutoff keeps the entire history
+        dm_diff(2, 1, 1, 3) = dm_diff(1, 1, 1, 1)
+        keep = history_step_mask(dm_diff)
+        if (.not. all(keep)) then
+            write (stderr, *) "test_history_step_mask failed: A history whose "// &
+                "steps are all comparable was not kept in full."
+            test_history_step_mask = .false.
+        end if
+        deallocate(keep)
+
+        ! the open-shell step length spans both spin channels, so an entry that is
+        ! long only in the second one still has to be dropped
+        dm_diff_os = 0.0_rp
+        dm_diff_os(1, 1, 1, 1) = 1.0_rp
+        dm_diff_os(1, 1, 1, 2) = 1.0_rp
+        dm_diff_os(2, 1, 2, 2) = 1e4_rp
+        keep = history_step_mask(dm_diff_os)
+        if (.not. keep(1) .or. keep(2)) then
+            write (stderr, *) "test_history_step_mask failed: An entry beyond the "// &
+                "cutoff only through its second spin channel was not dropped."
+            test_history_step_mask = .false.
+        end if
+        deallocate(keep)
+
+        ! a single entry has nothing to be judged against and is always kept
+        dm_diff_single = 0.0_rp
+        dm_diff_single(1, 1, 1, 1) = 1.0_rp
+        keep = history_step_mask(dm_diff_single)
+        if (size(keep) /= 1 .or. .not. keep(1)) then
+            write (stderr, *) "test_history_step_mask failed: A single history "// &
+                "entry was not kept."
+            test_history_step_mask = .false.
+        end if
+        deallocate(keep)
+
+    end function test_history_step_mask
+
+    logical(c_bool) function test_median() bind(C)
+        !
+        ! this function tests the function which returns the median of an array, for
+        ! an odd and an even number of entries and for an empty array
+        !
+        use otr_arh, only: median
+
+        integer(ip), parameter :: n_odd = 5, n_even = 6
+        real(rp) :: odd(n_odd), even(n_even)
+
+        ! assume tests pass
+        test_median = .true.
+
+        ! an unordered odd number of entries has a single central one, which is not
+        ! the mean of the array
+        odd = [3.0_rp, -1.0_rp, 10.0_rp, 0.5_rp, 2.0_rp]
+        if (abs(median(odd) - 2.0_rp) > tol) then
+            write (stderr, *) "test_median failed: Incorrect median for an odd "// &
+                "number of entries."
+            test_median = .false.
+        end if
+
+        ! an even number of entries averages the two central ones, which a single large 
+        ! outlier must not move
+        even = [3.0_rp, -1.0_rp, 10.0_rp, 0.5_rp, 2.0_rp, 100.0_rp]
+        if (abs(median(even) - 2.5_rp) > tol) then
+            write (stderr, *) "test_median failed: Incorrect median for an even "// &
+                "number of entries."
+            test_median = .false.
+        end if
+
+        ! an empty array has no entries to take a median of
+        if (abs(median([real(rp) ::])) > tol) then
+            write (stderr, *) "test_median failed: Median of an empty array does "// &
+                "not vanish."
+            test_median = .false.
+        end if
+
+    end function test_median
+
+    logical(c_bool) function test_resolvable_residual() bind(C)
+        !
+        ! this function tests the function which returns the shortest residual norm a
+        ! history direction has to contribute for its response to describe curvature
+        ! rather than the error in it
+        !
+        use otr_arh, only: resolvable_residual
+
+        integer(ip), parameter :: flat_len = 4, n_diff = 4
+        real(rp), parameter :: lengths(n_diff) = [1.0_rp, 2.0_rp, 0.5_rp, 4.0_rp]
+
+        real(rp) :: basis(flat_len, n_diff), steps(flat_len, n_diff), &
+                    responses(flat_len, n_diff), q(flat_len, n_diff), &
+                    z(flat_len, n_diff), a(n_diff, n_diff), asymmetries(n_diff), &
+                    curvatures(n_diff), expected
+        logical :: keep(n_diff)
+        integer(ip) :: i, k
+
+        ! assume tests pass
+        test_resolvable_residual = .true.
+
+        ! orthogonal steps of different lengths, so that the orthonormalization the
+        ! routine performs internally is a scaling by those lengths regardless of the 
+        ! order it accepts them in, while every quantity below is a median over 
+        ! directions and therefore independent of that order
+        basis = 0.5_rp * reshape([1.0_rp, 1.0_rp, 1.0_rp, 1.0_rp, &
+                                  1.0_rp, -1.0_rp, 1.0_rp, -1.0_rp, &
+                                  1.0_rp, 1.0_rp, -1.0_rp, -1.0_rp, &
+                                  1.0_rp, -1.0_rp, -1.0_rp, 1.0_rp], &
+                                 [flat_len, n_diff])
+        do i = 1, n_diff
+            steps(:, i) = lengths(i) * basis(:, i)
+        end do
+
+        ! random responses, so that the transformed response matrix is generically
+        ! asymmetric and its asymmetry is a genuine error estimate
+        call random_number(responses)
+        responses = responses - 0.5_rp
+
+        ! the transformed response matrix follows from the same scaling
+        q = basis
+        do i = 1, n_diff
+            z(:, i) = responses(:, i) / lengths(i)
+        end do
+        a = matmul(transpose(q), z)
+
+        ! the error of a direction is the typical asymmetry of its own column, and
+        ! undoing the amplification of every column recovers the error of the response
+        ! itself, which the typical curvature turns into a length
+        do k = 1, n_diff
+            asymmetries(k) = ref_median(pack(abs(a(:, k) - a(k, :)), &
+                                             [(i /= k, i = 1, n_diff)]))
+            curvatures(k) = abs(a(k, k))
+        end do
+        expected = ref_median(asymmetries * lengths) / ref_median(curvatures)
+
+        ! call routine and determine if the threshold matches
+        keep = .true.
+        if (abs(resolvable_residual(steps, responses, keep) - expected) > tol) then
+            write (stderr, *) "test_resolvable_residual failed: Incorrect shortest "// &
+                "resolvable residual norm."
+            test_resolvable_residual = .false.
+        end if
+
+        ! a direction needs at least two partners for the asymmetry of its column to
+        ! be a typical value, so a shorter history yields no threshold at all
+        keep = [.true., .true., .false., .false.]
+        if (abs(resolvable_residual(steps, responses, keep)) > tol) then
+            write (stderr, *) "test_resolvable_residual failed: Threshold does not "// &
+                "vanish for a history too short to estimate an error scale from."
+            test_resolvable_residual = .false.
+        end if
+
+    end function test_resolvable_residual
+
     logical(c_bool) function test_factorize_history() bind(C)
         !
         ! this function tests the subroutine which performs a pivoted, rank-revealing 
@@ -3281,12 +3878,14 @@ contains
         use otr_arh, only: factorize_history
 
         integer(ip), parameter :: n_ao = 2, n_diff = 3
+        real(rp), parameter :: small_norm = 1e-8_rp, large_norm = 1e6_rp, &
+                               resolvable_norm = 1e-3_rp
 
         real(rp) :: dm_diff(n_ao, n_ao, n_diff), dm_diff_empty(n_ao, n_ao, 0), &
-                    expected_chol(2, 2)
-        real(rp), allocatable :: chol(:, :)
-        integer(ip), allocatable :: map(:)
-        integer(ip) :: n_accepted
+                    expected_chol(2, 2), flat(n_ao * n_ao, n_diff), gram(n_diff, n_diff)
+        real(rp), allocatable :: chol(:, :), chol_all(:, :)
+        integer(ip), allocatable :: map(:), map_all(:)
+        integer(ip) :: n_accepted, n_accepted_all
 
         ! assume tests pass
         test_factorize_history = .true.
@@ -3301,11 +3900,13 @@ contains
         dm_diff(:, :, 3) = reshape([0.0_rp, 1.0_rp, &
                                     1.0_rp, 0.0_rp], [n_ao, n_ao])
 
-        ! the Gram matrix is [[0.25, 1, 0], [1, 4, 0], [0, 0, 2]]: columns 1 and 2
-        ! are parallel, so pivoting accepts the larger-magnitude column 2 first,
-        ! then the orthogonal column 3 (residual 2, exceeding column 1's now-zero
-        ! residual), permanently rejecting the smaller column 1
-        expected_chol = reshape([2.0_rp, 0.0_rp, &
+        ! the Gram matrix is [[0.25, 1, 0], [1, 4, 0], [0, 0, 2]], which normalizes to
+        ! a unit diagonal with columns 1 and 2 fully overlapping: the magnitude
+        ! difference between them no longer breaks the tie, so pivoting accepts the
+        ! lower-indexed column 1 first, then the orthogonal column 3, permanently
+        ! rejecting the parallel column 2; the factor is reported for the unscaled
+        ! columns, so its columns carry the norms 0.5 and sqrt(2) of columns 1 and 3
+        expected_chol = reshape([0.5_rp, 0.0_rp, &
                                  0.0_rp, sqrt(2.0_rp)], [2, 2])
 
         ! call routine and determine if the accepted count, map and Cholesky factor
@@ -3314,25 +3915,243 @@ contains
                                n_accepted)
         if (n_accepted /= 2) then
             write (stderr, *) "test_factorize_history failed: Incorrect number of "// &
-                "accepted columns."
+                "accepted columns for a parallel pair of different length."
             test_factorize_history = .false.
             return
         end if
-        if (any(map /= [2, 3])) then
+        if (any(map /= [1, 3])) then
             write (stderr, *) "test_factorize_history failed: Incorrect map back "// &
-                "to original history indices."
+                "to original history indices for a parallel pair of different "// &
+                "length."
             test_factorize_history = .false.
             return
         end if
         if (norm2(chol - expected_chol) > tol) then
             write (stderr, *) "test_factorize_history failed: Incorrect Cholesky "// &
-                "factor."
+                "factor for a parallel pair of different length."
             test_factorize_history = .false.
         end if
         if (norm2(matmul(transpose(chol), chol) - &
-                  reshape([4.0_rp, 0.0_rp, 0.0_rp, 2.0_rp], [2, 2])) > tol) then
-            write (stderr, *) "test_factorize_history failed: Cholesky factor "// &
-                "does not reproduce the Gram matrix of the accepted columns."
+                  reshape([0.25_rp, 0.0_rp, 0.0_rp, 2.0_rp], [2, 2])) > tol) then
+            write (stderr, *) "test_factorize_history failed: Cholesky factor does "// &
+                "not reproduce the Gram matrix of the accepted columns for a "// &
+                "parallel pair of different length."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map)
+
+        ! initialize three mutually orthogonal density matrix differences, the first of
+        ! which is many orders of magnitude shorter than the other two
+        dm_diff(:, :, 1) = reshape([small_norm, 0.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 2) = reshape([0.0_rp, 1.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 3) = reshape([0.0_rp, 0.0_rp, &
+                                    1.0_rp, 0.0_rp], [n_ao, n_ao])
+
+        ! call routine and determine that the short column is retained
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted)
+        if (n_accepted /= n_diff) then
+            write (stderr, *) "test_factorize_history failed: Incorrect number of "// &
+                "accepted columns for an independent much shorter column."
+            test_factorize_history = .false.
+        else if (any(map /= [1, 2, 3])) then
+            write (stderr, *) "test_factorize_history failed: Incorrect map back "// &
+                "to original history indices for an independent much shorter column."
+            test_factorize_history = .false.
+        else if (norm2(matmul(transpose(chol), chol) - &
+                       reshape([small_norm**2, 0.0_rp, 0.0_rp, &
+                                0.0_rp, 1.0_rp, 0.0_rp, &
+                                0.0_rp, 0.0_rp, 1.0_rp], [n_diff, n_diff])) > tol) then
+            write (stderr, *) "test_factorize_history failed: Cholesky factor does "// &
+                "not reproduce the Gram matrix of the accepted columns for an "// &
+                "independent much shorter column."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map)
+
+        ! initialize a history whose second entry vanishes entirely
+        dm_diff(:, :, 2) = 0.0_rp
+
+        ! call routine and determine that the vanishing column is rejected rather than
+        ! admitted with a zero-norm factor column
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted)
+        if (n_accepted /= 2) then
+            write (stderr, *) "test_factorize_history failed: Incorrect number of "// &
+                "accepted columns for a vanishing column."
+            test_factorize_history = .false.
+        else if (any(map /= [1, 3])) then
+            write (stderr, *) "test_factorize_history failed: Incorrect map back "// &
+                "to original history indices for a vanishing column."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map)
+
+        ! initialize two parallel columns of equal length followed by an orthogonal
+        ! one, and exclude the first of the parallel pair
+        dm_diff(:, :, 1) = reshape([1.0_rp, 0.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 3) = reshape([0.0_rp, 1.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 2) = reshape([1.0_rp, 0.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+
+        ! call routine and determine that the excluded column is passed over in
+        ! favour of its parallel twin, which an exact tie would otherwise resolve
+        ! towards the lower index
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted, [.false., .true., .true.])
+        if (n_accepted /= 2) then
+            write (stderr, *) "test_factorize_history failed: Incorrect number of "// &
+                "accepted columns for an excluded column with a parallel twin."
+            test_factorize_history = .false.
+        else if (any(map /= [2, 3])) then
+            write (stderr, *) "test_factorize_history failed: Incorrect map back "// &
+                "to original history indices for an excluded column with a "// &
+                "parallel twin."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map)
+
+        ! initialize three mutually orthogonal columns of differing length and
+        ! exclude the middle one
+        dm_diff(:, :, 1) = reshape([3.0_rp, 0.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 2) = reshape([0.0_rp, 0.0_rp, &
+                                    0.0_rp, 7.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 3) = reshape([0.0_rp, 4.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+
+        ! call routine and determine that the excluded column is rejected even though
+        ! it is linearly independent of the others, and that the factor is still
+        ! reported for the raw columns
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted, [.true., .false., .true.])
+        if (n_accepted /= 2) then
+            write (stderr, *) "test_factorize_history failed: Incorrect number of "// &
+                "accepted columns for an excluded but independent column."
+            test_factorize_history = .false.
+        else if (any(map /= [1, 3])) then
+            write (stderr, *) "test_factorize_history failed: Incorrect map back "// &
+                "to original history indices for an excluded but independent column."
+            test_factorize_history = .false.
+        else if (norm2(matmul(transpose(chol), chol) - &
+                       reshape([9.0_rp, 0.0_rp, 0.0_rp, 16.0_rp], [2, 2])) > tol) then
+            write (stderr, *) "test_factorize_history failed: Cholesky factor does "// &
+                "not reproduce the Gram matrix of the accepted columns for an "// &
+                "excluded but independent column."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map)
+
+        ! initialize a history whose second entry is far shorter than the other two,
+        ! but still far above any absolute round-off constant
+        dm_diff(:, :, 1) = reshape([large_norm, 0.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 2) = reshape([0.0_rp, small_norm, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 3) = reshape([0.0_rp, 0.0_rp, &
+                                    large_norm, 0.0_rp], [n_ao, n_ao])
+
+        ! call routine and determine that the short column is rejected: whether a
+        ! column has vanished has to be judged against the largest column rather than
+        ! against an absolute constant
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, &
+                               map, n_accepted)
+        if (n_accepted /= 2) then
+            write (stderr, *) "test_factorize_history failed: Incorrect number of "// &
+                "accepted columns for a column vanishing relative to the largest "// &
+                "one."
+            test_factorize_history = .false.
+        else if (any(map /= [1, 3])) then
+            write (stderr, *) "test_factorize_history failed: Incorrect map back "// &
+                "to original history indices for a column vanishing relative to "// &
+                "the largest one."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map)
+
+        ! call routine once with the mask omitted and once with every column kept,
+        ! and determine that the two agree: omitting the mask has to mean using the
+        ! whole history rather than anything else
+        dm_diff(:, :, 1) = reshape([2.0_rp, 0.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 2) = reshape([0.0_rp, 3.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 3) = reshape([0.0_rp, 0.0_rp, &
+                                    5.0_rp, 0.0_rp], [n_ao, n_ao])
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted)
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol_all, &
+                               map_all, n_accepted_all, spread(.true., 1, n_diff))
+        if (n_accepted /= n_accepted_all) then
+            write (stderr, *) "test_factorize_history failed: Incorrect number of "// &
+                "accepted columns for an omitted mask."
+            test_factorize_history = .false.
+        else if (any(map /= map_all)) then
+            write (stderr, *) "test_factorize_history failed: Incorrect map back "// &
+                "to original history indices for an omitted mask."
+            test_factorize_history = .false.
+        else if (norm2(chol - chol_all) > tol) then
+            write (stderr, *) "test_factorize_history failed: Incorrect Cholesky "// &
+                "factor for an omitted mask."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map, chol_all, map_all)
+
+        ! initialize a history whose third column repeats the direction of the first
+        ! but contributes a new component which has a resolvable norm: the demanded
+        ! residual, rather than the angle, decides whether that column is accepted
+        dm_diff(:, :, 1) = reshape([2.0_rp, 0.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 2) = reshape([0.0_rp, 3.0_rp, &
+                                    0.0_rp, 0.0_rp], [n_ao, n_ao])
+        dm_diff(:, :, 3) = reshape([0.5_rp, 0.0_rp, &
+                                    resolvable_norm, 0.0_rp], [n_ao, n_ao])
+
+        ! call routine demanding more than that column contributes and determine that
+        ! it is rejected
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted, min_residual=1e2_rp * resolvable_norm)
+        if (n_accepted /= 2 .or. any(map == 3)) then
+            write (stderr, *) "test_factorize_history failed: Incorrect accepted "// &
+                "columns for a column contributing less than the demanded residual."
+            test_factorize_history = .false.
+        end if
+        deallocate(chol, map)
+
+        ! call routine demanding less than that column contributes and determine that
+        ! it is accepted, and that the returned factor still reproduces the Gram
+        ! matrix of the accepted columns, which is only the case if it is reported for
+        ! the unscaled columns
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted, min_residual=1e-2_rp * resolvable_norm)
+        if (n_accepted /= n_diff) then
+            write (stderr, *) "test_factorize_history failed: Incorrect accepted "// &
+                "columns for a column contributing more than the demanded residual."
+            test_factorize_history = .false.
+        else
+            flat = reshape(dm_diff, [n_ao * n_ao, n_diff])
+            gram = matmul(transpose(flat), flat)
+            if (norm2(matmul(transpose(chol), chol) - gram(map, map)) > tol) then
+                write (stderr, *) "test_factorize_history failed: Cholesky factor "// &
+                    "does not reproduce the Gram matrix of the accepted columns "// &
+                    "for a demanded residual."
+                test_factorize_history = .false.
+            end if
+        end if
+        deallocate(chol, map)
+
+        ! call routine without demanding a residual and determine that the same column
+        ! is accepted, so that it is the demand rather than linear dependence that
+        ! rejects it above
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_diff]), chol, map, &
+                               n_accepted)
+        if (n_accepted /= n_diff) then
+            write (stderr, *) "test_factorize_history failed: Incorrect accepted "// &
+                "columns for an omitted demanded residual."
             test_factorize_history = .false.
         end if
         deallocate(chol, map)
@@ -3343,7 +4162,7 @@ contains
                                n_accepted)
         if (n_accepted /= 0 .or. size(chol, 1) /= 0 .or. size(map) /= 0) then
             write (stderr, *) "test_factorize_history failed: Incorrect "// &
-                "factorization of an empty history."
+                "factorization for an empty history."
             test_factorize_history = .false.
         end if
         deallocate(chol, map)
@@ -3479,112 +4298,114 @@ contains
 
     end function test_combine_channels
 
-    logical(c_bool) function test_get_ms_a_inv_cs() bind(C)
+    logical(c_bool) function test_get_ms_a_inv() bind(C)
         !
         ! this function tests the subroutine which computes the pseudoinverse
-        ! multisecant SR1 matrix for the closed-shell case, for both the linear and the
-        ! non-linear part
+        ! multisecant SR1 matrix of one part of the response, for the closed-shell case 
+        ! as well as the spin-combined open-shell case
         !
-        use otr_arh, only: get_ms_a_inv_cs, arh_settings_type
+        use otr_arh, only: get_ms_a_inv, arh_settings_type
         use otr_oao_test_reference, only: n_ao
         use opentrustregion_unit_tests, only: setup_settings
 
-        integer(ip), parameter :: n_particle = 1, n_diff = 3, n_accepted = 2, &
-                                  flat_len = n_ao * n_ao * n_particle
-        character(10), parameter :: case_names(2) = &
-            [character(10) :: "linear", "non-linear"]
+        integer(ip), parameter :: n_diff = 3, n_accepted = 2
+        character(12), parameter :: shell_names(2) = &
+            [character(12) :: "closed-shell", "open-shell"]
 
-        real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
-                    fock_diff(n_ao, n_ao, n_particle, n_diff), &
-                    empty_dm_diff(n_ao, n_ao, n_particle, 0), &
-                    empty_fock_diff(n_ao, n_ao, n_particle, 0), &
-                    chol(n_accepted, n_accepted), flat(flat_len, n_diff), &
-                    flat_v(flat_len, n_diff)
-        real(rp), allocatable :: a_inv(:, :), expected(:, :), a_tilde(:, :), &
-                                 y_gram(:, :)
-        integer(ip) :: map(n_accepted), error, i_case
-        logical :: linear
+        real(rp) :: chol(n_accepted, n_accepted)
+        real(rp), allocatable :: dm_diff(:, :, :, :), fock_diff(:, :, :, :), &
+                                 flat(:, :), a_inv(:, :), expected(:, :), &
+                                 a_tilde(:, :), y_gram(:, :)
+        integer(ip) :: map(n_accepted), error, i_shell, n_particle, flat_len
         type(arh_settings_type) :: settings
 
         ! assume tests pass
-        test_get_ms_a_inv_cs = .true.
+        test_get_ms_a_inv = .true.
 
         ! setup settings object
         call setup_settings(settings)
 
-        ! initialize random history and response, reordered and rebased into an 
-        ! arbitrary orthonormalized basis that also drops one history entry; the 
-        ! entries are centered on zero so that a history direction can end up poorly 
-        ! aligned with its own response and be screened out
-        call random_number(dm_diff)
-        call random_number(fock_diff)
-        dm_diff = dm_diff - 0.5_rp
-        fock_diff = fock_diff - 0.5_rp
+        ! reorder and rebase into an arbitrary orthonormalized basis that also drops
+        ! one history entry
         map = [3, 1]
         chol = generate_random_upper_triangular(n_accepted)
-        flat = reshape(fock_diff, [flat_len, n_diff])
 
-        do i_case = 1, 2
-            linear = i_case == 1
+        ! the open-shell system flattens the history over both spin channels at once,
+        ! so the routine is covered at both particle counts
+        do i_shell = 1, 2
+            n_particle = i_shell
+            flat_len = n_ao * n_ao * n_particle
+            allocate(dm_diff(n_ao, n_ao, n_particle, n_diff), &
+                     fock_diff(n_ao, n_ao, n_particle, n_diff))
+
+            ! initialize random history and response; the entries are centered on zero
+            ! so that a history direction can end up poorly aligned with its own
+            ! response and be screened out
+            call random_number(dm_diff)
+            call random_number(fock_diff)
+            dm_diff = dm_diff - 0.5_rp
+            fock_diff = fock_diff - 0.5_rp
+            flat = reshape(fock_diff, [flat_len, n_diff])
 
             ! the expected pseudoinverse is assembled independently of the routine
-            a_tilde = ref_congruence_transform( &
-                ref_build_a_part(dm_diff, fock_diff, linear), map, chol)
+            a_tilde = ref_congruence_transform(ref_build_a_part(dm_diff, fock_diff), &
+                                               map, chol)
             y_gram = ref_congruence_transform(matmul(transpose(flat), flat), map, chol)
             expected = ref_ms_a_inv(a_tilde, y_gram)
 
             ! call routine and determine if the pseudoinverse matches
-            call get_ms_a_inv_cs(dm_diff, fock_diff, linear, map, chol, a_inv, &
-                                 settings, error)
+            call get_ms_a_inv(dm_diff, fock_diff, map, chol, a_inv, settings, error)
             if (error /= 0) then
-                write (stderr, *) "test_get_ms_a_inv_cs failed for the "// &
-                    trim(case_names(i_case))//" part: Produced error."
-                test_get_ms_a_inv_cs = .false.
+                write (stderr, *) "test_get_ms_a_inv failed: Produced error for "// &
+                    "the "//trim(shell_names(i_shell))//" case."
+                test_get_ms_a_inv = .false.
             else if (norm2(a_inv - expected) > tol) then
-                write (stderr, *) "test_get_ms_a_inv_cs failed for the "// &
-                    trim(case_names(i_case))//" part: Incorrect pseudoinverse."
-                test_get_ms_a_inv_cs = .false.
+                write (stderr, *) "test_get_ms_a_inv failed: Incorrect "// &
+                    "pseudoinverse for the "//trim(shell_names(i_shell))//" case."
+                test_get_ms_a_inv = .false.
             end if
-            deallocate(a_inv, expected, a_tilde, y_gram)
+            deallocate(a_inv, expected, a_tilde, y_gram, dm_diff, fock_diff, flat)
         end do
 
         ! a history whose responses live almost entirely outside the span of the steps 
         ! leaves every direction badly aligned with its own response, so the screening
         ! criterion has to discard all of them and the pseudoinverse has to vanish
+        flat_len = n_ao * n_ao
+        allocate(dm_diff(n_ao, n_ao, 1, n_diff), fock_diff(n_ao, n_ao, 1, n_diff), &
+                 flat(flat_len, n_diff))
         call random_number(flat)
-        call random_number(flat_v)
         flat(flat_len / 2 + 1:, :) = 0.0_rp
-        flat_v(:flat_len / 2, :) = 1e-3_rp * flat_v(:flat_len / 2, :)
         dm_diff = reshape(flat, shape(dm_diff))
-        fock_diff = reshape(flat_v, shape(fock_diff))
+        call random_number(flat)
+        flat(:flat_len / 2, :) = 1e-3_rp * flat(:flat_len / 2, :)
+        fock_diff = reshape(flat, shape(fock_diff))
 
         ! call routine and determine if the pseudoinverse vanishes
-        call get_ms_a_inv_cs(dm_diff, fock_diff, .false., map, chol, a_inv, settings, &
-                             error)
+        call get_ms_a_inv(dm_diff, fock_diff, map, chol, a_inv, settings, error)
         if (error /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_cs failed: Produced error for a "// &
+            write (stderr, *) "test_get_ms_a_inv failed: Produced error for a "// &
                 "badly aligned history."
-            test_get_ms_a_inv_cs = .false.
+            test_get_ms_a_inv = .false.
         else if (norm2(a_inv) > tol) then
-            write (stderr, *) "test_get_ms_a_inv_cs failed: Screening did not "// &
-                "discard every direction of a badly aligned history."
-            test_get_ms_a_inv_cs = .false.
+            write (stderr, *) "test_get_ms_a_inv failed: Screening did not discard "// &
+                "every direction of a badly aligned history."
+            test_get_ms_a_inv = .false.
         end if
-        deallocate(a_inv)
+        deallocate(a_inv, dm_diff, fock_diff, flat)
 
         ! call routine for an empty history and determine if dimensions of the
         ! resulting pseudoinverse vanish
-        call get_ms_a_inv_cs(empty_dm_diff, empty_fock_diff, .true., &
-                             [integer(ip) ::], reshape([real(rp) ::], [0, 0]), a_inv, &
-                             settings, error)
+        allocate(dm_diff(n_ao, n_ao, 1, 0), fock_diff(n_ao, n_ao, 1, 0))
+        call get_ms_a_inv(dm_diff, fock_diff, [integer(ip) ::], &
+                          reshape([real(rp) ::], [0, 0]), a_inv, settings, error)
         if (size(a_inv, 1) /= 0 .or. size(a_inv, 2) /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_cs failed: Incorrect "// &
-                "pseudoinverse dimensions for empty history."
-            test_get_ms_a_inv_cs = .false.
+            write (stderr, *) "test_get_ms_a_inv failed: Incorrect pseudoinverse "// &
+                "dimensions for empty history."
+            test_get_ms_a_inv = .false.
         end if
-        deallocate(a_inv)
+        deallocate(a_inv, dm_diff, fock_diff)
 
-    end function test_get_ms_a_inv_cs
+    end function test_get_ms_a_inv
 
     logical(c_bool) function test_get_ms_a_inv_os_linear() bind(C)
         !
@@ -3687,104 +4508,6 @@ contains
         deallocate(a_inv)
 
     end function test_get_ms_a_inv_os_linear
-
-    logical(c_bool) function test_get_ms_a_inv_os_nonlinear() bind(C)
-        !
-        ! this function tests the subroutine which computes the pseudoinverse
-        ! multisecant SR1 matrix in a spin-combined manner for the non-linear part in 
-        ! the open-shell case
-        !
-        use otr_arh, only: get_ms_a_inv_os_nonlinear, arh_settings_type
-        use otr_oao_test_reference, only: n_ao, n_particle
-        use opentrustregion_unit_tests, only: setup_settings
-
-        integer(ip), parameter :: n_diff = 3, n_accepted = 2, &
-                                  flat_len = n_ao * n_ao * n_particle
-
-        real(rp) :: dm_diff(n_ao, n_ao, n_particle, n_diff), &
-                    v_diff(n_ao, n_ao, n_particle, n_diff), &
-                    empty_dm_diff(n_ao, n_ao, n_particle, 0), &
-                    empty_v_diff(n_ao, n_ao, n_particle, 0), &
-                    chol(n_accepted, n_accepted), flat(flat_len, n_diff), &
-                    flat_v(flat_len, n_diff)
-        real(rp), allocatable :: a_inv(:, :), expected(:, :), a_tilde(:, :), &
-                                 y_gram(:, :)
-        integer(ip) :: map(n_accepted), error
-        type(arh_settings_type) :: settings
-
-        ! assume tests pass
-        test_get_ms_a_inv_os_nonlinear = .true.
-
-        ! setup settings object
-        call setup_settings(settings)
-
-        ! initialize random history and response centered on zero, reordered and 
-        ! rebased into an arbitrary orthonormalized basis that also drops one history 
-        ! entry
-        call random_number(dm_diff)
-        call random_number(v_diff)
-        dm_diff = dm_diff - 0.5_rp
-        v_diff = v_diff - 0.5_rp
-        map = [3, 1]
-        chol = generate_random_upper_triangular(n_accepted)
-        flat_v = reshape(v_diff, [flat_len, n_diff])
-
-        ! the expected pseudoinverse is assembled independently of the routine
-        a_tilde = ref_congruence_transform( &
-            ref_build_a_part(dm_diff, v_diff, .false.), map, chol)
-        y_gram = ref_congruence_transform(matmul(transpose(flat_v), flat_v), map, chol)
-        expected = ref_ms_a_inv(a_tilde, y_gram)
-
-        ! call routine and determine if the pseudoinverse matches
-        call get_ms_a_inv_os_nonlinear(dm_diff, v_diff, map, chol, a_inv, settings, &
-                                       error)
-        if (error /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Produced error."
-            test_get_ms_a_inv_os_nonlinear = .false.
-        else if (norm2(a_inv - expected) > tol) then
-            write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Incorrect "// &
-                "pseudoinverse."
-            test_get_ms_a_inv_os_nonlinear = .false.
-        end if
-        deallocate(a_inv, expected, a_tilde, y_gram)
-
-        ! a history whose responses live almost entirely outside the span of the steps
-        ! leaves every direction badly aligned with its own response, so the screening
-        ! criterion has to discard all of them and the pseudoinverse has to vanish
-        call random_number(flat)
-        call random_number(flat_v)
-        flat(flat_len / 2 + 1:, :) = 0.0_rp
-        flat_v(:flat_len / 2, :) = 1e-3_rp * flat_v(:flat_len / 2, :)
-        dm_diff = reshape(flat, shape(dm_diff))
-        v_diff = reshape(flat_v, shape(v_diff))
-
-        ! call routine and determine if the pseudoinverse vanishes
-        call get_ms_a_inv_os_nonlinear(dm_diff, v_diff, map, chol, a_inv, settings, &
-                                       error)
-        if (error /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Produced "// &
-                "error for a badly aligned history."
-            test_get_ms_a_inv_os_nonlinear = .false.
-        else if (norm2(a_inv) > tol) then
-            write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Screening "// &
-                "did not discard every direction of a badly aligned history."
-            test_get_ms_a_inv_os_nonlinear = .false.
-        end if
-        deallocate(a_inv)
-
-        ! call routine for an empty history and determine if dimensions of the
-        ! resulting pseudoinverse vanish
-        call get_ms_a_inv_os_nonlinear(empty_dm_diff, empty_v_diff, [integer(ip) ::], &
-                                       reshape([real(rp) ::], [0, 0]), a_inv, &
-                                       settings, error)
-        if (size(a_inv, 1) /= 0 .or. size(a_inv, 2) /= 0) then
-            write (stderr, *) "test_get_ms_a_inv_os_nonlinear failed: Incorrect "// &
-                "pseudoinverse dimensions for empty history."
-            test_get_ms_a_inv_os_nonlinear = .false.
-        end if
-        deallocate(a_inv)
-
-    end function test_get_ms_a_inv_os_nonlinear
 
     logical(c_bool) function test_spectral_to_dense() bind(C)
         !
@@ -3954,7 +4677,7 @@ contains
         use otr_oao_test_reference, only: n_ao, n_particle
 
         integer(ip), parameter :: n_dm = 3, n_accepted = 2
-        integer(ip) :: map(n_accepted), i, j
+        integer(ip) :: map(n_accepted)
         real(rp) :: v_diff(n_ao, n_ao, n_particle, n_dm), &
                     chol(n_accepted, n_accepted), &
                     flat(n_ao * n_ao * n_particle, n_dm), gram(n_dm, n_dm)
