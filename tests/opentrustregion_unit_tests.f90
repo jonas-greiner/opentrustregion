@@ -276,6 +276,21 @@ contains
 
     end subroutine mock_precond_pd
 
+    subroutine mock_scaled_precond_pd(residual, precond_residual, error)
+        !
+        ! this subroutine is a test subroutine for the positive-definite preconditioner 
+        ! subroutine scaled by a large constant factor
+        !
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+
+        precond_residual = 300.0_rp * residual
+
+        error = 0
+
+    end subroutine mock_scaled_precond_pd
+
     subroutine mock_project(vector, error)
         !
         ! this subroutine is a test projection subroutine that projects onto the
@@ -4375,10 +4390,11 @@ contains
                                    trust_radius_shrink_ratio, &
                                    trust_radius_expand_ratio, &
                                    trust_radius_shrink_factor, &
-                                   trust_radius_expand_factor
+                                   trust_radius_expand_factor, default_settings => &
+                                   default_solver_settings
 
-        real(rp) :: func, grad_norm, trust_radius, ratio, solution_norm
-        real(rp), dimension(n_param) :: grad, h_diag, solution
+        real(rp) :: func, trust_radius, ratio, solution_norm
+        real(rp), dimension(n_param) :: grad, h_diag, solution, scaled_solution
         integer(ip) :: i, imicro, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -4402,13 +4418,12 @@ contains
         curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
-        grad_norm = norm2(grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
 
         ! run truncated conjugate gradient, check whether the solution lies at the 
         ! trust region boundary and reduces the function value
-        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           trust_radius, solution, solution_norm, &
                                           imicro, max_precision_reached, error)
@@ -4436,7 +4451,7 @@ contains
         ! run truncated conjugate gradient with a spherical trust region and check that 
         ! the returned solution norm equals the true Euclidean norm of the solution
         settings%trust_region_shape = "spherical"
-        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           trust_radius, solution, solution_norm, &
                                           imicro, max_precision_reached, error)
@@ -4453,18 +4468,53 @@ contains
         end if
         settings%trust_region_shape = "ellipsoidal"
 
+        ! run truncated conjugate gradient with two preconditioners which only differ 
+        ! by a constant factor and check that both produce the same solution
+        settings%n_random_trial_vectors = 0
+        settings%local_red_factor = 1e-1_rp
+        settings%precond_pd => mock_precond_pd
+        trust_radius = 0.4_rp
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
+                                          trust_radius, solution, solution_norm, &
+                                          imicro, max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
+                "error near minimum for user-defined preconditioner."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        settings%precond_pd => mock_scaled_precond_pd
+        trust_radius = 0.4_rp
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
+                                          trust_radius, scaled_solution, &
+                                          solution_norm, imicro, &
+                                          max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
+                "error near minimum for scaled user-defined preconditioner."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        if (any(abs(solution - scaled_solution) > tol)) then
+            write (stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "depends on the scale of the preconditioner near minimum."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        nullify (settings%precond_pd)
+        settings%n_random_trial_vectors = default_settings%n_random_trial_vectors
+        settings%local_red_factor = default_settings%local_red_factor
+
         ! start near saddle point
         curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
-        grad_norm = norm2(grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         trust_radius = 0.4_rp
 
         ! run truncated conjugate gradient, check whether the solution lies at the 
         ! trust region boundary and reduces the function value
-        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           trust_radius, solution, solution_norm, &
                                           imicro, max_precision_reached, error)
@@ -4495,7 +4545,7 @@ contains
         ! Euclidean norm of the solution
         settings%trust_region_shape = "spherical"
         trust_radius = 0.4_rp
-        call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
+        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           trust_radius, solution, solution_norm, &
                                           imicro, max_precision_reached, error)
@@ -4535,10 +4585,13 @@ contains
                                    trust_radius_shrink_ratio, &
                                    trust_radius_expand_ratio, &
                                    trust_radius_shrink_factor, &
-                                   trust_radius_expand_factor, precond_rel_floor_factor
+                                   trust_radius_expand_factor, &
+                                   precond_rel_floor_factor, default_settings => &
+                                   default_solver_settings
 
-        real(rp) :: func, grad_norm, trust_radius, lambda, ratio, solution_norm
-        real(rp), dimension(n_param) :: grad, h_diag, solution, residual, precond
+        real(rp) :: func, trust_radius, lambda, ratio, solution_norm
+        real(rp), dimension(n_param) :: grad, h_diag, solution, scaled_solution, &
+                                        residual, precond
         integer(ip) :: i, imicro, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -4561,14 +4614,13 @@ contains
         curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
-        grad_norm = norm2(grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
 
         ! run generalized Lanczos trust region without perturbation, check if error has 
         ! occured, whether the Lagrange multiplier shift vanishes and whether the 
         ! solution stays within trust region and describes the Newton step
-        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
                                               obj_func_funptr, hess_x_funptr, &
                                               settings, trust_radius, solution, &
                                               solution_norm, lambda, imicro, &
@@ -4584,8 +4636,9 @@ contains
             test_generalized_lanczos_trust_region = .false.
         end if
         residual = grad + hartmann6d_hess_x(solution)
-        if (sqrt(dot_product(residual, residual / h_diag)) > &
-            settings%local_red_factor * grad_norm) then
+        precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
+        if (sqrt(dot_product(residual, residual / precond)) > &
+            settings%local_red_factor * sqrt(dot_product(grad, grad / precond))) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not describe Newton step near minimum."
             test_generalized_lanczos_trust_region = .false.
@@ -4605,7 +4658,7 @@ contains
         ! occured, whether the Lagrange multiplier shift vanishes and whether the 
         ! solution stays within trust region and reduces the function value
         settings%n_random_trial_vectors = 1
-        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
                                               obj_func_funptr, hess_x_funptr, &
                                               settings, trust_radius, solution, &
                                               solution_norm, lambda, imicro, &
@@ -4646,7 +4699,7 @@ contains
         ! produces a valid, converged solution
         settings%trust_region_shape = "spherical"
         settings%n_random_trial_vectors = 0
-        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
                                               obj_func_funptr, hess_x_funptr, &
                                               settings, trust_radius, solution, &
                                               solution_norm, lambda, imicro, &
@@ -4664,11 +4717,49 @@ contains
         end if
         settings%trust_region_shape = "ellipsoidal"
 
+        ! run generalized Lanczos trust region with two preconditioners which only 
+        ! differ by a constant factor and check that both produce the same solution
+        settings%n_random_trial_vectors = 0
+        settings%local_red_factor = 1e-1_rp
+        settings%global_red_factor = 1e-1_rp
+        settings%precond_pd => mock_precond_pd
+        trust_radius = 0.4_rp
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
+                                              obj_func_funptr, hess_x_funptr, &
+                                              settings, trust_radius, solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near minimum for user-defined preconditioner."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        settings%precond_pd => mock_scaled_precond_pd
+        trust_radius = 0.4_rp
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
+                                              obj_func_funptr, hess_x_funptr, &
+                                              settings, trust_radius, scaled_solution, &
+                                              solution_norm, lambda, imicro, &
+                                              max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error near minimum for scaled user-defined preconditioner."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (any(abs(solution - scaled_solution) > tol)) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution depends on the scale of the preconditioner near minimum."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        nullify (settings%precond_pd)
+        settings%n_random_trial_vectors = default_settings%n_random_trial_vectors
+        settings%local_red_factor = default_settings%local_red_factor
+        settings%global_red_factor = default_settings%global_red_factor
+
         ! start near saddle point
         curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         func = hartmann6d_func(curr_vars)
         call hartmann6d_gradient(curr_vars, grad)
-        grad_norm = norm2(grad)
         call hartmann6d_hessian(curr_vars)
         h_diag = [(hess(i, i), i=1, size(h_diag))]
         trust_radius = 0.4_rp
@@ -4677,7 +4768,7 @@ contains
         ! occured, whether the Lagrange multiplier is positive and whether the solution
         ! lies at the trust region boundary and describes a level-shifted Newton step
         settings%n_random_trial_vectors = 0
-        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
                                               obj_func_funptr, hess_x_funptr, &
                                               settings, trust_radius, solution, &
                                               solution_norm, lambda, imicro, &
@@ -4695,7 +4786,7 @@ contains
         precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
         residual = grad + hartmann6d_hess_x(solution) + lambda * solution * precond
         if (sqrt(dot_product(residual, residual / precond)) > &
-            settings%global_red_factor * grad_norm) then
+            settings%global_red_factor * sqrt(dot_product(grad, grad / precond))) then
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not describe level-shifted Newton step near saddle "// &
                 "point."
@@ -4718,7 +4809,7 @@ contains
         ! Euclidean norm of the solution and lies at the trust region boundary
         settings%trust_region_shape = "spherical"
         trust_radius = 0.4_rp
-        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
                                               obj_func_funptr, hess_x_funptr, &
                                               settings, trust_radius, solution, &
                                               solution_norm, lambda, imicro, &
@@ -4752,7 +4843,7 @@ contains
         ! occured, whether the Lagrange multiplier is positive and whether the solution
         ! lies at the trust region boundary and reduces the function value
         settings%n_random_trial_vectors = 1
-        call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, n_param, &
+        call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
                                               obj_func_funptr, hess_x_funptr, &
                                               settings, trust_radius, solution, &
                                               solution_norm, lambda, imicro, &

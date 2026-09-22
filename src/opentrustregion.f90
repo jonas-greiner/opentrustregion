@@ -496,18 +496,16 @@ contains
                                             max_precision_reached, error)
             else if (settings%subsystem_solver == "tcg") then
                 ! solve trust region subproblem with truncated conjugate gradient
-                call truncated_conjugate_gradient(func, grad, grad_norm, h_diag, &
-                                                  n_param, obj_func, hess_x_funptr, &
-                                                  settings, trust_radius, kappa, &
-                                                  kappa_norm, imicro, &
-                                                  max_precision_reached, error)
+                call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
+                                                  obj_func, hess_x_funptr, settings, &
+                                                  trust_radius, kappa, kappa_norm, &
+                                                  imicro, max_precision_reached, error)
             else if (settings%subsystem_solver == "gltr") then
                 ! solve trust region subproblem with generalized Lanczos
-                call generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, &
-                                                      n_param, obj_func, &
-                                                      hess_x_funptr, settings, &
-                                                      trust_radius, kappa, kappa_norm, &
-                                                      lambda, imicro, &
+                call generalized_lanczos_trust_region(func, grad, h_diag, n_param, &
+                                                      obj_func, hess_x_funptr, &
+                                                      settings, trust_radius, kappa, &
+                                                      kappa_norm, lambda, imicro, &
                                                       max_precision_reached, error)
             end if
             call add_error_origin(error, error_solver, settings)
@@ -3073,10 +3071,10 @@ contains
 
     end subroutine level_shifted_davidson
 
-    subroutine truncated_conjugate_gradient(func, grad, grad_norm, h_diag, n_param, &
-                                            obj_func, hess_x_funptr, settings, &
-                                            trust_radius, solution, solution_norm, &
-                                            n_micro, max_precision_reached, error)
+    subroutine truncated_conjugate_gradient(func, grad, h_diag, n_param, obj_func, &
+                                            hess_x_funptr, settings, trust_radius, &
+                                            solution, solution_norm, n_micro, &
+                                            max_precision_reached, error)
         !
         ! this subroutine performs truncated conjugate gradient to solve the trust 
         ! region subproblem, this implementation is a bit different from standard TCG 
@@ -3086,7 +3084,7 @@ contains
         ! implementation is based on the implementation of the Steihaug-Toint method 
         ! in the GALAHAD library (https://github.com/ralna/GALAHAD)
         !
-        real(rp), intent(in) :: func, grad(:), grad_norm, h_diag(:)
+        real(rp), intent(in) :: func, grad(:), h_diag(:)
         integer(ip), intent(in) :: n_param
         procedure(obj_func_type), intent(in), pointer :: obj_func
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
@@ -3118,9 +3116,6 @@ contains
         ! instead the plain Euclidean inner products computed directly, while
         ! the search direction itself remains preconditioned either way
         spherical = settings%trust_region_shape == "spherical"
-
-        ! compute the stopping tolerance
-        conv_tol = max(settings%local_red_factor * grad_norm, residual_norm_floor)
 
         ! allocate space for vectors
         allocate(residual(n_param), vector(n_param), basis_vec(n_param))
@@ -3175,6 +3170,13 @@ contains
                     beta = residual_dot / residual_dot_old
                     lanczos_diag_elem = beta / step_size
                     lanczos_off_diag_elem = sqrt(beta) / abs(step_size)
+                ! compute the stopping tolerance from the initial residual which is 
+                ! measured in the same preconditioner metric as the residuals it is 
+                ! compared against, this makes the stopping test invariant to a 
+                ! rescaling of the preconditioner
+                else
+                    conv_tol = max(settings%local_red_factor * sqrt(residual_dot), &
+                                   residual_norm_floor)
                 end if
 
                 ! test for an approximate solution
@@ -3311,17 +3313,16 @@ contains
 
     end subroutine truncated_conjugate_gradient
 
-    subroutine generalized_lanczos_trust_region(func, grad, grad_norm, h_diag, &
-                                                n_param, obj_func, hess_x_funptr, &
-                                                settings, trust_radius, solution, &
-                                                solution_norm, lambda, n_micro, &
-                                                max_precision_reached, error)
+    subroutine generalized_lanczos_trust_region(func, grad, h_diag, n_param, obj_func, &
+                                                hess_x_funptr, settings, trust_radius, &
+                                                solution, solution_norm, lambda, &
+                                                n_micro, max_precision_reached, error)
         !
         ! this subroutine performs generalized lanczos trust region to solve the trust 
         ! region subproblem, this implementation is based on the implementation of GLTR 
         ! in the GALAHAD library (https://github.com/ralna/GALAHAD)
         !
-        real(rp), intent(in) :: func, grad(:), grad_norm, h_diag(:)
+        real(rp), intent(in) :: func, grad(:), h_diag(:)
         integer(ip), intent(in) :: n_param
         procedure(obj_func_type), intent(in), pointer :: obj_func
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
@@ -3390,14 +3391,13 @@ contains
                 ! check whether Lanczos is being run for the first time
                 if (.not. restart_lanczos .or. n_red_space <= 0) then
                     ! perform first pass
-                    call gltr_first_pass(func, grad_norm, h_diag, hess_x_funptr, &
-                                         trust_radius, residual, solution, eigenvec, &
-                                         lanczos_diag, lanczos_off_diag, &
-                                         lanczos_diag_fact, lanczos_off_diag_fact, &
-                                         red_space_rhs, red_space_solution, &
-                                         red_space_eigenvec, work, stepsize_list, &
-                                         residual_dot_list, pred_func, lambda, &
-                                         solution_norm, lowest_eigval, tau, &
+                    call gltr_first_pass(func, h_diag, hess_x_funptr, trust_radius, &
+                                         residual, solution, eigenvec, lanczos_diag, &
+                                         lanczos_off_diag, lanczos_diag_fact, &
+                                         lanczos_off_diag_fact, red_space_rhs, &
+                                         red_space_solution, red_space_eigenvec, work, &
+                                         stepsize_list, residual_dot_list, pred_func, &
+                                         lambda, solution_norm, lowest_eigval, tau, &
                                          micro_converged, interior, hard_case, &
                                          hard_case_step_size, n_first_pass, &
                                          n_red_space, n_saved, settings, error)
@@ -3444,8 +3444,11 @@ contains
                         red_factor = settings%global_red_factor
                     end if
 
-                    ! compute the stopping tolerance
-                    conv_tol = max(red_factor * grad_norm, residual_norm_floor)
+                    ! compute the stopping tolerance from the initial residual of the 
+                    ! first pass which is measured in the same preconditioner metric as 
+                    ! the residuals it is compared against, this makes the stopping 
+                    ! test invariant to a rescaling of the preconditioner
+                    conv_tol = max(red_factor * red_space_rhs(1), residual_norm_floor)
 
                     ! check whether solution satisfies convergence criteria or whether 
                     ! trust radius needs to be decreased further
@@ -3825,20 +3828,20 @@ contains
 
     end function string_in
 
-    subroutine gltr_first_pass(func, grad_norm, h_diag, hess_x_funptr, trust_radius, &
-                               residual, solution, eigenvec, lanczos_diag, &
-                               lanczos_off_diag, lanczos_diag_fact, &
-                               lanczos_off_diag_fact, red_space_rhs, &
-                               red_space_solution, red_space_eigenvec, work, &
-                               stepsize_list, residual_dot_list, pred_func, lambda, &
-                               solution_norm, lowest_eigval, tau, micro_converged, &
-                               interior, hard_case, hard_case_step_size, imicro, &
-                               n_red_space, n_saved, settings, error)
+    subroutine gltr_first_pass(func, h_diag, hess_x_funptr, trust_radius, residual, &
+                               solution, eigenvec, lanczos_diag, lanczos_off_diag, &
+                               lanczos_diag_fact, lanczos_off_diag_fact, &
+                               red_space_rhs, red_space_solution, red_space_eigenvec, &
+                               work, stepsize_list, residual_dot_list, pred_func, &
+                               lambda, solution_norm, lowest_eigval, tau, &
+                               micro_converged, interior, hard_case, &
+                               hard_case_step_size, imicro, n_red_space, n_saved, &
+                               settings, error)
         !
         ! this subroutine performs the first Lanczos pass to compute the tridiagonal 
         ! matrix and the right hand side of the reduced problem
         !
-        real(rp), intent(in) :: func, grad_norm, h_diag(:), trust_radius
+        real(rp), intent(in) :: func, h_diag(:), trust_radius
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(inout) :: residual(:), solution(:), eigenvec(:)
         real(rp), intent(out) :: lanczos_diag(:), lanczos_off_diag(:), &
@@ -4004,8 +4007,11 @@ contains
                 red_factor = settings%global_red_factor
             end if
 
-            ! compute the stopping tolerance
-            conv_tol = max(red_factor * grad_norm, residual_norm_floor)
+            ! compute the stopping tolerance from the initial residual which is 
+            ! measured in the same preconditioner metric as the residuals it is 
+            ! compared against, this makes the stopping test invariant to a rescaling 
+            ! of the preconditioner
+            conv_tol = max(red_factor * red_space_rhs(1), residual_norm_floor)
 
             ! test for an interior approximate solution
             if (interior .and. residual_norm <= conv_tol) then
