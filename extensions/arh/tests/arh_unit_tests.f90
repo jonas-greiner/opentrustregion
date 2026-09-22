@@ -1861,7 +1861,7 @@ contains
             generate_random_density_matrix(n_ao, n_electrons)
         arh_object%fock_list(:, :, :, 1) = fock_saved
         arh_object%v_nonlinear_list(:, :, :, 1) = v_nonlinear_saved
-        kappa = 1e-3_rp
+        kappa = 1e-6_rp
         call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
@@ -2387,7 +2387,7 @@ contains
             arh_object%v_same_spin_list(:, :, :, 1) = v_same_spin_saved
             arh_object%v_opposite_spin_list(:, :, :, 1) = v_opposite_spin_saved
             arh_object%v_nonlinear_list(:, :, :, 1) = v_nonlinear_saved
-            kappa = 1e-3_rp
+            kappa = 1e-6_rp
             call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
             if (error /= 0) then
                 write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &

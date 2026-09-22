@@ -4327,7 +4327,7 @@ contains
                         " solver."
                     test_level_shifted_davidson = .false.
                 end if
-                if (sum(abs(grad + hartmann6d_hess_x(solution))) > &
+                if (norm2(grad + hartmann6d_hess_x(solution)) > &
                     settings%local_red_factor * grad_norm) then
                     write (stderr, *) "test_level_shifted_davidson failed: "// &
                         "Solution does not describe Newton step near minimum with " // &
@@ -4341,7 +4341,7 @@ contains
                         trim(solver_name) // " solver."
                     test_level_shifted_davidson = .false.
                 end if
-                if (sum(abs(grad + hartmann6d_hess_x(solution) - mu * solution)) > &
+                if (norm2(grad + hartmann6d_hess_x(solution) - mu * solution) > &
                     settings%global_red_factor * grad_norm) then
                     write (stderr, *) "test_level_shifted_davidson failed: "// &
                         "Solution does not describe level-shifted Newton step near "// &
