@@ -9,71 +9,85 @@ module otr_arh_c_interface_unit_tests
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, tol_c
-    use otr_arh_c_interface, only: update_dm_os_c_type, update_dm_cs_c_type
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_funloc, c_associated
+    use otr_arh_c_interface, only: evaluate_dm_os_c_type, evaluate_dm_cs_c_type
+    use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_funptr, c_funloc
 
     implicit none
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_dm_cs_c_type), pointer :: mock_arh_update_dm_cs_ptr => &
-                                               mock_arh_update_dm_cs
-    procedure(update_dm_os_c_type), pointer :: mock_arh_update_dm_os_ptr => &
-                                               mock_arh_update_dm_os
+    procedure(evaluate_dm_cs_c_type), pointer :: mock_arh_evaluate_dm_cs_ptr => &
+        mock_arh_evaluate_dm_cs
+    procedure(evaluate_dm_os_c_type), pointer :: mock_arh_evaluate_dm_os_ptr => &
+        mock_arh_evaluate_dm_os
 
 contains
 
-    function mock_arh_update_dm_cs(dm_ao, energy, fock, v_nonlinear) result(error) &
+    function mock_arh_evaluate_dm_cs(dm_ao, energy, fock, v_nonlinear) result(error) &
         bind(C)
         !
-        ! this subroutine is a test subroutine for the density matrix updating C
+        ! this subroutine is a test subroutine for the density matrix evaluating C
         ! function with a separate non-linear potential contribution for the
         ! closed-shell case
         !
         use otr_oao_test_reference, only: n_ao
+        use otr_arh_test_reference, only: evaluate_dm_cs_factors
+        use otr_oao_unit_tests, only: record_mock_call
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
-        real(c_rp), intent(out), target :: fock(*), v_nonlinear(*)
+        real(c_rp), intent(out), optional :: fock(*), v_nonlinear(*)
         integer(c_ip) :: error
 
-        integer(c_ip) :: flat_len = n_ao ** 2
+        integer(c_ip) :: flat_len = n_ao**2
 
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
+                              merge(2_ip, 0_ip, present(v_nonlinear)))
         energy = sum(dm_ao(:flat_len))
-
-        fock(:flat_len) = 2 * dm_ao(:flat_len)
-        v_nonlinear(:flat_len) = 3 * dm_ao(:flat_len)
+        if (present(fock)) &
+            fock(:flat_len) = evaluate_dm_cs_factors(1) * dm_ao(:flat_len)
+        if (present(v_nonlinear)) &
+            v_nonlinear(:flat_len) = evaluate_dm_cs_factors(2) * dm_ao(:flat_len)
 
         error = 0_c_ip
 
-    end function mock_arh_update_dm_cs
+    end function mock_arh_evaluate_dm_cs
 
-    function mock_arh_update_dm_os(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
-                                   v_nonlinear) result(error) bind(C)
+    function mock_arh_evaluate_dm_os(dm_ao, energy, fock, v_same_spin, &
+                                     v_opposite_spin, v_nonlinear) result(error) bind(C)
         !
-        ! this subroutine is a test subroutine for the density matrix updating C
-        ! function with separate same- and opposite-spin potential contributions and
-        ! a non-linear potential contribution for the open-shell case
+        ! this subroutine is a test subroutine for the density matrix evaluating C
+        ! function with separate same- and opposite-spin potential contributions and a
+        ! non-linear potential contribution for the open-shell case
         !
         use otr_oao_test_reference, only: n_ao, n_particle
+        use otr_arh_test_reference, only: evaluate_dm_os_factors
+        use otr_oao_unit_tests, only: record_mock_call
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
-        real(c_rp), intent(out), target :: fock(*), v_same_spin(*), &
-                                           v_opposite_spin(*), v_nonlinear(*)
+        real(c_rp), intent(out), optional :: fock(*), v_same_spin(*), &
+                                             v_opposite_spin(*), v_nonlinear(*)
         integer(c_ip) :: error
 
-        integer(c_ip) :: flat_len = n_ao ** 2 * n_particle
+        integer(c_ip) :: flat_len = n_ao**2 * n_particle
 
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
+                              merge(2_ip, 0_ip, present(v_same_spin)) + &
+                              merge(4_ip, 0_ip, present(v_opposite_spin)) + &
+                              merge(8_ip, 0_ip, present(v_nonlinear)))
         energy = sum(dm_ao(:flat_len))
-
-        fock(:flat_len) = 2 * dm_ao(:flat_len)
-        v_same_spin(:flat_len) = 3 * dm_ao(:flat_len)
-        v_opposite_spin(:flat_len) = 4 * dm_ao(:flat_len)
-        v_nonlinear(:flat_len) = 5 * dm_ao(:flat_len)
+        if (present(fock)) &
+            fock(:flat_len) = evaluate_dm_os_factors(1) * dm_ao(:flat_len)
+        if (present(v_same_spin)) &
+            v_same_spin(:flat_len) = evaluate_dm_os_factors(2) * dm_ao(:flat_len)
+        if (present(v_opposite_spin)) &
+            v_opposite_spin(:flat_len) = evaluate_dm_os_factors(3) * dm_ao(:flat_len)
+        if (present(v_nonlinear)) &
+            v_nonlinear(:flat_len) = evaluate_dm_os_factors(4) * dm_ao(:flat_len)
 
         error = 0_c_ip
 
-    end function mock_arh_update_dm_os
+    end function mock_arh_evaluate_dm_os
 
     logical(c_bool) function test_arh_factory_c_wrapper() bind(C)
         !
@@ -82,7 +96,6 @@ contains
         use otr_arh_c_interface, only: arh_settings_type_c, arh_factory_cs, &
                                        arh_factory_os, arh_factory_c_wrapper
         use otr_arh_mock, only: mock_arh_factory_cs, mock_arh_factory_os, test_passed
-        use otr_oao_c_interface_unit_tests, only: mock_get_energy_cs, mock_get_energy_os
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
         use otr_oao_test_reference, only: n_ao, n_particle, n_ao_c
         use c_interface_unit_tests, only: mock_logger, test_logger
@@ -92,10 +105,9 @@ contains
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
-        type(c_funptr) :: get_energy_c_funptr, update_dm_c_funptr, &
-                          obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
-                          precond_arh_c_funptr, precond_pd_arh_c_funptr, &
-                          project_arh_c_funptr
+        type(c_funptr) :: evaluate_dm_c_funptr, obj_func_arh_c_funptr, &
+                          update_orbs_arh_c_funptr, precond_arh_c_funptr, &
+                          precond_pd_arh_c_funptr, project_arh_c_funptr
         type(arh_settings_type_c) :: settings_c
         integer(c_ip) :: n_particle_c, error_c
 
@@ -115,8 +127,7 @@ contains
         ao_overlap_c = 2.0_c_rp
 
         ! get C function pointers to Fortran functions
-        get_energy_c_funptr = c_funloc(mock_get_energy_cs)
-        update_dm_c_funptr = c_funloc(mock_arh_update_dm_cs)
+        evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_cs)
 
         ! associate optional settings with values
         settings_c = ref_arh_settings
@@ -126,12 +137,10 @@ contains
         test_logger = .true.
 
         ! call ARH orbital updating factory C wrapper for closed-shell case
-        error_c = arh_factory_c_wrapper(dm_ao_2d_c, ao_overlap_c, n_particle_c, &
-                                        n_ao_c, get_energy_c_funptr, &
-                                        update_dm_c_funptr, obj_func_arh_c_funptr, &
-                                        update_orbs_arh_c_funptr, &
-                                        precond_arh_c_funptr, precond_pd_arh_c_funptr, &
-                                        project_arh_c_funptr, settings_c)
+        error_c = arh_factory_c_wrapper( &
+            dm_ao_2d_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
+            obj_func_arh_c_funptr, update_orbs_arh_c_funptr, precond_arh_c_funptr, &
+            precond_pd_arh_c_funptr, project_arh_c_funptr, settings_c)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -148,15 +157,16 @@ contains
         end if
 
         ! test returned objective function
-        test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. &
             test_obj_func_c_funptr(obj_func_arh_c_funptr, "arh_factory_c_wrapper", &
                                    " by returned objective function")
 
         ! test returned orbital updating function
-        test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
-            test_update_orbs_c_funptr(update_orbs_arh_c_funptr, &
-                                      "arh_factory_c_wrapper", &
-                                      " by returned orbital updating function")
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. test_update_orbs_c_funptr( &
+                update_orbs_arh_c_funptr, "arh_factory_c_wrapper", &
+                " by returned orbital updating function")
 
         ! check if density matrix was updated
         if (any(abs(dm_ao_2d_c - 2.0_c_rp) > tol)) then
@@ -167,18 +177,20 @@ contains
         deallocate(dm_ao_2d_c)
 
         ! test returned level-shifted preconditioner function
-        test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. &
             test_precond_c_funptr(precond_arh_c_funptr, "arh_factory_c_wrapper", &
                                   " by returned level-shifted preconditioner function")
 
         ! test returned positive-definite preconditioner function
-        test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
-            test_precond_pd_c_funptr(precond_pd_arh_c_funptr, &
-                                     "arh_factory_c_wrapper", " by returned "// &
-                                     "positive-definite preconditioner function")
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. test_precond_pd_c_funptr( &
+                precond_pd_arh_c_funptr, "arh_factory_c_wrapper", &
+                " by returned positive-definite preconditioner function")
 
         ! test returned projection function
-        test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. &
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. &
             test_project_c_funptr(project_arh_c_funptr, "arh_factory_c_wrapper", &
                                   " by returned projection function")
 
@@ -193,16 +205,13 @@ contains
         dm_ao_3d_c = 1.0_c_rp
 
         ! get C function pointers to Fortran functions
-        get_energy_c_funptr = c_funloc(mock_get_energy_os)
-        update_dm_c_funptr = c_funloc(mock_arh_update_dm_os)
+        evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_os)
 
         ! call ARH orbital updating factory C wrapper for open-shell case
-        error_c = arh_factory_c_wrapper(dm_ao_3d_c, ao_overlap_c, n_particle_c, &
-                                        n_ao_c, get_energy_c_funptr, &
-                                        update_dm_c_funptr, obj_func_arh_c_funptr, &
-                                        update_orbs_arh_c_funptr, &
-                                        precond_arh_c_funptr, precond_pd_arh_c_funptr, &
-                                        project_arh_c_funptr, settings_c)
+        error_c = arh_factory_c_wrapper( &
+            dm_ao_3d_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
+            obj_func_arh_c_funptr, update_orbs_arh_c_funptr, precond_arh_c_funptr, &
+            precond_pd_arh_c_funptr, project_arh_c_funptr, settings_c)
 
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
@@ -212,55 +221,79 @@ contains
 
     end function test_arh_factory_c_wrapper
 
-    logical(c_bool) function test_update_dm_cs_f_wrapper() bind(C)
+    logical(c_bool) function test_evaluate_dm_cs_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the density matrix updating C
+        ! this function tests the Fortran wrapper for the density matrix evaluating C
         ! function with a separate non-linear potential contribution for the
         ! closed-shell case
         !
-        use otr_arh, only: update_dm_cs_type
-        use otr_arh_c_interface, only: update_dm_cs_before_wrapping, &
-                                       update_dm_cs_f_wrapper
-        use otr_arh_test_reference, only: test_update_dm_cs_funptr
+        use otr_arh, only: evaluate_dm_cs_type
+        use otr_arh_c_interface, only: evaluate_dm_cs_before_wrapping, &
+                                       evaluate_dm_cs_f_wrapper
+        use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr
+        use otr_oao_unit_tests, only: mock_requests
 
-        procedure(update_dm_cs_type), pointer :: update_dm_cs_funptr
-
-        ! inject mock subroutine
-        update_dm_cs_before_wrapping => mock_arh_update_dm_cs
-
-        ! get pointer to subroutine
-        update_dm_cs_funptr => update_dm_cs_f_wrapper
-
-        ! test density matrix updating wrapper
-        test_update_dm_cs_f_wrapper = &
-            test_update_dm_cs_funptr(update_dm_cs_funptr, "update_dm_cs_f_wrapper", "")
-
-    end function test_update_dm_cs_f_wrapper
-
-    logical(c_bool) function test_update_dm_os_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the density matrix updating C 
-        ! function with same- and opposite-spin potential contributions 
-        ! for the open-shell case
-        !
-        use otr_arh, only: update_dm_os_type
-        use otr_arh_c_interface, only: update_dm_os_before_wrapping, &
-                                       update_dm_os_f_wrapper
-        use otr_arh_test_reference, only: test_update_dm_os_funptr
-
-        procedure(update_dm_os_type), pointer :: update_dm_os_funptr
+        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
+        integer(ip) :: request
 
         ! inject mock subroutine
-        update_dm_os_before_wrapping => mock_arh_update_dm_os
+        evaluate_dm_cs_before_wrapping => mock_arh_evaluate_dm_cs
 
         ! get pointer to subroutine
-        update_dm_os_funptr => update_dm_os_f_wrapper
+        evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
 
-        ! test density matrix updating wrapper
-        test_update_dm_os_f_wrapper = &
-            test_update_dm_os_funptr(update_dm_os_funptr, "update_dm_os_f_wrapper", "")
+        ! test density matrix evaluating wrapper, which is called once for every
+        ! combination of requested outputs and has to pass each on to the C function
+        ! unchanged
+        mock_requests = [integer(ip) ::]
+        test_evaluate_dm_cs_f_wrapper = test_evaluate_dm_cs_funptr( &
+            evaluate_dm_cs_funptr, "evaluate_dm_cs_f_wrapper", "")
+        if (size(mock_requests) /= 4 .or. &
+            .not. all([(any(mock_requests == request), request = 0, 3)])) then
+            write (stderr, *) "test_evaluate_dm_cs_f_wrapper failed: Outputs "// &
+                "passed on to density matrix evaluating C function for "// &
+                "closed-shell case wrong."
+            test_evaluate_dm_cs_f_wrapper = .false.
+        end if
 
-    end function test_update_dm_os_f_wrapper
+    end function test_evaluate_dm_cs_f_wrapper
+
+    logical(c_bool) function test_evaluate_dm_os_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the density matrix evaluating C
+        ! function with same- and opposite-spin potential contributions for the
+        ! open-shell case
+        !
+        use otr_arh, only: evaluate_dm_os_type
+        use otr_arh_c_interface, only: evaluate_dm_os_before_wrapping, &
+                                       evaluate_dm_os_f_wrapper
+        use otr_arh_test_reference, only: test_evaluate_dm_os_funptr
+        use otr_oao_unit_tests, only: mock_requests
+
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        integer(ip) :: request
+
+        ! inject mock subroutine
+        evaluate_dm_os_before_wrapping => mock_arh_evaluate_dm_os
+
+        ! get pointer to subroutine
+        evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
+
+        ! test density matrix evaluating wrapper, which is called once for every
+        ! combination of requested outputs and has to pass each on to the C function
+        ! unchanged
+        mock_requests = [integer(ip) ::]
+        test_evaluate_dm_os_f_wrapper = test_evaluate_dm_os_funptr( &
+            evaluate_dm_os_funptr, "evaluate_dm_os_f_wrapper", "")
+        if (size(mock_requests) /= 16 .or. &
+            .not. all([(any(mock_requests == request), request = 0, 15)])) then
+            write (stderr, *) "test_evaluate_dm_os_f_wrapper failed: Outputs "// &
+                "passed on to density matrix evaluating C function for open-shell "// &
+                "case wrong."
+            test_evaluate_dm_os_f_wrapper = .false.
+        end if
+
+    end function test_evaluate_dm_os_f_wrapper
 
     logical(c_bool) function test_update_orbs_arh_c_wrapper() bind(C)
         !
@@ -279,9 +312,8 @@ contains
         update_orbs_arh_before_wrapping => mock_update_orbs
 
         ! test orbital updating function
-        test_update_orbs_arh_c_wrapper = &
-            test_update_orbs_c_funptr(c_funloc(update_orbs_arh_c_wrapper), &
-                                      "update_orbs_arh_c_wrapper", "")
+        test_update_orbs_arh_c_wrapper = test_update_orbs_c_funptr( &
+            c_funloc(update_orbs_arh_c_wrapper), "update_orbs_arh_c_wrapper", "")
 
     end function test_update_orbs_arh_c_wrapper
 
@@ -301,9 +333,8 @@ contains
         hess_x_arh_before_wrapping => mock_hess_x
 
         ! test orbital updating function
-        test_hess_x_arh_c_wrapper = &
-            test_hess_x_c_funptr(c_funloc(hess_x_arh_c_wrapper), &
-                                 "hess_x_arh_c_wrapper", "")
+        test_hess_x_arh_c_wrapper = test_hess_x_c_funptr( &
+            c_funloc(hess_x_arh_c_wrapper), "hess_x_arh_c_wrapper", "")
 
     end function test_hess_x_arh_c_wrapper
 

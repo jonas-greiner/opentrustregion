@@ -52,26 +52,22 @@ contains
 
     end subroutine mock_update_orbs
 
-    subroutine mock_oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, &
-                                   get_energy_funptr, update_dm_funptr, &
-                                   obj_func_oao_funptr, update_orbs_oao_funptr, &
-                                   precond_oao_funptr, precond_pd_oao_funptr, &
-                                   project_oao_funptr, &
-                                   get_extra_trial_vectors_oao_funptr, error, settings)
+    subroutine mock_oao_factory_cs( &
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_oao_funptr, &
+        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
+        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
         !
         use opentrustregion, only: update_orbs_type, hess_x_type
-        use otr_oao, only: get_energy_cs_type, update_dm_cs_type, oao_settings_type
-        use otr_oao_test_reference, only: test_get_energy_cs_funptr, &
-                                          test_update_dm_cs_funptr
+        use otr_oao, only: evaluate_dm_cs_type, oao_settings_type
+        use otr_oao_test_reference, only: test_evaluate_dm_cs_funptr
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_funptr
-        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_funptr
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
@@ -111,15 +107,10 @@ contains
                 "AOs wrong."
         end if
 
-        ! test passed energy function
-        test_passed = test_passed .and. &
-            test_get_energy_cs_funptr(get_energy_funptr, "oao_factory_c_wrapper", &
-                                      " by given energy function")
-
-        ! test passed density matrix updating function
-        test_passed = test_passed .and. &
-            test_update_dm_cs_funptr(update_dm_funptr, "oao_factory_c_wrapper", &
-                                     " by given density matrix updating function")
+        ! test passed density matrix evaluating function
+        test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
+            evaluate_dm_funptr, "oao_factory_c_wrapper", &
+            " by given density matrix evaluating function")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -149,26 +140,22 @@ contains
 
     end subroutine mock_oao_factory_cs
 
-    subroutine mock_oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, &
-                                   get_energy_funptr, update_dm_funptr, &
-                                   obj_func_oao_funptr, update_orbs_oao_funptr, &
-                                   precond_oao_funptr, precond_pd_oao_funptr, &
-                                   project_oao_funptr, &
-                                   get_extra_trial_vectors_oao_funptr, error, settings)
+    subroutine mock_oao_factory_os( &
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_oao_funptr, &
+        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
+        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
         !
         use opentrustregion, only: update_orbs_type, hess_x_type
-        use otr_oao, only: get_energy_os_type, update_dm_os_type, oao_settings_type
-        use otr_oao_test_reference, only: test_get_energy_os_funptr, &
-                                          test_update_dm_os_funptr
+        use otr_oao, only: evaluate_dm_os_type, oao_settings_type
+        use otr_oao_test_reference, only: test_evaluate_dm_os_funptr
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_os_type), intent(in), pointer :: get_energy_funptr
-        procedure(update_dm_os_type), intent(in), pointer :: update_dm_funptr
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
@@ -208,15 +195,10 @@ contains
                 "AOs wrong."
         end if
 
-        ! test passed energy function
-        test_passed = test_passed .and. &
-            test_get_energy_os_funptr(get_energy_funptr, "oao_factory_c_wrapper", &
-                                      " by given energy function")
-
-        ! test passed density matrix updating function
-        test_passed = test_passed .and. &
-            test_update_dm_os_funptr(update_dm_funptr, "oao_factory_c_wrapper", &
-                                     " by given density matrix updating function")
+        ! test passed density matrix evaluating function
+        test_passed = test_passed .and. test_evaluate_dm_os_funptr( &
+            evaluate_dm_funptr, "oao_factory_c_wrapper", &
+            " by given density matrix evaluating function")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then

@@ -32,13 +32,18 @@ from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInt
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any, Dict
 
+    GetResponseType = Callable[[np.ndarray, np.ndarray], None]
+    EvaluateDMType = Callable[
+        [np.ndarray, Optional[np.ndarray], bool],
+        Tuple[float, Optional[GetResponseType]],
+    ]
+
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-get_energy_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 get_response_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
-update_dm_interface_type = CFUNCTYPE(
+evaluate_dm_interface_type = CFUNCTYPE(
     c_int,
     POINTER(c_real),
     POINTER(c_real),
@@ -77,46 +82,13 @@ auto_bind_fields(OAOSettings)
 
 # define interface factories
 @dataclass
-class GetEnergyInterface:
-    """
-    this class provides the interface to get the energy for a given density matrix
-    """
-
-    get_energy: Callable[[np.ndarray], float]
-    n_ao: int
-    n_particle: int
-    closed_shell: bool
-    exception: Dict[str, Exception]
-
-    def __call__(self, dm_ao_ptr, energy_ptr) -> int:
-        # convert matrix pointers to numpy arrays
-        dm_ao = np.ctypeslib.as_array(
-            dm_ao_ptr,
-            shape=(
-                2 * (self.n_ao,)
-                if self.closed_shell
-                else (self.n_particle, self.n_ao, self.n_ao)
-            ),
-        )
-
-        # get energy
-        try:
-            energy_ptr[0] = self.get_energy(dm_ao)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
-
-        return 0
-
-
-@dataclass
 class GetResponseInterface:
     """
     this class provides the interface to write the response to the memory provided for
     a given density matrix
     """
 
-    get_response: Callable[[np.ndarray, np.ndarray], None]
+    get_response: GetResponseType
     n_ao: int
     n_particle: int
     closed_shell: bool
@@ -146,14 +118,12 @@ class GetResponseInterface:
 
 
 @dataclass
-class UpdateDMInterface:
+class EvaluateDMInterface:
     """
-    this class provides the interface to the density matrix updating function
+    this class provides the interface to the density matrix evaluating function
     """
 
-    update_dm: Callable[
-        [np.ndarray, np.ndarray], Tuple[float, Callable[[np.ndarray, np.ndarray], None]]
-    ]
+    evaluate_dm: EvaluateDMType
     n_ao: int
     n_particle: int
     closed_shell: bool
@@ -162,36 +132,43 @@ class UpdateDMInterface:
 
     def __call__(self, dm_ao_ptr, energy_ptr, fock_ptr, get_response_funptr) -> int:
         # convert matrix pointers to numpy arrays
-        if self.closed_shell:
-            dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=2 * (self.n_ao,))
-            fock = np.ctypeslib.as_array(fock_ptr, shape=2 * (self.n_ao,))
-        else:
-            dm_ao = np.ctypeslib.as_array(
-                dm_ao_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
-            )
-            fock = np.ctypeslib.as_array(
-                fock_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
-            )
+        shape = (
+            2 * (self.n_ao,)
+            if self.closed_shell
+            else (self.n_particle, self.n_ao, self.n_ao)
+        )
+        dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=shape)
+        fock = np.ctypeslib.as_array(fock_ptr, shape=shape) if fock_ptr else None
 
-        # get energy, Fock matrix, and response function
+        # get energy, and the Fock matrix and response function where wanted
         try:
-            energy_ptr[0], get_response = self.update_dm(dm_ao, fock)
+            energy_ptr[0], get_response = self.evaluate_dm(
+                dm_ao, fock, bool(get_response_funptr)
+            )
         except Exception as e:
             self.exception["exc"] = e
             return 1
 
-        # attach the response interface to the object so that it persists in Python
-        # to ensure that it is not garbage collected when the factory completes
-        self.get_response_funptr = get_response_interface_type(
-            GetResponseInterface(
-                get_response,
-                self.n_ao,
-                self.n_particle,
-                self.closed_shell,
-                self.exception,
+        if get_response_funptr:
+            if get_response is None:
+                self.exception["exc"] = RuntimeError(
+                    "evaluate_dm returned no response function although one was "
+                    "requested."
+                )
+                return 1
+
+            # attach the response interface to the object so that it persists in Python
+            # to ensure that it is not garbage collected when the factory completes
+            self.get_response_funptr = get_response_interface_type(
+                GetResponseInterface(
+                    get_response,
+                    self.n_ao,
+                    self.n_particle,
+                    self.closed_shell,
+                    self.exception,
+                )
             )
-        )
-        get_response_funptr[0] = self.get_response_funptr
+            get_response_funptr[0] = self.get_response_funptr
 
         return 0
 
@@ -200,12 +177,12 @@ class UpdateDMInterface:
 class ObjFuncPyInterface:
     """
     this class provides the Python interface to the objective function,
-    get_energy_interface is stored to ensure that it is not garbage collected when the
+    evaluate_dm_interface is stored to ensure that it is not garbage collected when the
     factory completes
     """
 
     obj_func_funptr: Any
-    get_energy_interface: Any
+    evaluate_dm_interface: Any
     _otr_exception: Optional[Dict[str, Exception]] = None
 
     def __call__(self, kappa: np.ndarray) -> float:
@@ -337,11 +314,7 @@ def oao_factory(
     ao_overlap: np.ndarray,
     n_particle: int,
     n_ao: int,
-    get_energy: Callable[[np.ndarray], float],
-    update_dm: Callable[
-        [np.ndarray, np.ndarray],
-        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
-    ],
+    evaluate_dm: EvaluateDMType,
     settings: OAOSettings,
 ) -> Tuple[
     Callable[[np.ndarray], float],
@@ -362,22 +335,13 @@ def oao_factory(
     closed_shell = dm_ao.ndim == 2
 
     # collector for exceptions raised inside the wrapped user callbacks; adopted from
-    # get_energy or update_dm when either is itself factory-produced so a whole chain
-    # of factories shares one, and handed to solver through the returned object
-    exception = adopt_collector(get_energy, update_dm)
+    # evaluate_dm when it is itself factory-produced so a whole chain of factories
+    # shares one, and handed to solver through the returned object
+    exception = adopt_collector(evaluate_dm)
 
     # define interfaces for callback functions
-    get_energy_interface = get_energy_interface_type(
-        GetEnergyInterface(
-            get_energy=get_energy,
-            n_ao=n_ao,
-            n_particle=n_particle,
-            closed_shell=closed_shell,
-            exception=exception,
-        )
-    )
-    update_dm_interface = update_dm_interface_type(
-        UpdateDMInterface(update_dm, n_ao, n_particle, closed_shell, exception)
+    evaluate_dm_interface = evaluate_dm_interface_type(
+        EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
     )
 
     # set interfaces for optional callback functions, these need to be set here since
@@ -400,8 +364,7 @@ def oao_factory(
         POINTER(c_real),
         c_int,
         c_int,
-        get_energy_interface_type,
-        update_dm_interface_type,
+        evaluate_dm_interface_type,
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
         POINTER(precond_interface_type),
@@ -423,8 +386,7 @@ def oao_factory(
         ao_overlap_ptr,
         n_particle,
         n_ao,
-        get_energy_interface,
-        update_dm_interface,
+        evaluate_dm_interface,
         byref(obj_func_oao_funptr),
         byref(update_orbs_oao_funptr),
         byref(precond_oao_funptr),
@@ -447,15 +409,14 @@ def oao_factory(
     return (
         ObjFuncPyInterface(
             obj_func_funptr=obj_func_oao_funptr,
-            get_energy_interface=get_energy_interface,
+            evaluate_dm_interface=evaluate_dm_interface,
             _otr_exception=exception,
         ),
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_oao_funptr,
             _otr_exception=exception,
             saved_objects={
-                "get_energy_interface": get_energy_interface,
-                "update_dm_interface": update_dm_interface,
+                "evaluate_dm_interface": evaluate_dm_interface,
             },
         ),
         PrecondPyInterface(precond_funptr=precond_oao_funptr, _otr_exception=exception),

@@ -30,6 +30,21 @@ module otr_arh_test_reference
         ref_arh_settings_type(ref_oao_settings_type = ref_oao_settings, &
                               arh_type = "symm_arh")
 
+    ! multiples of the density matrix the mock density matrix evaluating functions
+    ! return for each optional output, in the order of evaluate_dm_*_outputs
+    real(c_rp), protected, bind(C, name="test_evaluate_dm_cs_factors") :: &
+        evaluate_dm_cs_factors(2) = [2.0_c_rp, 3.0_c_rp]
+    real(c_rp), protected, bind(C, name="test_evaluate_dm_os_factors") :: &
+        evaluate_dm_os_factors(4) = [2.0_c_rp, 3.0_c_rp, 4.0_c_rp, 5.0_c_rp]
+
+    ! optional outputs of the density matrix evaluating functions in the order of their
+    ! argument lists
+    character(20), parameter :: evaluate_dm_cs_outputs(2) = &
+        [character(20) :: "Fock matrix", "non-linear potential"]
+    character(23), parameter :: evaluate_dm_os_outputs(4) = &
+        [character(23) :: "Fock matrix", "same-spin potential", &
+         "opposite-spin potential", "non-linear potential"]
+
     interface assignment(=)
         module procedure assign_ref_to_arh
         module procedure assign_ref_to_arh_c
@@ -52,336 +67,336 @@ module otr_arh_test_reference
 
 contains
 
-        function test_update_dm_cs_funptr(update_dm_funptr, test_name, message) &
+    function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message) &
         result(test_passed)
         !
-        ! this function tests a provided density matrix updating function pointer with 
-        ! a separate non-linear potential contribution for the closed-shell case
-        !
-        use otr_arh, only: update_dm_cs_type
-        use test_reference, only: tol
-
-        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_funptr
-        character(*), intent(in) :: test_name, message
-        logical :: test_passed
-
-        real(rp), allocatable :: dm_ao(:, :), fock(:, :), v_nonlinear(:, :)
-        real(rp) :: energy
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. associated(update_dm_funptr)) then
-            test_passed = .false.
-            write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function with non-linear potential contribution for "// &
-                "closed-shell case provided"//message//" not associated with value."
-            return
-        end if
-
-        ! allocate arrays
-        allocate(dm_ao(n_ao, n_ao), fock(n_ao, n_ao), v_nonlinear(n_ao, n_ao))
-
-        ! initialize density matrix
-        dm_ao = 1.0_rp
-
-        ! call density matrix updating subroutine
-        call update_dm_funptr(dm_ao, energy, fock, v_nonlinear, error)
-
-        ! check for error
-        if (error /= 0) then
-            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
-                " for closed-shell case."
-            test_passed = .false.
-        end if
-
-        ! check energy
-        if (abs(energy - 9.0_rp) > tol) then
-            write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
-                message//" for closed-shell case wrong."
-            test_passed = .false.
-        end if
-
-        ! check Fock matrix
-        if (any(abs(fock - 2.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
-                message//" for closed-shell case wrong."
-            test_passed = .false.
-        end if
-
-        ! check non-linear potential
-        if (any(abs(v_nonlinear - 3.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Non-linear potential "// &
-                "returned"//message//" for closed-shell case wrong."
-            test_passed = .false.
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao, fock, v_nonlinear)
-
-    end function test_update_dm_cs_funptr
-
-    function test_update_dm_cs_c_funptr(update_dm_c_funptr, test_name, message) &
-        result(test_passed)
-        !
-        ! this function tests a provided density matrix updating C function pointer 
+        ! this function tests a provided density matrix evaluating function pointer
         ! with a separate non-linear potential contribution for the closed-shell case
+        ! for every combination of requested outputs
         !
-        use otr_arh_c_interface, only: update_dm_cs_c_type
-        use test_reference, only: tol_c
+        use otr_arh, only: evaluate_dm_cs_type
+        use otr_oao_test_reference, only: request_label, capitalized
+        use test_reference, only: tol
 
-        type(c_funptr), intent(in) :: update_dm_c_funptr
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
-        procedure(update_dm_cs_c_type), pointer :: update_dm_funptr
-        real(c_rp), allocatable :: dm_ao(:, :), fock(:, :), v_nonlinear(:, :)
+        real(rp), target :: dm_ao(n_ao, n_ao), outputs(n_ao, n_ao, 2)
+        real(rp), pointer, contiguous :: fock(:, :), v_nonlinear(:, :)
+        real(rp) :: energy
+        character(:), allocatable :: requested
+        integer(ip) :: request, i, error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(evaluate_dm_funptr)) then
+            test_passed = .false.
+            write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
+                "evaluating function with non-linear potential contribution for "// &
+                "closed-shell case provided"//message//" not associated with value."
+            return
+        end if
+
+        ! generate random density matrix
+        call random_number(dm_ao)
+
+        ! call density matrix evaluating subroutine for every combination of requested
+        ! outputs
+        do request = 0, 3
+            requested = request_label(evaluate_dm_cs_outputs, request)
+            nullify(fock, v_nonlinear)
+            if (btest(request, 0)) fock => outputs(:, :, 1)
+            if (btest(request, 1)) v_nonlinear => outputs(:, :, 2)
+            energy = 0.0_rp
+            outputs = 0.0_rp
+            call evaluate_dm_funptr(dm_ao, energy, fock, v_nonlinear, error)
+
+            ! check for error
+            if (error /= 0) then
+                write (stderr, *) "test_"//test_name//" failed: Error produced"// &
+                    message//" for closed-shell case"//requested//"."
+                test_passed = .false.
+                cycle
+            end if
+
+            ! check energy
+            if (abs(energy - sum(dm_ao)) > tol) then
+                write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
+                    message//" for closed-shell case wrong"//requested//"."
+                test_passed = .false.
+            end if
+
+            ! check requested outputs
+            do i = 1, size(evaluate_dm_cs_outputs)
+                if (btest(request, i - 1) .and. any( &
+                    abs(outputs(:, :, i) - evaluate_dm_cs_factors(i) * dm_ao) > tol)) &
+                    then
+                    write (stderr, *) "test_"//test_name//" failed: "// &
+                        trim(capitalized(evaluate_dm_cs_outputs(i)))//" returned"// &
+                        message//" for closed-shell case wrong"//requested//"."
+                    test_passed = .false.
+                end if
+            end do
+        end do
+
+    end function test_evaluate_dm_cs_funptr
+
+    function test_evaluate_dm_cs_c_funptr(evaluate_dm_c_funptr, test_name, message) &
+        result(test_passed)
+        !
+        ! this function tests a provided density matrix evaluating C function pointer
+        ! with a separate non-linear potential contribution for the closed-shell case
+        ! for every combination of requested outputs
+        !
+        use otr_arh_c_interface, only: evaluate_dm_cs_c_type
+        use otr_oao_test_reference, only: request_label, capitalized
+        use test_reference, only: tol_c
+
+        type(c_funptr), intent(in) :: evaluate_dm_c_funptr
+        character(*), intent(in) :: test_name, message
+        logical :: test_passed
+
+
+        procedure(evaluate_dm_cs_c_type), pointer :: evaluate_dm_funptr
+        real(c_rp), target :: dm_ao(n_ao, n_ao), outputs(n_ao, n_ao, 2)
+        real(c_rp), pointer :: fock(:, :), v_nonlinear(:, :)
         real(c_rp) :: energy
+        character(:), allocatable :: requested
+        integer(ip) :: request, i
         integer(c_ip) :: error
 
         ! assume tests pass
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. c_associated(update_dm_c_funptr)) then
+        if (.not. c_associated(evaluate_dm_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function with non-linear potential contribution for "// &
+                "evaluating function with non-linear potential contribution for "// &
                 "closed-shell case provided"//message//" not associated with value."
             return
         end if
 
         ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=update_dm_c_funptr, fptr=update_dm_funptr)
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=evaluate_dm_funptr)
 
-        ! allocate arrays
-        allocate(dm_ao(n_ao, n_ao), fock(n_ao, n_ao), v_nonlinear(n_ao, n_ao))
+        ! generate random density matrix
+        call random_number(dm_ao)
 
-        ! initialize density matrix
-        dm_ao = 1.0_c_rp
+        ! call density matrix evaluating function for every combination of requested
+        ! outputs
+        do request = 0, 3
+            requested = request_label(evaluate_dm_cs_outputs, request)
+            nullify(fock, v_nonlinear)
+            if (btest(request, 0)) fock => outputs(:, :, 1)
+            if (btest(request, 1)) v_nonlinear => outputs(:, :, 2)
+            energy = 0.0_c_rp
+            outputs = 0.0_c_rp
+            error = evaluate_dm_funptr(dm_ao, energy, fock, v_nonlinear)
 
-        ! call density matrix updating function
-        error = update_dm_funptr(dm_ao, energy, fock, v_nonlinear)
+            ! check for error
+            if (error /= 0) then
+                write (stderr, *) "test_"//test_name//" failed: Error produced"// &
+                    message//" for closed-shell case"//requested//"."
+                test_passed = .false.
+                cycle
+            end if
 
-        ! check for error
-        if (error /= 0) then
-            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
-                " for closed-shell case."
-            test_passed = .false.
-        end if
+            ! check energy
+            if (abs(energy - sum(dm_ao)) > tol_c) then
+                write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
+                    message//" for closed-shell case wrong"//requested//"."
+                test_passed = .false.
+            end if
 
-        ! check energy
-        if (abs(energy - 9.0_c_rp) > tol_c) then
-            write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
-                message//" for closed-shell case wrong."
-            test_passed = .false.
-        end if
+            ! check requested outputs
+            do i = 1, size(evaluate_dm_cs_outputs)
+                if (btest(request, i - 1) .and. &
+                    any(abs(outputs(:, :, i) - evaluate_dm_cs_factors(i) * dm_ao) > &
+                        tol_c)) then
+                    write (stderr, *) "test_"//test_name//" failed: "// &
+                        trim(capitalized(evaluate_dm_cs_outputs(i)))//" returned"// &
+                        message//" for closed-shell case wrong"//requested//"."
+                    test_passed = .false.
+                end if
+            end do
+        end do
 
-        ! check Fock matrix
-        if (any(abs(fock - 2.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
-                message//" for closed-shell case wrong."
-            test_passed = .false.
-        end if
+    end function test_evaluate_dm_cs_c_funptr
 
-        ! check non-linear potential
-        if (any(abs(v_nonlinear - 3.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Non-linear potential "// &
-                "returned"//message//" for closed-shell case wrong."
-            test_passed = .false.
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao, fock, v_nonlinear)
-
-    end function test_update_dm_cs_c_funptr
-
-    function test_update_dm_os_funptr(update_dm_funptr, test_name, message) &
+    function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message) &
         result(test_passed)
         !
-        ! this function tests a provided density matrix function pointer with same- and 
-        ! opposite-spin potential contributions
+        ! this function tests a provided density matrix evaluating function pointer
+        ! with same- and opposite-spin potential contributions for every combination of
+        ! requested outputs
         !
-        use otr_arh, only: update_dm_os_type
+        use otr_arh, only: evaluate_dm_os_type
+        use otr_oao_test_reference, only: request_label, capitalized
         use test_reference, only: tol
 
-        procedure(update_dm_os_type), intent(in), pointer :: update_dm_funptr
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
-        real(rp), allocatable :: dm_ao(:, :, :), fock(:, :, :), v_same_spin(:, :, :), &
-                                 v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
+
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle), &
+                            outputs(n_ao, n_ao, n_particle, 4)
+        real(rp), pointer :: fock(:, :, :), v_same_spin(:, :, :), &
+                             v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
         real(rp) :: energy
-        integer(ip) :: error
+        character(:), allocatable :: requested
+        integer(ip) :: request, i, error
 
         ! assume tests pass
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. associated(update_dm_funptr)) then
+        if (.not. associated(evaluate_dm_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function with same- and opposite-spin potential "// &
+                "evaluating function with same- and opposite-spin potential "// &
                 "contributions provided"//message//" not associated with value."
             return
         end if
 
-        ! allocate arrays
-        allocate(dm_ao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
-                 v_same_spin(n_ao, n_ao, n_particle), &
-                 v_opposite_spin(n_ao, n_ao, n_particle), &
-                 v_nonlinear(n_ao, n_ao, n_particle))
+        ! generate random density matrix
+        call random_number(dm_ao)
 
-        ! initialize density matrix
-        dm_ao = 1.0_rp
+        ! call density matrix evaluating subroutine for every combination of requested
+        ! outputs
+        do request = 0, 15
+            requested = request_label(evaluate_dm_os_outputs, request)
+            nullify(fock, v_same_spin, v_opposite_spin, v_nonlinear)
+            if (btest(request, 0)) fock => outputs(:, :, :, 1)
+            if (btest(request, 1)) v_same_spin => outputs(:, :, :, 2)
+            if (btest(request, 2)) v_opposite_spin => outputs(:, :, :, 3)
+            if (btest(request, 3)) v_nonlinear => outputs(:, :, :, 4)
+            energy = 0.0_rp
+            outputs = 0.0_rp
+            call evaluate_dm_funptr(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
+                                    v_nonlinear, error)
 
-        ! call density matrix updating subroutine
-        call update_dm_funptr(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
-                              v_nonlinear, error)
+            ! check for error
+            if (error /= 0) then
+                write (stderr, *) "test_"//test_name//" failed: Error produced"// &
+                    message//" for open-shell case"//requested//"."
+                test_passed = .false.
+                cycle
+            end if
 
-        ! check for error
-        if (error /= 0) then
-            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
-                "."
-            test_passed = .false.
-        end if
+            ! check energy
+            if (abs(energy - sum(dm_ao)) > tol) then
+                write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
+                    message//" for open-shell case wrong"//requested//"."
+                test_passed = .false.
+            end if
 
-        ! check energy
-        if (abs(energy - 18.0_rp) > tol) then
-            write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
+            ! check requested outputs
+            do i = 1, size(evaluate_dm_os_outputs)
+                if (btest(request, i - 1) .and. &
+                    any(abs(outputs(:, :, :, i) - evaluate_dm_os_factors(i) * dm_ao) > &
+                        tol)) then
+                    write (stderr, *) "test_"//test_name//" failed: "// &
+                        trim(capitalized(evaluate_dm_os_outputs(i)))//" returned"// &
+                        message//" for open-shell case wrong"//requested//"."
+                    test_passed = .false.
+                end if
+            end do
+        end do
 
-        ! check Fock matrix
-        if (any(abs(fock - 2.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
+    end function test_evaluate_dm_os_funptr
 
-        ! check same-spin potential
-        if (any(abs(v_same_spin - 3.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Same-spin potential "// &
-                "returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! check opposite-spin potential
-        if (any(abs(v_opposite_spin - 4.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Opposite-spin "// &
-                "potential returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! check non-linear potential
-        if (any(abs(v_nonlinear - 5.0_rp) > tol)) then
-            write (stderr, *) "test_"//test_name//" failed: Non-linear potential "// &
-                "returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao, fock, v_same_spin, v_opposite_spin, v_nonlinear)
-
-    end function test_update_dm_os_funptr
-
-    function test_update_dm_os_c_funptr(update_dm_c_funptr, test_name, message) &
+    function test_evaluate_dm_os_c_funptr(evaluate_dm_c_funptr, test_name, message) &
         result(test_passed)
         !
-        ! this function tests a provided density matrix updating C function pointer
-        ! with same- and opposite-spin potential contributions
+        ! this function tests a provided density matrix evaluating C function pointer
+        ! with same- and opposite-spin potential contributions for every combination of
+        ! requested outputs
         !
-        use otr_arh_c_interface, only: update_dm_os_c_type
+        use otr_arh_c_interface, only: evaluate_dm_os_c_type
+        use otr_oao_test_reference, only: request_label, capitalized
         use test_reference, only: tol_c
 
-        type(c_funptr), intent(in) :: update_dm_c_funptr
+        type(c_funptr), intent(in) :: evaluate_dm_c_funptr
         character(*), intent(in) :: test_name, message
         logical :: test_passed
 
-        procedure(update_dm_os_c_type), pointer :: update_dm_funptr
-        real(c_rp), allocatable :: dm_ao(:, :, :), fock(:, :, :), &
-                                   v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
-                                   v_nonlinear(:, :, :)
+
+        procedure(evaluate_dm_os_c_type), pointer :: evaluate_dm_funptr
+        real(c_rp), target :: dm_ao(n_ao, n_ao, n_particle), &
+                              outputs(n_ao, n_ao, n_particle, 4)
+        real(c_rp), pointer :: fock(:, :, :), v_same_spin(:, :, :), &
+                               v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
         real(c_rp) :: energy
+        character(:), allocatable :: requested
+        integer(ip) :: request, i
         integer(c_ip) :: error
 
         ! assume tests pass
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. c_associated(update_dm_c_funptr)) then
+        if (.not. c_associated(evaluate_dm_c_funptr)) then
             test_passed = .false.
             write (stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "updating function with same- and opposite-spin potential "// &
+                "evaluating function with same- and opposite-spin potential "// &
                 "contributions provided"//message//" not associated with value."
             return
         end if
 
         ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=update_dm_c_funptr, fptr=update_dm_funptr)
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=evaluate_dm_funptr)
 
-        ! allocate arrays
-        allocate(dm_ao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
-                 v_same_spin(n_ao, n_ao, n_particle), &
-                 v_opposite_spin(n_ao, n_ao, n_particle), &
-                 v_nonlinear(n_ao, n_ao, n_particle))
+        ! generate random density matrix
+        call random_number(dm_ao)
 
-        ! initialize density matrix
-        dm_ao = 1.0_c_rp
+        ! call density matrix evaluating function for every combination of requested
+        ! outputs
+        do request = 0, 15
+            requested = request_label(evaluate_dm_os_outputs, request)
+            nullify(fock, v_same_spin, v_opposite_spin, v_nonlinear)
+            if (btest(request, 0)) fock => outputs(:, :, :, 1)
+            if (btest(request, 1)) v_same_spin => outputs(:, :, :, 2)
+            if (btest(request, 2)) v_opposite_spin => outputs(:, :, :, 3)
+            if (btest(request, 3)) v_nonlinear => outputs(:, :, :, 4)
+            energy = 0.0_c_rp
+            outputs = 0.0_c_rp
+            error = evaluate_dm_funptr(dm_ao, energy, fock, v_same_spin, &
+                                       v_opposite_spin, v_nonlinear)
 
-        ! call density matrix updating function
-        error = update_dm_funptr(dm_ao, energy, fock, v_same_spin, v_opposite_spin, &
-                                 v_nonlinear)
+            ! check for error
+            if (error /= 0) then
+                write (stderr, *) "test_"//test_name//" failed: Error produced"// &
+                    message//" for open-shell case"//requested//"."
+                test_passed = .false.
+                cycle
+            end if
 
-        ! check for error
-        if (error /= 0) then
-            write (stderr, *) "test_"//test_name//" failed: Error produced"//message// &
-                "."
-            test_passed = .false.
-        end if
+            ! check energy
+            if (abs(energy - sum(dm_ao)) > tol_c) then
+                write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
+                    message//" for open-shell case wrong"//requested//"."
+                test_passed = .false.
+            end if
 
-        ! check energy
-        if (abs(energy - 18.0_c_rp) > tol_c) then
-            write (stderr, *) "test_"//test_name//" failed: Energy returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
+            ! check requested outputs
+            do i = 1, size(evaluate_dm_os_outputs)
+                if (btest(request, i - 1) .and. &
+                    any(abs(outputs(:, :, :, i) - evaluate_dm_os_factors(i) * dm_ao) > &
+                        tol_c)) then
+                    write (stderr, *) "test_"//test_name//" failed: "// &
+                        trim(capitalized(evaluate_dm_os_outputs(i)))//" returned"// &
+                        message//" for open-shell case wrong"//requested//"."
+                    test_passed = .false.
+                end if
+            end do
+        end do
 
-        ! check Fock matrix
-        if (any(abs(fock - 2.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! check same-spin potential
-        if (any(abs(v_same_spin - 3.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Same-spin potential "// &
-                "returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! check opposite-spin potential
-        if (any(abs(v_opposite_spin - 4.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Opposite-spin "// &
-                "potential returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! check non-linear potential
-        if (any(abs(v_nonlinear - 5.0_c_rp) > tol_c)) then
-            write (stderr, *) "test_"//test_name//" failed: Non-linear potential "// &
-                "returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao, fock, v_same_spin, v_opposite_spin, v_nonlinear)
-
-    end function test_update_dm_os_c_funptr
+    end function test_evaluate_dm_os_c_funptr
 
     subroutine get_reference_arh_values(ref_settings_out) bind(C)
         !
@@ -427,7 +442,7 @@ contains
 
     subroutine assign_ref_to_arh_c(lhs_c, rhs)
         !
-        ! this subroutine overloads the assignment operator to set C ARH settings to 
+        ! this subroutine overloads the assignment operator to set C ARH settings to
         ! reference values
         !
         use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
@@ -460,7 +475,7 @@ contains
 
     logical function equal_arh_to_ref(lhs, rhs)
         !
-        ! this function overloads the comparison operator to compare ARH settings to 
+        ! this function overloads the comparison operator to compare ARH settings to
         ! reference values
         !
         use otr_arh, only: arh_settings_type
@@ -490,7 +505,7 @@ contains
 
     logical function equal_arh_c_to_ref(lhs_c, rhs)
         !
-        ! this function overloads the comparison operator to compare ARH settings to 
+        ! this function overloads the comparison operator to compare ARH settings to
         ! reference values
         !
         use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
@@ -508,7 +523,7 @@ contains
 
     logical function not_equal_arh_c_to_ref(lhs, rhs)
         !
-        ! this function overloads the negated comparison operator to compare ARH 
+        ! this function overloads the negated comparison operator to compare ARH
         ! settings to reference values
         !
         use otr_arh_c_interface, only: arh_settings_type_c
@@ -522,7 +537,7 @@ contains
 
     logical function equal_arh(lhs, rhs)
         !
-        ! this function overloads the comparison operator to compare ARH settings to 
+        ! this function overloads the comparison operator to compare ARH settings to
         ! different ARH settings
         !
         use otr_arh, only: arh_settings_type
@@ -550,7 +565,7 @@ contains
 
     logical function equal_arh_c(lhs_c, rhs)
         !
-        ! this function overloads the comparison operator to compare ARH settings to 
+        ! this function overloads the comparison operator to compare ARH settings to
         ! different ARH settings
         !
         use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
@@ -568,7 +583,7 @@ contains
 
     logical function not_equal_arh_c(lhs_c, rhs)
         !
-        ! this function overloads the negated comparison operator to compare ARH 
+        ! this function overloads the negated comparison operator to compare ARH
         ! settings to different ARH settings
         !
         use otr_arh_c_interface, only: arh_settings_type_c

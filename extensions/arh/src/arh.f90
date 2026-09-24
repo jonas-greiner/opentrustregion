@@ -23,34 +23,34 @@ module otr_arh
     end type arh_settings_type
 
     type(arh_settings_type), parameter :: default_arh_settings = &
-        arh_settings_type(oao_settings_type = default_oao_settings, &
-                          arh_type = "ms_sr1")
+        arh_settings_type(oao_settings_type = default_oao_settings, arh_type = "ms_sr1")
 
     ! define setting options
     character(kw_len), parameter :: arh_types(5) = &
-            [character(len=kw_len) :: "arh", "symm_arh", "ms_psb", "ms_sp", "ms_sr1"]
+        [character(len=kw_len) :: "arh", "symm_arh", "ms_psb", "ms_sp", "ms_sr1"]
 
     abstract interface
-        subroutine update_dm_cs_type(dm, energy, fock, v_nonlinear, error)
+        subroutine evaluate_dm_cs_type(dm, energy, fock, v_nonlinear, error)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), target, contiguous :: fock(:, :), v_nonlinear(:, :)
+            real(rp), intent(out), optional, target, contiguous :: fock(:, :), &
+                                                                   v_nonlinear(:, :)
             integer(ip), intent(out) :: error
-        end subroutine update_dm_cs_type
+        end subroutine evaluate_dm_cs_type
 
-        subroutine update_dm_os_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
+        subroutine evaluate_dm_os_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
                                        v_nonlinear, error)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
-                                             v_opposite_spin(:, :, :), &
-                                             v_nonlinear(:, :, :)
+            real(rp), intent(out), optional, target :: &
+                fock(:, :, :), v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
+                v_nonlinear(:, :, :)
             integer(ip), intent(out) :: error
-        end subroutine update_dm_os_type
+        end subroutine evaluate_dm_os_type
     end interface
 
     type :: arh_type
@@ -60,26 +60,24 @@ module otr_arh
         real(rp), pointer :: s_inv_sqrt(:, :) => null(), dm_oao(:, :, :) => null(), &
                              fock_oo(:, :, :) => null(), fock_vv(:, :, :) => null(), &
                              energy => null(), grad(:) => null(), h_diag(:) => null()
-        real(rp), allocatable :: fock_oao(:, :, :), v_same_spin_oao(:, :, :), &
-                                 v_opposite_spin_oao(:, :, :), &
-                                 v_nonlinear_oao(:, :, :), a_sym(:, :), &
-                                 a_sym_nonlinear(:, :), a_inv(:, :), a_inv_comb(:, :), &
-                                 dm_list(:, :, :, :), fock_list(:, :, :, :), &
-                                 v_same_spin_list(:, :, :, :), &
-                                 v_opposite_spin_list(:, :, :, :), &
-                                 v_nonlinear_list(:, :, :, :), &
-                                 linear_potential_dirs(:, :), &
-                                 nonlinear_potential_dirs(:, :), dm_dirs(:, :), &
-                                 dm_dirs_nonlinear(:, :), expansion_dirs(:, :), &
-                                 projection_dirs(:, :), coupling_matrix(:, :)
-        procedure(update_dm_os_type), pointer, nopass :: update_dm_os => null()
-        procedure(update_dm_cs_type), pointer, nopass :: update_dm_cs => null()
+        real(rp), allocatable :: &
+            fock_oao(:, :, :), v_same_spin_oao(:, :, :), v_opposite_spin_oao(:, :, :), &
+            v_nonlinear_oao(:, :, :), a_sym(:, :), a_sym_nonlinear(:, :), a_inv(:, :), &
+            a_inv_comb(:, :), dm_list(:, :, :, :), fock_list(:, :, :, :), &
+            v_same_spin_list(:, :, :, :), v_opposite_spin_list(:, :, :, :), &
+            v_nonlinear_list(:, :, :, :), linear_potential_dirs(:, :), &
+            nonlinear_potential_dirs(:, :), dm_dirs(:, :), dm_dirs_nonlinear(:, :), &
+            expansion_dirs(:, :), projection_dirs(:, :), coupling_matrix(:, :)
+        procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
+        procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
     end type arh_type
 
     ! global variables
     type(arh_type), allocatable :: arh_object
 
     ! create function pointers to ensure that routines comply with interface
+    procedure(obj_func_type), pointer :: obj_func_arh_cs_ptr => obj_func_arh_cs
+    procedure(obj_func_type), pointer :: obj_func_arh_os_ptr => obj_func_arh_os
     procedure(update_orbs_type), pointer :: update_orbs_arh_cs_ptr => update_orbs_arh_cs
     procedure(update_orbs_type), pointer :: update_orbs_arh_os_ptr => update_orbs_arh_os
     procedure(hess_x_type), pointer :: hess_x_arh_ptr => hess_x_arh
@@ -90,25 +88,22 @@ module otr_arh
         module procedure arh_factory_cs, arh_factory_os
     end interface arh_factory
 
-    contains
+contains
 
-    subroutine arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, &
-                              update_dm_cs, obj_func_arh_funptr, &
-                              update_orbs_arh_funptr, precond_arh_funptr, &
-                              precond_pd_arh_funptr, project_arh_funptr, error, &
-                              settings)
+    subroutine arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
+                              obj_func_arh_funptr, update_orbs_arh_funptr, &
+                              precond_arh_funptr, precond_pd_arh_funptr, &
+                              project_arh_funptr, error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! closed-shell case
         !
-        use otr_oao, only: get_energy_cs_type, obj_func_oao, precond_pd_oao, &
-                           project_oao, oao_object
+        use otr_oao, only: precond_pd_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_cs
-        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_cs
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(precond_type), intent(out), pointer :: precond_arh_funptr
@@ -129,11 +124,10 @@ module otr_arh
         nullify(dm_ao_3d)
 
         ! set pointers to functions
-        oao_object%get_energy_cs => get_energy_cs
-        arh_object%update_dm_cs => update_dm_cs
+        arh_object%evaluate_dm_cs => evaluate_dm_cs
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_oao
+        obj_func_arh_funptr => obj_func_arh_cs
         update_orbs_arh_funptr => update_orbs_arh_cs
         precond_arh_funptr => precond_arh
         precond_pd_arh_funptr => precond_pd_oao
@@ -141,23 +135,20 @@ module otr_arh
 
     end subroutine arh_factory_cs
 
-    subroutine arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, &
-                              update_dm_os, obj_func_arh_funptr, &
-                              update_orbs_arh_funptr, precond_arh_funptr, &
-                              precond_pd_arh_funptr, project_arh_funptr, error, &
-                              settings)
+    subroutine arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
+                              obj_func_arh_funptr, update_orbs_arh_funptr, &
+                              precond_arh_funptr, precond_pd_arh_funptr, &
+                              project_arh_funptr, error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! open-shell case
         !
-        use otr_oao, only: get_energy_os_type, obj_func_oao, precond_pd_oao, &
-                           project_oao, oao_object
+        use otr_oao, only: precond_pd_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_os_type), intent(in), pointer :: get_energy_os
-        procedure(update_dm_os_type), intent(in), pointer :: update_dm_os
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(precond_type), intent(out), pointer :: precond_arh_funptr
@@ -174,11 +165,10 @@ module otr_arh
         if (error /= 0) return
 
         ! set pointers to functions
-        oao_object%get_energy_os => get_energy_os
-        arh_object%update_dm_os => update_dm_os
+        arh_object%evaluate_dm_os => evaluate_dm_os
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_oao
+        obj_func_arh_funptr => obj_func_arh_os
         update_orbs_arh_funptr => update_orbs_arh_os
         precond_arh_funptr => precond_arh
         precond_pd_arh_funptr => precond_pd_oao
@@ -261,6 +251,109 @@ module otr_arh
 
     end subroutine arh_sanity_check
 
+    function obj_func_arh_cs(kappa, error) result(energy)
+        !
+        ! this function defines the energy evaluation in the OAO basis for the
+        ! closed-shell case, which also adds the evaluated point with its Fock matrix
+        ! and non-linear potential to the history, unless it is already there
+        !
+        use otr_oao, only: rotate_dm_ao, symmetric_transformation
+
+        real(rp), intent(in), target :: kappa(:)
+        integer(ip), intent(out) :: error
+        real(rp) :: energy
+
+        integer(ip) :: n_ao
+        real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_oao(:, :, :), &
+                                 fock_ao(:, :, :), v_nonlinear_ao(:, :, :)
+
+        ! initialize energy in case of error
+        energy = 0.0_rp
+
+        ! number of AOs
+        n_ao = arh_object%n_ao
+
+        ! get rotated density matrix in AO and OAO basis
+        allocate(rot_dm_ao(n_ao, n_ao, 1), rot_dm_oao(n_ao, n_ao, 1), &
+                 fock_ao(n_ao, n_ao, 1), v_nonlinear_ao(n_ao, n_ao, 1))
+        call rotate_dm_ao(kappa, arh_object%n_particle, n_ao, rot_dm_ao, error, &
+                          rot_dm_oao)
+        if (error /= 0) return
+
+        ! calculate mean-field energy
+        call arh_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, fock_ao(:, :, 1), &
+                                       v_nonlinear_ao(:, :, 1), error)
+        if (error /= 0) return
+
+        ! update list of density, Fock and non-linear potential matrices
+        if (allocated(arh_object%dm_list)) then
+            if (.not. density_in_history(rot_dm_oao)) then
+                call prepend(arh_object%dm_list, rot_dm_oao)
+                call prepend(arh_object%fock_list, &
+                             symmetric_transformation(arh_object%s_inv_sqrt, fock_ao))
+                call prepend(arh_object%v_nonlinear_list, symmetric_transformation( &
+                    arh_object%s_inv_sqrt, v_nonlinear_ao))
+            end if
+        end if
+
+    end function obj_func_arh_cs
+
+    function obj_func_arh_os(kappa, error) result(energy)
+        !
+        ! this function defines the energy evaluation in the OAO basis for the
+        ! open-shell case, which also adds the evaluated point with its same-spin,
+        ! opposite-spin and non-linear potentials to the history, unless it is already
+        ! there
+        !
+        use otr_oao, only: rotate_dm_ao, symmetric_transformation
+
+        real(rp), intent(in), target :: kappa(:)
+        integer(ip), intent(out) :: error
+        real(rp) :: energy
+
+        integer(ip) :: n_ao, n_particle
+        real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_oao(:, :, :), &
+                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
+                                 v_nonlinear_ao(:, :, :)
+
+        ! initialize energy in case of error
+        energy = 0.0_rp
+
+        ! number of AOs and number of particles
+        n_ao = arh_object%n_ao
+        n_particle = arh_object%n_particle
+
+        ! get rotated density matrix in AO and OAO basis
+        allocate(rot_dm_ao(n_ao, n_ao, n_particle), &
+                 rot_dm_oao(n_ao, n_ao, n_particle), &
+                 v_same_spin_ao(n_ao, n_ao, n_particle), &
+                 v_opposite_spin_ao(n_ao, n_ao, n_particle), &
+                 v_nonlinear_ao(n_ao, n_ao, n_particle))
+        call rotate_dm_ao(kappa, n_particle, n_ao, rot_dm_ao, error, rot_dm_oao)
+        if (error /= 0) return
+
+        ! calculate mean-field energy
+        call arh_object%evaluate_dm_os(rot_dm_ao, energy, v_same_spin=v_same_spin_ao, &
+                                       v_opposite_spin=v_opposite_spin_ao, &
+                                       v_nonlinear=v_nonlinear_ao, error=error)
+        if (error /= 0) return
+
+        ! update list of density and potential matrices
+        if (allocated(arh_object%dm_list)) then
+            if (.not. density_in_history(rot_dm_oao)) then
+                call prepend(arh_object%dm_list, rot_dm_oao)
+                call prepend(arh_object%v_same_spin_list, symmetric_transformation( &
+                    arh_object%s_inv_sqrt, v_same_spin_ao))
+                call prepend( &
+                    arh_object%v_opposite_spin_list, &
+                    symmetric_transformation(arh_object%s_inv_sqrt, v_opposite_spin_ao))
+                call prepend(arh_object%v_nonlinear_list, symmetric_transformation( &
+                    arh_object%s_inv_sqrt, v_nonlinear_ao))
+            end if
+        end if
+
+    end function obj_func_arh_os
+
     subroutine update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation 
@@ -293,9 +386,9 @@ module otr_arh
 
         ! check if orbitals are actually rotated
         if ((sum(abs(kappa)) > 0.0_rp) .or. &
-            (abs(arh_object%energy) <= numerical_zero) .or. &
-            (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
-                    .and. (allocated(arh_object%dm_list))))) then
+            (abs(arh_object%energy) <= numerical_zero) .or. (.not. ( &
+                allocated(oao_object%grad) .and. allocated(oao_object%h_diag) .and. &
+                (allocated(arh_object%dm_list))))) then
             ! number of AOs
             n_ao = arh_object%n_ao
 
@@ -304,9 +397,12 @@ module otr_arh
 
             ! update list of density, Fock and non-linear potential matrices
             if (allocated(arh_object%dm_list)) then
-                call prepend(arh_object%dm_list, arh_object%dm_oao)
-                call prepend(arh_object%fock_list, arh_object%fock_oao)
-                call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear_oao)
+                if (.not. density_in_history(arh_object%dm_oao)) then
+                    call prepend(arh_object%dm_list, arh_object%dm_oao)
+                    call prepend(arh_object%fock_list, arh_object%fock_oao)
+                    call prepend(arh_object%v_nonlinear_list, &
+                                 arh_object%v_nonlinear_oao)
+                end if
             else
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
                          arh_object%fock_list(n_ao, n_ao, n_particle, 0), &
@@ -324,9 +420,9 @@ module otr_arh
             ! get energy, Fock matrix and non-linear potential
             allocate(fock_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
-            call arh_object%update_dm_cs(arh_object%dm_ao(:, :, 1), arh_object%energy, &
-                                         fock_ao(:, :, 1), v_nonlinear_ao(:, :, 1), &
-                                         error)
+            call arh_object%evaluate_dm_cs(arh_object%dm_ao(:, :, 1), &
+                                           arh_object%energy, fock_ao(:, :, 1), &
+                                           v_nonlinear_ao(:, :, 1), error)
             if (error /= 0) then
                 deallocate(fock_ao, v_nonlinear_ao)
                 return
@@ -379,21 +475,19 @@ module otr_arh
                      v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
             do i = 1, n_list
                 v_nonlinear_diff(:, :, :, i) = &
-                    arh_object%v_nonlinear_list(:, :, :, i) - &
-                    arh_object%v_nonlinear_oao
-                v_linear_diff(:, :, :, i) = &
-                    arh_object%fock_list(:, :, :, i) - arh_object%fock_oao - &
-                    v_nonlinear_diff(:, :, :, i)
+                    arh_object%v_nonlinear_list(:, :, :, i) - arh_object%v_nonlinear_oao
+                v_linear_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
+                                            arh_object%fock_oao - &
+                                            v_nonlinear_diff(:, :, :, i)
             end do
 
             ! factorize the same history for the non-linear part, which can only be
             ! done once its response is known since the error in that response sets
             ! the shortest residual a direction has to contribute
             keep_nonlinear = history_step_mask(dm_diff)
-            min_residual = &
-                resolvable_residual(reshape(dm_diff, [n_ao * n_ao, n_list]), &
-                                    reshape(v_nonlinear_diff, &
-                                            [n_ao * n_ao, n_list]), keep_nonlinear)
+            min_residual = resolvable_residual( &
+                reshape(dm_diff, [n_ao * n_ao, n_list]), &
+                reshape(v_nonlinear_diff, [n_ao * n_ao, n_list]), keep_nonlinear)
             call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_list]), &
                                    chol_nonlinear, map_nonlinear, n_acc_nonlinear, &
                                    keep_nonlinear, min_residual)
@@ -419,10 +513,9 @@ module otr_arh
                 call cache_history_dirs(v_linear_diff, arh_object%dm_oao, n_list, &
                                         arh_object%n_param, map, chol, &
                                         arh_object%linear_potential_dirs)
-                call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, n_list, &
-                                        arh_object%n_param, map_nonlinear, &
-                                        chol_nonlinear, &
-                                        arh_object%nonlinear_potential_dirs)
+                call cache_history_dirs( &
+                    v_nonlinear_diff, arh_object%dm_oao, n_list, arh_object%n_param, &
+                    map_nonlinear, chol_nonlinear, arh_object%nonlinear_potential_dirs)
             ! ARH and related methods
             else
                 ! cache the packed history-projection directions the low-rank Hessian 
@@ -448,11 +541,10 @@ module otr_arh
                 ! congruence-transformed into its own orthonormalized S-basis
                 if (arh_object%settings%arh_type == "ms_sp" .or. &
                     arh_object%settings%arh_type == "ms_psb") then
-                    arh_object%a_sym = build_a_transformed(dm_diff, v_linear_diff, &
-                                                           map, chol)
-                    arh_object%a_sym_nonlinear = &
-                        build_a_transformed(dm_diff, v_nonlinear_diff, map_nonlinear, &
-                                            chol_nonlinear)
+                    arh_object%a_sym = &
+                        build_a_transformed(dm_diff, v_linear_diff, map, chol)
+                    arh_object%a_sym_nonlinear = build_a_transformed( &
+                        dm_diff, v_nonlinear_diff, map_nonlinear, chol_nonlinear)
                 end if
                 deallocate(v_nonlinear_diff, v_linear_diff)
             end if
@@ -466,7 +558,7 @@ module otr_arh
         grad = arh_object%grad
         h_diag = arh_object%h_diag
         hess_x_funptr => hess_x_arh
-        
+
     end subroutine update_orbs_arh_cs
 
     subroutine update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
@@ -490,15 +582,13 @@ module otr_arh
         real(rp) :: min_residual
         integer(ip), allocatable :: map1_nl(:), map2_nl(:), map_comb_nl(:)
         logical, allocatable :: keep_nonlinear(:)
-        real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :), &
-                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
-                                 v_nonlinear_ao(:, :, :), dm_diff(:, :, :, :), &
-                                 v_same_spin_diff(:, :, :, :), &
-                                 v_opposite_spin_diff(:, :, :, :), &
-                                 v_nonlinear_diff(:, :, :, :), v_zero(:, :, :, :), &
-                                 chol1(:, :), chol2(:, :), chol1_nl(:, :), &
-                                 chol2_nl(:, :), chol_comb(:, :), chol_comb_nl(:, :), &
-                                 chol_nl(:, :)
+        real(rp), allocatable :: &
+            fock_ao(:, :, :), fock_oao(:, :, :), v_same_spin_ao(:, :, :), &
+            v_opposite_spin_ao(:, :, :), v_nonlinear_ao(:, :, :), dm_diff(:, :, :, :), &
+            v_same_spin_diff(:, :, :, :), v_opposite_spin_diff(:, :, :, :), &
+            v_nonlinear_diff(:, :, :, :), v_zero(:, :, :, :), chol1(:, :), &
+            chol2(:, :), chol1_nl(:, :), chol2_nl(:, :), chol_comb(:, :), &
+            chol_comb_nl(:, :), chol_nl(:, :)
         integer(ip), allocatable :: map1(:), map2(:), map_comb(:), map_nl(:)
 
         external :: dgemm
@@ -508,9 +598,9 @@ module otr_arh
 
         ! check if orbitals are actually rotated
         if ((sum(abs(kappa)) > 0.0_rp) .or. &
-            (abs(arh_object%energy) <= numerical_zero) .or. &
-            (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
-                    .and. (allocated(arh_object%dm_list))))) then
+            (abs(arh_object%energy) <= numerical_zero) .or. (.not. ( &
+                allocated(oao_object%grad) .and. allocated(oao_object%h_diag) .and. &
+                (allocated(arh_object%dm_list))))) then
             ! number of AOs
             n_ao = arh_object%n_ao
 
@@ -519,11 +609,15 @@ module otr_arh
 
             ! update list of density and potential matrices
             if (allocated(arh_object%dm_list)) then
-                call prepend(arh_object%dm_list, arh_object%dm_oao)
-                call prepend(arh_object%v_same_spin_list, arh_object%v_same_spin_oao)
-                call prepend(arh_object%v_opposite_spin_list, &
-                             arh_object%v_opposite_spin_oao)
-                call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear_oao)
+                if (.not. density_in_history(arh_object%dm_oao)) then
+                    call prepend(arh_object%dm_list, arh_object%dm_oao)
+                    call prepend(arh_object%v_same_spin_list, &
+                                 arh_object%v_same_spin_oao)
+                    call prepend(arh_object%v_opposite_spin_list, &
+                                 arh_object%v_opposite_spin_oao)
+                    call prepend(arh_object%v_nonlinear_list, &
+                                 arh_object%v_nonlinear_oao)
+                end if
             else
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
                          arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
@@ -545,9 +639,9 @@ module otr_arh
                      v_same_spin_ao(n_ao, n_ao, n_particle), &
                      v_opposite_spin_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
-            call arh_object%update_dm_os(arh_object%dm_ao, arh_object%energy, fock_ao, &
-                                         v_same_spin_ao, v_opposite_spin_ao, &
-                                         v_nonlinear_ao, error)
+            call arh_object%evaluate_dm_os(arh_object%dm_ao, arh_object%energy, &
+                                           fock_ao, v_same_spin_ao, &
+                                           v_opposite_spin_ao, v_nonlinear_ao, error)
             if (error /= 0) then
                 deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao, v_nonlinear_ao)
                 return
@@ -610,8 +704,7 @@ module otr_arh
                                            [n_ao * n_ao, n_list]), chol1, map1, n_acc1)
             call factorize_history(reshape(dm_diff(:, :, 2, :), &
                                            [n_ao * n_ao, n_list]), chol2, map2, n_acc2)
-            call combine_channels(chol1, map1, chol2, map2, n_list, chol_comb, &
-                                 map_comb)
+            call combine_channels(chol1, map1, chol2, map2, n_list, chol_comb, map_comb)
 
             ! keep the same-spin and opposite-spin potential differences separate 
             ! from the non-linear one since the former are exact at any distance from 
@@ -622,11 +715,9 @@ module otr_arh
                      v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
             do i = 1, n_list
                 v_same_spin_diff(:, :, :, i) = &
-                    arh_object%v_same_spin_list(:, :, :, i) - &
-                    arh_object%v_same_spin_oao
+                    arh_object%v_same_spin_list(:, :, :, i) - arh_object%v_same_spin_oao
                 v_nonlinear_diff(:, :, :, i) = &
-                    arh_object%v_nonlinear_list(:, :, :, i) - &
-                    arh_object%v_nonlinear_oao
+                    arh_object%v_nonlinear_list(:, :, :, i) - arh_object%v_nonlinear_oao
             end do
 
             ! MS-SR1
@@ -635,24 +726,21 @@ module otr_arh
                 ! linear part: get spin-separated multisecant SR1 matrix for which 
                 ! separation is exact since Coulomb and exact exchange are linear in 
                 ! the density matrix
-                call get_ms_a_inv_os_linear(dm_diff, v_same_spin_diff, &
-                                            v_opposite_spin_diff, map_comb, chol_comb, &
-                                            arh_object%a_inv, n_ao, &
-                                            arh_object%settings, error)
+                call get_ms_a_inv_os_linear( &
+                    dm_diff, v_same_spin_diff, v_opposite_spin_diff, map_comb, &
+                    chol_comb, arh_object%a_inv, n_ao, arh_object%settings, error)
                 if (error /= 0) return
                 ! non-linear part: get spin-combined multisecant SR1 matrix; the
                 ! non-linear response mixes both channels at once, so this needs its
                 ! own, separate combined-flat factorization of the same history
                 keep_nonlinear = history_step_mask(dm_diff)
-                min_residual = &
-                    resolvable_residual(reshape(dm_diff, &
-                                                [n_ao * n_ao * n_particle, n_list]), &
-                                        reshape(v_nonlinear_diff, &
-                                                [n_ao * n_ao * n_particle, n_list]), &
-                                        keep_nonlinear)
-                call factorize_history(reshape(dm_diff, [n_ao * n_ao * n_particle, &
-                                                         n_list]), chol_nl, map_nl, &
-                                       n_acc_nl, keep_nonlinear, min_residual)
+                min_residual = resolvable_residual( &
+                    reshape(dm_diff, [n_ao * n_ao * n_particle, n_list]), &
+                    reshape(v_nonlinear_diff, [n_ao * n_ao * n_particle, n_list]), &
+                    keep_nonlinear)
+                call factorize_history( &
+                    reshape(dm_diff, [n_ao * n_ao * n_particle, n_list]), chol_nl, &
+                    map_nl, n_acc_nl, keep_nonlinear, min_residual)
                 call get_ms_a_inv(dm_diff, v_nonlinear_diff, map_nl, chol_nl, &
                                   arh_object%a_inv_comb, arh_object%settings, error)
                 if (error /= 0) return
@@ -663,8 +751,8 @@ module otr_arh
                 ! directions need no channel-splitting; rebased into the
                 ! orthonormalized S-basis
                 call cache_combined_channel_dirs( &
-                    v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, &
-                    n_list, arh_object%n_param, n_particle, map_comb, chol_comb, &
+                    v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, n_list, &
+                    arh_object%n_param, n_particle, map_comb, chol_comb, &
                     arh_object%linear_potential_dirs)
                 call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, n_list, &
                                         arh_object%n_param, map_nl, chol_nl, &
@@ -682,22 +770,20 @@ module otr_arh
                 ! either channel is a functional of both spin densities and its
                 ! staleness is therefore set by the total step
                 keep_nonlinear = history_step_mask(dm_diff)
-                min_residual = &
-                    resolvable_residual(reshape(dm_diff(:, :, 1, :), &
-                                                [n_ao * n_ao, n_list]), &
-                                        reshape(v_nonlinear_diff(:, :, 1, :), &
-                                                [n_ao * n_ao, n_list]), keep_nonlinear)
-                call factorize_history(reshape(dm_diff(:, :, 1, :), &
-                                               [n_ao * n_ao, n_list]), chol1_nl, &
-                                       map1_nl, n_acc1_nl, keep_nonlinear, min_residual)
-                min_residual = &
-                    resolvable_residual(reshape(dm_diff(:, :, 2, :), &
-                                                [n_ao * n_ao, n_list]), &
-                                        reshape(v_nonlinear_diff(:, :, 2, :), &
-                                                [n_ao * n_ao, n_list]), keep_nonlinear)
-                call factorize_history(reshape(dm_diff(:, :, 2, :), &
-                                               [n_ao * n_ao, n_list]), chol2_nl, &
-                                       map2_nl, n_acc2_nl, keep_nonlinear, min_residual)
+                min_residual = resolvable_residual( &
+                    reshape(dm_diff(:, :, 1, :), [n_ao * n_ao, n_list]), &
+                    reshape(v_nonlinear_diff(:, :, 1, :), [n_ao * n_ao, n_list]), &
+                    keep_nonlinear)
+                call factorize_history( &
+                    reshape(dm_diff(:, :, 1, :), [n_ao * n_ao, n_list]), chol1_nl, &
+                    map1_nl, n_acc1_nl, keep_nonlinear, min_residual)
+                min_residual = resolvable_residual( &
+                    reshape(dm_diff(:, :, 2, :), [n_ao * n_ao, n_list]), &
+                    reshape(v_nonlinear_diff(:, :, 2, :), [n_ao * n_ao, n_list]), &
+                    keep_nonlinear)
+                call factorize_history( &
+                    reshape(dm_diff(:, :, 2, :), [n_ao * n_ao, n_list]), chol2_nl, &
+                    map2_nl, n_acc2_nl, keep_nonlinear, min_residual)
                 call combine_channels(chol1_nl, map1_nl, chol2_nl, map2_nl, n_list, &
                                       chol_comb_nl, map_comb_nl)
 
@@ -708,10 +794,9 @@ module otr_arh
                 call cache_channel_split_dirs(dm_diff, arh_object%dm_oao, n_list, &
                                               arh_object%n_param, n_particle, &
                                               map_comb, chol_comb, arh_object%dm_dirs)
-                call cache_channel_split_dirs(dm_diff, arh_object%dm_oao, n_list, &
-                                              arh_object%n_param, n_particle, &
-                                              map_comb_nl, chol_comb_nl, &
-                                              arh_object%dm_dirs_nonlinear)
+                call cache_channel_split_dirs( &
+                    dm_diff, arh_object%dm_oao, n_list, arh_object%n_param, &
+                    n_particle, map_comb_nl, chol_comb_nl, arh_object%dm_dirs_nonlinear)
                 if (arh_object%settings%arh_type /= "ms_sp") then
                     call cache_combined_channel_dirs( &
                         v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, &
@@ -745,7 +830,7 @@ module otr_arh
         grad = arh_object%grad
         h_diag = arh_object%h_diag
         hess_x_funptr => hess_x_arh
-        
+
     end subroutine update_orbs_arh_os
 
     subroutine hess_x_arh(x, hess_x, error)
@@ -781,9 +866,9 @@ module otr_arh
         ! get static part
         allocate(hess_x_full(n_ao, n_ao, n_particle))
         do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, arh_object%fock_vv(:, :, i) &
-                       - arh_object%fock_oo(:, :, i), n_ao, x_full(:, :, i), n_ao, &
-                       0.0_rp, hess_x_full(:, :, i), n_ao)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, &
+                       arh_object%fock_vv(:, :, i) - arh_object%fock_oo(:, :, i), &
+                       n_ao, x_full(:, :, i), n_ao, 0.0_rp, hess_x_full(:, :, i), n_ao)
             hess_x_full(:, :, i) = hess_x_full(:, :, i) - &
                                    transpose(hess_x_full(:, :, i))
         end do
@@ -810,9 +895,8 @@ module otr_arh
             call dgemv("T", size(x, kind=ip), n_dirs, 1.0_rp, &
                        arh_object%projection_dirs, size(x, kind=ip), x, 1_ip, 0.0_rp, &
                        projected_x, 1_ip)
-            call dgemv("N", n_dirs, n_dirs, 1.0_rp, &
-                       arh_object%coupling_matrix, n_dirs, projected_x, 1_ip, 0.0_rp, &
-                       coupled_x, 1_ip)
+            call dgemv("N", n_dirs, n_dirs, 1.0_rp, arh_object%coupling_matrix, &
+                       n_dirs, projected_x, 1_ip, 0.0_rp, coupled_x, 1_ip)
             call dgemv("N", size(hess_x, kind=ip), n_dirs, 1.0_rp, &
                        arh_object%expansion_dirs, size(hess_x, kind=ip), coupled_x, &
                        1_ip, 1.0_rp, hess_x, 1_ip)
@@ -849,8 +933,8 @@ module otr_arh
         real(rp), allocatable :: rotated_x(:), eigval_pairs(:), scaled_x(:), &
                                  rotated_expansion(:, :), rotated_projection(:, :), &
                                  weighted_projection(:, :), dirs_overlap(:, :), &
-                                 bracket_matrix(:, :), projected_x(:), &
-                                 bracket_rhs(:), bracket_solution(:), correction(:)
+                                 bracket_matrix(:, :), projected_x(:), bracket_rhs(:), &
+                                 bracket_solution(:), correction(:)
         integer(ip), allocatable :: ipiv(:)
         external :: dgemv, dgemm, dgesv
 
@@ -1118,7 +1202,7 @@ module otr_arh
         !     G_low_rank = expansion_dirs * coupling_matrix * transpose(projection_dirs)
         !
         ! by constructing expansion_dirs, coupling_matrix, and projection_dirs
-        
+
         ! the response is defined through Frobenius inner products
         ! <history_k, delta_dm(x)> of a history matrix with the density response, yet
         ! the whole correction can be expressed on packed parameter vectors alone:
@@ -1204,8 +1288,8 @@ module otr_arh
             arh_object%expansion_dirs(:, :n_linear) = arh_object%dm_dirs
             arh_object%expansion_dirs(:, n_linear + 1:2 * n_linear) = &
                 arh_object%linear_potential_dirs
-            arh_object%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + n_nonlinear) &
-                = arh_object%dm_dirs_nonlinear
+            arh_object%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + &
+                                      n_nonlinear) = arh_object%dm_dirs_nonlinear
             arh_object%expansion_dirs(:, 2 * n_linear + n_nonlinear + 1:) = &
                 arh_object%nonlinear_potential_dirs
             ! the metric scaling collapses in the orthonormalized S-basis
@@ -1215,9 +1299,8 @@ module otr_arh
                 arh_object%coupling_matrix(n_linear + i, i) = 4.0_rp * shell_scale
             end do
             do i = 1, n_nonlinear
-                arh_object%coupling_matrix(2 * n_linear + i, &
-                                           2 * n_linear + n_nonlinear + i) = &
-                    4.0_rp * shell_scale
+                arh_object%coupling_matrix(2 * n_linear + i, 2 * n_linear + &
+                                           n_nonlinear + i) = 4.0_rp * shell_scale
                 arh_object%coupling_matrix(2 * n_linear + n_nonlinear + i, &
                                            2 * n_linear + i) = 4.0_rp * shell_scale
             end do
@@ -1237,13 +1320,13 @@ module otr_arh
             arh_object%expansion_dirs(:, :n_linear) = arh_object%dm_dirs
             arh_object%expansion_dirs(:, n_linear + 1:2 * n_linear) = &
                 arh_object%linear_potential_dirs
-            arh_object%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + n_nonlinear) &
-                = arh_object%dm_dirs_nonlinear
+            arh_object%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + &
+                                      n_nonlinear) = arh_object%dm_dirs_nonlinear
             arh_object%expansion_dirs(:, 2 * n_linear + n_nonlinear + 1:) = &
                 arh_object%nonlinear_potential_dirs
             arh_object%coupling_matrix = 0.0_rp
-            arh_object%coupling_matrix(:n_linear, :n_linear) = &
-                -8.0_rp * shell_scale * arh_object%a_sym
+            arh_object%coupling_matrix(:n_linear, :n_linear) = -8.0_rp * shell_scale * &
+                                                               arh_object%a_sym
             arh_object%coupling_matrix(2 * n_linear + 1:2 * n_linear + n_nonlinear, &
                                        2 * n_linear + 1:2 * n_linear + n_nonlinear) = &
                 -8.0_rp * shell_scale * arh_object%a_sym_nonlinear
@@ -1254,9 +1337,8 @@ module otr_arh
                 arh_object%coupling_matrix(n_linear + i, i) = 8.0_rp * shell_scale
             end do
             do i = 1, n_nonlinear
-                arh_object%coupling_matrix(2 * n_linear + i, &
-                                           2 * n_linear + n_nonlinear + i) = &
-                    8.0_rp * shell_scale
+                arh_object%coupling_matrix(2 * n_linear + i, 2 * n_linear + &
+                                           n_nonlinear + i) = 8.0_rp * shell_scale
                 arh_object%coupling_matrix(2 * n_linear + n_nonlinear + i, &
                                            2 * n_linear + i) = 8.0_rp * shell_scale
             end do
@@ -1279,8 +1361,7 @@ module otr_arh
             arh_object%expansion_dirs(:, n_linear + 1:) = &
                 arh_object%nonlinear_potential_dirs
             arh_object%projection_dirs(:, :n_linear) = arh_object%dm_dirs
-            arh_object%projection_dirs(:, n_linear + 1:) = &
-                arh_object%dm_dirs_nonlinear
+            arh_object%projection_dirs(:, n_linear + 1:) = arh_object%dm_dirs_nonlinear
             arh_object%coupling_matrix = 0.0_rp
             ! the metric scaling collapses in the orthonormalized S-basis
             do i = 1, n_total
@@ -1315,8 +1396,8 @@ module otr_arh
         ! dimensions
         n_dm = size(dm_diff, 4)
         flat_len = size(dm_diff, 1) * size(dm_diff, 2) * size(dm_diff, 3)
-        call dgemm("T", "N", n_dm, n_dm, flat_len, 1.0_rp, dm_diff, flat_len, &
-                   v_diff, flat_len, 0.0_rp, a, n_dm)
+        call dgemm("T", "N", n_dm, n_dm, flat_len, 1.0_rp, dm_diff, flat_len, v_diff, &
+                   flat_len, 0.0_rp, a, n_dm)
 
         ! symmetrize A
         a = 0.5_rp * (a + transpose(a))
@@ -1366,10 +1447,10 @@ module otr_arh
         allocate(a_same(n_diff, n_diff, 2), a_opp(n_diff, n_diff, 2))
 
         do j = 1, 2
-            call build_a_part(reshape(dm_diff(:, :, j, :), &
-                                      [n_ao, n_ao, 1_ip, n_diff]), &
-                              reshape(v_same_linear(:, :, j, :), &
-                                      [n_ao, n_ao, 1_ip, n_diff]), a_same(:, :, j))
+            call build_a_part( &
+                reshape(dm_diff(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff]), &
+                reshape(v_same_linear(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff]), &
+                a_same(:, :, j))
             call dgemm("T", "N", n_diff, n_diff, n_ao * n_ao, 1.0_rp, &
                        reshape(dm_diff(:, :, j, :), [n_ao * n_ao, n_diff]), &
                        n_ao * n_ao, reshape(v_opp(:, :, j, :), [n_ao * n_ao, n_diff]), &
@@ -1400,8 +1481,7 @@ module otr_arh
         ! per-channel diagonal blocks only, and the result is congruence-transformed to
         ! the orthonormalized, rank-independent S-basis
         !
-        real(rp), intent(in) :: dm_diff(:, :, :, :), v_nonlinear(:, :, :, :), &
-                                chol(:, :)
+        real(rp), intent(in) :: dm_diff(:, :, :, :), v_nonlinear(:, :, :, :), chol(:, :)
         integer(ip), intent(in) :: n_ao, map(:)
         real(rp), allocatable :: a_block(:, :)
 
@@ -1411,10 +1491,10 @@ module otr_arh
         n_diff = size(dm_diff, 4)
         allocate(a_same(n_diff, n_diff, 2))
         do j = 1, 2
-            call build_a_part(reshape(dm_diff(:, :, j, :), &
-                                      [n_ao, n_ao, 1_ip, n_diff]), &
-                              reshape(v_nonlinear(:, :, j, :), &
-                                      [n_ao, n_ao, 1_ip, n_diff]), a_same(:, :, j))
+            call build_a_part( &
+                reshape(dm_diff(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff]), &
+                reshape(v_nonlinear(:, :, j, :), [n_ao, n_ao, 1_ip, n_diff]), &
+                a_same(:, :, j))
         end do
 
         allocate(a_full(2 * n_diff, 2 * n_diff))
@@ -1749,9 +1829,8 @@ module otr_arh
             rebased(:, j) = dirs(:, map(j))
         end do
 
-        if (n_accepted > 0) &
-            call dtrsm("R", "U", "N", "N", n_param, n_accepted, 1.0_rp, chol, &
-                       n_accepted, rebased, n_param)
+        if (n_accepted > 0) call dtrsm("R", "U", "N", "N", n_param, n_accepted, &
+                                       1.0_rp, chol, n_accepted, rebased, n_param)
 
     end function rebase_dirs
 
@@ -1924,9 +2003,8 @@ module otr_arh
                                       v_opposite_spin_diff(:, :, 1, k), 1_ip)
                 a(n_dm + i, k) = ddot(n_ao * n_ao, dm_diff(:, :, 2, i), 1_ip, &
                                       v_opposite_spin_diff(:, :, 2, k), 1_ip)
-                a(n_dm + i, n_dm + k) = ddot(n_ao * n_ao, dm_diff(:, :, 2, i), &
-                                             1_ip, v_same_spin_diff(:, :, 2, k), &
-                                             1_ip)
+                a(n_dm + i, n_dm + k) = ddot(n_ao * n_ao, dm_diff(:, :, 2, i), 1_ip, &
+                                             v_same_spin_diff(:, :, 2, k), 1_ip)
             end do
         end do
 
@@ -2073,6 +2151,34 @@ module otr_arh
         deallocate(scaled)
 
     end function spectral_to_dense
+
+    function density_in_history(dm_oao) result(in_history)
+        !
+        ! this function reports whether a density is already held in the history
+        !
+        use opentrustregion, only: numerical_zero
+
+        real(rp), intent(in) :: dm_oao(:, :, :)
+        logical :: in_history
+
+        integer(ip) :: i
+        real(rp) :: dm_scale
+
+        in_history = .false.
+        if (.not. allocated(arh_object%dm_list)) return
+
+        ! judge the difference against the size of the density, so that the test is a
+        ! relative one
+        dm_scale = max(maxval(abs(dm_oao)), numerical_zero)
+        do i = 1, size(arh_object%dm_list, 4)
+            if (maxval(abs(arh_object%dm_list(:, :, :, i) - dm_oao)) <= &
+                numerical_zero * dm_scale) then
+                in_history = .true.
+                return
+            end if
+        end do
+
+    end function density_in_history
 
     subroutine prepend(list, new_array)
         !

@@ -53,6 +53,7 @@ fortran_tests = {
         "combine_channels",
         "congruence_transform",
         "cross_symmetrize",
+        "density_in_history",
         "factorize_history",
         "get_low_rank_hess_factors",
         "get_ms_a_inv",
@@ -62,6 +63,8 @@ fortran_tests = {
         "init_arh_settings",
         "inv_hess_x_arh",
         "median",
+        "obj_func_arh_cs",
+        "obj_func_arh_os",
         "precond_arh",
         "prepend",
         "rebase_dirs",
@@ -78,13 +81,18 @@ fortran_tests = {
         "arh_factory_c_wrapper",
         "assign_arh_c_f",
         "assign_arh_f_c",
+        "evaluate_dm_cs_f_wrapper",
+        "evaluate_dm_os_f_wrapper",
         "hess_x_arh_c_wrapper",
         "init_arh_settings_c",
-        "update_dm_cs_f_wrapper",
-        "update_dm_os_f_wrapper",
         "update_orbs_arh_c_wrapper",
     ],
 }
+
+# multiples of the density matrix the mock density matrix evaluating functions return
+# for each optional output, in the order of their argument lists
+evaluate_dm_cs_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_cs_factors"))
+evaluate_dm_os_factors = list((c_real * 4).in_dll(lib, "test_evaluate_dm_os_factors"))
 
 
 @add_tests
@@ -166,28 +174,34 @@ class ARHPyInterfaceTests(unittest.TestCase):
     assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
     equal_settings_to_ref = PyInterfaceTests.equal_settings_to_ref
 
-    mock_get_energy = OAOPyInterfaceTests.mock_get_energy
-
-    def mock_update_dm_cs(self, dm_ao, fock, v_nonlinear):
+    def mock_evaluate_dm_cs(self, dm_ao, fock, v_nonlinear):
         """
-        this function is a mock function for the density matrix updating function with
-        a separate non-linear potential contribution for the closed-shell case
+        this function is a mock function for the density matrix evaluating function
+        with a separate non-linear potential contribution for the closed-shell case
         """
-        fock[:] = 2 * dm_ao
-        v_nonlinear[:] = 3 * dm_ao
+        if fock is not None:
+            fock[:] = evaluate_dm_cs_factors[0] * dm_ao
+        if v_nonlinear is not None:
+            v_nonlinear[:] = evaluate_dm_cs_factors[1] * dm_ao
 
         return np.sum(dm_ao)
 
-    def mock_update_dm_os(self, dm_ao, fock, v_same_spin, v_opposite_spin, v_nonlinear):
+    def mock_evaluate_dm_os(
+        self, dm_ao, fock, v_same_spin, v_opposite_spin, v_nonlinear
+    ):
         """
-        this function is a mock function for the density matrix updating function with
-        separate same- and opposite spin and non-linear contributions for the
+        this function is a mock function for the density matrix evaluating function
+        with separate same- and opposite spin and non-linear contributions for the
         open-shell case
         """
-        fock[:] = 2 * dm_ao
-        v_same_spin[:] = 3 * dm_ao
-        v_opposite_spin[:] = 4 * dm_ao
-        v_nonlinear[:] = 5 * dm_ao
+        if fock is not None:
+            fock[:] = evaluate_dm_os_factors[0] * dm_ao
+        if v_same_spin is not None:
+            v_same_spin[:] = evaluate_dm_os_factors[1] * dm_ao
+        if v_opposite_spin is not None:
+            v_opposite_spin[:] = evaluate_dm_os_factors[2] * dm_ao
+        if v_nonlinear is not None:
+            v_nonlinear[:] = evaluate_dm_os_factors[3] * dm_ao
 
         return np.sum(dm_ao)
 
@@ -197,9 +211,9 @@ class ARHPyInterfaceTests(unittest.TestCase):
     @patch("pyopentrustregion.python_interface.lib.arh_factory", lib.mock_arh_factory)
     def test_arh_factory_py_interface(self):
         """
-        this function tests the ARH factory python interface (only tests if dm_ao,
-        mock_get_energy and mock_update_dm_os are passed correctly for the open-shell
-        case since everything else is the same in the closed-shell case)
+        this function tests the ARH factory python interface (only tests whether dm_ao
+        and mock_evaluate_dm_os are passed correctly for the open-shell case since
+        everything else is the same in the closed-shell case)
         """
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
 
@@ -226,8 +240,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 ao_overlap,
                 n_particle,
                 n_ao,
-                self.mock_get_energy,
-                self.mock_update_dm_cs,
+                self.mock_evaluate_dm_cs,
                 settings,
             )
         )
@@ -395,8 +408,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             ao_overlap,
             n_particle,
             n_ao,
-            self.mock_get_energy,
-            self.mock_update_dm_os,
+            self.mock_evaluate_dm_os,
             settings,
         )
 

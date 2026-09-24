@@ -21,28 +21,6 @@ module otr_oao
         oao_settings_type(logger = null(), initialized = .true., verbose = 0)
 
     abstract interface
-        function get_energy_cs_type(dm, error) result(energy)
-            import :: rp, ip
-
-            real(rp), intent(in), target, contiguous :: dm(:, :)
-            integer(ip), intent(out) :: error
-
-            real(rp) :: energy
-        end function get_energy_cs_type
-    end interface
-
-    abstract interface
-        function get_energy_os_type(dm, error) result(energy)
-            import :: rp, ip
-
-            real(rp), intent(in), target :: dm(:, :, :)
-            integer(ip), intent(out) :: error
-
-            real(rp) :: energy
-        end function get_energy_os_type
-    end interface
-
-    abstract interface
         subroutine get_response_cs_type(dm, response, error)
             import :: rp, ip
 
@@ -63,27 +41,29 @@ module otr_oao
     end interface
 
     abstract interface
-        subroutine update_dm_cs_type(dm, energy, fock, get_response_funptr, error)
+        subroutine evaluate_dm_cs_type(dm, energy, fock, get_response_funptr, error)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), target, contiguous :: fock(:, :)
-            procedure(get_response_cs_type), intent(out), pointer :: get_response_funptr
+            real(rp), intent(out), optional, target, contiguous :: fock(:, :)
+            procedure(get_response_cs_type), intent(out), optional, pointer :: &
+                get_response_funptr
             integer(ip), intent(out) :: error
-        end subroutine update_dm_cs_type
+        end subroutine evaluate_dm_cs_type
     end interface
 
     abstract interface
-        subroutine update_dm_os_type(dm, energy, fock, get_response_funptr, error)
+        subroutine evaluate_dm_os_type(dm, energy, fock, get_response_funptr, error)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), target :: fock(:, :, :)
-            procedure(get_response_os_type), intent(out), pointer :: get_response_funptr
+            real(rp), intent(out), optional, target :: fock(:, :, :)
+            procedure(get_response_os_type), intent(out), optional, pointer :: &
+                get_response_funptr
             integer(ip), intent(out) :: error
-        end subroutine update_dm_os_type
+        end subroutine evaluate_dm_os_type
     end interface
 
     type :: oao_type
@@ -95,11 +75,9 @@ module otr_oao
                                  fock_oo(:, :, :), fock_vv(:, :, :), grad(:), &
                                  h_diag(:), hess_eigvecs(:, :, :), hess_eigvals(:, :)
         logical :: response_stale = .false., hess_eigen_stale = .true.
-        procedure(get_energy_os_type), pointer, nopass :: get_energy_os => null()
-        procedure(update_dm_os_type), pointer, nopass :: update_dm_os => null()
+        procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
         procedure(get_response_os_type), pointer, nopass :: get_response_os => null()
-        procedure(get_energy_cs_type), pointer, nopass :: get_energy_cs => null()
-        procedure(update_dm_cs_type), pointer, nopass :: update_dm_cs => null()
+        procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
         procedure(get_response_cs_type), pointer, nopass :: get_response_cs => null()
     end type oao_type
 
@@ -116,13 +94,12 @@ module otr_oao
     procedure(get_extra_trial_vectors_type), pointer :: &
         get_extra_trial_vectors_oao_ptr => get_extra_trial_vectors_oao
 
-    contains
+contains
 
-    subroutine oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, &
-                              update_dm_cs, obj_func_oao_funptr, &
-                              update_orbs_oao_funptr, precond_oao_funptr, &
-                              precond_pd_oao_funptr, project_oao_funptr, &
-                              get_extra_trial_vectors_oao_funptr, error, settings)
+    subroutine oao_factory_cs( &
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, obj_func_oao_funptr, &
+        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
+        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function returns a modified OAO orbital updating function for the
         ! closed-shell case
@@ -130,8 +107,7 @@ module otr_oao
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_cs
-        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_cs
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
@@ -154,8 +130,7 @@ module otr_oao
         nullify(dm_ao_3d)
 
         ! set pointers to functions
-        oao_object%get_energy_cs => get_energy_cs
-        oao_object%update_dm_cs => update_dm_cs
+        oao_object%evaluate_dm_cs => evaluate_dm_cs
 
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
@@ -167,11 +142,10 @@ module otr_oao
 
     end subroutine oao_factory_cs
 
-    subroutine oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, &
-                              update_dm_os, obj_func_oao_funptr, &
-                              update_orbs_oao_funptr, precond_oao_funptr, &
-                              precond_pd_oao_funptr, project_oao_funptr, &
-                              get_extra_trial_vectors_oao_funptr, error, settings)
+    subroutine oao_factory_os( &
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, obj_func_oao_funptr, &
+        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
+        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
         !
         ! this function returns a modified OAO orbital updating function for the
         ! open-shell case
@@ -179,8 +153,7 @@ module otr_oao
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_os_type), intent(in), pointer :: get_energy_os
-        procedure(update_dm_os_type), intent(in), pointer :: update_dm_os
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(precond_type), intent(out), pointer :: precond_oao_funptr
@@ -199,8 +172,7 @@ module otr_oao
         if (error /= 0) return
 
         ! set pointers to functions
-        oao_object%get_energy_os => get_energy_os
-        oao_object%update_dm_os => update_dm_os
+        oao_object%evaluate_dm_os => evaluate_dm_os
 
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
@@ -239,9 +211,9 @@ module otr_oao
 
         ! check if object has not been initialized or has been initialize with wrong 
         ! settings
-        if (.not. initialized .or. (initialized .and. &
-                                    (oao_object%n_particle /= n_particle .or. &
-                                     oao_object%n_ao /= n_ao))) then
+        if (.not. initialized .or. &
+            (initialized .and. &
+             (oao_object%n_particle /= n_particle .or. oao_object%n_ao /= n_ao))) then
             ! deallocate arrays if they are already allocated
             if (allocated(oao_object%s_sqrt)) deallocate(oao_object%s_sqrt)
             if (allocated(oao_object%s_inv_sqrt)) deallocate(oao_object%s_inv_sqrt)
@@ -321,11 +293,11 @@ module otr_oao
                           error)
         if (error /= 0) return
 
-        ! calculate mean-field energy
-        if (associated(oao_object%get_energy_os)) then
-            energy = oao_object%get_energy_os(rot_dm_ao, error)
+        ! calculate the mean-field energy
+        if (associated(oao_object%evaluate_dm_os)) then
+            call oao_object%evaluate_dm_os(rot_dm_ao, energy, error=error)
         else
-            energy = oao_object%get_energy_cs(rot_dm_ao(:, :, 1), error)
+            call oao_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error)
         end if
         if (error /= 0) return
 
@@ -354,10 +326,10 @@ module otr_oao
         ! check if orbitals are actually rotated
         if ((sum(abs(kappa)) > 0.0_rp) .or. &
             (abs(oao_object%energy) <= numerical_zero) .or. &
-            oao_object%response_stale .or. &
-            (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag) &
-                    .and. (associated(oao_object%get_response_cs) .or. &
-                           associated(oao_object%get_response_os))))) then
+            oao_object%response_stale .or. (.not. ( &
+                allocated(oao_object%grad) .and. allocated(oao_object%h_diag) .and. &
+                (associated(oao_object%get_response_cs) .or. &
+                 associated(oao_object%get_response_os))))) then
             ! number of AOs
             n_ao = oao_object%n_ao
 
@@ -371,13 +343,14 @@ module otr_oao
 
             ! get energy, Fock matrix, and response function
             allocate(fock_ao(n_ao, n_ao, n_particle))
-            if (associated(oao_object%update_dm_os)) then
-                call oao_object%update_dm_os(oao_object%dm_ao, oao_object%energy, &
-                                             fock_ao, oao_object%get_response_os, error)
+            if (associated(oao_object%evaluate_dm_os)) then
+                call oao_object%evaluate_dm_os(oao_object%dm_ao, oao_object%energy, &
+                                               fock_ao, oao_object%get_response_os, &
+                                               error)
             else
-                call oao_object%update_dm_cs(oao_object%dm_ao(:, :, 1), &
-                                             oao_object%energy, fock_ao(:, :, 1), &
-                                             oao_object%get_response_cs, error)
+                call oao_object%evaluate_dm_cs(oao_object%dm_ao(:, :, 1), &
+                                               oao_object%energy, fock_ao(:, :, 1), &
+                                               oao_object%get_response_cs, error)
             end if
             if (error /= 0) then
                 deallocate(fock_ao)
@@ -454,9 +427,9 @@ module otr_oao
         ! get static part
         allocate(hess_x_full(n_ao, n_ao, n_particle))
         do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, oao_object%fock_vv(:, :, i) &
-                       - oao_object%fock_oo(:, :, i), n_ao, x_full(:, :, i), n_ao, &
-                       0.0_rp, hess_x_full(:, :, i), n_ao)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, &
+                       oao_object%fock_vv(:, :, i) - oao_object%fock_oo(:, :, i), &
+                       n_ao, x_full(:, :, i), n_ao, 0.0_rp, hess_x_full(:, :, i), n_ao)
             hess_x_full(:, :, i) = hess_x_full(:, :, i) - &
                                    transpose(hess_x_full(:, :, i))
         end do
@@ -515,8 +488,7 @@ module otr_oao
         error = 0
 
         ! unpack vector
-        vector_full = unpack_asymm(vector, oao_object%n_particle, &
-                                   oao_object%n_ao)
+        vector_full = unpack_asymm(vector, oao_object%n_particle, oao_object%n_ao)
 
         ! project vector onto occupied-virtual and virtual-occupied subspace
         projected_vector_full = project_asymm(vector_full, oao_object%dm_oao)
@@ -907,23 +879,21 @@ module otr_oao
         integer(ip), intent(out) :: error
 
         real(rp) :: energy
-        real(rp), allocatable :: fock_ao(:, :, :)
 
         ! initialize error flag
         error = 0
 
-        ! rebuild response, the energy and Fock matrix are byproducts which are
-        ! discarded since the caller already holds them for the current density
-        allocate(fock_ao(oao_object%n_ao, oao_object%n_ao, oao_object%n_particle))
-        if (associated(oao_object%update_dm_os)) then
-            call oao_object%update_dm_os(oao_object%dm_ao, energy, fock_ao, &
-                                         oao_object%get_response_os, error)
+        ! rebuild response, the energy is discarded since the caller already holds it 
+        ! for the current density
+        if (associated(oao_object%evaluate_dm_os)) then
+            call oao_object%evaluate_dm_os( &
+                oao_object%dm_ao, energy, &
+                get_response_funptr=oao_object%get_response_os, error=error)
         else
-            call oao_object%update_dm_cs(oao_object%dm_ao(:, :, 1), energy, &
-                                         fock_ao(:, :, 1), &
-                                         oao_object%get_response_cs, error)
+            call oao_object%evaluate_dm_cs( &
+                oao_object%dm_ao(:, :, 1), energy, &
+                get_response_funptr=oao_object%get_response_cs, error=error)
         end if
-        deallocate(fock_ao)
         if (error /= 0) return
 
         ! the response callbacks were just rebuilt at the current density
@@ -931,8 +901,7 @@ module otr_oao
 
     end subroutine refresh_oao_response
 
-    subroutine rotate_dm_ao(kappa, n_particle, n_ao, rot_dm_ao, error, &
-                            rot_dm_oao)
+    subroutine rotate_dm_ao(kappa, n_particle, n_ao, rot_dm_ao, error, rot_dm_oao)
         !
         ! this subroutine returns the rotated density matrix in AO basis
         !
@@ -1339,14 +1308,14 @@ module otr_oao
         allocate(An(n, n), tmp(n, n), expA(n, n))
 
         ! compute Frobenius norm of A
-        A_norm = sqrt(sum(A ** 2))
+        A_norm = sqrt(sum(A**2))
 
         ! determine scale factor
         power = 3
         if (A_norm > 1.0_rp) then
             power = power + int(ceiling(log(A_norm) / log(2.0_rp)))
         end if
-        scale = 2.0_rp ** (-power)
+        scale = 2.0_rp**(-power)
 
         ! initialize exponential and product of matrices
         expA = 0.0_rp
@@ -1371,16 +1340,15 @@ module otr_oao
             expA = expA + fac * An
 
             ! convergence check for last expansion order
-            A_norm = fac * sqrt(sum(An ** 2))
+            A_norm = fac * sqrt(sum(An**2))
 
             ! check if maximum number of iterations is reached
             i = i + 1
             ! check for errors
             if (i > 100) then
-                call oao_object%settings%log("Maximum number of iterations for "// &
-                                             "Taylor expansion of matrix "// &
-                                             "exponential reached.", verbosity_error, &
-                                             .true.)
+                call oao_object%settings%log( &
+                    "Maximum number of iterations for Taylor expansion of matrix "// &
+                    "exponential reached.", verbosity_error, .true.)
                 error = 1
                 return
             end if

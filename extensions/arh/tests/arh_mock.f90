@@ -23,29 +23,25 @@ module otr_arh_mock
 
 contains
 
-    subroutine mock_arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, &
-                                   get_energy_funptr, update_dm_funptr, &
-                                   obj_func_arh_funptr, update_orbs_arh_funptr, &
-                                   precond_arh_funptr, precond_pd_arh_funptr, &
-                                   project_arh_funptr, error, settings)
+    subroutine mock_arh_factory_cs( &
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_arh_funptr, &
+        update_orbs_arh_funptr, precond_arh_funptr, precond_pd_arh_funptr, &
+        project_arh_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
                                    precond_type, precond_pd_type, project_type
-        use otr_oao, only: get_energy_cs_type
-        use otr_arh, only: arh_settings_type, update_dm_cs_type
-        use otr_oao_test_reference, only: test_get_energy_cs_funptr
-        use otr_arh_test_reference, only: test_update_dm_cs_funptr, operator(/=)
+        use otr_arh, only: arh_settings_type, evaluate_dm_cs_type
+        use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr, operator(/=)
         use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_precond_oao, &
                                 mock_precond_pd_oao, mock_project_oao, dm_ao_3d
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_funptr
-        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_funptr
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(precond_type), intent(out), pointer :: precond_arh_funptr
@@ -83,16 +79,10 @@ contains
                 "AOs wrong."
         end if
 
-        ! test passed energy function
-        test_passed = test_passed .and. &
-            test_get_energy_cs_funptr(get_energy_funptr, "arh_factory_c_wrapper", &
-                                      " by given energy function")
-
-        ! test passed density matrix updating function
-        test_passed = test_passed .and. &
-            test_update_dm_cs_funptr(update_dm_funptr, "arh_factory_c_wrapper", &
-                                     " by given density matrix updating function "// &
-                                     "with non-linear potential contribution")
+        ! test passed density matrix evaluating function
+        test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
+            evaluate_dm_funptr, "arh_factory_c_wrapper", " by given density matrix "// &
+            "evaluating function with non-linear potential contribution")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -121,29 +111,25 @@ contains
 
     end subroutine mock_arh_factory_cs
 
-    subroutine mock_arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, &
-                                   get_energy_funptr, update_dm_os_funptr, &
-                                   obj_func_arh_funptr, update_orbs_arh_funptr, &
-                                   precond_arh_funptr, precond_pd_arh_funptr, &
-                                   project_arh_funptr, error, settings)
+    subroutine mock_arh_factory_os( &
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os_funptr, &
+        obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
+        precond_pd_arh_funptr, project_arh_funptr, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
                                    precond_type, precond_pd_type, project_type
-        use otr_oao, only: get_energy_os_type
-        use otr_arh, only: update_dm_os_type, arh_settings_type
-        use otr_oao_test_reference, only: test_get_energy_os_funptr
-        use otr_arh_test_reference, only: test_update_dm_os_funptr, operator(/=)
+        use otr_arh, only: evaluate_dm_os_type, arh_settings_type
+        use otr_arh_test_reference, only: test_evaluate_dm_os_funptr, operator(/=)
         use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_precond_oao, &
                                 mock_precond_pd_oao, mock_project_oao, dm_ao_3d
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_os_type), intent(in), pointer :: get_energy_funptr
-        procedure(update_dm_os_type), intent(in), pointer :: update_dm_os_funptr
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(precond_type), intent(out), pointer :: precond_arh_funptr
@@ -181,17 +167,11 @@ contains
                 "AOs wrong."
         end if
 
-        ! test passed energy function
-        test_passed = test_passed .and. &
-            test_get_energy_os_funptr(get_energy_funptr, "arh_factory_c_wrapper", &
-                                      " by given energy function")
-
-        ! test passed density matrix updating function
-        test_passed = test_passed .and. &
-            test_update_dm_os_funptr(update_dm_os_funptr, "arh_factory_c_wrapper", &
-                                     " by given density matrix updating function "// &
-                                     "with same- and opposite-spin potential "// &
-                                     "contributions")
+        ! test passed density matrix evaluating function
+        test_passed = test_passed .and. test_evaluate_dm_os_funptr( &
+            evaluate_dm_os_funptr, "arh_factory_c_wrapper", " by given density "// &
+            "matrix evaluating function with same- and opposite-spin potential "// &
+            "contributions")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then

@@ -10,7 +10,7 @@ OpenTrustRegion is a Fortran library implementing a second-order trust-region op
 
 Apply equally to `src/` and every `extensions/<name>/`.
 
-**Formatting.** Fortran lines max 88 columns, continued with a trailing `&` aligned to the opening parenthesis of the call. Every procedure opens with a `!`-delimited comment block describing what it does; each logical step inside gets a lowercase `!` comment. Unit tests: assume success (`test_<name> = .true.`), then one `if (...) then` / `write (stderr, *) "test_<name> failed: ..."` / `test_<name> = .false.` block per assertion, no early returns except where a later assertion would crash.
+**Formatting.** Fortran lines max 88 columns. Continuation layout, statement indentation, operator spacing and string splitting are defined by `tools/f90_layout.py`, whose docstring is the authoritative rule list; don't restate its rules here or apply them by hand. Run `python3 tools/f90_layout.py` after every Fortran edit: by default it checks only statements touched relative to `HEAD`, `--fix` applies the fixes, and `--all` checks whole files (with `--fix` it requires explicit paths). The default mode also checks every untracked, non-ignored `.f90` file in full, so a bare `--fix` rewrites scratch copies of Fortran files left in the tree too; move them out first. So far only OAO and ARH have been formatted with it. The rest of the repo would get several hundred reflows, so don't run `--all --fix` on the core or other extensions without asking. Statements containing a comment, a `;` or a continuation line starting with `&` are never reflowed, so fix those by hand. Every procedure opens with a `!`-delimited comment block describing what it does; each logical step inside gets a lowercase `!` comment. Unit tests: assume success (`test_<name> = .true.`), then one `if (...) then` / `write (stderr, *) "test_<name> failed: ..."` / `test_<name> = .false.` block per assertion, no early returns except where a later assertion would crash.
 
 **Python formatting.** All Python (`pyopentrustregion/`, its `extensions/`, `setup.py`) is `black`-formatted, default settings. Run `black pyopentrustregion setup.py` before considering Python changes done.
 
@@ -37,7 +37,7 @@ Roles, one file each:
 | File | Role |
 |---|---|
 | `test_reference.f90` | Tolerances, reference values, `ref_*` reimplementations computed independently of the routine under test. |
-| `<name>_unit_tests.f90` | The Fortran-level `test_*` functions, plus mocks/fixtures needed only to drive them (e.g. a stand-in `get_energy`/`update_dm`). |
+| `<name>_unit_tests.f90` | The Fortran-level `test_*` functions, plus mocks/fixtures needed only to drive them (e.g. a stand-in `evaluate_dm`). |
 | `<name>_mock.f90` | Mocks of the module's *own* production routines that are bridged to the C interface (factories, deconstructors), so a caller (typically `<name>_c_interface_unit_tests.f90`) can verify invocation without running the real logic. |
 | `<name>_c_interface_unit_tests.f90` | Tests for the `bind(C)` wrapper layer; defines its own local `bind(C)` mocks rather than using `<name>_c_interface_mock.f90`. |
 | `<name>_c_interface_mock.f90` | `bind(C)`-signature mocks used exclusively by the Python interface tests, dynamically loaded via `ctypes` from `libotrtestsuite`. |
@@ -204,7 +204,7 @@ Each extension (`arh`, `oao`, `quasi_newton`, `s_gek`) has its own interface cha
 
 If an extension doesn't actually need a given callback, remove it from all six rather than leaving it defined-but-unused — a present-but-ignored parameter looks load-bearing to callers, which will build and pass a closure for nothing. Example: ARH's `get_response` was dropped entirely, since ARH approximates the Hessian response from its own history rather than calling a supplied function.
 
-When a factory-style C interface must accept either of two distinct callback signatures for the same slot (e.g. closed-shell vs. open-shell `update_dm`), expose it as a named union of the two typedefs with members named for the two cases (`update_dm_fp` with `.cs`/`.os` members in `extensions/arh/include/opentrustregion_arh.h`), not a generic `void*` or a single opaque typedef — keeps the header type-safe while giving the factory one parameter slot.
+When a factory-style C interface must accept either of two distinct callback signatures for the same slot (e.g. closed-shell vs. open-shell `evaluate_dm`), expose it as a named union of the two typedefs with members named for the two cases (`arh_evaluate_dm_fp` with `.cs`/`.os` members in `extensions/arh/include/opentrustregion_arh.h`), not a generic `void*` or a single opaque typedef — keeps the header type-safe while giving the factory one parameter slot.
 
 ### OAO and ARH
 

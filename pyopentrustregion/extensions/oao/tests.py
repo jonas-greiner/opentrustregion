@@ -28,6 +28,7 @@ from pyopentrustregion.tests import (
 )
 from pyopentrustregion.python_interface import c_real, c_int
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
+from pyopentrustregion.extensions.oao.python_interface import EvaluateDMInterface
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -68,7 +69,7 @@ fortran_tests = {
     "oao_c_interface_tests": [
         "assign_oao_c_f",
         "assign_oao_f_c",
-        "get_energy_f_wrapper",
+        "evaluate_dm_f_wrapper",
         "get_extra_trial_vectors_oao_c_wrapper",
         "get_response_f_wrapper",
         "hess_x_oao_c_wrapper",
@@ -79,13 +80,16 @@ fortran_tests = {
         "precond_oao_c_wrapper",
         "precond_pd_oao_c_wrapper",
         "project_oao_c_wrapper",
-        "update_dm_f_wrapper",
         "update_orbs_oao_c_wrapper",
     ],
 }
 
 # number of AOs
 n_ao = c_int.in_dll(lib, "test_n_ao").value
+
+# multiples of the density matrix the mock density matrix evaluating function returns
+# for the Fock matrix and the response
+evaluate_dm_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_factors"))
 
 
 @add_tests
@@ -169,25 +173,21 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
     mock_logger = PyInterfaceTests.mock_logger
 
-    def mock_get_energy(self, dm_ao):
+    def mock_evaluate_dm(self, dm_ao, fock, get_response):
         """
-        this function is a mock function for the energy function
+        this function is a mock function for the density matrix evaluating function,
+        which builds only what it is asked for
         """
-        return np.sum(dm_ao)
+        if fock is not None:
+            fock[:] = evaluate_dm_factors[0] * dm_ao
 
-    def mock_update_dm(self, dm_ao, fock):
-        """
-        this function is a mock function for the density matrix updating function
-        """
-        fock[:] = 2 * dm_ao
-
-        return np.sum(dm_ao), self.mock_get_response
+        return np.sum(dm_ao), (self.mock_get_response if get_response else None)
 
     def mock_get_response(self, dm_ao, response):
         """
         this function is a mock function for the response function
         """
-        response[:] = 2 * dm_ao
+        response[:] = evaluate_dm_factors[1] * dm_ao
 
         return
 
@@ -195,9 +195,9 @@ class OAOPyInterfaceTests(unittest.TestCase):
     @patch("pyopentrustregion.python_interface.lib.oao_factory", lib.mock_oao_factory)
     def test_oao_factory_py_interface(self):
         """
-        this function tests the OAO factory python interface (only tests if dm_ao,
-        mock_get_energy and mock_update_dm are passed correctly for the open-shell
-        case since everything else is the same in the closed-shell case)
+        this function tests the OAO factory python interface (only tests whether dm_ao
+        and mock_evaluate_dm are passed correctly for the open-shell case since
+        everything else is the same in the closed-shell case)
         """
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
 
@@ -230,8 +230,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
             ao_overlap,
             n_particle,
             n_ao,
-            self.mock_get_energy,
-            self.mock_update_dm,
+            self.mock_evaluate_dm,
             settings,
         )
 
@@ -419,10 +418,32 @@ class OAOPyInterfaceTests(unittest.TestCase):
             ao_overlap,
             n_particle,
             n_ao,
-            self.mock_get_energy,
-            self.mock_update_dm,
+            self.mock_evaluate_dm,
             settings,
         )
+
+        # check if a density matrix evaluating function which returns no response
+        # function although one is requested produces an error
+        def evaluate_dm_without_response(dm_ao, fock, get_response):
+            return np.sum(dm_ao), None
+
+        exception = {}
+        evaluate_dm = EvaluateDMInterface(
+            evaluate_dm_without_response, n_ao, 1, True, exception
+        )
+        dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
+        energy = (c_real * 1)()
+        get_response_funptr = (c_void_p * 1)()
+        error = evaluate_dm(
+            dm_ao.ctypes.data_as(POINTER(c_real)), energy, None, get_response_funptr
+        )
+        if error == 0 or not isinstance(exception.get("exc"), RuntimeError):
+            print(
+                " test_oao_factory_py_interface failed: Missing response function "
+                "requested from density matrix evaluating function does not produce "
+                "an error."
+            )
+            test_passed = False
 
         self.assertTrue(
             c_bool.in_dll(lib, "test_oao_factory_interface").value and test_passed,
