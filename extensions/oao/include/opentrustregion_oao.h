@@ -17,18 +17,14 @@ extern "C" {
  * Declarations for OAO functions and function pointer types
  * ------------------------------------------------------------------ */
 
-/* Energy callback */
-typedef c_int get_energy_fn(const c_real *dm_ao_c, c_real *energy_c);
-typedef get_energy_fn *get_energy_fp;
-
 /* Response callback */
 typedef c_int get_response_fn(const c_real *dm_ao_c, c_real *response_c);
 typedef get_response_fn *get_response_fp;
 
-/* Density matrix updating callback */
-typedef c_int update_dm_fn(const c_real *dm_ao_c, c_real *energy_c, c_real *fock_c,
-                           get_response_fp *get_response_ptr);
-typedef update_dm_fn *update_dm_fp;
+/* Density matrix evaluating callback */
+typedef c_int evaluate_dm_fn(const c_real *dm_ao_c, c_real *energy_c, c_real *fock_c,
+                             get_response_fp *get_response_ptr);
+typedef evaluate_dm_fn *evaluate_dm_fp;
 
 /* ------------------------------------------------------------------
  * Struct corresponding to Fortran type(oao_settings_type_c)
@@ -55,8 +51,7 @@ void init_oao_settings(oao_settings_type *settings);
  *                                                n_ao^2)
  * @param n_particle_c                            Number of particles
  * @param n_ao_c                                  Number of AO basis functions
- * @param get_energy_c_funptr                     C pointer to get_energy callback
- * @param update_dm_c_funptr                      C pointer to update_dm callback
+ * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback
  * @param settings_c                              OAO settings
  * @param obj_func_oao_c_funptr                   Output: wrapped objective function
  *                                                pointer
@@ -74,8 +69,8 @@ void init_oao_settings(oao_settings_type *settings);
  * @return                                        Integer error code from Fortran
  */
 c_int oao_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
-                  c_int n_ao_c, get_energy_fp get_energy_c_funptr,
-                  update_dm_fp update_dm_c_funptr, obj_func_fp *obj_func_oao_c_funptr,
+                  c_int n_ao_c, evaluate_dm_fp evaluate_dm_c_funptr,
+                  obj_func_fp *obj_func_oao_c_funptr,
                   update_orbs_fp *update_orbs_oao_c_funptr,
                   precond_fp *precond_oao_c_funptr,
                   precond_pd_fp *precond_pd_oao_c_funptr,

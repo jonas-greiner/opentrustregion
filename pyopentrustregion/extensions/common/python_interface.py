@@ -44,9 +44,9 @@ class HessXPyInterface:
 @dataclass
 class UpdateOrbsPyInterface:
     """
-    this class provides the Python interface to the orbital updating function,
-    get_energy_interface and get_fock_interface are stored to ensure that they are not
-    garbage collected when the factory completes
+    this class provides the Python interface to the orbital updating function, the
+    callback interfaces are stored to ensure that they are not garbage collected when
+    the factory completes
     """
 
     update_orbs_funptr: Any

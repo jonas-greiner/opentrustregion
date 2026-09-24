@@ -30,26 +30,27 @@ module otr_arh
         [character(len=kw_len) :: "arh", "symm_arh", "ms_psb", "ms_sp", "ms_sr1"]
 
     abstract interface
-        subroutine update_dm_cs_type(dm, energy, fock, v_nonlinear, error)
+        subroutine evaluate_dm_cs_type(dm, energy, fock, v_nonlinear, error)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), target, contiguous :: fock(:, :), v_nonlinear(:, :)
+            real(rp), intent(out), optional, target, contiguous :: fock(:, :), &
+                                                                   v_nonlinear(:, :)
             integer(ip), intent(out) :: error
-        end subroutine update_dm_cs_type
+        end subroutine evaluate_dm_cs_type
 
-        subroutine update_dm_os_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
-                                     v_nonlinear, error)
+        subroutine evaluate_dm_os_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
+                                       v_nonlinear, error)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
-                                             v_opposite_spin(:, :, :), &
-                                             v_nonlinear(:, :, :)
+            real(rp), intent(out), optional, target :: &
+                fock(:, :, :), v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
+                v_nonlinear(:, :, :)
             integer(ip), intent(out) :: error
-        end subroutine update_dm_os_type
+        end subroutine evaluate_dm_os_type
     end interface
 
     type :: arh_type
@@ -67,14 +68,16 @@ module otr_arh
             v_nonlinear_list(:, :, :, :), linear_potential_dirs(:, :), &
             nonlinear_potential_dirs(:, :), dm_dirs(:, :), dm_dirs_nonlinear(:, :), &
             expansion_dirs(:, :), projection_dirs(:, :), coupling_matrix(:, :)
-        procedure(update_dm_os_type), pointer, nopass :: update_dm_os => null()
-        procedure(update_dm_cs_type), pointer, nopass :: update_dm_cs => null()
+        procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
+        procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
     end type
 
     ! global variables
     type(arh_type), allocatable :: arh_object
 
     ! create function pointers to ensure that routines comply with interface
+    procedure(obj_func_type), pointer :: obj_func_arh_cs_ptr => obj_func_arh_cs
+    procedure(obj_func_type), pointer :: obj_func_arh_os_ptr => obj_func_arh_os
     procedure(update_orbs_type), pointer :: update_orbs_arh_cs_ptr => update_orbs_arh_cs
     procedure(update_orbs_type), pointer :: update_orbs_arh_os_ptr => update_orbs_arh_os
     procedure(hess_x_type), pointer :: hess_x_arh_ptr => hess_x_arh
@@ -87,22 +90,20 @@ module otr_arh
 
 contains
 
-    subroutine arh_factory_cs( &
-        dm_ao, ao_overlap, n_particle, n_ao, get_energy_cs, update_dm_cs, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
-        precond_pd_arh_funptr, project_arh_funptr, error, settings)
+    subroutine arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
+                              obj_func_arh_funptr, update_orbs_arh_funptr, &
+                              precond_arh_funptr, precond_pd_arh_funptr, &
+                              project_arh_funptr, error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! closed-shell case
         !
-        use otr_oao, only: get_energy_cs_type, obj_func_oao, precond_pd_oao, &
-                           project_oao, oao_object
+        use otr_oao, only: precond_pd_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_cs_type), intent(in), pointer :: get_energy_cs
-        procedure(update_dm_cs_type), intent(in), pointer :: update_dm_cs
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(precond_type), intent(out), pointer :: precond_arh_funptr
@@ -123,11 +124,10 @@ contains
         nullify(dm_ao_3d)
 
         ! set pointers to functions
-        oao_object%get_energy_cs => get_energy_cs
-        arh_object%update_dm_cs => update_dm_cs
+        arh_object%evaluate_dm_cs => evaluate_dm_cs
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_oao
+        obj_func_arh_funptr => obj_func_arh_cs
         update_orbs_arh_funptr => update_orbs_arh_cs
         precond_arh_funptr => precond_arh
         precond_pd_arh_funptr => precond_pd_oao
@@ -135,22 +135,20 @@ contains
 
     end subroutine arh_factory_cs
 
-    subroutine arh_factory_os( &
-        dm_ao, ao_overlap, n_particle, n_ao, get_energy_os, update_dm_os, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
-        precond_pd_arh_funptr, project_arh_funptr, error, settings)
+    subroutine arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
+                              obj_func_arh_funptr, update_orbs_arh_funptr, &
+                              precond_arh_funptr, precond_pd_arh_funptr, &
+                              project_arh_funptr, error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! open-shell case
         !
-        use otr_oao, only: get_energy_os_type, obj_func_oao, precond_pd_oao, &
-                           project_oao, oao_object
+        use otr_oao, only: precond_pd_oao, project_oao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
-        procedure(get_energy_os_type), intent(in), pointer :: get_energy_os
-        procedure(update_dm_os_type), intent(in), pointer :: update_dm_os
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(precond_type), intent(out), pointer :: precond_arh_funptr
@@ -167,11 +165,10 @@ contains
         if (error /= 0) return
 
         ! set pointers to functions
-        oao_object%get_energy_os => get_energy_os
-        arh_object%update_dm_os => update_dm_os
+        arh_object%evaluate_dm_os => evaluate_dm_os
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_oao
+        obj_func_arh_funptr => obj_func_arh_os
         update_orbs_arh_funptr => update_orbs_arh_os
         precond_arh_funptr => precond_arh
         precond_pd_arh_funptr => precond_pd_oao
@@ -254,6 +251,109 @@ contains
 
     end subroutine arh_sanity_check
 
+    function obj_func_arh_cs(kappa, error) result(energy)
+        !
+        ! this function defines the energy evaluation in the OAO basis for the
+        ! closed-shell case, which also adds the evaluated point with its Fock matrix
+        ! and non-linear potential to the history, unless it is already there
+        !
+        use otr_oao, only: rotate_dm_ao, symmetric_transformation
+
+        real(rp), intent(in), target :: kappa(:)
+        integer(ip), intent(out) :: error
+        real(rp) :: energy
+
+        integer(ip) :: n_ao
+        real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_oao(:, :, :), &
+                                 fock_ao(:, :, :), v_nonlinear_ao(:, :, :)
+
+        ! initialize energy in case of error
+        energy = 0.0_rp
+
+        ! number of AOs
+        n_ao = arh_object%n_ao
+
+        ! get rotated density matrix in AO and OAO basis
+        allocate(rot_dm_ao(n_ao, n_ao, 1), rot_dm_oao(n_ao, n_ao, 1), &
+                 fock_ao(n_ao, n_ao, 1), v_nonlinear_ao(n_ao, n_ao, 1))
+        call rotate_dm_ao(kappa, arh_object%n_particle, n_ao, rot_dm_ao, error, &
+                          rot_dm_oao)
+        if (error /= 0) return
+
+        ! calculate mean-field energy
+        call arh_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, fock_ao(:, :, 1), &
+                                       v_nonlinear_ao(:, :, 1), error)
+        if (error /= 0) return
+
+        ! update list of density, Fock and non-linear potential matrices
+        if (allocated(arh_object%dm_list)) then
+            if (.not. density_in_history(rot_dm_oao)) then
+                call prepend(arh_object%dm_list, rot_dm_oao)
+                call prepend(arh_object%fock_list, &
+                             symmetric_transformation(arh_object%s_inv_sqrt, fock_ao))
+                call prepend(arh_object%v_nonlinear_list, symmetric_transformation( &
+                    arh_object%s_inv_sqrt, v_nonlinear_ao))
+            end if
+        end if
+
+    end function obj_func_arh_cs
+
+    function obj_func_arh_os(kappa, error) result(energy)
+        !
+        ! this function defines the energy evaluation in the OAO basis for the
+        ! open-shell case, which also adds the evaluated point with its same-spin,
+        ! opposite-spin and non-linear potentials to the history, unless it is already
+        ! there
+        !
+        use otr_oao, only: rotate_dm_ao, symmetric_transformation
+
+        real(rp), intent(in), target :: kappa(:)
+        integer(ip), intent(out) :: error
+        real(rp) :: energy
+
+        integer(ip) :: n_ao, n_particle
+        real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_oao(:, :, :), &
+                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
+                                 v_nonlinear_ao(:, :, :)
+
+        ! initialize energy in case of error
+        energy = 0.0_rp
+
+        ! number of AOs and number of particles
+        n_ao = arh_object%n_ao
+        n_particle = arh_object%n_particle
+
+        ! get rotated density matrix in AO and OAO basis
+        allocate(rot_dm_ao(n_ao, n_ao, n_particle), &
+                 rot_dm_oao(n_ao, n_ao, n_particle), &
+                 v_same_spin_ao(n_ao, n_ao, n_particle), &
+                 v_opposite_spin_ao(n_ao, n_ao, n_particle), &
+                 v_nonlinear_ao(n_ao, n_ao, n_particle))
+        call rotate_dm_ao(kappa, n_particle, n_ao, rot_dm_ao, error, rot_dm_oao)
+        if (error /= 0) return
+
+        ! calculate mean-field energy
+        call arh_object%evaluate_dm_os(rot_dm_ao, energy, v_same_spin=v_same_spin_ao, &
+                                       v_opposite_spin=v_opposite_spin_ao, &
+                                       v_nonlinear=v_nonlinear_ao, error=error)
+        if (error /= 0) return
+
+        ! update list of density and potential matrices
+        if (allocated(arh_object%dm_list)) then
+            if (.not. density_in_history(rot_dm_oao)) then
+                call prepend(arh_object%dm_list, rot_dm_oao)
+                call prepend(arh_object%v_same_spin_list, symmetric_transformation( &
+                    arh_object%s_inv_sqrt, v_same_spin_ao))
+                call prepend( &
+                    arh_object%v_opposite_spin_list, &
+                    symmetric_transformation(arh_object%s_inv_sqrt, v_opposite_spin_ao))
+                call prepend(arh_object%v_nonlinear_list, symmetric_transformation( &
+                    arh_object%s_inv_sqrt, v_nonlinear_ao))
+            end if
+        end if
+
+    end function obj_func_arh_os
+
     subroutine update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
@@ -297,9 +397,12 @@ contains
 
             ! update list of density, Fock and non-linear potential matrices
             if (allocated(arh_object%dm_list)) then
-                call prepend(arh_object%dm_list, arh_object%dm_oao)
-                call prepend(arh_object%fock_list, arh_object%fock_oao)
-                call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear_oao)
+                if (.not. density_in_history(arh_object%dm_oao)) then
+                    call prepend(arh_object%dm_list, arh_object%dm_oao)
+                    call prepend(arh_object%fock_list, arh_object%fock_oao)
+                    call prepend(arh_object%v_nonlinear_list, &
+                                 arh_object%v_nonlinear_oao)
+                end if
             else
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
                          arh_object%fock_list(n_ao, n_ao, n_particle, 0), &
@@ -317,9 +420,9 @@ contains
             ! get energy, Fock matrix and non-linear potential
             allocate(fock_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
-            call arh_object%update_dm_cs(arh_object%dm_ao(:, :, 1), arh_object%energy, &
-                                         fock_ao(:, :, 1), v_nonlinear_ao(:, :, 1), &
-                                         error)
+            call arh_object%evaluate_dm_cs(arh_object%dm_ao(:, :, 1), &
+                                           arh_object%energy, fock_ao(:, :, 1), &
+                                           v_nonlinear_ao(:, :, 1), error)
             if (error /= 0) then
                 deallocate(fock_ao, v_nonlinear_ao)
                 return
@@ -506,11 +609,15 @@ contains
 
             ! update list of density and potential matrices
             if (allocated(arh_object%dm_list)) then
-                call prepend(arh_object%dm_list, arh_object%dm_oao)
-                call prepend(arh_object%v_same_spin_list, arh_object%v_same_spin_oao)
-                call prepend(arh_object%v_opposite_spin_list, &
-                             arh_object%v_opposite_spin_oao)
-                call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear_oao)
+                if (.not. density_in_history(arh_object%dm_oao)) then
+                    call prepend(arh_object%dm_list, arh_object%dm_oao)
+                    call prepend(arh_object%v_same_spin_list, &
+                                 arh_object%v_same_spin_oao)
+                    call prepend(arh_object%v_opposite_spin_list, &
+                                 arh_object%v_opposite_spin_oao)
+                    call prepend(arh_object%v_nonlinear_list, &
+                                 arh_object%v_nonlinear_oao)
+                end if
             else
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
                          arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
@@ -532,9 +639,9 @@ contains
                      v_same_spin_ao(n_ao, n_ao, n_particle), &
                      v_opposite_spin_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
-            call arh_object%update_dm_os(arh_object%dm_ao, arh_object%energy, fock_ao, &
-                                         v_same_spin_ao, v_opposite_spin_ao, &
-                                         v_nonlinear_ao, error)
+            call arh_object%evaluate_dm_os(arh_object%dm_ao, arh_object%energy, &
+                                           fock_ao, v_same_spin_ao, &
+                                           v_opposite_spin_ao, v_nonlinear_ao, error)
             if (error /= 0) then
                 deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao, v_nonlinear_ao)
                 return
@@ -2044,6 +2151,34 @@ contains
         deallocate(scaled)
 
     end function spectral_to_dense
+
+    function density_in_history(dm_oao) result(in_history)
+        !
+        ! this function reports whether a density is already held in the history
+        !
+        use opentrustregion, only: numerical_zero
+
+        real(rp), intent(in) :: dm_oao(:, :, :)
+        logical :: in_history
+
+        integer(ip) :: i
+        real(rp) :: dm_scale
+
+        in_history = .false.
+        if (.not. allocated(arh_object%dm_list)) return
+
+        ! judge the difference against the size of the density, so that the test is a
+        ! relative one
+        dm_scale = max(maxval(abs(dm_oao)), numerical_zero)
+        do i = 1, size(arh_object%dm_list, 4)
+            if (maxval(abs(arh_object%dm_list(:, :, :, i) - dm_oao)) <= &
+                numerical_zero * dm_scale) then
+                in_history = .true.
+                return
+            end if
+        end do
+
+    end function density_in_history
 
     subroutine prepend(list, new_array)
         !

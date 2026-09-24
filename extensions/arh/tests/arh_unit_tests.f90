@@ -12,7 +12,7 @@ module otr_arh_unit_tests
 
     implicit none
 
-    ! multipliers of the density matrix returned by the mock density matrix updating
+    ! multipliers of the density matrix returned by the mock density matrix evaluating
     ! functions, which differ between the first and any subsequent call, following the
     ! same convention as the shared multiplier for the Fock matrix
     real(rp), parameter :: mock_v_same_spin_factor(2) = [3.0_rp, 7.0_rp], &
@@ -69,61 +69,70 @@ contains
 
     end function mock_potential_os
 
-    subroutine mock_update_dm_cs(dm, energy, fock, v_nonlinear, error)
+    subroutine mock_evaluate_dm_cs(dm, energy, fock, v_nonlinear, error)
         !
-        ! this subroutine is a mock density matrix updating function with a separate
+        ! this subroutine is a mock density matrix evaluating function with a separate
         ! non-linear potential contribution for the closed-shell case, which returns
         ! multiples of the density matrix that change between calls so that
         ! non-vanishing differences are produced
         !
-        use otr_oao_unit_tests, only: n_mock_calls, mock_factor, mock_fock_factor
+        use otr_oao_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
-        real(rp), intent(out), target, contiguous :: fock(:, :), v_nonlinear(:, :)
+        real(rp), intent(out), optional, target, contiguous :: fock(:, :), &
+                                                               v_nonlinear(:, :)
         integer(ip), intent(out) :: error
 
-        n_mock_calls = n_mock_calls + 1
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
+                              merge(2_ip, 0_ip, present(v_nonlinear)))
 
         error = 0
         energy = sum(dm)
-        fock = mock_potential(mock_factor(mock_fock_factor), dm)
-        v_nonlinear = mock_potential(mock_v_nonlinear_factor, dm)
+        if (present(fock)) fock = mock_potential(mock_factor(mock_fock_factor), dm)
+        if (present(v_nonlinear)) &
+            v_nonlinear = mock_potential(mock_v_nonlinear_factor, dm)
 
-    end subroutine mock_update_dm_cs
+    end subroutine mock_evaluate_dm_cs
 
-    subroutine mock_update_dm_os(dm, energy, fock, v_same_spin, v_opposite_spin, &
-                                 v_nonlinear, error)
+    subroutine mock_evaluate_dm_os(dm, energy, fock, v_same_spin, v_opposite_spin, &
+                                   v_nonlinear, error)
         !
-        ! this subroutine is a mock density matrix updating function with spin-resolved
-        ! and non-linear potential contributions for the open-shell case, which returns
-        ! multiples of the density matrix that change between calls so that
-        ! non-vanishing differences are produced
+        ! this subroutine is a mock density matrix evaluating function with
+        ! spin-resolved and non-linear potential contributions for the open-shell case,
+        ! which returns multiples of the density matrix that change between calls so
+        ! that non-vanishing differences are produced
         !
-        use otr_oao_unit_tests, only: n_mock_calls, mock_factor, mock_fock_factor
+        use otr_oao_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
-        real(rp), intent(out), target :: fock(:, :, :), v_same_spin(:, :, :), &
-                                         v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
+        real(rp), intent(out), optional, target :: &
+            fock(:, :, :), v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
+            v_nonlinear(:, :, :)
         integer(ip), intent(out) :: error
 
         integer(ip) :: i
 
-        n_mock_calls = n_mock_calls + 1
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
+                              merge(2_ip, 0_ip, present(v_same_spin)) + &
+                              merge(4_ip, 0_ip, present(v_opposite_spin)) + &
+                              merge(8_ip, 0_ip, present(v_nonlinear)))
 
         error = 0
         energy = sum(dm)
         do i = 1, size(dm, 3)
-            fock(:, :, i) = mock_potential(mock_factor(mock_fock_factor), dm(:, :, i))
-            v_same_spin(:, :, i) = &
+            if (present(fock)) fock(:, :, i) = &
+                mock_potential(mock_factor(mock_fock_factor), dm(:, :, i))
+            if (present(v_same_spin)) v_same_spin(:, :, i) = &
                 mock_potential(mock_factor(mock_v_same_spin_factor), dm(:, :, i))
-            v_opposite_spin(:, :, i) = &
+            if (present(v_opposite_spin)) v_opposite_spin(:, :, i) = &
                 mock_potential(mock_factor(mock_v_opposite_spin_factor), dm(:, :, i))
-            v_nonlinear(:, :, i) = mock_potential(mock_v_nonlinear_factor, dm(:, :, i))
+            if (present(v_nonlinear)) v_nonlinear(:, :, i) = &
+                mock_potential(mock_v_nonlinear_factor, dm(:, :, i))
         end do
 
-    end subroutine mock_update_dm_os
+    end subroutine mock_evaluate_dm_os
 
     function embed_channel(v, channel, n_ao, n_particle) result(embedded)
         !
@@ -1153,13 +1162,12 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
                                    precond_pd_type, project_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
-                           update_dm_cs_type, update_orbs_arh_cs_ptr, precond_arh_ptr
+                           evaluate_dm_cs_type, obj_func_arh_cs_ptr, &
+                           update_orbs_arh_cs_ptr, precond_arh_ptr
         use otr_oao_test_reference, only: n_ao
         use otr_arh_test_reference, only: operator(==)
-        use otr_oao, only: oao_object, get_energy_cs_type, obj_func_oao_ptr, &
-                           precond_pd_oao_ptr, project_oao_ptr
-        use otr_oao_unit_tests, only: mock_get_energy_cs, identity_matrix, &
-                                      generate_random_density_matrix
+        use otr_oao, only: oao_object, precond_pd_oao_ptr, project_oao_ptr
+        use otr_oao_unit_tests, only: identity_matrix, generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
 
         integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
@@ -1169,8 +1177,7 @@ contains
         real(rp) :: ao_overlap(n_ao, n_ao)
         integer(ip) :: error
         type(arh_settings_type) :: settings
-        procedure(get_energy_cs_type), pointer :: get_energy_funptr
-        procedure(update_dm_cs_type), pointer :: update_dm_funptr
+        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(precond_type), pointer :: precond_arh_funptr
@@ -1190,14 +1197,13 @@ contains
         ao_overlap = identity_matrix(n_ao)
 
         ! initialize callback function pointers
-        get_energy_funptr => mock_get_energy_cs
-        update_dm_funptr => mock_update_dm_cs
+        evaluate_dm_funptr => mock_evaluate_dm_cs
 
         ! call routine and determine if an error is produced
-        call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
-                         update_dm_funptr, obj_func_arh_funptr, &
-                         update_orbs_arh_funptr, precond_arh_funptr, &
-                         precond_pd_arh_funptr, project_arh_funptr, error, settings)
+        call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
+                         obj_func_arh_funptr, update_orbs_arh_funptr, &
+                         precond_arh_funptr, precond_pd_arh_funptr, &
+                         project_arh_funptr, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_arh_factory_cs failed: Produced error."
             test_arh_factory_cs = .false.
@@ -1235,19 +1241,14 @@ contains
                 "associated correctly."
             test_arh_factory_cs = .false.
         end if
-        if (.not. associated(oao_object%get_energy_cs, mock_get_energy_cs)) then
-            write(stderr, *) "test_arh_factory_cs failed: Energy function not "// &
-                "stored correctly."
-            test_arh_factory_cs = .false.
-        end if
-        if (.not. associated(arh_object%update_dm_cs, mock_update_dm_cs)) then
-            write(stderr, *) "test_arh_factory_cs failed: Density matrix updating "// &
-                "function not stored correctly."
+        if (.not. associated(arh_object%evaluate_dm_cs, mock_evaluate_dm_cs)) then
+            write(stderr, *) "test_arh_factory_cs failed: Density matrix "// &
+                "evaluating function not stored correctly."
             test_arh_factory_cs = .false.
         end if
 
         ! determine if returned function pointers point to the correct routines
-        if (.not. associated(obj_func_arh_funptr, obj_func_oao_ptr)) then
+        if (.not. associated(obj_func_arh_funptr, obj_func_arh_cs_ptr)) then
             write(stderr, *) "test_arh_factory_cs failed: Returned objective "// &
                 "function is wrong."
             test_arh_factory_cs = .false.
@@ -1276,10 +1277,10 @@ contains
         ! call routine with an unknown ARH type and determine if the sanity check
         ! rejects it
         settings%arh_type = "unknown"
-        call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
-                         update_dm_funptr, obj_func_arh_funptr, &
-                         update_orbs_arh_funptr, precond_arh_funptr, &
-                         precond_pd_arh_funptr, project_arh_funptr, error, settings)
+        call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
+                         obj_func_arh_funptr, update_orbs_arh_funptr, &
+                         precond_arh_funptr, precond_pd_arh_funptr, &
+                         project_arh_funptr, error, settings)
         if (error == 0) then
             write(stderr, *) "test_arh_factory_cs failed: Error not thrown for "// &
                 "unknown ARH type."
@@ -1299,13 +1300,12 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
                                    precond_pd_type, project_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
-                           update_dm_os_type, update_orbs_arh_os_ptr, precond_arh_ptr
+                           evaluate_dm_os_type, obj_func_arh_os_ptr, &
+                           update_orbs_arh_os_ptr, precond_arh_ptr
         use otr_oao_test_reference, only: n_ao, n_particle, n_param
         use otr_arh_test_reference, only: operator(==)
-        use otr_oao, only: oao_object, get_energy_os_type, obj_func_oao_ptr, &
-                           precond_pd_oao_ptr, project_oao_ptr
-        use otr_oao_unit_tests, only: mock_get_energy_os, identity_matrix, &
-                                      generate_random_density_matrix
+        use otr_oao, only: oao_object, precond_pd_oao_ptr, project_oao_ptr
+        use otr_oao_unit_tests, only: identity_matrix, generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
 
         integer(ip), parameter :: n_electrons = 2
@@ -1314,8 +1314,7 @@ contains
         real(rp) :: ao_overlap(n_ao, n_ao)
         integer(ip) :: i, error
         type(arh_settings_type) :: settings
-        procedure(get_energy_os_type), pointer :: get_energy_funptr
-        procedure(update_dm_os_type), pointer :: update_dm_funptr
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(precond_type), pointer :: precond_arh_funptr
@@ -1337,14 +1336,13 @@ contains
         ao_overlap = identity_matrix(n_ao)
 
         ! initialize callback function pointers
-        get_energy_funptr => mock_get_energy_os
-        update_dm_funptr => mock_update_dm_os
+        evaluate_dm_funptr => mock_evaluate_dm_os
 
         ! call routine and determine if an error is produced
-        call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, get_energy_funptr, &
-                         update_dm_funptr, obj_func_arh_funptr, &
-                         update_orbs_arh_funptr, precond_arh_funptr, &
-                         precond_pd_arh_funptr, project_arh_funptr, error, settings)
+        call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
+                         obj_func_arh_funptr, update_orbs_arh_funptr, &
+                         precond_arh_funptr, precond_pd_arh_funptr, &
+                         project_arh_funptr, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_arh_factory_os failed: Produced error."
             test_arh_factory_os = .false.
@@ -1382,19 +1380,14 @@ contains
                 "associated correctly."
             test_arh_factory_os = .false.
         end if
-        if (.not. associated(oao_object%get_energy_os, mock_get_energy_os)) then
-            write(stderr, *) "test_arh_factory_os failed: Energy function not "// &
-                "stored correctly."
-            test_arh_factory_os = .false.
-        end if
-        if (.not. associated(arh_object%update_dm_os, mock_update_dm_os)) then
-            write(stderr, *) "test_arh_factory_os failed: Density matrix updating "// &
-                "function not stored correctly."
+        if (.not. associated(arh_object%evaluate_dm_os, mock_evaluate_dm_os)) then
+            write(stderr, *) "test_arh_factory_os failed: Density matrix "// &
+                "evaluating function not stored correctly."
             test_arh_factory_os = .false.
         end if
 
         ! determine if returned function pointers point to the correct routines
-        if (.not. associated(obj_func_arh_funptr, obj_func_oao_ptr)) then
+        if (.not. associated(obj_func_arh_funptr, obj_func_arh_os_ptr)) then
             write(stderr, *) "test_arh_factory_os failed: Returned objective "// &
                 "function is wrong."
             test_arh_factory_os = .false.
@@ -1473,6 +1466,289 @@ contains
 
     end function test_arh_sanity_check
 
+    logical(c_bool) function test_obj_func_arh_cs() bind(C)
+        !
+        ! this function tests the function which defines the energy evaluation in the
+        ! OAO basis for the closed-shell case, which also adds the evaluated point to
+        ! the history
+        !
+        use otr_arh, only: obj_func_arh_cs, arh_object
+        use otr_oao_test_reference, only: n_ao
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: mock_requests, mock_fock_factor, &
+                                      identity_matrix, generate_random_density_matrix
+
+        integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
+                                  n_param = n_ao * (n_ao - 1) / 2
+        real(rp), parameter :: basis_scale = 0.5_rp
+
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+        real(rp) :: dm_oao(n_ao, n_ao, n_particle), kappa(n_param), energy
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_obj_func_arh_cs = .true.
+
+        ! set up the OAO object with an AO basis whose overlap has the inverse square
+        ! root c I
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%s_inv_sqrt = basis_scale * identity_matrix(n_ao)
+        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_electrons)
+        dm_ao = basis_scale**2 * dm_oao
+        oao_object%dm_ao => dm_ao
+        oao_object%dm_oao = dm_oao
+
+        ! set up the ARH object the way the ARH factory would
+        allocate(arh_object)
+        call setup_settings(arh_object%settings)
+        arh_object%n_ao => oao_object%n_ao
+        arh_object%n_param => oao_object%n_param
+        arh_object%n_particle => oao_object%n_particle
+        arh_object%dm_ao => oao_object%dm_ao
+        arh_object%s_inv_sqrt => oao_object%s_inv_sqrt
+        arh_object%dm_oao => oao_object%dm_oao
+        arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
+
+        ! call routine with an orbital rotation before the history exists and determine
+        ! if the Fock matrix and non-linear potential are requested and nothing is
+        ! added to the history
+        call random_number(kappa)
+        kappa = 0.1_rp * kappa
+        mock_requests = [integer(ip) :: ]
+        energy = obj_func_arh_cs(kappa, error)
+        if (error /= 0) then
+            write(stderr, *) "test_obj_func_arh_cs failed: Produced error without "// &
+                "history."
+            test_obj_func_arh_cs = .false.
+        end if
+        if (size(mock_requests) /= 1) then
+            write(stderr, *) "test_obj_func_arh_cs failed: Density matrix "// &
+                "evaluating function not called exactly once."
+            test_obj_func_arh_cs = .false.
+        end if
+        if (any(mock_requests /= 3)) then
+            write(stderr, *) "test_obj_func_arh_cs failed: Incorrect outputs "// &
+                "requested from density matrix evaluating function."
+            test_obj_func_arh_cs = .false.
+        end if
+        if (allocated(arh_object%dm_list)) then
+            write(stderr, *) "test_obj_func_arh_cs failed: History created by "// &
+                "energy evaluation."
+            test_obj_func_arh_cs = .false.
+        end if
+
+        ! call routine again with an empty history and determine if the rotated density
+        ! matrix is added together with the Fock matrix and non-linear potential
+        ! evaluated at it, while the current density matrix is left untouched
+        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%fock_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
+        mock_requests = [integer(ip) :: ]
+        energy = obj_func_arh_cs(kappa, error)
+        if (error /= 0) then
+            write(stderr, *) "test_obj_func_arh_cs failed: Produced error with history."
+            test_obj_func_arh_cs = .false.
+        else if (size(arh_object%dm_list, 4) /= 1) then
+            write(stderr, *) "test_obj_func_arh_cs failed: Evaluated point not "// &
+                "added to history."
+            test_obj_func_arh_cs = .false.
+        else
+            if (abs(energy - basis_scale**2 * sum(arh_object%dm_list(:, :, :, 1))) > &
+                tol) then
+                write(stderr, *) "test_obj_func_arh_cs failed: Incorrect energy."
+                test_obj_func_arh_cs = .false.
+            end if
+            if (norm2(arh_object%dm_list(:, :, :, 1) - dm_oao) < tol) then
+                write(stderr, *) "test_obj_func_arh_cs failed: Incorrect density "// &
+                    "matrix history."
+                test_obj_func_arh_cs = .false.
+            end if
+            if (norm2(arh_object%fock_list(:, :, :, 1) - basis_scale**4 * &
+                      mock_potential(mock_fock_factor(1), &
+                                     arh_object%dm_list(:, :, :, 1))) > tol) then
+                write(stderr, *) "test_obj_func_arh_cs failed: Incorrect Fock "// &
+                    "matrix history."
+                test_obj_func_arh_cs = .false.
+            end if
+            if (norm2(arh_object%v_nonlinear_list(:, :, :, 1) - basis_scale**4 * &
+                      mock_potential(mock_v_nonlinear_factor, &
+                                     arh_object%dm_list(:, :, :, 1))) > tol) then
+                write(stderr, *) "test_obj_func_arh_cs failed: Incorrect "// &
+                    "non-linear potential history."
+                test_obj_func_arh_cs = .false.
+            end if
+        end if
+        if (norm2(arh_object%dm_oao - dm_oao) > tol .or. &
+            norm2(arh_object%dm_ao - basis_scale**2 * dm_oao) > tol) then
+            write(stderr, *) "test_obj_func_arh_cs failed: Current density matrix "// &
+                "changed by energy evaluation."
+            test_obj_func_arh_cs = .false.
+        end if
+
+        ! call routine at the same point and determine if it is not added twice
+        energy = obj_func_arh_cs(kappa, error)
+        if (size(arh_object%dm_list, 4) /= 1) then
+            write(stderr, *) "test_obj_func_arh_cs failed: History extended for a "// &
+                "point it already holds."
+            test_obj_func_arh_cs = .false.
+        end if
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh_object, oao_object)
+
+    end function test_obj_func_arh_cs
+
+    logical(c_bool) function test_obj_func_arh_os() bind(C)
+        !
+        ! this function tests the function which defines the energy evaluation in the
+        ! OAO basis for the open-shell case, which also adds the evaluated point to the
+        ! history
+        !
+        use otr_arh, only: obj_func_arh_os, arh_object
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: mock_requests, identity_matrix, &
+                                      generate_random_density_matrix
+
+        integer(ip), parameter :: n_electrons = 2
+        real(rp), parameter :: basis_scale = 0.5_rp
+
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+        real(rp) :: dm_oao(n_ao, n_ao, n_particle), kappa(n_param), energy
+        integer(ip) :: i, error
+
+        ! assume tests pass
+        test_obj_func_arh_os = .true.
+
+        ! set up the OAO object with an AO basis whose overlap has the inverse square
+        ! root c I
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%s_inv_sqrt = basis_scale * identity_matrix(n_ao)
+        do i = 1, n_particle
+            dm_oao(:, :, i) = generate_random_density_matrix(n_ao, n_electrons)
+        end do
+        dm_ao = basis_scale**2 * dm_oao
+        oao_object%dm_ao => dm_ao
+        oao_object%dm_oao = dm_oao
+
+        ! set up the ARH object the way the ARH factory would
+        allocate(arh_object)
+        call setup_settings(arh_object%settings)
+        arh_object%n_ao => oao_object%n_ao
+        arh_object%n_param => oao_object%n_param
+        arh_object%n_particle => oao_object%n_particle
+        arh_object%dm_ao => oao_object%dm_ao
+        arh_object%s_inv_sqrt => oao_object%s_inv_sqrt
+        arh_object%dm_oao => oao_object%dm_oao
+        arh_object%evaluate_dm_os => mock_evaluate_dm_os
+
+        ! call routine with an orbital rotation before the history exists and determine
+        ! if the same-spin, opposite-spin and non-linear potentials but not the Fock
+        ! matrix are requested and nothing is added to the history
+        call random_number(kappa)
+        kappa = 0.1_rp * kappa
+        mock_requests = [integer(ip) :: ]
+        energy = obj_func_arh_os(kappa, error)
+        if (error /= 0) then
+            write(stderr, *) "test_obj_func_arh_os failed: Produced error without "// &
+                "history."
+            test_obj_func_arh_os = .false.
+        end if
+        if (size(mock_requests) /= 1) then
+            write(stderr, *) "test_obj_func_arh_os failed: Density matrix "// &
+                "evaluating function not called exactly once."
+            test_obj_func_arh_os = .false.
+        end if
+        if (any(mock_requests /= 14)) then
+            write(stderr, *) "test_obj_func_arh_os failed: Incorrect outputs "// &
+                "requested from density matrix evaluating function."
+            test_obj_func_arh_os = .false.
+        end if
+        if (allocated(arh_object%dm_list)) then
+            write(stderr, *) "test_obj_func_arh_os failed: History created by "// &
+                "energy evaluation."
+            test_obj_func_arh_os = .false.
+        end if
+
+        ! call routine again with an empty history and determine if the rotated density
+        ! matrix is added together with the potentials evaluated at it, while the
+        ! current density matrix is left untouched
+        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
+        mock_requests = [integer(ip) :: ]
+        energy = obj_func_arh_os(kappa, error)
+        if (error /= 0) then
+            write(stderr, *) "test_obj_func_arh_os failed: Produced error with history."
+            test_obj_func_arh_os = .false.
+        else if (size(arh_object%dm_list, 4) /= 1) then
+            write(stderr, *) "test_obj_func_arh_os failed: Evaluated point not "// &
+                "added to history."
+            test_obj_func_arh_os = .false.
+        else
+            if (abs(energy - basis_scale**2 * sum(arh_object%dm_list(:, :, :, 1))) > &
+                tol) then
+                write(stderr, *) "test_obj_func_arh_os failed: Incorrect energy."
+                test_obj_func_arh_os = .false.
+            end if
+            if (norm2(arh_object%dm_list(:, :, :, 1) - dm_oao) < tol) then
+                write(stderr, *) "test_obj_func_arh_os failed: Incorrect density "// &
+                    "matrix history."
+                test_obj_func_arh_os = .false.
+            end if
+            if (norm2(arh_object%v_same_spin_list(:, :, :, 1) - basis_scale**4 * &
+                      mock_potential(mock_v_same_spin_factor(1), &
+                                     arh_object%dm_list(:, :, :, 1))) > tol) then
+                write(stderr, *) "test_obj_func_arh_os failed: Incorrect same-spin "// &
+                    "potential history."
+                test_obj_func_arh_os = .false.
+            end if
+            if (norm2(arh_object%v_opposite_spin_list(:, :, :, 1) - basis_scale**4 * &
+                      mock_potential(mock_v_opposite_spin_factor(1), &
+                                     arh_object%dm_list(:, :, :, 1))) > tol) then
+                write(stderr, *) "test_obj_func_arh_os failed: Incorrect "// &
+                    "opposite-spin potential history."
+                test_obj_func_arh_os = .false.
+            end if
+            if (norm2(arh_object%v_nonlinear_list(:, :, :, 1) - basis_scale**4 * &
+                      mock_potential(mock_v_nonlinear_factor, &
+                                     arh_object%dm_list(:, :, :, 1))) > tol) then
+                write(stderr, *) "test_obj_func_arh_os failed: Incorrect "// &
+                    "non-linear potential history."
+                test_obj_func_arh_os = .false.
+            end if
+        end if
+        if (norm2(arh_object%dm_oao - dm_oao) > tol .or. &
+            norm2(arh_object%dm_ao - basis_scale**2 * dm_oao) > tol) then
+            write(stderr, *) "test_obj_func_arh_os failed: Current density matrix "// &
+                "changed by energy evaluation."
+            test_obj_func_arh_os = .false.
+        end if
+
+        ! call routine at the same point and determine if it is not added twice
+        energy = obj_func_arh_os(kappa, error)
+        if (size(arh_object%dm_list, 4) /= 1) then
+            write(stderr, *) "test_obj_func_arh_os failed: History extended for a "// &
+                "point it already holds."
+            test_obj_func_arh_os = .false.
+        end if
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh_object, oao_object)
+
+    end function test_obj_func_arh_os
+
     logical(c_bool) function test_update_orbs_arh_cs() bind(C)
         !
         ! this function tests the subroutine which defines the energy, gradient and
@@ -1483,8 +1759,8 @@ contains
         use otr_oao_test_reference, only: n_ao
         use otr_oao, only: oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_unit_tests, only: n_mock_calls, mock_fock_factor, identity_matrix, &
-                                      generate_random_density_matrix
+        use otr_oao_unit_tests, only: mock_requests, mock_fock_factor, &
+                                      identity_matrix, generate_random_density_matrix
 
         integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
                                   n_param = n_ao * (n_ao - 1) / 2, n_noisy = 3
@@ -1533,10 +1809,10 @@ contains
         arh_object%fock_oo => oao_object%fock_oo
         arh_object%fock_vv => oao_object%fock_vv
         arh_object%energy => oao_object%energy
-        arh_object%update_dm_cs => mock_update_dm_cs
+        arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
 
-        ! reset mock density matrix updating function
-        n_mock_calls = 0
+        ! reset the calls recorded by the mock density matrix evaluating function
+        mock_requests = [integer(ip) :: ]
 
         ! call routine without an orbital rotation for an uninitialized object and
         ! determine if an error is produced
@@ -1556,7 +1832,7 @@ contains
         end if
 
         ! determine if the energy, Fock matrix and non-linear potential of the density
-        ! matrix updating function are picked up
+        ! matrix evaluating function are picked up
         if (abs(func - sum(dm_ao)) > tol) then
             write(stderr, *) "test_update_orbs_arh_cs failed: Incorrect energy."
             test_update_orbs_arh_cs = .false.
@@ -1608,7 +1884,12 @@ contains
         ! valid since it was not rebuilt
         oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (n_mock_calls /= 1) then
+        if (error /= 0) then
+            write(stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
+                "an initialized object."
+            test_update_orbs_arh_cs = .false.
+        end if
+        if (size(mock_requests) /= 1) then
             write(stderr, *) "test_update_orbs_arh_cs failed: Quantities "// &
                 "recomputed without an orbital rotation."
             test_update_orbs_arh_cs = .false.
@@ -1949,6 +2230,34 @@ contains
             end if
         end if
 
+        ! determine if a rotation starting from a density matrix which the history
+        ! already holds, as after the energy evaluation of an accepted trial point,
+        ! does not add that density matrix a second time
+        arh_object%dm_list = reshape(arh_object%dm_oao, [n_ao, n_ao, n_particle, 1_ip])
+        arh_object%fock_list = reshape(arh_object%fock_oao, &
+                                       [n_ao, n_ao, n_particle, 1_ip])
+        arh_object%v_nonlinear_list = reshape(arh_object%v_nonlinear_oao, &
+                                              [n_ao, n_ao, n_particle, 1_ip])
+        kappa = 0.1_rp
+        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write(stderr, *) "test_update_orbs_arh_cs failed: Produced error for a "// &
+                "density matrix already held in the history."
+            test_update_orbs_arh_cs = .false.
+        else if (size(arh_object%dm_list, 4) /= 1) then
+            write(stderr, *) "test_update_orbs_arh_cs failed: History extended for "// &
+                "a density matrix it already holds."
+            test_update_orbs_arh_cs = .false.
+        end if
+
+        ! determine if every recompute asked for the Fock matrix and non-linear
+        ! potential
+        if (any(mock_requests /= 3)) then
+            write(stderr, *) "test_update_orbs_arh_cs failed: Incorrect outputs "// &
+                "requested from density matrix evaluating function."
+            test_update_orbs_arh_cs = .false.
+        end if
+
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
 
@@ -1964,7 +2273,7 @@ contains
         use otr_oao_test_reference, only: n_ao, n_particle, n_param
         use otr_oao, only: oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_unit_tests, only: n_mock_calls, identity_matrix, &
+        use otr_oao_unit_tests, only: mock_requests, identity_matrix, &
                                       generate_random_density_matrix
 
         integer(ip), parameter :: n_electrons = 2, n_noisy = 3
@@ -2024,10 +2333,10 @@ contains
         arh_object%fock_oo => oao_object%fock_oo
         arh_object%fock_vv => oao_object%fock_vv
         arh_object%energy => oao_object%energy
-        arh_object%update_dm_os => mock_update_dm_os
+        arh_object%evaluate_dm_os => mock_evaluate_dm_os
 
-        ! reset mock density matrix updating function
-        n_mock_calls = 0
+        ! reset the calls recorded by the mock density matrix evaluating function
+        mock_requests = [integer(ip) :: ]
 
         ! call routine without an orbital rotation for an uninitialized object and
         ! determine if an error is produced
@@ -2046,7 +2355,7 @@ contains
             test_update_orbs_arh_os = .false.
         end if
 
-        ! determine if the energy and the potentials of the density matrix updating
+        ! determine if the energy and the potentials of the density matrix evaluating
         ! function are picked up
         if (abs(func - sum(dm_ao)) > tol) then
             write(stderr, *) "test_update_orbs_arh_os failed: Incorrect energy."
@@ -2107,7 +2416,12 @@ contains
         ! valid since it was not rebuilt
         oao_object%hess_eigen_stale = .false.
         call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (n_mock_calls /= 1) then
+        if (error /= 0) then
+            write(stderr, *) "test_update_orbs_arh_os failed: Produced error for "// &
+                "an initialized object."
+            test_update_orbs_arh_os = .false.
+        end if
+        if (size(mock_requests) /= 1) then
             write(stderr, *) "test_update_orbs_arh_os failed: Quantities "// &
                 "recomputed without an orbital rotation."
             test_update_orbs_arh_os = .false.
@@ -2552,6 +2866,35 @@ contains
                 end if
             end do
         end do
+
+        ! determine if a rotation starting from a density matrix which the history
+        ! already holds, as after the energy evaluation of an accepted trial point,
+        ! does not add that density matrix a second time
+        arh_object%dm_list = reshape(arh_object%dm_oao, [n_ao, n_ao, n_particle, 1_ip])
+        arh_object%v_same_spin_list = reshape(arh_object%v_same_spin_oao, &
+                                              [n_ao, n_ao, n_particle, 1_ip])
+        arh_object%v_opposite_spin_list = reshape(arh_object%v_opposite_spin_oao, &
+                                                  [n_ao, n_ao, n_particle, 1_ip])
+        arh_object%v_nonlinear_list = reshape(arh_object%v_nonlinear_oao, &
+                                              [n_ao, n_ao, n_particle, 1_ip])
+        kappa = 0.1_rp
+        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
+        if (error /= 0) then
+            write(stderr, *) "test_update_orbs_arh_os failed: Produced error for a "// &
+                "density matrix already held in the history."
+            test_update_orbs_arh_os = .false.
+        else if (size(arh_object%dm_list, 4) /= 1) then
+            write(stderr, *) "test_update_orbs_arh_os failed: History extended for "// &
+                "a density matrix it already holds."
+            test_update_orbs_arh_os = .false.
+        end if
+
+        ! determine if every recompute asked for all potentials
+        if (any(mock_requests /= 15)) then
+            write(stderr, *) "test_update_orbs_arh_os failed: Incorrect outputs "// &
+                "requested from density matrix evaluating function."
+            test_update_orbs_arh_os = .false.
+        end if
 
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
@@ -4521,6 +4864,78 @@ contains
         end if
 
     end function test_spectral_to_dense
+
+    logical(c_bool) function test_density_in_history() bind(C)
+        !
+        ! this function tests the function which reports whether a density is already
+        ! held in the history
+        !
+        use opentrustregion, only: numerical_zero
+        use otr_arh, only: density_in_history, arh_object
+        use otr_oao_test_reference, only: n_ao, n_particle
+
+        real(rp), parameter :: scale = 1e6_rp
+
+        real(rp) :: dm(n_ao, n_ao, n_particle), other(n_ao, n_ao, n_particle)
+
+        ! assume tests pass
+        test_density_in_history = .true.
+
+        ! generate two different densities
+        call random_number(dm)
+        call random_number(other)
+        other = other + 1.0_rp
+
+        ! determine if no density is reported before the history exists
+        allocate(arh_object)
+        if (density_in_history(dm)) then
+            write(stderr, *) "test_density_in_history failed: Density matrix "// &
+                "reported without a history."
+            test_density_in_history = .false.
+        end if
+
+        ! determine if a density is found in a history holding it besides another one,
+        ! also when it differs by much less than numerical zero relative to its size,
+        ! but not when it differs by much more
+        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 2))
+        arh_object%dm_list(:, :, :, 1) = other
+        arh_object%dm_list(:, :, :, 2) = dm
+        if (.not. density_in_history(dm)) then
+            write(stderr, *) "test_density_in_history failed: Density matrix held "// &
+                "in history not found."
+            test_density_in_history = .false.
+        end if
+        if (.not. density_in_history(dm + 0.1_rp * numerical_zero)) then
+            write(stderr, *) "test_density_in_history failed: Density matrix "// &
+                "differing by much less than numerical zero not found."
+            test_density_in_history = .false.
+        end if
+        if (density_in_history(dm + 10.0_rp * numerical_zero)) then
+            write(stderr, *) "test_density_in_history failed: Density matrix "// &
+                "differing by much more than numerical zero found."
+            test_density_in_history = .false.
+        end if
+
+        ! determine if the comparison is relative to the size of the density, where the
+        ! densities are scaled after perturbing them so that the differences scale with
+        ! them instead of vanishing in their precision
+        arh_object%dm_list(:, :, :, 2) = scale * dm
+        if (.not. density_in_history(scale * (dm + 0.1_rp * numerical_zero))) then
+            write(stderr, *) "test_density_in_history failed: Large density matrix "// &
+                "differing by much less than numerical zero relative to its size "// &
+                "not found."
+            test_density_in_history = .false.
+        end if
+        if (density_in_history(scale * (dm + 10.0_rp * numerical_zero))) then
+            write(stderr, *) "test_density_in_history failed: Large density matrix "// &
+                "differing by much more than numerical zero relative to its size found."
+            test_density_in_history = .false.
+        end if
+
+        ! deallocate ARH object
+        deallocate(arh_object)
+
+    end function test_density_in_history
 
     logical(c_bool) function test_prepend() bind(C)
         !

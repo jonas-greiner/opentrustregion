@@ -37,7 +37,7 @@ Roles, one file each:
 | File | Role |
 |---|---|
 | `test_reference.f90` | Tolerances, reference values, `ref_*` reimplementations computed independently of the routine under test. |
-| `<name>_unit_tests.f90` | The Fortran-level `test_*` functions, plus mocks/fixtures needed only to drive them (e.g. a stand-in `get_energy`/`update_dm`). |
+| `<name>_unit_tests.f90` | The Fortran-level `test_*` functions, plus mocks/fixtures needed only to drive them (e.g. a stand-in `evaluate_dm`). |
 | `<name>_mock.f90` | Mocks of the module's *own* production routines that are bridged to the C interface (factories, deconstructors), so a caller (typically `<name>_c_interface_unit_tests.f90`) can verify invocation without running the real logic. |
 | `<name>_c_interface_unit_tests.f90` | Tests for the `bind(C)` wrapper layer; defines its own local `bind(C)` mocks rather than using `<name>_c_interface_mock.f90`. |
 | `<name>_c_interface_mock.f90` | `bind(C)`-signature mocks used exclusively by the Python interface tests, dynamically loaded via `ctypes` from `libotrtestsuite`. |
@@ -204,7 +204,7 @@ Each extension (`arh`, `oao`, `quasi_newton`, `s_gek`) has its own interface cha
 
 If an extension doesn't actually need a given callback, remove it from all six rather than leaving it defined-but-unused — a present-but-ignored parameter looks load-bearing to callers, which will build and pass a closure for nothing. Example: ARH's `get_response` was dropped entirely, since ARH approximates the Hessian response from its own history rather than calling a supplied function.
 
-When a factory-style C interface must accept either of two distinct callback signatures for the same slot (e.g. closed-shell vs. open-shell `update_dm`), expose it as a named union of the two typedefs with members named for the two cases (`update_dm_fp` with `.cs`/`.os` members in `extensions/arh/include/opentrustregion_arh.h`), not a generic `void*` or a single opaque typedef — keeps the header type-safe while giving the factory one parameter slot.
+When a factory-style C interface must accept either of two distinct callback signatures for the same slot (e.g. closed-shell vs. open-shell `evaluate_dm`), expose it as a named union of the two typedefs with members named for the two cases (`arh_evaluate_dm_fp` with `.cs`/`.os` members in `extensions/arh/include/opentrustregion_arh.h`), not a generic `void*` or a single opaque typedef — keeps the header type-safe while giving the factory one parameter slot.
 
 ### OAO and ARH
 
