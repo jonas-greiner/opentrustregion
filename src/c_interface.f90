@@ -181,7 +181,7 @@ module c_interface
     type, bind(C) :: solver_settings_type_c
         type(c_funptr) :: precond, precond_pd, project, modify_step, &
                           get_extra_trial_vectors, conv_check, stability_hess_x, logger
-        logical(c_bool) :: stability, line_search, hess_symm, initialized
+        logical(c_bool) :: stability, line_search, refresh_hess, hess_symm, initialized
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
                          n_micro, jacobi_davidson_start, seed, verbose
@@ -853,6 +853,7 @@ contains
             ! convert logicals
             settings%stability = logical(settings_c%stability)
             settings%line_search = logical(settings_c%line_search)
+            settings%refresh_hess = logical(settings_c%refresh_hess)
             settings%hess_symm = logical(settings_c%hess_symm)
 
             ! convert reals
@@ -991,6 +992,7 @@ contains
             ! convert logicals
             settings_c%stability = logical(settings%stability, kind=c_bool)
             settings_c%line_search = logical(settings%line_search, kind=c_bool)
+            settings_c%refresh_hess = logical(settings%refresh_hess, kind=c_bool)
             settings_c%hess_symm = logical(settings%hess_symm, kind=c_bool)
 
             ! convert reals

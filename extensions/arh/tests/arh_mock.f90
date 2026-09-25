@@ -23,20 +23,33 @@ module otr_arh_mock
 
 contains
 
+    subroutine mock_arh_set_solver_settings(solver_settings)
+        !
+        ! this subroutine wires the OAO mock routines into the solver settings and asks
+        ! for the Hessian refresh
+        !
+        use opentrustregion, only: solver_settings_type
+        use otr_oao_mock, only: mock_oao_set_solver_settings
+
+        type(solver_settings_type), intent(inout) :: solver_settings
+
+        call mock_oao_set_solver_settings(solver_settings)
+        solver_settings%refresh_hess = .true.
+        solver_settings%hess_symm = .false.
+
+    end subroutine mock_arh_set_solver_settings
+
     subroutine mock_arh_factory_cs( &
         dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_arh_funptr, &
-        update_orbs_arh_funptr, precond_arh_funptr, precond_pd_arh_funptr, &
-        project_arh_funptr, error, settings)
+        update_orbs_arh_funptr, solver_settings, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
-                                   precond_type, precond_pd_type, project_type
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_settings_type, evaluate_dm_cs_type
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr, operator(/=)
-        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_precond_oao, &
-                                mock_precond_pd_oao, mock_project_oao, dm_ao_3d
+        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, dm_ao_3d
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -44,9 +57,7 @@ contains
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
-        procedure(project_type), intent(out), pointer :: project_arh_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
 
@@ -104,27 +115,22 @@ contains
         error = 0
         obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
-        precond_arh_funptr => mock_precond_oao
-        precond_pd_arh_funptr => mock_precond_pd_oao
-        project_arh_funptr => mock_project_oao
+        call mock_arh_set_solver_settings(solver_settings)
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
 
     end subroutine mock_arh_factory_cs
 
     subroutine mock_arh_factory_os( &
         dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os_funptr, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
-        precond_pd_arh_funptr, project_arh_funptr, error, settings)
+        obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, hess_x_type, &
-                                   precond_type, precond_pd_type, project_type
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: evaluate_dm_os_type, arh_settings_type
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr, operator(/=)
-        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_precond_oao, &
-                                mock_precond_pd_oao, mock_project_oao, dm_ao_3d
+        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, dm_ao_3d
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -132,9 +138,7 @@ contains
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
-        procedure(project_type), intent(out), pointer :: project_arh_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
 
@@ -193,9 +197,7 @@ contains
         error = 0
         obj_func_arh_funptr => mock_obj_func_oao
         update_orbs_arh_funptr => mock_update_orbs
-        precond_arh_funptr => mock_precond_oao
-        precond_pd_arh_funptr => mock_precond_pd_oao
-        project_arh_funptr => mock_project_oao
+        call mock_arh_set_solver_settings(solver_settings)
         dm_ao_3d => dm_ao
 
     end subroutine mock_arh_factory_os

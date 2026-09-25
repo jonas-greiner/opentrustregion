@@ -52,15 +52,36 @@ contains
 
     end subroutine mock_update_orbs
 
+    subroutine mock_oao_set_solver_settings(solver_settings)
+        !
+        ! this subroutine wires the OAO mock routines into the solver settings
+        !
+        use opentrustregion, only: solver_settings_type
+
+        type(solver_settings_type), intent(inout) :: solver_settings
+
+        integer(ip) :: error
+
+        if (.not. solver_settings%initialized) call solver_settings%init(error)
+        solver_settings%precond => mock_precond_oao
+        solver_settings%precond_pd => mock_precond_pd_oao
+        solver_settings%project => mock_project_oao
+        solver_settings%get_extra_trial_vectors => mock_get_extra_trial_vectors_oao
+        solver_settings%stability_settings%precond => mock_precond_oao
+        solver_settings%stability_settings%project => mock_project_oao
+        solver_settings%stability_settings%get_extra_trial_vectors => &
+            mock_get_extra_trial_vectors_oao
+
+    end subroutine mock_oao_set_solver_settings
+
     subroutine mock_oao_factory_cs( &
         dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_oao_funptr, &
-        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
-        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
+        update_orbs_oao_funptr, solver_settings, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
         !
-        use opentrustregion, only: update_orbs_type, hess_x_type
+        use opentrustregion, only: update_orbs_type, solver_settings_type
         use otr_oao, only: evaluate_dm_cs_type, oao_settings_type
         use otr_oao_test_reference, only: test_evaluate_dm_cs_funptr
 
@@ -70,11 +91,7 @@ contains
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
-        procedure(project_type), intent(out), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
-            get_extra_trial_vectors_oao_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -132,23 +149,19 @@ contains
         error = 0
         obj_func_oao_funptr => mock_obj_func_oao
         update_orbs_oao_funptr => mock_update_orbs
-        precond_oao_funptr => mock_precond_oao
-        precond_pd_oao_funptr => mock_precond_pd_oao
-        project_oao_funptr => mock_project_oao
-        get_extra_trial_vectors_oao_funptr => mock_get_extra_trial_vectors_oao
+        call mock_oao_set_solver_settings(solver_settings)
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
 
     end subroutine mock_oao_factory_cs
 
     subroutine mock_oao_factory_os( &
         dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_oao_funptr, &
-        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
-        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
+        update_orbs_oao_funptr, solver_settings, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
         !
-        use opentrustregion, only: update_orbs_type, hess_x_type
+        use opentrustregion, only: update_orbs_type, solver_settings_type
         use otr_oao, only: evaluate_dm_os_type, oao_settings_type
         use otr_oao_test_reference, only: test_evaluate_dm_os_funptr
 
@@ -158,11 +171,7 @@ contains
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
-        procedure(project_type), intent(out), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
-            get_extra_trial_vectors_oao_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -220,10 +229,7 @@ contains
         error = 0
         obj_func_oao_funptr => mock_obj_func_oao
         update_orbs_oao_funptr => mock_update_orbs
-        precond_oao_funptr => mock_precond_oao
-        precond_pd_oao_funptr => mock_precond_pd_oao
-        project_oao_funptr => mock_project_oao
-        get_extra_trial_vectors_oao_funptr => mock_get_extra_trial_vectors_oao
+        call mock_oao_set_solver_settings(solver_settings)
         dm_ao_3d => dm_ao
 
     end subroutine mock_oao_factory_os

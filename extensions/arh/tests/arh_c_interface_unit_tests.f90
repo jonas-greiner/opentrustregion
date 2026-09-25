@@ -101,14 +101,17 @@ contains
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &
-                                  test_project_c_funptr
+                                  test_project_c_funptr, &
+                                  test_get_extra_trial_vectors_c_funptr, ref_settings, &
+                                  assignment(=), operator(/=)
+        use c_interface, only: solver_settings_type_c
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
         type(c_funptr) :: evaluate_dm_c_funptr, obj_func_arh_c_funptr, &
-                          update_orbs_arh_c_funptr, precond_arh_c_funptr, &
-                          precond_pd_arh_c_funptr, project_arh_c_funptr
+                          update_orbs_arh_c_funptr
         type(arh_settings_type_c) :: settings_c
+        type(solver_settings_type_c) :: solver_settings_c
         integer(c_ip) :: n_particle_c, error_c
 
         ! assume tests pass
@@ -136,11 +139,14 @@ contains
         ! initialize logger logical
         test_logger = .true.
 
+        ! solver settings which are not yet initialized
+        solver_settings_c%initialized = .false._c_bool
+
         ! call ARH orbital updating factory C wrapper for closed-shell case
         error_c = arh_factory_c_wrapper( &
             dm_ao_2d_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-            obj_func_arh_c_funptr, update_orbs_arh_c_funptr, precond_arh_c_funptr, &
-            precond_pd_arh_c_funptr, project_arh_c_funptr, settings_c)
+            obj_func_arh_c_funptr, update_orbs_arh_c_funptr, solver_settings_c, &
+            settings_c)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -176,23 +182,56 @@ contains
         end if
         deallocate(dm_ao_2d_c)
 
-        ! test returned level-shifted preconditioner function
+        ! determine if the solver settings were initialized and the Hessian refresh
+        ! is requested
+        if (.not. solver_settings_c%initialized) then
+            test_arh_factory_c_wrapper = .false.
+            write(stderr, *) "test_arh_factory_c_wrapper failed: Solver settings "// &
+                "not initialized."
+        end if
+        if (.not. solver_settings_c%refresh_hess) then
+            test_arh_factory_c_wrapper = .false.
+            write(stderr, *) "test_arh_factory_c_wrapper failed: Hessian refresh "// &
+                "not requested."
+        end if
+        if (solver_settings_c%hess_symm) then
+            test_arh_factory_c_wrapper = .false.
+            write(stderr, *) "test_arh_factory_c_wrapper failed: Symmetry of the "// &
+                "approximate Hessian not passed on."
+        end if
+
+        ! test functions wired into solver settings
         test_arh_factory_c_wrapper = &
             test_arh_factory_c_wrapper .and. &
-            test_precond_c_funptr(precond_arh_c_funptr, "arh_factory_c_wrapper", &
-                                  " by returned level-shifted preconditioner function")
-
-        ! test returned positive-definite preconditioner function
+            test_precond_c_funptr(solver_settings_c%precond, "arh_factory_c_wrapper", &
+                                  " by wired level-shifted preconditioner function")
         test_arh_factory_c_wrapper = &
             test_arh_factory_c_wrapper .and. test_precond_pd_c_funptr( &
-                precond_pd_arh_c_funptr, "arh_factory_c_wrapper", &
-                " by returned positive-definite preconditioner function")
-
-        ! test returned projection function
+                solver_settings_c%precond_pd, "arh_factory_c_wrapper", &
+                " by wired positive-definite preconditioner function")
         test_arh_factory_c_wrapper = &
             test_arh_factory_c_wrapper .and. &
-            test_project_c_funptr(project_arh_c_funptr, "arh_factory_c_wrapper", &
-                                  " by returned projection function")
+            test_project_c_funptr(solver_settings_c%project, "arh_factory_c_wrapper", &
+                                  " by wired projection function")
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. test_get_extra_trial_vectors_c_funptr( &
+                solver_settings_c%get_extra_trial_vectors, "arh_factory_c_wrapper", &
+                " by wired extra trial vector function")
+
+        ! test functions wired into stability check settings
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. test_precond_c_funptr( &
+                solver_settings_c%stability_settings%precond, "arh_factory_c_wrapper", &
+                " by wired stability check level-shifted preconditioner function")
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. test_project_c_funptr( &
+                solver_settings_c%stability_settings%project, "arh_factory_c_wrapper", &
+                " by wired stability check projection function")
+        test_arh_factory_c_wrapper = &
+            test_arh_factory_c_wrapper .and. test_get_extra_trial_vectors_c_funptr( &
+                solver_settings_c%stability_settings%get_extra_trial_vectors, &
+                "arh_factory_c_wrapper", &
+                " by wired stability check extra trial vector function")
 
         ! check if test has passed
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. test_passed
@@ -207,14 +246,24 @@ contains
         ! get C function pointers to Fortran functions
         evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_os)
 
+        ! set the now initialized solver settings to reference values
+        solver_settings_c = ref_settings
+
         ! call ARH orbital updating factory C wrapper for open-shell case
         error_c = arh_factory_c_wrapper( &
             dm_ao_3d_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-            obj_func_arh_c_funptr, update_orbs_arh_c_funptr, precond_arh_c_funptr, &
-            precond_pd_arh_c_funptr, project_arh_c_funptr, settings_c)
+            obj_func_arh_c_funptr, update_orbs_arh_c_funptr, solver_settings_c, &
+            settings_c)
 
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
+
+        ! determine if the initialized solver settings were kept
+        if (solver_settings_c /= ref_settings) then
+            test_arh_factory_c_wrapper = .false.
+            write(stderr, *) "test_arh_factory_c_wrapper failed: Initialized "// &
+                "solver settings not kept."
+        end if
 
         ! check if tests have passed
         test_arh_factory_c_wrapper = test_arh_factory_c_wrapper .and. test_passed

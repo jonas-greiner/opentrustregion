@@ -8,7 +8,8 @@ module otr_oao
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
                                hess_x_type, precond_type, precond_pd_type, &
-                               project_type, get_extra_trial_vectors_type
+                               project_type, get_extra_trial_vectors_type, &
+                               solver_settings_type
 
     implicit none
 
@@ -96,13 +97,13 @@ module otr_oao
 
 contains
 
-    subroutine oao_factory_cs( &
-        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, obj_func_oao_funptr, &
-        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
-        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
+    subroutine oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
+                              obj_func_oao_funptr, update_orbs_oao_funptr, &
+                              solver_settings, error, settings)
         !
         ! this function returns a modified OAO orbital updating function for the
-        ! closed-shell case
+        ! closed-shell case and wires the OAO preconditioners, projection and extra
+        ! trial vectors into the solver settings
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -110,11 +111,7 @@ contains
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
-        procedure(project_type), intent(out), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
-            get_extra_trial_vectors_oao_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -135,20 +132,19 @@ contains
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
         update_orbs_oao_funptr => update_orbs_oao
-        precond_oao_funptr => precond_oao
-        precond_pd_oao_funptr => precond_pd_oao
-        project_oao_funptr => project_oao
-        get_extra_trial_vectors_oao_funptr => get_extra_trial_vectors_oao
+
+        ! wire the remaining OAO routines into the solver settings
+        call oao_set_solver_settings(solver_settings, error)
 
     end subroutine oao_factory_cs
 
-    subroutine oao_factory_os( &
-        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, obj_func_oao_funptr, &
-        update_orbs_oao_funptr, precond_oao_funptr, precond_pd_oao_funptr, &
-        project_oao_funptr, get_extra_trial_vectors_oao_funptr, error, settings)
+    subroutine oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
+                              obj_func_oao_funptr, update_orbs_oao_funptr, &
+                              solver_settings, error, settings)
         !
         ! this function returns a modified OAO orbital updating function for the
-        ! open-shell case
+        ! open-shell case and wires the OAO preconditioners, projection and extra trial
+        ! vectors into the solver settings
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -156,11 +152,7 @@ contains
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        procedure(precond_type), intent(out), pointer :: precond_oao_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_oao_funptr
-        procedure(project_type), intent(out), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_type), intent(out), pointer :: &
-            get_extra_trial_vectors_oao_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(inout) :: settings
 
@@ -177,10 +169,9 @@ contains
         ! get pointers to modified function
         obj_func_oao_funptr => obj_func_oao
         update_orbs_oao_funptr => update_orbs_oao
-        precond_oao_funptr => precond_oao
-        precond_pd_oao_funptr => precond_pd_oao
-        project_oao_funptr => project_oao
-        get_extra_trial_vectors_oao_funptr => get_extra_trial_vectors_oao
+
+        ! wire the remaining OAO routines into the solver settings
+        call oao_set_solver_settings(solver_settings, error)
 
     end subroutine oao_factory_os
 
@@ -273,6 +264,35 @@ contains
         end if
 
     end subroutine oao_sanity_check
+
+    subroutine oao_set_solver_settings(solver_settings, error)
+        !
+        ! this subroutine wires the OAO preconditioners, projection and extra trial
+        ! vectors into the solver settings and those of its stability check
+        !
+        type(solver_settings_type), intent(inout) :: solver_settings
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! initialize settings
+        if (.not. solver_settings%initialized) then
+            call solver_settings%init(error)
+            if (error /= 0) return
+        end if
+
+        ! set callback functions of the solver and its stability check
+        solver_settings%precond => precond_oao
+        solver_settings%precond_pd => precond_pd_oao
+        solver_settings%project => project_oao
+        solver_settings%get_extra_trial_vectors => get_extra_trial_vectors_oao
+        solver_settings%stability_settings%precond => precond_oao
+        solver_settings%stability_settings%project => project_oao
+        solver_settings%stability_settings%get_extra_trial_vectors => &
+            get_extra_trial_vectors_oao
+
+    end subroutine oao_set_solver_settings
 
     function obj_func_oao(kappa, error) result(energy)
         !

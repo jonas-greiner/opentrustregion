@@ -7,7 +7,7 @@
 module otr_arh
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
-                               hess_x_type, precond_type, precond_pd_type, project_type
+                               hess_x_type, precond_type, solver_settings_type
     use otr_oao, only: oao_settings_type, default_oao_settings
 
     implicit none
@@ -55,6 +55,7 @@ module otr_arh
 
     type :: arh_type
         type(arh_settings_type) :: settings
+        logical :: model_stale = .false.
         integer(ip), pointer :: n_ao => null(), n_param => null(), n_particle => null()
         real(rp), pointer, contiguous :: dm_ao(:, :, :) => null()
         real(rp), pointer :: s_inv_sqrt(:, :) => null(), dm_oao(:, :, :) => null(), &
@@ -92,23 +93,21 @@ contains
 
     subroutine arh_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
                               obj_func_arh_funptr, update_orbs_arh_funptr, &
-                              precond_arh_funptr, precond_pd_arh_funptr, &
-                              project_arh_funptr, error, settings)
+                              solver_settings, error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the
-        ! closed-shell case
+        ! closed-shell case and wires the ARH preconditioners, projection and extra
+        ! trial vectors into the solver settings, which it also asks to rebuild the
+        ! Hessian information of the subsystem solver after rejected steps and tells
+        ! whether the approximate Hessian is symmetric
         !
-        use otr_oao, only: precond_pd_oao, project_oao
-
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
-        procedure(project_type), intent(out), pointer :: project_arh_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
 
@@ -129,31 +128,29 @@ contains
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_arh_cs
         update_orbs_arh_funptr => update_orbs_arh_cs
-        precond_arh_funptr => precond_arh
-        precond_pd_arh_funptr => precond_pd_oao
-        project_arh_funptr => project_oao
+
+        ! wire the remaining ARH routines into the solver settings
+        call arh_set_solver_settings(solver_settings, settings%arh_type, error)
 
     end subroutine arh_factory_cs
 
     subroutine arh_factory_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
                               obj_func_arh_funptr, update_orbs_arh_funptr, &
-                              precond_arh_funptr, precond_pd_arh_funptr, &
-                              project_arh_funptr, error, settings)
+                              solver_settings, error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the
-        ! open-shell case
+        ! open-shell case and wires the ARH preconditioners, projection and extra trial
+        ! vectors into the solver settings, which it also asks to rebuild the Hessian
+        ! information of the subsystem solver after rejected steps and tells whether
+        ! the approximate Hessian is symmetric
         !
-        use otr_oao, only: precond_pd_oao, project_oao
-
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), intent(out), pointer :: precond_arh_funptr
-        procedure(precond_pd_type), intent(out), pointer :: precond_pd_arh_funptr
-        procedure(project_type), intent(out), pointer :: project_arh_funptr
+        type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
 
@@ -170,9 +167,9 @@ contains
         ! get pointers to modified function
         obj_func_arh_funptr => obj_func_arh_os
         update_orbs_arh_funptr => update_orbs_arh_os
-        precond_arh_funptr => precond_arh
-        precond_pd_arh_funptr => precond_pd_oao
-        project_arh_funptr => project_oao
+
+        ! wire the remaining ARH routines into the solver settings
+        call arh_set_solver_settings(solver_settings, settings%arh_type, error)
 
     end subroutine arh_factory_os
 
@@ -251,6 +248,48 @@ contains
 
     end subroutine arh_sanity_check
 
+    subroutine arh_set_solver_settings(solver_settings, arh_type, error)
+        !
+        ! this subroutine wires the ARH preconditioners, projection and extra trial
+        ! vectors into the solver settings and those of its stability check; it also
+        ! asks the solver to rebuild the Hessian information of the subsystem solver
+        ! after rejected steps, since the objective function adds the rejected point to
+        ! the history, which changes the approximate Hessian, and tells it whether the
+        ! approximate Hessian of the given ARH type is symmetric
+        !
+        use otr_oao, only: precond_pd_oao, project_oao, get_extra_trial_vectors_oao
+
+        type(solver_settings_type), intent(inout) :: solver_settings
+        character(*), intent(in) :: arh_type
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! initialize settings
+        if (.not. solver_settings%initialized) then
+            call solver_settings%init(error)
+            if (error /= 0) return
+        end if
+
+        ! set callback functions of the solver and its stability check
+        solver_settings%precond => precond_arh
+        solver_settings%precond_pd => precond_pd_oao
+        solver_settings%project => project_oao
+        solver_settings%get_extra_trial_vectors => get_extra_trial_vectors_oao
+        solver_settings%stability_settings%precond => precond_arh
+        solver_settings%stability_settings%project => project_oao
+        solver_settings%stability_settings%get_extra_trial_vectors => &
+            get_extra_trial_vectors_oao
+
+        ! rebuild the Hessian information after rejected steps
+        solver_settings%refresh_hess = .true.
+
+        ! only the standard ARH type breaks the symmetry of the approximate Hessian
+        solver_settings%hess_symm = arh_type /= "arh"
+
+    end subroutine arh_set_solver_settings
+
     function obj_func_arh_cs(kappa, error) result(energy)
         !
         ! this function defines the energy evaluation in the OAO basis for the
@@ -293,6 +332,7 @@ contains
                              symmetric_transformation(arh_object%s_inv_sqrt, fock_ao))
                 call prepend(arh_object%v_nonlinear_list, symmetric_transformation( &
                     arh_object%s_inv_sqrt, v_nonlinear_ao))
+                arh_object%model_stale = .true.
             end if
         end if
 
@@ -349,6 +389,7 @@ contains
                     symmetric_transformation(arh_object%s_inv_sqrt, v_opposite_spin_ao))
                 call prepend(arh_object%v_nonlinear_list, symmetric_transformation( &
                     arh_object%s_inv_sqrt, v_nonlinear_ao))
+                arh_object%model_stale = .true.
             end if
         end if
 
@@ -370,16 +411,8 @@ contains
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, i, n_list, n_acc, n_acc_nonlinear
-        real(rp) :: min_residual
-        real(rp), allocatable :: fock_ao(:, :, :), v_nonlinear_ao(:, :, :), &
-                                 dm_diff(:, :, :, :), v_linear_diff(:, :, :, :), &
-                                 v_nonlinear_diff(:, :, :, :), chol(:, :), &
-                                 chol_nonlinear(:, :)
-        integer(ip), allocatable :: map(:), map_nonlinear(:)
-        logical, allocatable :: keep_nonlinear(:)
-
-        external :: dgemm
+        integer(ip) :: n_ao, n_particle
+        real(rp), allocatable :: fock_ao(:, :, :), v_nonlinear_ao(:, :, :)
 
         ! initialize error flag
         error = 0
@@ -455,102 +488,9 @@ contains
             ! eigendecomposition of it is now stale
             oao_object%hess_eigen_stale = .true.
 
-            ! prepare the density matrix difference
-            n_list = size(arh_object%dm_list, 4)
-            allocate(dm_diff(n_ao, n_ao, n_particle, n_list))
-            do i = 1, n_list
-                dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - arh_object%dm_oao
-            end do
-
-            ! factorize the density-matrix-difference history for the linear part which 
-            ! resolves linear dependencies in the history; the coupling formulas below 
-            ! never need an explicit metric inverse since everything is expressed in 
-            ! the resulting orthonormalized basis via a single triangular solve
-            call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_list]), chol, map, &
-                                   n_acc)
-
-            ! get potential differences for linear (Coulomb and exact exchange) and 
-            ! non-linear (XC) parts
-            allocate(v_linear_diff(n_ao, n_ao, n_particle, n_list), &
-                     v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
-            do i = 1, n_list
-                v_nonlinear_diff(:, :, :, i) = &
-                    arh_object%v_nonlinear_list(:, :, :, i) - arh_object%v_nonlinear_oao
-                v_linear_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
-                                            arh_object%fock_oao - &
-                                            v_nonlinear_diff(:, :, :, i)
-            end do
-
-            ! factorize the same history for the non-linear part, which can only be
-            ! done once its response is known since the error in that response sets
-            ! the shortest residual a direction has to contribute
-            keep_nonlinear = history_step_mask(dm_diff)
-            min_residual = resolvable_residual( &
-                reshape(dm_diff, [n_ao * n_ao, n_list]), &
-                reshape(v_nonlinear_diff, [n_ao * n_ao, n_list]), keep_nonlinear)
-            call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_list]), &
-                                   chol_nonlinear, map_nonlinear, n_acc_nonlinear, &
-                                   keep_nonlinear, min_residual)
-
-            ! for MS-SR1 and cache the direction vectors
-            if (arh_object%settings%arh_type == "ms_sr1") then
-                ! get inverted A matrix
-                ! linear part: this is exact since Coulomb and exact exchange are
-                ! linear in the density matrix
-                call get_ms_a_inv(dm_diff, v_linear_diff, map, chol, arh_object%a_inv, &
-                                  arh_object%settings, error)
-                if (error /= 0) return
-                ! non-linear part: kept on its own system so that it contracts against
-                ! its own inverse and the exact linear secant relationship is not
-                ! averaged with the approximate one
-                call get_ms_a_inv(dm_diff, v_nonlinear_diff, map_nonlinear, &
-                                  chol_nonlinear, arh_object%a_inv_comb, &
-                                  arh_object%settings, error)
-                if (error /= 0) return
-
-                ! cache the packed history-projection directions the low-rank Hessian 
-                ! factors are assembled from, rebased into the orthonormalized S-basis
-                call cache_history_dirs(v_linear_diff, arh_object%dm_oao, n_list, &
-                                        arh_object%n_param, map, chol, &
-                                        arh_object%linear_potential_dirs)
-                call cache_history_dirs( &
-                    v_nonlinear_diff, arh_object%dm_oao, n_list, arh_object%n_param, &
-                    map_nonlinear, chol_nonlinear, arh_object%nonlinear_potential_dirs)
-            ! ARH and related methods
-            else
-                ! cache the packed history-projection directions the low-rank Hessian 
-                ! factors are assembled from, rebased into the orthonormalized S-basis
-                ! belonging to the linear and non-linear systems
-                call cache_history_dirs(dm_diff, arh_object%dm_oao, n_list, &
-                                        arh_object%n_param, map, chol, &
-                                        arh_object%dm_dirs)
-                call cache_history_dirs(dm_diff, arh_object%dm_oao, n_list, &
-                                        arh_object%n_param, map_nonlinear, &
-                                        chol_nonlinear, arh_object%dm_dirs_nonlinear)
-                if (arh_object%settings%arh_type /= "ms_sp") then
-                    call cache_history_dirs(v_linear_diff, arh_object%dm_oao, n_list, &
-                                            arh_object%n_param, map, chol, &
-                                            arh_object%linear_potential_dirs)
-                    call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, &
-                                            n_list, arh_object%n_param, map_nonlinear, &
-                                            chol_nonlinear, &
-                                            arh_object%nonlinear_potential_dirs)
-                end if
-
-                ! construct A = S^T Y for the linear and non-linear system, 
-                ! congruence-transformed into its own orthonormalized S-basis
-                if (arh_object%settings%arh_type == "ms_sp" .or. &
-                    arh_object%settings%arh_type == "ms_psb") then
-                    arh_object%a_sym = &
-                        build_a_transformed(dm_diff, v_linear_diff, map, chol)
-                    arh_object%a_sym_nonlinear = build_a_transformed( &
-                        dm_diff, v_nonlinear_diff, map_nonlinear, chol_nonlinear)
-                end if
-                deallocate(v_nonlinear_diff, v_linear_diff)
-            end if
-
-            ! assemble the low-rank (response) part of the approximate Hessian
-            call get_low_rank_hess_factors()
+            ! assemble the approximate Hessian model from the history
+            call build_hess_model_cs(error)
+            if (error /= 0) return
         end if
 
         ! set outputs
@@ -577,21 +517,10 @@ contains
         procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, i, n_list, n_acc1, n_acc2, n_acc_nl, &
-                       n_acc1_nl, n_acc2_nl
-        real(rp) :: min_residual
-        integer(ip), allocatable :: map1_nl(:), map2_nl(:), map_comb_nl(:)
-        logical, allocatable :: keep_nonlinear(:)
-        real(rp), allocatable :: &
-            fock_ao(:, :, :), fock_oao(:, :, :), v_same_spin_ao(:, :, :), &
-            v_opposite_spin_ao(:, :, :), v_nonlinear_ao(:, :, :), dm_diff(:, :, :, :), &
-            v_same_spin_diff(:, :, :, :), v_opposite_spin_diff(:, :, :, :), &
-            v_nonlinear_diff(:, :, :, :), v_zero(:, :, :, :), chol1(:, :), &
-            chol2(:, :), chol1_nl(:, :), chol2_nl(:, :), chol_comb(:, :), &
-            chol_comb_nl(:, :), chol_nl(:, :)
-        integer(ip), allocatable :: map1(:), map2(:), map_comb(:), map_nl(:)
-
-        external :: dgemm
+        integer(ip) :: n_ao, n_particle
+        real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :), &
+                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
+                                 v_nonlinear_ao(:, :, :)
 
         ! initialize error flag
         error = 0
@@ -680,149 +609,9 @@ contains
             ! eigendecomposition of it is now stale
             oao_object%hess_eigen_stale = .true.
 
-            ! prepare the density matrix and opposite-spin potential differences
-            n_list = size(arh_object%dm_list, 4)
-            allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
-                     v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list))
-            do i = 1, n_list
-                dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - arh_object%dm_oao
-                v_opposite_spin_diff(:, :, :, i) = &
-                    arh_object%v_opposite_spin_list(:, :, :, i) - &
-                    arh_object%v_opposite_spin_oao
-            end do
-
-            ! factorize the density-matrix-difference history once per channel which 
-            ! resolves linear dependencies in the history; the coupling formulas below 
-            ! never need an explicit metric inverse since everything is expressed in 
-            ! the resulting orthonormalized basis via a single triangular solve; the 
-            ! two channels never mix in this factorization (the metric itself is
-            ! block-diagonal across channels), so they are factorized independently
-            ! and then combined into one block-diagonal (chol, map) pair wherever the 
-            ! coupled types or the linear multisecant system need to act on both 
-            ! channels together
-            call factorize_history(reshape(dm_diff(:, :, 1, :), &
-                                           [n_ao * n_ao, n_list]), chol1, map1, n_acc1)
-            call factorize_history(reshape(dm_diff(:, :, 2, :), &
-                                           [n_ao * n_ao, n_list]), chol2, map2, n_acc2)
-            call combine_channels(chol1, map1, chol2, map2, n_list, chol_comb, map_comb)
-
-            ! keep the same-spin and opposite-spin potential differences separate 
-            ! from the non-linear one since the former are exact at any distance from 
-            ! the current density and therefore take the full history, while the 
-            ! non-linear one describes a drifting Hessian and is fitted only to the 
-            ! history entries the screening below admits
-            allocate(v_same_spin_diff(n_ao, n_ao, n_particle, n_list), &
-                     v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
-            do i = 1, n_list
-                v_same_spin_diff(:, :, :, i) = &
-                    arh_object%v_same_spin_list(:, :, :, i) - arh_object%v_same_spin_oao
-                v_nonlinear_diff(:, :, :, i) = &
-                    arh_object%v_nonlinear_list(:, :, :, i) - arh_object%v_nonlinear_oao
-            end do
-
-            ! MS-SR1
-            if (arh_object%settings%arh_type == "ms_sr1") then
-                ! get inverted A matrix
-                ! linear part: get spin-separated multisecant SR1 matrix for which 
-                ! separation is exact since Coulomb and exact exchange are linear in 
-                ! the density matrix
-                call get_ms_a_inv_os_linear( &
-                    dm_diff, v_same_spin_diff, v_opposite_spin_diff, map_comb, &
-                    chol_comb, arh_object%a_inv, n_ao, arh_object%settings, error)
-                if (error /= 0) return
-                ! non-linear part: get spin-combined multisecant SR1 matrix; the
-                ! non-linear response mixes both channels at once, so this needs its
-                ! own, separate combined-flat factorization of the same history
-                keep_nonlinear = history_step_mask(dm_diff)
-                min_residual = resolvable_residual( &
-                    reshape(dm_diff, [n_ao * n_ao * n_particle, n_list]), &
-                    reshape(v_nonlinear_diff, [n_ao * n_ao * n_particle, n_list]), &
-                    keep_nonlinear)
-                call factorize_history( &
-                    reshape(dm_diff, [n_ao * n_ao * n_particle, n_list]), chol_nl, &
-                    map_nl, n_acc_nl, keep_nonlinear, min_residual)
-                call get_ms_a_inv(dm_diff, v_nonlinear_diff, map_nl, chol_nl, &
-                                  arh_object%a_inv_comb, arh_object%settings, error)
-                if (error /= 0) return
-
-                ! cache the packed history-projection directions the low-rank Hessian 
-                ! factors are assembled from; the linear potential directions combine 
-                ! the same-/opposite-spin channels, while the non-linear potential 
-                ! directions need no channel-splitting; rebased into the
-                ! orthonormalized S-basis
-                call cache_combined_channel_dirs( &
-                    v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, n_list, &
-                    arh_object%n_param, n_particle, map_comb, chol_comb, &
-                    arh_object%linear_potential_dirs)
-                call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, n_list, &
-                                        arh_object%n_param, map_nl, chol_nl, &
-                                        arh_object%nonlinear_potential_dirs)
-            ! ARH and related methods
-            else
-                ! the non-linear response has no opposite-spin counterpart, so the
-                ! combined-channel routine is handed a vanishing one
-                allocate(v_zero(n_ao, n_ao, n_particle, n_list))
-                v_zero = 0.0_rp
-
-                ! screened per-channel factorization for the non-linear system; both
-                ! channels are screened on the step length of the whole density matrix
-                ! rather than on their own channel's, since the non-linear potential of
-                ! either channel is a functional of both spin densities and its
-                ! staleness is therefore set by the total step
-                keep_nonlinear = history_step_mask(dm_diff)
-                min_residual = resolvable_residual( &
-                    reshape(dm_diff(:, :, 1, :), [n_ao * n_ao, n_list]), &
-                    reshape(v_nonlinear_diff(:, :, 1, :), [n_ao * n_ao, n_list]), &
-                    keep_nonlinear)
-                call factorize_history( &
-                    reshape(dm_diff(:, :, 1, :), [n_ao * n_ao, n_list]), chol1_nl, &
-                    map1_nl, n_acc1_nl, keep_nonlinear, min_residual)
-                min_residual = resolvable_residual( &
-                    reshape(dm_diff(:, :, 2, :), [n_ao * n_ao, n_list]), &
-                    reshape(v_nonlinear_diff(:, :, 2, :), [n_ao * n_ao, n_list]), &
-                    keep_nonlinear)
-                call factorize_history( &
-                    reshape(dm_diff(:, :, 2, :), [n_ao * n_ao, n_list]), chol2_nl, &
-                    map2_nl, n_acc2_nl, keep_nonlinear, min_residual)
-                call combine_channels(chol1_nl, map1_nl, chol2_nl, map2_nl, n_list, &
-                                      chol_comb_nl, map_comb_nl)
-
-                ! cache the packed history-projection directions the low-rank Hessian 
-                ! factors are assembled from; the density matrix directions isolate
-                ! each channel separately, the potential directions combine channels,
-                ! each rebased into the S-basis belonging to its own system
-                call cache_channel_split_dirs(dm_diff, arh_object%dm_oao, n_list, &
-                                              arh_object%n_param, n_particle, &
-                                              map_comb, chol_comb, arh_object%dm_dirs)
-                call cache_channel_split_dirs( &
-                    dm_diff, arh_object%dm_oao, n_list, arh_object%n_param, &
-                    n_particle, map_comb_nl, chol_comb_nl, arh_object%dm_dirs_nonlinear)
-                if (arh_object%settings%arh_type /= "ms_sp") then
-                    call cache_combined_channel_dirs( &
-                        v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, &
-                        n_list, arh_object%n_param, n_particle, map_comb, chol_comb, &
-                        arh_object%linear_potential_dirs)
-                    call cache_combined_channel_dirs( &
-                        v_nonlinear_diff, v_zero, arh_object%dm_oao, n_list, &
-                        arh_object%n_param, n_particle, map_comb_nl, chol_comb_nl, &
-                        arh_object%nonlinear_potential_dirs)
-                end if
-
-                ! construct A = S^T Y for the linear and non-linear system, 
-                ! congruence-transformed into its own combined orthonormalized S-basis
-                if (arh_object%settings%arh_type == "ms_sp" .or. &
-                    arh_object%settings%arh_type == "ms_psb") then
-                    arh_object%a_sym = build_a_block_linear_os( &
-                        dm_diff, v_same_spin_diff, v_opposite_spin_diff, n_ao, &
-                        map_comb, chol_comb)
-                    arh_object%a_sym_nonlinear = build_a_block_nonlinear_os( &
-                        dm_diff, v_nonlinear_diff, n_ao, map_comb_nl, chol_comb_nl)
-                end if
-                deallocate(v_same_spin_diff, v_nonlinear_diff, v_zero)
-            end if
-
-            ! assemble the low-rank (response) part of the approximate Hessian
-            call get_low_rank_hess_factors()
+            ! assemble the approximate Hessian model from the history
+            call build_hess_model_os(error)
+            if (error /= 0) return
         end if
 
         ! set outputs
@@ -832,6 +621,325 @@ contains
         hess_x_funptr => hess_x_arh
 
     end subroutine update_orbs_arh_os
+
+    subroutine build_hess_model_cs(error)
+        !
+        ! this subroutine assembles the closed-shell approximate Hessian model from the
+        ! history relative to the current point
+        !
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_ao, n_particle, i, n_list, n_acc, n_acc_nonlinear
+        real(rp) :: min_residual
+        real(rp), allocatable :: dm_diff(:, :, :, :), v_linear_diff(:, :, :, :), &
+                                 v_nonlinear_diff(:, :, :, :), chol(:, :), &
+                                 chol_nonlinear(:, :)
+        integer(ip), allocatable :: map(:), map_nonlinear(:)
+        logical, allocatable :: keep_nonlinear(:)
+
+        ! initialize error flag
+        error = 0
+
+        ! number of AOs and number of particles
+        n_ao = arh_object%n_ao
+        n_particle = arh_object%n_particle
+
+        ! prepare the density matrix difference
+        n_list = size(arh_object%dm_list, 4)
+        allocate(dm_diff(n_ao, n_ao, n_particle, n_list))
+        do i = 1, n_list
+            dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - arh_object%dm_oao
+        end do
+
+        ! factorize the density-matrix-difference history for the linear part which
+        ! resolves linear dependencies in the history; the coupling formulas below
+        ! never need an explicit metric inverse since everything is expressed in the
+        ! resulting orthonormalized basis via a single triangular solve
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_list]), chol, map, &
+                               n_acc)
+
+        ! get potential differences for linear (Coulomb and exact exchange) and
+        ! non-linear (XC) parts
+        allocate(v_linear_diff(n_ao, n_ao, n_particle, n_list), &
+                 v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
+        do i = 1, n_list
+            v_nonlinear_diff(:, :, :, i) = arh_object%v_nonlinear_list(:, :, :, i) - &
+                                           arh_object%v_nonlinear_oao
+            v_linear_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
+                                        arh_object%fock_oao - &
+                                        v_nonlinear_diff(:, :, :, i)
+        end do
+
+        ! factorize the same history for the non-linear part, which can only be done
+        ! once its response is known since the error in that response sets the shortest
+        ! residual a direction has to contribute
+        keep_nonlinear = history_step_mask(dm_diff)
+        min_residual = resolvable_residual( &
+            reshape(dm_diff, [n_ao * n_ao, n_list]), &
+            reshape(v_nonlinear_diff, [n_ao * n_ao, n_list]), keep_nonlinear)
+        call factorize_history(reshape(dm_diff, [n_ao * n_ao, n_list]), &
+                               chol_nonlinear, map_nonlinear, n_acc_nonlinear, &
+                               keep_nonlinear, min_residual)
+
+        ! MS-SR1
+        if (arh_object%settings%arh_type == "ms_sr1") then
+            ! get inverted A matrix
+            ! linear part: this is exact since Coulomb and exact exchange are linear in
+            ! the density matrix
+            call get_ms_a_inv(dm_diff, v_linear_diff, map, chol, arh_object%a_inv, &
+                              arh_object%settings, error)
+            if (error /= 0) return
+            ! non-linear part: kept on its own system so that it contracts against its
+            ! own inverse and the exact linear secant relationship is not averaged with
+            ! the approximate one
+            call get_ms_a_inv(dm_diff, v_nonlinear_diff, map_nonlinear, &
+                              chol_nonlinear, arh_object%a_inv_comb, &
+                              arh_object%settings, error)
+            if (error /= 0) return
+
+            ! cache the packed history-projection directions the low-rank Hessian
+            ! factors are assembled from, rebased into the orthonormalized S-basis
+            call cache_history_dirs(v_linear_diff, arh_object%dm_oao, n_list, &
+                                    arh_object%n_param, map, chol, &
+                                    arh_object%linear_potential_dirs)
+            call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, n_list, &
+                                    arh_object%n_param, map_nonlinear, chol_nonlinear, &
+                                    arh_object%nonlinear_potential_dirs)
+        ! ARH and related methods
+        else
+            ! cache the packed history-projection directions the low-rank Hessian
+            ! factors are assembled from, rebased into the orthonormalized S-basis
+            ! belonging to the linear and non-linear systems
+            call cache_history_dirs(dm_diff, arh_object%dm_oao, n_list, &
+                                    arh_object%n_param, map, chol, arh_object%dm_dirs)
+            call cache_history_dirs(dm_diff, arh_object%dm_oao, n_list, &
+                                    arh_object%n_param, map_nonlinear, chol_nonlinear, &
+                                    arh_object%dm_dirs_nonlinear)
+            if (arh_object%settings%arh_type /= "ms_sp") then
+                call cache_history_dirs(v_linear_diff, arh_object%dm_oao, n_list, &
+                                        arh_object%n_param, map, chol, &
+                                        arh_object%linear_potential_dirs)
+                call cache_history_dirs( &
+                    v_nonlinear_diff, arh_object%dm_oao, n_list, arh_object%n_param, &
+                    map_nonlinear, chol_nonlinear, arh_object%nonlinear_potential_dirs)
+            end if
+
+            ! construct A = S^T Y for the linear and non-linear system,
+            ! congruence-transformed into its own orthonormalized S-basis
+            if (arh_object%settings%arh_type == "ms_sp" .or. &
+                arh_object%settings%arh_type == "ms_psb") then
+                arh_object%a_sym = &
+                    build_a_transformed(dm_diff, v_linear_diff, map, chol)
+                arh_object%a_sym_nonlinear = build_a_transformed( &
+                    dm_diff, v_nonlinear_diff, map_nonlinear, chol_nonlinear)
+            end if
+            deallocate(v_nonlinear_diff, v_linear_diff)
+        end if
+
+        ! assemble the low-rank (response) part of the approximate Hessian
+        call get_low_rank_hess_factors()
+
+        ! the model now reflects the whole history
+        arh_object%model_stale = .false.
+
+    end subroutine build_hess_model_cs
+
+    subroutine build_hess_model_os(error)
+        !
+        ! this subroutine assembles the open-shell approximate Hessian model from the
+        ! history relative to the current point
+        !
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_ao, n_particle, i, n_list, n_acc1, n_acc2, n_acc_nl, &
+                       n_acc1_nl, n_acc2_nl
+        real(rp) :: min_residual
+        integer(ip), allocatable :: map1(:), map2(:), map_comb(:), map_nl(:), &
+                                    map1_nl(:), map2_nl(:), map_comb_nl(:)
+        logical, allocatable :: keep_nonlinear(:)
+        real(rp), allocatable :: &
+            dm_diff(:, :, :, :), v_same_spin_diff(:, :, :, :), &
+            v_opposite_spin_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :), &
+            v_zero(:, :, :, :), chol1(:, :), chol2(:, :), chol1_nl(:, :), &
+            chol2_nl(:, :), chol_comb(:, :), chol_comb_nl(:, :), chol_nl(:, :)
+
+        ! initialize error flag
+        error = 0
+
+        ! number of AOs and number of particles
+        n_ao = arh_object%n_ao
+        n_particle = arh_object%n_particle
+
+        ! prepare the density matrix and opposite-spin potential differences
+        n_list = size(arh_object%dm_list, 4)
+        allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
+                 v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list))
+        do i = 1, n_list
+            dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - arh_object%dm_oao
+            v_opposite_spin_diff(:, :, :, i) = &
+                arh_object%v_opposite_spin_list(:, :, :, i) - &
+                arh_object%v_opposite_spin_oao
+        end do
+
+        ! factorize the density-matrix-difference history once per channel which
+        ! resolves linear dependencies in the history; the coupling formulas below
+        ! never need an explicit metric inverse since everything is expressed in the
+        ! resulting orthonormalized basis via a single triangular solve; the two
+        ! channels never mix in this factorization (the metric itself is block-diagonal
+        ! across channels), so they are factorized independently and then combined into
+        ! one block-diagonal (chol, map) pair wherever the coupled types or the linear
+        ! multisecant system need to act on both channels together
+        call factorize_history(reshape(dm_diff(:, :, 1, :), [n_ao * n_ao, n_list]), &
+                               chol1, map1, n_acc1)
+        call factorize_history(reshape(dm_diff(:, :, 2, :), [n_ao * n_ao, n_list]), &
+                               chol2, map2, n_acc2)
+        call combine_channels(chol1, map1, chol2, map2, n_list, chol_comb, map_comb)
+
+        ! keep the same-spin and opposite-spin potential differences separate from the
+        ! non-linear one since the former are exact at any distance from the current
+        ! density and therefore take the full history, while the non-linear one
+        ! describes a drifting Hessian and is fitted only to the history entries the
+        ! screening below admits
+        allocate(v_same_spin_diff(n_ao, n_ao, n_particle, n_list), &
+                 v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
+        do i = 1, n_list
+            v_same_spin_diff(:, :, :, i) = arh_object%v_same_spin_list(:, :, :, i) - &
+                                           arh_object%v_same_spin_oao
+            v_nonlinear_diff(:, :, :, i) = arh_object%v_nonlinear_list(:, :, :, i) - &
+                                           arh_object%v_nonlinear_oao
+        end do
+
+        ! MS-SR1
+        if (arh_object%settings%arh_type == "ms_sr1") then
+            ! get inverted A matrix
+            ! linear part: get spin-separated multisecant SR1 matrix for which
+            ! separation is exact since Coulomb and exact exchange are linear in the
+            ! density matrix
+            call get_ms_a_inv_os_linear( &
+                dm_diff, v_same_spin_diff, v_opposite_spin_diff, map_comb, chol_comb, &
+                arh_object%a_inv, n_ao, arh_object%settings, error)
+            if (error /= 0) return
+            ! non-linear part: get spin-combined multisecant SR1 matrix; the non-linear
+            ! response mixes both channels at once, so this needs its own, separate
+            ! combined-flat factorization of the same history
+            keep_nonlinear = history_step_mask(dm_diff)
+            min_residual = resolvable_residual( &
+                reshape(dm_diff, [n_ao * n_ao * n_particle, n_list]), &
+                reshape(v_nonlinear_diff, [n_ao * n_ao * n_particle, n_list]), &
+                keep_nonlinear)
+            call factorize_history( &
+                reshape(dm_diff, [n_ao * n_ao * n_particle, n_list]), chol_nl, map_nl, &
+                n_acc_nl, keep_nonlinear, min_residual)
+            call get_ms_a_inv(dm_diff, v_nonlinear_diff, map_nl, chol_nl, &
+                              arh_object%a_inv_comb, arh_object%settings, error)
+            if (error /= 0) return
+
+            ! cache the packed history-projection directions the low-rank Hessian
+            ! factors are assembled from; the linear potential directions combine the
+            ! same-/opposite-spin channels, while the non-linear potential directions
+            ! need no channel-splitting; rebased into the orthonormalized S-basis
+            call cache_combined_channel_dirs( &
+                v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, n_list, &
+                arh_object%n_param, n_particle, map_comb, chol_comb, &
+                arh_object%linear_potential_dirs)
+            call cache_history_dirs(v_nonlinear_diff, arh_object%dm_oao, n_list, &
+                                    arh_object%n_param, map_nl, chol_nl, &
+                                    arh_object%nonlinear_potential_dirs)
+        ! ARH and related methods
+        else
+            ! the non-linear response has no opposite-spin counterpart, so the
+            ! combined-channel routine is handed a vanishing one
+            allocate(v_zero(n_ao, n_ao, n_particle, n_list))
+            v_zero = 0.0_rp
+
+            ! screened per-channel factorization for the non-linear system; both
+            ! channels are screened on the step length of the whole density matrix
+            ! rather than on their own channel's, since the non-linear potential of
+            ! either channel is a functional of both spin densities and its staleness
+            ! is therefore set by the total step
+            keep_nonlinear = history_step_mask(dm_diff)
+            min_residual = resolvable_residual( &
+                reshape(dm_diff(:, :, 1, :), [n_ao * n_ao, n_list]), &
+                reshape(v_nonlinear_diff(:, :, 1, :), [n_ao * n_ao, n_list]), &
+                keep_nonlinear)
+            call factorize_history( &
+                reshape(dm_diff(:, :, 1, :), [n_ao * n_ao, n_list]), chol1_nl, &
+                map1_nl, n_acc1_nl, keep_nonlinear, min_residual)
+            min_residual = resolvable_residual( &
+                reshape(dm_diff(:, :, 2, :), [n_ao * n_ao, n_list]), &
+                reshape(v_nonlinear_diff(:, :, 2, :), [n_ao * n_ao, n_list]), &
+                keep_nonlinear)
+            call factorize_history( &
+                reshape(dm_diff(:, :, 2, :), [n_ao * n_ao, n_list]), chol2_nl, &
+                map2_nl, n_acc2_nl, keep_nonlinear, min_residual)
+            call combine_channels(chol1_nl, map1_nl, chol2_nl, map2_nl, n_list, &
+                                  chol_comb_nl, map_comb_nl)
+
+            ! cache the packed history-projection directions the low-rank Hessian
+            ! factors are assembled from; the density matrix directions isolate each
+            ! channel separately, the potential directions combine channels, each
+            ! rebased into the S-basis belonging to its own system
+            call cache_channel_split_dirs(dm_diff, arh_object%dm_oao, n_list, &
+                                          arh_object%n_param, n_particle, map_comb, &
+                                          chol_comb, arh_object%dm_dirs)
+            call cache_channel_split_dirs(dm_diff, arh_object%dm_oao, n_list, &
+                                          arh_object%n_param, n_particle, map_comb_nl, &
+                                          chol_comb_nl, arh_object%dm_dirs_nonlinear)
+            if (arh_object%settings%arh_type /= "ms_sp") then
+                call cache_combined_channel_dirs( &
+                    v_same_spin_diff, v_opposite_spin_diff, arh_object%dm_oao, n_list, &
+                    arh_object%n_param, n_particle, map_comb, chol_comb, &
+                    arh_object%linear_potential_dirs)
+                call cache_combined_channel_dirs( &
+                    v_nonlinear_diff, v_zero, arh_object%dm_oao, n_list, &
+                    arh_object%n_param, n_particle, map_comb_nl, chol_comb_nl, &
+                    arh_object%nonlinear_potential_dirs)
+            end if
+
+            ! construct A = S^T Y for the linear and non-linear system,
+            ! congruence-transformed into its own combined orthonormalized S-basis
+            if (arh_object%settings%arh_type == "ms_sp" .or. &
+                arh_object%settings%arh_type == "ms_psb") then
+                arh_object%a_sym = build_a_block_linear_os(dm_diff, v_same_spin_diff, &
+                                                           v_opposite_spin_diff, n_ao, &
+                                                           map_comb, chol_comb)
+                arh_object%a_sym_nonlinear = build_a_block_nonlinear_os( &
+                    dm_diff, v_nonlinear_diff, n_ao, map_comb_nl, chol_comb_nl)
+            end if
+            deallocate(v_same_spin_diff, v_nonlinear_diff, v_zero)
+        end if
+
+        ! assemble the low-rank (response) part of the approximate Hessian
+        call get_low_rank_hess_factors()
+
+        ! the model now reflects the whole history
+        arh_object%model_stale = .false.
+
+    end subroutine build_hess_model_os
+
+    subroutine rebuild_stale_hess_model(error)
+        !
+        ! this subroutine rebuilds the approximate Hessian model if the objective
+        ! function has added points to the history since it was last assembled, so that
+        ! the Hessian linear transformation and the preconditioner always use the
+        ! whole history
+        !
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! nothing to rebuild if the model reflects the whole history
+        if (.not. arh_object%model_stale) return
+
+        ! rebuild model for the closed- or open-shell case
+        if (associated(arh_object%evaluate_dm_cs)) then
+            call build_hess_model_cs(error)
+        else
+            call build_hess_model_os(error)
+        end if
+
+    end subroutine rebuild_stale_hess_model
 
     subroutine hess_x_arh(x, hess_x, error)
         !
@@ -853,6 +961,10 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! rebuild the approximate Hessian model if it is stale
+        call rebuild_stale_hess_model(error)
+        if (error /= 0) return
 
         ! number of AOs
         n_ao = arh_object%n_ao
@@ -940,6 +1052,10 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! rebuild the approximate Hessian model if it is stale
+        call rebuild_stale_hess_model(error)
+        if (error /= 0) return
 
         ! an absent level shift gives the plain inverse of the approximate Hessian
         mu = 0.0_rp

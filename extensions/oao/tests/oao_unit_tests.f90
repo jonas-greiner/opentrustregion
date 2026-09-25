@@ -516,6 +516,80 @@ contains
 
     end function test_oao_sanity_check
 
+    logical(c_bool) function test_oao_set_solver_settings() bind(C)
+        !
+        ! this function tests the subroutine which wires the OAO preconditioners,
+        ! projection and extra trial vectors into the solver settings
+        !
+        use otr_oao, only: oao_set_solver_settings, precond_oao_ptr, &
+                           precond_pd_oao_ptr, project_oao_ptr, &
+                           get_extra_trial_vectors_oao_ptr
+        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use test_reference, only: ref_settings, assignment(=), operator(/=)
+
+        type(solver_settings_type) :: solver_settings
+        integer(ip) :: i_case, error
+        character(:), allocatable :: case_name
+
+        ! assume tests pass
+        test_oao_set_solver_settings = .true.
+
+        ! wire the OAO routines into uninitialized settings, which have to be
+        ! initialized to their defaults, and into settings initialized to the reference
+        ! values, which have to be kept
+        do i_case = 1, 2
+            if (i_case == 1) then
+                case_name = "for uninitialized settings"
+            else
+                case_name = "for initialized settings"
+                solver_settings = ref_settings
+            end if
+            call oao_set_solver_settings(solver_settings, error)
+            if (error /= 0) then
+                write (stderr, *) "test_oao_set_solver_settings failed: Produced "// &
+                    "error " // case_name // "."
+                test_oao_set_solver_settings = .false.
+            end if
+            if (.not. solver_settings%initialized) then
+                write (stderr, *) "test_oao_set_solver_settings failed: Settings "// &
+                    "not initialized " // case_name // "."
+                test_oao_set_solver_settings = .false.
+            end if
+            if (i_case == 1 .and. solver_settings /= default_solver_settings) then
+                write (stderr, *) "test_oao_set_solver_settings failed: Settings "// &
+                    "not set to their defaults " // case_name // "."
+                test_oao_set_solver_settings = .false.
+            end if
+            if (i_case == 2 .and. solver_settings /= ref_settings) then
+                write (stderr, *) "test_oao_set_solver_settings failed: Settings "// &
+                    "not kept " // case_name // "."
+                test_oao_set_solver_settings = .false.
+            end if
+            if (.not. ( &
+                associated(solver_settings%precond, precond_oao_ptr) .and. &
+                associated(solver_settings%precond_pd, precond_pd_oao_ptr) .and. &
+                associated(solver_settings%project, project_oao_ptr) .and. &
+                associated(solver_settings%get_extra_trial_vectors, &
+                           get_extra_trial_vectors_oao_ptr))) then
+                write (stderr, *) "test_oao_set_solver_settings failed: OAO "// &
+                    "routines not wired into solver settings " // case_name // "."
+                test_oao_set_solver_settings = .false.
+            end if
+            if (.not. (associated( &
+                solver_settings%stability_settings%precond, precond_oao_ptr) .and. &
+                associated(solver_settings%stability_settings%project, &
+                           project_oao_ptr) .and. &
+                associated(solver_settings%stability_settings%get_extra_trial_vectors, &
+                           get_extra_trial_vectors_oao_ptr))) then
+                write (stderr, *) "test_oao_set_solver_settings failed: OAO "// &
+                    "routines not wired into stability check settings " // &
+                    case_name // "."
+                test_oao_set_solver_settings = .false.
+            end if
+        end do
+
+    end function test_oao_set_solver_settings
+
     logical(c_bool) function test_oao_deconstructor() bind(C)
         !
         ! this function tests the subroutine which deallocates the OAO objects
@@ -2355,11 +2429,8 @@ contains
         !
         use otr_oao, only: oao_factory_cs, oao_object, oao_settings_type, &
                            evaluate_dm_cs_type, obj_func_oao_ptr, update_orbs_oao_ptr, &
-                           precond_oao_ptr, precond_pd_oao_ptr, project_oao_ptr, &
-                           get_extra_trial_vectors_oao_ptr
-        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
-                                   precond_pd_type, project_type, &
-                                   get_extra_trial_vectors_type
+                           precond_oao_ptr
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_ao, operator(==)
 
@@ -2373,11 +2444,7 @@ contains
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
-        procedure(precond_type), pointer :: precond_oao_funptr
-        procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
-        procedure(project_type), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_type), pointer :: &
-            get_extra_trial_vectors_oao_funptr
+        type(solver_settings_type) :: solver_settings
 
         ! assume tests pass
         test_oao_factory_cs = .true.
@@ -2396,9 +2463,7 @@ contains
         ! call routine and determine if an error is produced
         call oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
                             obj_func_oao_funptr, update_orbs_oao_funptr, &
-                            precond_oao_funptr, precond_pd_oao_funptr, &
-                            project_oao_funptr, get_extra_trial_vectors_oao_funptr, &
-                            error, settings)
+                            solver_settings, error, settings)
         if (error /= 0) then
             write (stderr, *) "test_oao_factory_cs failed: Produced error."
             test_oao_factory_cs = .false.
@@ -2463,25 +2528,10 @@ contains
                 "updating function is wrong."
             test_oao_factory_cs = .false.
         end if
-        if (.not. associated(precond_oao_funptr, precond_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_cs failed: Returned level-shifted "// &
-                "preconditioner function is wrong."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. associated(precond_pd_oao_funptr, precond_pd_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_cs failed: Returned "// &
-                "positive-definite preconditioner function is wrong."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. associated(project_oao_funptr, project_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_cs failed: Returned projection "// &
-                "function is wrong."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. associated(get_extra_trial_vectors_oao_funptr, &
-                             get_extra_trial_vectors_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_cs failed: Returned extra trial "// &
-                "vector function is wrong."
+        ! determine if the OAO routines are wired into the solver settings
+        if (.not. associated(solver_settings%precond, precond_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_cs failed: OAO routines not wired "// &
+                "into solver settings."
             test_oao_factory_cs = .false.
         end if
         deallocate(oao_object)
@@ -2495,11 +2545,8 @@ contains
         !
         use otr_oao, only: oao_factory_os, oao_object, oao_settings_type, &
                            evaluate_dm_os_type, obj_func_oao_ptr, update_orbs_oao_ptr, &
-                           precond_oao_ptr, precond_pd_oao_ptr, project_oao_ptr, &
-                           get_extra_trial_vectors_oao_ptr
-        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
-                                   precond_pd_type, project_type, &
-                                   get_extra_trial_vectors_type
+                           precond_oao_ptr
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_ao, n_particle, n_param, operator(==)
 
@@ -2512,11 +2559,7 @@ contains
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
-        procedure(precond_type), pointer :: precond_oao_funptr
-        procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
-        procedure(project_type), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_type), pointer :: &
-            get_extra_trial_vectors_oao_funptr
+        type(solver_settings_type) :: solver_settings
 
         ! assume tests pass
         test_oao_factory_os = .true.
@@ -2537,9 +2580,7 @@ contains
         ! call routine and determine if an error is produced
         call oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
                             obj_func_oao_funptr, update_orbs_oao_funptr, &
-                            precond_oao_funptr, precond_pd_oao_funptr, &
-                            project_oao_funptr, get_extra_trial_vectors_oao_funptr, &
-                            error, settings)
+                            solver_settings, error, settings)
         if (error /= 0) then
             write (stderr, *) "test_oao_factory_os failed: Produced error."
             test_oao_factory_os = .false.
@@ -2594,25 +2635,10 @@ contains
                 "updating function is wrong."
             test_oao_factory_os = .false.
         end if
-        if (.not. associated(precond_oao_funptr, precond_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_os failed: Returned level-shifted "// &
-                "preconditioner function is wrong."
-            test_oao_factory_os = .false.
-        end if
-        if (.not. associated(precond_pd_oao_funptr, precond_pd_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_os failed: Returned "// &
-                "positive-definite preconditioner function is wrong."
-            test_oao_factory_os = .false.
-        end if
-        if (.not. associated(project_oao_funptr, project_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_os failed: Returned projection "// &
-                "function is wrong."
-            test_oao_factory_os = .false.
-        end if
-        if (.not. associated(get_extra_trial_vectors_oao_funptr, &
-                             get_extra_trial_vectors_oao_ptr)) then
-            write (stderr, *) "test_oao_factory_os failed: Returned extra trial "// &
-                "vector function is wrong."
+        ! determine if the OAO routines are wired into the solver settings
+        if (.not. associated(solver_settings%precond, precond_oao_ptr)) then
+            write (stderr, *) "test_oao_factory_os failed: OAO routines not wired "// &
+                "into solver settings."
             test_oao_factory_os = .false.
         end if
         deallocate(oao_object)

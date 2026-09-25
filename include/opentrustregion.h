@@ -127,6 +127,7 @@ typedef struct {
 
   c_bool stability;
   c_bool line_search;
+  c_bool refresh_hess;
   c_bool hess_symm;
   c_bool initialized;
 

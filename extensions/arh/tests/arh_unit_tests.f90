@@ -321,6 +321,40 @@ contains
 
     end subroutine setup_arh_and_oao_objects
 
+    subroutine setup_empty_history(n_particle)
+        !
+        ! this subroutine sets up the module-global ARH object with an empty history
+        ! and vanishing potentials at the current point for the closed- or open-shell
+        ! case
+        !
+        use otr_arh, only: arh_object
+
+        integer(ip), intent(in) :: n_particle
+
+        integer(ip) :: n_ao
+
+        n_ao = size(arh_object%dm_oao, 1)
+        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
+        allocate(arh_object%v_nonlinear_oao(n_ao, n_ao, n_particle))
+        arh_object%v_nonlinear_oao = 0.0_rp
+        if (n_particle == 1) then
+            arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
+            allocate(arh_object%fock_list(n_ao, n_ao, n_particle, 0), &
+                     arh_object%fock_oao(n_ao, n_ao, n_particle))
+            arh_object%fock_oao = 0.0_rp
+        else
+            arh_object%evaluate_dm_os => mock_evaluate_dm_os
+            allocate(arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
+                     arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0), &
+                     arh_object%v_same_spin_oao(n_ao, n_ao, n_particle), &
+                     arh_object%v_opposite_spin_oao(n_ao, n_ao, n_particle))
+            arh_object%v_same_spin_oao = 0.0_rp
+            arh_object%v_opposite_spin_oao = 0.0_rp
+        end if
+
+    end subroutine setup_empty_history
+
     function generate_nonredundant_vector(n_param, n_particle, n_ao, dm_oao) &
         result(vector)
         !
@@ -1158,14 +1192,13 @@ contains
         ! this function tests the subroutine which returns the modified ARH orbital
         ! updating function for the closed-shell case
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
-                                   precond_pd_type, project_type
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
                            evaluate_dm_cs_type, obj_func_arh_cs_ptr, &
                            update_orbs_arh_cs_ptr, precond_arh_ptr
         use otr_oao_test_reference, only: n_ao
         use otr_arh_test_reference, only: operator(==)
-        use otr_oao, only: oao_object, precond_pd_oao_ptr, project_oao_ptr
+        use otr_oao, only: oao_object
         use otr_oao_unit_tests, only: identity_matrix, generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
 
@@ -1179,16 +1212,14 @@ contains
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), pointer :: precond_arh_funptr
-        procedure(precond_pd_type), pointer :: precond_pd_arh_funptr
-        procedure(project_type), pointer :: project_arh_funptr
+        type(solver_settings_type) :: solver_settings
 
         ! assume tests pass
         test_arh_factory_cs = .true.
 
         ! setup settings object
         call setup_settings(settings)
-        settings%arh_type = "ms_psb"
+        settings%arh_type = "arh"
 
         ! initialize density matrix and an orthonormal AO basis, so that the AO and the
         ! OAO basis coincide
@@ -1200,9 +1231,8 @@ contains
 
         ! call routine and determine if an error is produced
         call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
-                         obj_func_arh_funptr, update_orbs_arh_funptr, &
-                         precond_arh_funptr, precond_pd_arh_funptr, &
-                         project_arh_funptr, error, settings)
+                         obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, &
+                         error, settings)
         if (error /= 0) then
             write (stderr, *) "test_arh_factory_cs failed: Produced error."
             test_arh_factory_cs = .false.
@@ -1257,19 +1287,16 @@ contains
                 "updating function is wrong."
             test_arh_factory_cs = .false.
         end if
-        if (.not. associated(precond_arh_funptr, precond_arh_ptr)) then
-            write (stderr, *) "test_arh_factory_cs failed: Returned level-shifted "// &
-                "preconditioner function is wrong."
+        ! determine if the ARH routines are wired into the solver settings for the
+        ! ARH type
+        if (.not. associated(solver_settings%precond, precond_arh_ptr)) then
+            write (stderr, *) "test_arh_factory_cs failed: ARH routines not wired "// &
+                "into solver settings."
             test_arh_factory_cs = .false.
         end if
-        if (.not. associated(precond_pd_arh_funptr, precond_pd_oao_ptr)) then
-            write (stderr, *) "test_arh_factory_cs failed: Returned "// &
-                "positive-definite preconditioner function is wrong."
-            test_arh_factory_cs = .false.
-        end if
-        if (.not. associated(project_arh_funptr, project_oao_ptr)) then
-            write (stderr, *) "test_arh_factory_cs failed: Returned projection "// &
-                "function is wrong."
+        if (solver_settings%hess_symm) then
+            write (stderr, *) "test_arh_factory_cs failed: Non-symmetric "// &
+                "approximate Hessian of ARH type not reported."
             test_arh_factory_cs = .false.
         end if
 
@@ -1277,9 +1304,8 @@ contains
         ! rejects it
         settings%arh_type = "unknown"
         call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
-                         obj_func_arh_funptr, update_orbs_arh_funptr, &
-                         precond_arh_funptr, precond_pd_arh_funptr, &
-                         project_arh_funptr, error, settings)
+                         obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, &
+                         error, settings)
         if (error == 0) then
             write (stderr, *) "test_arh_factory_cs failed: Error not thrown for "// &
                 "unknown ARH type."
@@ -1296,14 +1322,13 @@ contains
         ! this function tests the subroutine which returns the modified ARH orbital
         ! updating function for the open-shell case
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, precond_type, &
-                                   precond_pd_type, project_type
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
                            evaluate_dm_os_type, obj_func_arh_os_ptr, &
                            update_orbs_arh_os_ptr, precond_arh_ptr
         use otr_oao_test_reference, only: n_ao, n_particle, n_param
         use otr_arh_test_reference, only: operator(==)
-        use otr_oao, only: oao_object, precond_pd_oao_ptr, project_oao_ptr
+        use otr_oao, only: oao_object
         use otr_oao_unit_tests, only: identity_matrix, generate_random_density_matrix
         use opentrustregion_unit_tests, only: setup_settings
 
@@ -1316,16 +1341,14 @@ contains
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), pointer :: precond_arh_funptr
-        procedure(precond_pd_type), pointer :: precond_pd_arh_funptr
-        procedure(project_type), pointer :: project_arh_funptr
+        type(solver_settings_type) :: solver_settings
 
         ! assume tests pass
         test_arh_factory_os = .true.
 
         ! setup settings object
         call setup_settings(settings)
-        settings%arh_type = "ms_psb"
+        settings%arh_type = "arh"
 
         ! initialize density matrices and an orthonormal AO basis, so that the AO and
         ! the OAO basis coincide
@@ -1339,9 +1362,8 @@ contains
 
         ! call routine and determine if an error is produced
         call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
-                         obj_func_arh_funptr, update_orbs_arh_funptr, &
-                         precond_arh_funptr, precond_pd_arh_funptr, &
-                         project_arh_funptr, error, settings)
+                         obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, &
+                         error, settings)
         if (error /= 0) then
             write (stderr, *) "test_arh_factory_os failed: Produced error."
             test_arh_factory_os = .false.
@@ -1396,19 +1418,16 @@ contains
                 "updating function is wrong."
             test_arh_factory_os = .false.
         end if
-        if (.not. associated(precond_arh_funptr, precond_arh_ptr)) then
-            write (stderr, *) "test_arh_factory_os failed: Returned level-shifted "// &
-                "preconditioner function is wrong."
+        ! determine if the ARH routines are wired into the solver settings for the
+        ! ARH type
+        if (.not. associated(solver_settings%precond, precond_arh_ptr)) then
+            write (stderr, *) "test_arh_factory_os failed: ARH routines not wired "// &
+                "into solver settings."
             test_arh_factory_os = .false.
         end if
-        if (.not. associated(precond_pd_arh_funptr, precond_pd_oao_ptr)) then
-            write (stderr, *) "test_arh_factory_os failed: Returned "// &
-                "positive-definite preconditioner function is wrong."
-            test_arh_factory_os = .false.
-        end if
-        if (.not. associated(project_arh_funptr, project_oao_ptr)) then
-            write (stderr, *) "test_arh_factory_os failed: Returned projection "// &
-                "function is wrong."
+        if (solver_settings%hess_symm) then
+            write (stderr, *) "test_arh_factory_os failed: Non-symmetric "// &
+                "approximate Hessian of ARH type not reported."
             test_arh_factory_os = .false.
         end if
 
@@ -1464,6 +1483,99 @@ contains
         end if
 
     end function test_arh_sanity_check
+
+    logical(c_bool) function test_arh_set_solver_settings() bind(C)
+        !
+        ! this function tests the subroutine which wires the ARH preconditioners,
+        ! projection and extra trial vectors into the solver settings, requests the
+        ! Hessian refresh and reports the symmetry of the approximate Hessian
+        !
+        use otr_arh, only: arh_set_solver_settings, precond_arh_ptr
+        use otr_oao, only: precond_pd_oao_ptr, project_oao_ptr, &
+                           get_extra_trial_vectors_oao_ptr
+        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use test_reference, only: ref_settings, assignment(=), operator(/=)
+
+        type(solver_settings_type) :: solver_settings
+        integer(ip) :: i_case, error
+        character(:), allocatable :: case_name, arh_type
+
+        ! assume tests pass
+        test_arh_set_solver_settings = .true.
+
+        ! wire the ARH routines into uninitialized settings, which have to be
+        ! initialized to their defaults, and into settings initialized to the reference
+        ! values, which have to be kept
+        do i_case = 1, 2
+            if (i_case == 1) then
+                case_name = "for uninitialized settings"
+                arh_type = "arh"
+            else
+                case_name = "for initialized settings"
+                arh_type = "ms_sr1"
+                solver_settings = ref_settings
+            end if
+            call arh_set_solver_settings(solver_settings, arh_type, error)
+            if (error /= 0) then
+                write (stderr, *) "test_arh_set_solver_settings failed: Produced "// &
+                    "error "//case_name//"."
+                test_arh_set_solver_settings = .false.
+            end if
+            if (.not. solver_settings%initialized) then
+                write (stderr, *) "test_arh_set_solver_settings failed: Settings "// &
+                    "not initialized "//case_name//"."
+                test_arh_set_solver_settings = .false.
+            end if
+            if (.not. ( &
+                associated(solver_settings%precond, precond_arh_ptr) .and. &
+                associated(solver_settings%precond_pd, precond_pd_oao_ptr) .and. &
+                associated(solver_settings%project, project_oao_ptr) .and. associated( &
+                    solver_settings%stability_settings%precond, precond_arh_ptr) .and. &
+                associated(solver_settings%stability_settings%project, &
+                           project_oao_ptr) .and. &
+                associated(solver_settings%get_extra_trial_vectors, &
+                           get_extra_trial_vectors_oao_ptr) .and. &
+                associated(solver_settings%stability_settings%get_extra_trial_vectors, &
+                           get_extra_trial_vectors_oao_ptr))) then
+                write (stderr, *) "test_arh_set_solver_settings failed: ARH "// &
+                    "routines not wired into solver settings "//case_name//"."
+                test_arh_set_solver_settings = .false.
+            end if
+            if (.not. solver_settings%refresh_hess) then
+                write (stderr, *) "test_arh_set_solver_settings failed: Hessian "// &
+                    "refresh not requested "//case_name//"."
+                test_arh_set_solver_settings = .false.
+            end if
+            if (solver_settings%hess_symm .neqv. (arh_type /= "arh")) then
+                write (stderr, *) "test_arh_set_solver_settings failed: Symmetry "// &
+                    "of the approximate Hessian of ARH type "//arh_type// &
+                    " reported wrongly "//case_name//"."
+                test_arh_set_solver_settings = .false.
+            end if
+
+            ! apart from the Hessian refresh and the symmetry of the approximate
+            ! Hessian, uninitialized settings have to be set to their defaults and
+            ! initialized settings have to be kept
+            if (i_case == 1) then
+                solver_settings%refresh_hess = default_solver_settings%refresh_hess
+                solver_settings%hess_symm = default_solver_settings%hess_symm
+                if (solver_settings /= default_solver_settings) then
+                    write (stderr, *) "test_arh_set_solver_settings failed: "// &
+                        "Settings not set to their defaults "//case_name//"."
+                    test_arh_set_solver_settings = .false.
+                end if
+            else
+                solver_settings%refresh_hess = ref_settings%refresh_hess
+                solver_settings%hess_symm = ref_settings%hess_symm
+                if (solver_settings /= ref_settings) then
+                    write (stderr, *) "test_arh_set_solver_settings failed: "// &
+                        "Settings not kept "//case_name//"."
+                    test_arh_set_solver_settings = .false.
+                end if
+            end if
+        end do
+
+    end function test_arh_set_solver_settings
 
     logical(c_bool) function test_obj_func_arh_cs() bind(C)
         !
@@ -1540,6 +1652,11 @@ contains
                 "energy evaluation."
             test_obj_func_arh_cs = .false.
         end if
+        if (arh_object%model_stale) then
+            write (stderr, *) "test_obj_func_arh_cs failed: Hessian model marked "// &
+                "stale without history."
+            test_obj_func_arh_cs = .false.
+        end if
 
         ! call routine again with an empty history and determine if the rotated density
         ! matrix is added together with the Fock matrix and non-linear potential
@@ -1589,12 +1706,24 @@ contains
                 "changed by energy evaluation."
             test_obj_func_arh_cs = .false.
         end if
+        if (.not. arh_object%model_stale) then
+            write (stderr, *) "test_obj_func_arh_cs failed: Hessian model not "// &
+                "marked stale after adding the evaluated point to the history."
+            test_obj_func_arh_cs = .false.
+        end if
 
-        ! call routine at the same point and determine if it is not added twice
+        ! call routine at the same point and determine if it is not added twice and
+        ! leaves the Hessian model untouched
+        arh_object%model_stale = .false.
         energy = obj_func_arh_cs(kappa, error)
         if (size(arh_object%dm_list, 4) /= 1) then
             write (stderr, *) "test_obj_func_arh_cs failed: History extended for a "// &
                 "point it already holds."
+            test_obj_func_arh_cs = .false.
+        end if
+        if (arh_object%model_stale) then
+            write (stderr, *) "test_obj_func_arh_cs failed: Hessian model marked "// &
+                "stale for a point the history already holds."
             test_obj_func_arh_cs = .false.
         end if
 
@@ -1679,6 +1808,11 @@ contains
                 "energy evaluation."
             test_obj_func_arh_os = .false.
         end if
+        if (arh_object%model_stale) then
+            write (stderr, *) "test_obj_func_arh_os failed: Hessian model marked "// &
+                "stale without history."
+            test_obj_func_arh_os = .false.
+        end if
 
         ! call routine again with an empty history and determine if the rotated density
         ! matrix is added together with the potentials evaluated at it, while the
@@ -1736,12 +1870,24 @@ contains
                 "changed by energy evaluation."
             test_obj_func_arh_os = .false.
         end if
+        if (.not. arh_object%model_stale) then
+            write (stderr, *) "test_obj_func_arh_os failed: Hessian model not "// &
+                "marked stale after adding the evaluated point to the history."
+            test_obj_func_arh_os = .false.
+        end if
 
-        ! call routine at the same point and determine if it is not added twice
+        ! call routine at the same point and determine if it is not added twice and
+        ! leaves the Hessian model untouched
+        arh_object%model_stale = .false.
         energy = obj_func_arh_os(kappa, error)
         if (size(arh_object%dm_list, 4) /= 1) then
             write (stderr, *) "test_obj_func_arh_os failed: History extended for a "// &
                 "point it already holds."
+            test_obj_func_arh_os = .false.
+        end if
+        if (arh_object%model_stale) then
+            write (stderr, *) "test_obj_func_arh_os failed: Hessian model marked "// &
+                "stale for a point the history already holds."
             test_obj_func_arh_os = .false.
         end if
 
@@ -1764,9 +1910,7 @@ contains
                                       identity_matrix, generate_random_density_matrix
 
         integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
-                                  n_param = n_ao * (n_ao - 1) / 2, n_noisy = 3
-        real(rp), parameter :: noisy_scales(n_noisy) = [1e-3_rp, 3e-3_rp, 1e-2_rp], &
-                               duplicate_offset = 1e-3_rp
+                                  n_param = n_ao * (n_ao - 1) / 2
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: &
@@ -1774,10 +1918,8 @@ contains
             v_nonlinear_saved(n_ao, n_ao, n_particle), &
             dm_saved_2(n_ao, n_ao, n_particle), fock_saved_2(n_ao, n_ao, n_particle), &
             v_nonlinear_saved_2(n_ao, n_ao, n_particle), kappa(n_param), &
-            grad(n_param), h_diag(n_param), func, &
-            dm_diff_check(n_ao, n_ao, n_particle, 2), full_dirs_check(n_param, 2), &
-            chol_ref_check(2, 2), perturbation(n_ao, n_ao)
-        integer(ip) :: i, n_diff, info, error, pivot_order(2)
+            grad(n_param), h_diag(n_param), func
+        integer(ip) :: error
         procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! assume tests pass
@@ -1873,7 +2015,11 @@ contains
                 "history not initialized empty."
             test_update_orbs_arh_cs = .false.
         end if
-        if (size(arh_object%dm_dirs, 2) /= 0) then
+        if (.not. allocated(arh_object%dm_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Approximate Hessian "// &
+                "model not assembled for the initial point."
+            test_update_orbs_arh_cs = .false.
+        else if (size(arh_object%dm_dirs, 2) /= 0) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Difference "// &
                 "directions not initialized empty."
             test_update_orbs_arh_cs = .false.
@@ -1930,6 +2076,7 @@ contains
         dm_saved_2 = arh_object%dm_oao
         fock_saved_2 = arh_object%fock_oao
         v_nonlinear_saved_2 = arh_object%v_nonlinear_oao
+        arh_object%model_stale = .true.
         call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_cs failed: Produced error "// &
@@ -1965,269 +2112,16 @@ contains
             test_update_orbs_arh_cs = .false.
         end if
 
-        ! determine if the quantities the density matrix and Fock matrix differences
-        ! feed into are built from the history and the current quantities
-        if (.not. allocated(arh_object%a_sym) .or. &
-            .not. allocated(arh_object%a_sym_nonlinear)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Linear and "// &
-                "non-linear symmetrized A matrix not constructed."
+        ! determine if the approximate Hessian model is assembled from the history
+        ! extended by the point the orbitals were rotated away from
+        if (arh_object%model_stale .or. .not. allocated(arh_object%dm_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Approximate Hessian "// &
+                "model not assembled."
             test_update_orbs_arh_cs = .false.
-            return
-        end if
-        if (.not. allocated(arh_object%dm_dirs) .or. &
-            .not. allocated(arh_object%dm_dirs_nonlinear)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Linear and "// &
-                "non-linear density matrix difference directions not constructed."
+        else if (size(arh_object%dm_dirs, 2) /= 2) then
+            write (stderr, *) "test_update_orbs_arh_cs failed: Approximate Hessian "// &
+                "model not assembled from the extended history."
             test_update_orbs_arh_cs = .false.
-            return
-        end if
-        if (.not. allocated(arh_object%linear_potential_dirs) .or. &
-            .not. allocated(arh_object%nonlinear_potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Linear and "// &
-                "non-linear potential difference directions not both constructed."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-        n_diff = size(arh_object%dm_dirs, 2)
-        if (n_diff /= 2) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Two independent "// &
-                "history entries were not both accepted."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-        dm_diff_check(:, :, :, 1) = dm_saved_2 - arh_object%dm_oao
-        dm_diff_check(:, :, :, 2) = dm_saved - arh_object%dm_oao
-        call ref_pivoted_cholesky( &
-            dm_diff_check(:, :, :, 1), dm_diff_check(:, :, :, 2), arh_object%dm_oao, &
-            n_param, pivot_order, full_dirs_check, chol_ref_check, info)
-        if (info /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Reference Cholesky "// &
-                "factorization of the raw history Gram matrix failed."
-            test_update_orbs_arh_cs = .false.
-        else
-            if (norm2(matmul(arh_object%dm_dirs, chol_ref_check) - full_dirs_check) > &
-                tol) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: Density matrix "// &
-                    "difference directions are not rebased by the inverse of the "// &
-                    "Cholesky factor of the raw history Gram matrix."
-                test_update_orbs_arh_cs = .false.
-            end if
-        end if
-        if (size(arh_object%linear_potential_dirs, 2) /= n_diff) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Potential "// &
-                "difference directions are not rebased onto the same basis as the "// &
-                "density matrix difference directions."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%a_sym, 1) /= n_diff) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized A "// &
-                "matrix does not match the density matrix difference directions."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%a_sym - transpose(arh_object%a_sym)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized A "// &
-                "matrix is not symmetric."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%dm_dirs_nonlinear, 2) > n_diff) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear density "// &
-                "matrix difference directions outnumber the linear ones."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%nonlinear_potential_dirs, 2) /= &
-            size(arh_object%dm_dirs_nonlinear, 2)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
-                "potential difference directions are not rebased onto the same "// &
-                "basis as the non-linear density matrix difference directions."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%a_sym_nonlinear, 1) /= &
-            size(arh_object%dm_dirs_nonlinear, 2)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
-                "symmetrized A matrix does not match the non-linear density matrix "// &
-                "difference directions."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (norm2(arh_object%a_sym_nonlinear - &
-                  transpose(arh_object%a_sym_nonlinear)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
-                "symmetrized A matrix is not symmetric."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! call routine for multisecant SR1 and determine if the separately regularized
-        ! multisecant SR1 systems are constructed
-        arh_object%settings%arh_type = "ms_sr1"
-        oao_object%hess_eigen_stale = .false.
-        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
-                "multisecant SR1."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. oao_object%hess_eigen_stale) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Cached "// &
-                "eigendecomposition of the static Hessian part not marked stale "// &
-                "for multisecant SR1."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. allocated(arh_object%a_inv)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Multisecant SR1 "// &
-                "system not constructed."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. allocated(arh_object%a_inv_comb)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Spin-combined "// &
-                "multisecant SR1 system not constructed."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (.not. allocated(arh_object%linear_potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Linear potential "// &
-                "difference directions not constructed."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-        if (.not. allocated(arh_object%nonlinear_potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
-                "potential difference directions not constructed."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-
-        ! determine if the quantities the density matrix and potential differences
-        ! feed into are built from the history and the current quantities
-        n_diff = size(arh_object%dm_list, 4)
-        if (size(arh_object%linear_potential_dirs, 2) /= n_diff .or. &
-            size(arh_object%nonlinear_potential_dirs, 2) /= n_diff) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Two independent "// &
-                "history entries were not both accepted for multisecant SR1."
-            test_update_orbs_arh_cs = .false.
-            return
-        end if
-        if (size(arh_object%a_inv, 1) /= n_diff .or. &
-            norm2(arh_object%a_inv - transpose(arh_object%a_inv)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Multisecant SR1 "// &
-                "pseudoinverse is not a symmetric matrix matching the linear "// &
-                "potential difference directions."
-            test_update_orbs_arh_cs = .false.
-        end if
-        if (size(arh_object%a_inv_comb, 1) /= n_diff .or. &
-            norm2(arh_object%a_inv_comb - transpose(arh_object%a_inv_comb)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Spin-combined "// &
-                "multisecant SR1 pseudoinverse is not a symmetric matrix matching "// &
-                "the non-linear potential difference directions."
-            test_update_orbs_arh_cs = .false.
-        end if
-
-        ! replace the history with one step far from the current density, then rotate 
-        ! only slightly, so that the history spans two very different step lengths
-        arh_object%settings%arh_type = "ms_psb"
-        deallocate(arh_object%dm_list, arh_object%fock_list, &
-                   arh_object%v_nonlinear_list)
-        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 1), &
-                 arh_object%fock_list(n_ao, n_ao, n_particle, 1), &
-                 arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 1))
-        arh_object%dm_list(:, :, 1, 1) = &
-            generate_random_density_matrix(n_ao, n_electrons)
-        arh_object%fock_list(:, :, :, 1) = fock_saved
-        arh_object%v_nonlinear_list(:, :, :, 1) = v_nonlinear_saved
-        kappa = 1e-6_rp
-        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
-                "a history spanning very different step lengths."
-            test_update_orbs_arh_cs = .false.
-        else
-            ! the screen drops the single far entry, so the non-linear system keeps
-            ! one entry where the linear system keeps both
-            if (size(arh_object%dm_dirs, 2) /= 2 * n_particle) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: The linear "// &
-                    "system does not keep the entire history spanning very "// &
-                    "different step lengths."
-                test_update_orbs_arh_cs = .false.
-            end if
-            if (size(arh_object%dm_dirs_nonlinear, 2) /= n_particle) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: The non-linear "// &
-                    "system does not drop the history entry beyond the step-length "// &
-                    "cutoff."
-                test_update_orbs_arh_cs = .false.
-            end if
-            if (size(arh_object%dm_dirs, 2) == size(arh_object%dm_dirs_nonlinear, 2)) &
-                then
-                if (norm2(arh_object%dm_dirs - arh_object%dm_dirs_nonlinear) <= tol) &
-                    then
-                    write (stderr, *) "test_update_orbs_arh_cs failed: The "// &
-                        "non-linear system shares the linear system's basis even "// &
-                        "though the history spans very different step lengths."
-                    test_update_orbs_arh_cs = .false.
-                end if
-            end if
-            if (size(arh_object%nonlinear_potential_dirs, 2) /= &
-                size(arh_object%dm_dirs_nonlinear, 2)) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
-                    "potential difference directions follow the linear system's "// &
-                    "basis for a history spanning very different step lengths."
-                test_update_orbs_arh_cs = .false.
-            end if
-            if (size(arh_object%a_sym_nonlinear, 1) /= &
-                size(arh_object%dm_dirs_nonlinear, 2)) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: Non-linear "// &
-                    "symmetrized A matrix follows the linear system's basis for a "// &
-                    "history spanning very different step lengths."
-                test_update_orbs_arh_cs = .false.
-            end if
-            if (size(arh_object%a_sym, 1) /= size(arh_object%dm_dirs, 2)) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: Symmetrized A "// &
-                    "matrix follows the non-linear system's basis for a history "// &
-                    "spanning very different step lengths."
-                test_update_orbs_arh_cs = .false.
-            end if
-        end if
-
-        ! replace the history with one whose non-linear response is not a function of
-        ! the density at all, while keeping the step lengths comparable so that the
-        ! step-length screen admits every entry: the noisy non-linear system directions 
-        ! then need to be dropped
-        deallocate(arh_object%dm_list, arh_object%fock_list, &
-                   arh_object%v_nonlinear_list)
-        allocate(arh_object%dm_list(n_ao, n_ao, n_particle, n_noisy), &
-                 arh_object%fock_list(n_ao, n_ao, n_particle, n_noisy), &
-                 arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, n_noisy))
-        do i = 1, n_noisy
-            call random_number(perturbation)
-            arh_object%dm_list(:, :, 1, i) = &
-                oao_object%dm_oao(:, :, 1) + &
-                noisy_scales(i) * (perturbation + transpose(perturbation))
-            arh_object%fock_list(:, :, :, i) = fock_saved
-        end do
-
-        ! the last entry barely departs from the direction of the one before it, so
-        ! that it stays linearly independent but contributes a residual far below the
-        ! noise of the response, while still being admitted by the step-length screen
-        call random_number(perturbation)
-        arh_object%dm_list(:, :, 1, n_noisy) = &
-            arh_object%dm_list(:, :, 1, n_noisy - 1) + duplicate_offset * &
-            noisy_scales(n_noisy - 1) * (perturbation + transpose(perturbation))
-        call random_number(arh_object%v_nonlinear_list)
-        kappa = 1e-3_rp
-        call update_orbs_arh_cs(kappa, func, grad, h_diag, hess_x_funptr, error)
-        n_diff = size(arh_object%dm_list, 4)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_cs failed: Produced error for "// &
-                "a history whose non-linear response is noise."
-            test_update_orbs_arh_cs = .false.
-        else
-            if (size(arh_object%dm_dirs, 2) /= n_diff * n_particle) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: The linear "// &
-                    "system does not keep the entire history whose non-linear "// &
-                    "response is noise."
-                test_update_orbs_arh_cs = .false.
-            end if
-            if (size(arh_object%dm_dirs_nonlinear, 2) >= n_diff * n_particle) then
-                write (stderr, *) "test_update_orbs_arh_cs failed: The non-linear "// &
-                    "system does not drop any history entry whose response is noise."
-                test_update_orbs_arh_cs = .false.
-            end if
         end if
 
         ! determine if a rotation starting from a density matrix which the history
@@ -2276,10 +2170,7 @@ contains
         use otr_oao_unit_tests, only: mock_requests, identity_matrix, &
                                       generate_random_density_matrix
 
-        integer(ip), parameter :: n_electrons = 2, n_noisy = 3
-        real(rp), parameter :: noisy_scales(n_noisy) = [1e-3_rp, 3e-3_rp, 1e-2_rp], &
-                               duplicate_offset = 1e-3_rp
-        character(6), parameter :: case_types(2) = [character(6) :: "ms_psb", "ms_sr1"]
+        integer(ip), parameter :: n_electrons = 2
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: dm_saved(n_ao, n_ao, n_particle), &
@@ -2290,14 +2181,8 @@ contains
                     v_same_spin_saved_2(n_ao, n_ao, n_particle), &
                     v_opposite_spin_saved_2(n_ao, n_ao, n_particle), &
                     v_nonlinear_saved_2(n_ao, n_ao, n_particle), kappa(n_param), &
-                    grad(n_param), h_diag(n_param), func, &
-                    dm_diff_check(n_ao, n_ao, n_particle, 2), &
-                    embedded_check(n_ao, n_ao, n_particle, 2), &
-                    full_dirs_check(n_param, 2 * n_particle), &
-                    full_dirs_block(n_param, 2), chol_ref_check(2, 2), &
-                    perturbation(n_ao, n_ao)
-        integer(ip) :: i, j, col, n_diff, info, error, pivot_order(2), i_case, &
-                       i_noisy, n_linear, n_nonlinear, n_nonlinear_expected
+                    grad(n_param), h_diag(n_param), func
+        integer(ip) :: i, error
         procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! assume tests pass
@@ -2396,7 +2281,11 @@ contains
                 "history not initialized empty."
             test_update_orbs_arh_os = .false.
         end if
-        if (size(arh_object%dm_dirs, 2) /= 0) then
+        if (.not. allocated(arh_object%dm_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Approximate Hessian "// &
+                "model not assembled for the initial point."
+            test_update_orbs_arh_os = .false.
+        else if (size(arh_object%dm_dirs, 2) /= 0) then
             write (stderr, *) "test_update_orbs_arh_os failed: Difference "// &
                 "directions not initialized empty."
             test_update_orbs_arh_os = .false.
@@ -2462,6 +2351,7 @@ contains
         v_same_spin_saved_2 = arh_object%v_same_spin_oao
         v_opposite_spin_saved_2 = arh_object%v_opposite_spin_oao
         v_nonlinear_saved_2 = arh_object%v_nonlinear_oao
+        arh_object%model_stale = .true.
         call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
         if (error /= 0) then
             write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &
@@ -2475,7 +2365,6 @@ contains
             test_update_orbs_arh_os = .false.
             return
         end if
-        n_diff = size(arh_object%dm_list, 4)
         if (norm2(arh_object%dm_list(:, :, :, 1) - dm_saved_2) > tol .or. &
             norm2(arh_object%dm_list(:, :, :, 2) - dm_saved) > tol) then
             write (stderr, *) "test_update_orbs_arh_os failed: Incorrect density "// &
@@ -2505,364 +2394,17 @@ contains
             test_update_orbs_arh_os = .false.
         end if
 
-        ! determine if the quantities the density matrix and potential differences
-        ! feed into are built from the history and the current quantities
-        if (.not. allocated(arh_object%a_sym) .or. &
-            .not. allocated(arh_object%a_sym_nonlinear)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Linear and "// &
-                "non-linear symmetrized A matrix not constructed."
+        ! determine if the approximate Hessian model is assembled from the history
+        ! extended by the point the orbitals were rotated away from
+        if (arh_object%model_stale .or. .not. allocated(arh_object%dm_dirs)) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Approximate Hessian "// &
+                "model not assembled."
             test_update_orbs_arh_os = .false.
-            return
-        end if
-        if (.not. allocated(arh_object%dm_dirs) .or. &
-            .not. allocated(arh_object%dm_dirs_nonlinear)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Linear and "// &
-                "non-linear density matrix difference directions not constructed."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        if (.not. allocated(arh_object%linear_potential_dirs) .or. &
-            .not. allocated(arh_object%nonlinear_potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Linear and "// &
-                "non-linear potential difference directions not both constructed."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        col = size(arh_object%dm_dirs, 2)
-        if (col /= n_particle * n_diff) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Two independent "// &
-                "history entries were not both accepted in both channels."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        dm_diff_check(:, :, :, 1) = dm_saved_2 - arh_object%dm_oao
-        dm_diff_check(:, :, :, 2) = dm_saved - arh_object%dm_oao
-        do j = 1, n_particle
-            embedded_check = 0.0_rp
-            embedded_check(:, :, j, :) = dm_diff_check(:, :, j, :)
-            call ref_pivoted_cholesky(embedded_check(:, :, :, 1), &
-                                      embedded_check(:, :, :, 2), arh_object%dm_oao, &
-                                      n_param, pivot_order, full_dirs_block, &
-                                      chol_ref_check, info)
-            full_dirs_check(:, (j - 1) * n_diff + 1:j * n_diff) = full_dirs_block
-            if (info /= 0) then
-                write (stderr, *) "test_update_orbs_arh_os failed: Reference "// &
-                    "Cholesky factorization of the raw per-channel history Gram "// &
-                    "matrix failed."
-                test_update_orbs_arh_os = .false.
-            else
-                if (norm2( &
-                    matmul(arh_object%dm_dirs(:, (j - 1) * n_diff + 1:j * n_diff), &
-                           chol_ref_check) - full_dirs_block) > tol) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: Density "// &
-                        "matrix difference directions are not rebased by the "// &
-                        "inverse of the per-channel Cholesky factor."
-                    test_update_orbs_arh_os = .false.
-                end if
-            end if
-        end do
-        if (size(arh_object%linear_potential_dirs, 2) /= col) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Potential "// &
-                "difference directions are not rebased onto the same basis as the "// &
-                "density matrix difference directions."
+        else if (size(arh_object%dm_dirs, 2) /= n_particle * 2) then
+            write (stderr, *) "test_update_orbs_arh_os failed: Approximate Hessian "// &
+                "model not assembled from the extended history."
             test_update_orbs_arh_os = .false.
         end if
-        if (size(arh_object%a_sym, 1) /= col) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized A "// &
-                "matrix does not match the density matrix difference directions."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%a_sym - transpose(arh_object%a_sym)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized A "// &
-                "matrix is not symmetric."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (size(arh_object%dm_dirs_nonlinear, 2) > col) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear density "// &
-                "matrix difference directions outnumber the linear ones."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (size(arh_object%nonlinear_potential_dirs, 2) /= &
-            size(arh_object%dm_dirs_nonlinear, 2)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
-                "potential difference directions are not rebased onto the same "// &
-                "basis as the non-linear density matrix difference directions."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (size(arh_object%a_sym_nonlinear, 1) /= &
-            size(arh_object%dm_dirs_nonlinear, 2)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
-                "symmetrized A matrix does not match the non-linear density matrix "// &
-                "difference directions."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (norm2(arh_object%a_sym_nonlinear - &
-                  transpose(arh_object%a_sym_nonlinear)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
-                "symmetrized A matrix is not symmetric."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! call routine for multisecant SR1 and determine if the spin-separated and
-        ! spin-combined multisecant SR1 systems are constructed
-        arh_object%settings%arh_type = "ms_sr1"
-        call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-        if (error /= 0) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Produced error for "// &
-                "multisecant SR1."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (.not. allocated(arh_object%a_inv)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Spin-separated "// &
-                "multisecant SR1 system not constructed."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (.not. allocated(arh_object%a_inv_comb)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Spin-combined "// &
-                "multisecant SR1 system not constructed."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (.not. allocated(arh_object%linear_potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Spin-separated "// &
-                "potential difference directions not constructed."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        if (.not. allocated(arh_object%nonlinear_potential_dirs)) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
-                "potential difference directions not constructed."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-
-        ! determine that both channels' history entries were accepted as independent 
-        ! by their respective factorizations, and that the inverse A matrices are 
-        ! symmetric matrices matching the direction sets they are meant to couple
-        n_diff = size(arh_object%dm_list, 4)
-        if (size(arh_object%nonlinear_potential_dirs, 2) /= n_diff) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Two independent "// &
-                "history entries were not both accepted for the spin-combined "// &
-                "non-linear multisecant SR1 system."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        if (size(arh_object%linear_potential_dirs, 2) /= n_particle * n_diff) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Two independent "// &
-                "history entries were not both accepted in both channels for the "// &
-                "spin-separated linear multisecant SR1 system."
-            test_update_orbs_arh_os = .false.
-            return
-        end if
-        if (size(arh_object%a_inv, 1) /= n_particle * n_diff .or. &
-            norm2(arh_object%a_inv - transpose(arh_object%a_inv)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Spin-separated "// &
-                "multisecant SR1 pseudoinverse is not a symmetric matrix matching "// &
-                "the linear potential difference directions."
-            test_update_orbs_arh_os = .false.
-        end if
-        if (size(arh_object%a_inv_comb, 1) /= n_diff .or. &
-            norm2(arh_object%a_inv_comb - transpose(arh_object%a_inv_comb)) > tol) then
-            write (stderr, *) "test_update_orbs_arh_os failed: Spin-combined "// &
-                "multisecant SR1 pseudoinverse is not a symmetric matrix matching "// &
-                "the non-linear potential difference directions."
-            test_update_orbs_arh_os = .false.
-        end if
-
-        ! replace the history with one step far from the current density, then rotate 
-        ! only slightly, so that the history spans two very different step lengths; 
-        ! both multisecant families are driven through this since the open-shell 
-        ! non-linear response is factorized per channel for the ARH family but on the 
-        ! channel-combined history for multisecant SR1
-        do i_case = 1, 2
-            arh_object%settings%arh_type = case_types(i_case)
-            deallocate(arh_object%dm_list, arh_object%v_same_spin_list, &
-                       arh_object%v_opposite_spin_list, arh_object%v_nonlinear_list)
-            allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 1), &
-                     arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 1), &
-                     arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 1), &
-                     arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 1))
-            do i = 1, n_particle
-                arh_object%dm_list(:, :, i, 1) = &
-                    generate_random_density_matrix(n_ao, n_electrons)
-            end do
-            arh_object%v_same_spin_list(:, :, :, 1) = v_same_spin_saved
-            arh_object%v_opposite_spin_list(:, :, :, 1) = v_opposite_spin_saved
-            arh_object%v_nonlinear_list(:, :, :, 1) = v_nonlinear_saved
-            kappa = 1e-6_rp
-            call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-            if (error /= 0) then
-                write (stderr, *) "test_update_orbs_arh_os failed: Produced error "// &
-                    "for a history spanning very different step lengths for "// &
-                    trim(case_types(i_case))//"."
-                test_update_orbs_arh_os = .false.
-                cycle
-            end if
-
-            ! the screen drops the single far entry, so the non-linear system keeps
-            ! one entry where the linear system keeps both: multisecant SR1 factorizes 
-            ! the non-linear history with both channels flattened together and so keeps 
-            ! a single direction, while the ARH family factorizes each channel on its 
-            ! own and so keeps one per channel
-            if (case_types(i_case) == "ms_sr1") then
-                n_linear = size(arh_object%linear_potential_dirs, 2)
-                n_nonlinear = size(arh_object%nonlinear_potential_dirs, 2)
-                n_nonlinear_expected = 1
-            else
-                n_linear = size(arh_object%dm_dirs, 2)
-                n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
-                n_nonlinear_expected = n_particle
-            end if
-            if (n_linear /= 2 * n_particle) then
-                write (stderr, *) "test_update_orbs_arh_os failed: The linear "// &
-                    "system does not keep the entire history spanning very "// &
-                    "different step lengths for "//trim(case_types(i_case))//"."
-                test_update_orbs_arh_os = .false.
-            end if
-            if (n_nonlinear /= n_nonlinear_expected) then
-                write (stderr, *) "test_update_orbs_arh_os failed: The non-linear "// &
-                    "system does not drop the history entry beyond the step-length "// &
-                    "cutoff in every channel for "//trim(case_types(i_case))//"."
-                test_update_orbs_arh_os = .false.
-            end if
-
-            ! the remaining quantities are those the respective family builds, each of
-            ! which has to follow its own system's basis
-            if (case_types(i_case) == "ms_sr1") then
-                if (size(arh_object%a_inv_comb, 1) /= n_nonlinear) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: "// &
-                        "Spin-combined multisecant SR1 pseudoinverse follows the "// &
-                        "linear system's basis for a history spanning very "// &
-                        "different step lengths for "//trim(case_types(i_case))//"."
-                    test_update_orbs_arh_os = .false.
-                end if
-            else
-                if (size(arh_object%dm_dirs, 2) == &
-                    size(arh_object%dm_dirs_nonlinear, 2)) then
-                    if (norm2(arh_object%dm_dirs - arh_object%dm_dirs_nonlinear) <= &
-                        tol) then
-                        write (stderr, *) "test_update_orbs_arh_os failed: The "// &
-                            "non-linear system shares the linear system's basis "// &
-                            "even though the history spans very different step "// &
-                            "lengths for "//trim(case_types(i_case))//"."
-                        test_update_orbs_arh_os = .false.
-                    end if
-                end if
-                if (size(arh_object%nonlinear_potential_dirs, 2) /= &
-                    size(arh_object%dm_dirs_nonlinear, 2)) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
-                        "potential difference directions follow the linear "// &
-                        "system's basis for a history spanning very different step "// &
-                        "lengths for "//trim(case_types(i_case))//"."
-                    test_update_orbs_arh_os = .false.
-                end if
-                if (size(arh_object%a_sym_nonlinear, 1) /= &
-                    size(arh_object%dm_dirs_nonlinear, 2)) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: Non-linear "// &
-                        "symmetrized A matrix follows the linear system's basis "// &
-                        "for a history spanning very different step lengths for "// &
-                        trim(case_types(i_case))//"."
-                    test_update_orbs_arh_os = .false.
-                end if
-                if (size(arh_object%a_sym, 1) /= size(arh_object%dm_dirs, 2)) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: Symmetrized "// &
-                        "A matrix follows the non-linear system's basis for a "// &
-                        "history spanning very different step lengths for "// &
-                        trim(case_types(i_case))//"."
-                    test_update_orbs_arh_os = .false.
-                end if
-            end if
-
-            ! replace the history with one whose non-linear response is not a function
-            ! of the density in a single channel, while keeping the step lengths
-            ! comparable so that the step-length screen admits every entry: the noisy 
-            ! non-linear system directions then need to be dropped, and putting it in 
-            ! one channel at a time covers the per-channel factorization of the ARH 
-            ! family as well as the spin-combined one of multisecant SR1
-            do i_noisy = 1, n_particle
-                deallocate(arh_object%dm_list, arh_object%v_same_spin_list, &
-                           arh_object%v_opposite_spin_list, arh_object%v_nonlinear_list)
-                allocate( &
-                    arh_object%dm_list(n_ao, n_ao, n_particle, n_noisy), &
-                    arh_object%v_same_spin_list(n_ao, n_ao, n_particle, n_noisy), &
-                    arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, n_noisy), &
-                    arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, n_noisy))
-                do j = 1, n_noisy
-                    do i = 1, n_particle
-                        call random_number(perturbation)
-                        arh_object%dm_list(:, :, i, j) = &
-                            oao_object%dm_oao(:, :, i) + &
-                            noisy_scales(j) * (perturbation + transpose(perturbation))
-                    end do
-                    arh_object%v_same_spin_list(:, :, :, j) = v_same_spin_saved
-                    arh_object%v_opposite_spin_list(:, :, :, j) = v_opposite_spin_saved
-                end do
-
-                ! the last entry barely departs from the direction of the one before 
-                ! it, so that it stays linearly independent but contributes a residual 
-                ! far below the noise of the response, while still being admitted by 
-                ! the step-length screen
-                do i = 1, n_particle
-                    call random_number(perturbation)
-                    arh_object%dm_list(:, :, i, n_noisy) = &
-                        arh_object%dm_list(:, :, i, n_noisy - 1) + &
-                        duplicate_offset * noisy_scales(n_noisy - 1) * &
-                        (perturbation + transpose(perturbation))
-                end do
-
-                ! only the channel under test carries a response that is not a
-                ! function of the density
-                do j = 1, n_noisy
-                    do i = 1, n_particle
-                        if (i == i_noisy) then
-                            call random_number(perturbation)
-                            arh_object%v_nonlinear_list(:, :, i, j) = perturbation
-                        else
-                            arh_object%v_nonlinear_list(:, :, i, j) = mock_potential( &
-                                mock_v_nonlinear_factor, arh_object%dm_list(:, :, i, j))
-                        end if
-                    end do
-                end do
-                kappa = 1e-3_rp
-                call update_orbs_arh_os(kappa, func, grad, h_diag, hess_x_funptr, error)
-                if (error /= 0) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: Produced "// &
-                        "error for a history whose non-linear response is noise in "// &
-                        "one channel for "//trim(case_types(i_case))//"."
-                    test_update_orbs_arh_os = .false.
-                    cycle
-                end if
-                n_diff = size(arh_object%dm_list, 4)
-
-                ! multisecant SR1 flattens both channels into one factorization, and 
-                ! therefore noise in either channel leads to a residual far below the 
-                ! noise of the response, while the ARH family factorizes each channel 
-                ! on its own and only the residual in the noisy channel ends up being 
-                ! removed
-                if (case_types(i_case) == "ms_sr1") then
-                    n_linear = size(arh_object%linear_potential_dirs, 2)
-                    n_nonlinear = size(arh_object%nonlinear_potential_dirs, 2)
-                    n_nonlinear_expected = n_diff - 1
-                else
-                    n_linear = size(arh_object%dm_dirs, 2)
-                    n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
-                    n_nonlinear_expected = n_diff * n_particle - 1
-                end if
-                if (n_linear /= n_diff * n_particle) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: The linear "// &
-                        "system does not keep the entire history whose non-linear "// &
-                        "response is noise in one channel for "// &
-                        trim(case_types(i_case))//"."
-                    test_update_orbs_arh_os = .false.
-                end if
-                if (n_nonlinear > n_nonlinear_expected) then
-                    write (stderr, *) "test_update_orbs_arh_os failed: The "// &
-                        "non-linear system does not drop a history entry whose "// &
-                        "response is noise in the channel carrying it for "// &
-                        trim(case_types(i_case))//"."
-                    test_update_orbs_arh_os = .false.
-                end if
-            end do
-        end do
 
         ! determine if a rotation starting from a density matrix which the history
         ! already holds, as after the energy evaluation of an accepted trial point,
@@ -2897,6 +2439,776 @@ contains
         deallocate(arh_object, oao_object)
 
     end function test_update_orbs_arh_os
+
+    logical(c_bool) function test_build_hess_model_cs() bind(C)
+        !
+        ! this function tests the subroutine which assembles the closed-shell
+        ! approximate Hessian model from the history relative to the current point
+        !
+        use otr_arh, only: build_hess_model_cs, arh_object, arh_types
+        use otr_oao_test_reference, only: n_ao
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: mock_requests, mock_fock_factor, &
+                                      identity_matrix, generate_random_density_matrix
+
+        integer(ip), parameter :: n_particle = 1, n_electrons = 2, &
+                                  n_param = n_ao * (n_ao - 1) / 2, n_noisy = 3
+        real(rp), parameter :: noisy_scales(n_noisy) = [1e-3_rp, 3e-3_rp, 1e-2_rp], &
+                               duplicate_offset = 1e-3_rp
+
+        real(rp), allocatable :: dm_list(:, :, :, :), fock_list(:, :, :, :), &
+                                 v_nonlinear_list(:, :, :, :)
+        real(rp) :: perturbation(n_ao, n_ao), full_dirs_check(n_param, 2), &
+                    chol_ref_check(2, 2)
+        integer(ip) :: i, i_case, i_type, n_list, n_linear, n_nonlinear, info, error, &
+                       pivot_order(2)
+        logical :: built
+        character(:), allocatable :: arh_type, case_name
+
+        ! assume tests pass
+        test_build_hess_model_cs = .true.
+
+        ! set up the OAO object with an orthonormal AO basis, so that the AO and the
+        ! OAO basis coincide
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%s_inv_sqrt = identity_matrix(n_ao)
+        allocate(oao_object%dm_oao(n_ao, n_ao, n_particle))
+        oao_object%dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_electrons)
+
+        ! build the model from a history of independent points, one spanning very
+        ! different step lengths and one whose non-linear response is noise
+        do i_case = 1, 3
+            if (i_case == 3) then
+                n_list = n_noisy
+            else
+                n_list = 2
+            end if
+            if (allocated(dm_list)) deallocate(dm_list, fock_list, v_nonlinear_list)
+            allocate(dm_list(n_ao, n_ao, n_particle, n_list), &
+                     fock_list(n_ao, n_ao, n_particle, n_list), &
+                     v_nonlinear_list(n_ao, n_ao, n_particle, n_list))
+            if (i_case == 1) then
+                case_name = "a history of independent points"
+                do i = 1, n_list
+                    call random_number(perturbation)
+                    dm_list(:, :, 1, i) = oao_object%dm_oao(:, :, 1) + 1e-2_rp * &
+                                          (perturbation + transpose(perturbation))
+                end do
+            else if (i_case == 2) then
+                case_name = "a history spanning very different step lengths"
+                call random_number(perturbation)
+                dm_list(:, :, 1, 1) = oao_object%dm_oao(:, :, 1) + &
+                                      1e-6_rp * (perturbation + transpose(perturbation))
+                dm_list(:, :, 1, 2) = generate_random_density_matrix(n_ao, n_electrons)
+            else
+                case_name = "a history whose non-linear response is noise"
+                do i = 1, n_list
+                    call random_number(perturbation)
+                    dm_list(:, :, 1, i) = &
+                        oao_object%dm_oao(:, :, 1) + &
+                        noisy_scales(i) * (perturbation + transpose(perturbation))
+                end do
+
+                ! the last entry barely departs from the direction of the one before
+                ! it, so that it stays linearly independent but contributes a residual
+                ! far below the noise of the response, while still being admitted by
+                ! the step-length screen
+                call random_number(perturbation)
+                dm_list(:, :, 1, n_list) = &
+                    dm_list(:, :, 1, n_list - 1) + duplicate_offset * &
+                    noisy_scales(n_list - 1) * (perturbation + transpose(perturbation))
+            end if
+            do i = 1, n_list
+                fock_list(:, :, :, i) = mock_potential(mock_fock_factor(1), &
+                                                       dm_list(:, :, :, i))
+                v_nonlinear_list(:, :, :, i) = mock_potential(mock_v_nonlinear_factor, &
+                                                              dm_list(:, :, :, i))
+            end do
+            if (i_case == 3) call random_number(v_nonlinear_list)
+
+            ! the density matrix difference directions have to be rebased by the
+            ! inverse of the Cholesky factor of the raw history Gram matrix
+            if (i_case == 1) then
+                call ref_pivoted_cholesky(dm_list(:, :, :, 1) - oao_object%dm_oao, &
+                                          dm_list(:, :, :, 2) - oao_object%dm_oao, &
+                                          oao_object%dm_oao, n_param, pivot_order, &
+                                          full_dirs_check, chol_ref_check, info)
+                if (info /= 0) then
+                    write (stderr, *) "test_build_hess_model_cs failed: Reference "// &
+                        "Cholesky factorization of the raw history Gram matrix "// &
+                        "failed for "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                end if
+            end if
+
+            ! build the model for every ARH type on a newly set up ARH object
+            do i_type = 1, size(arh_types)
+                arh_type = trim(arh_types(i_type))
+                allocate(arh_object)
+                call setup_settings(arh_object%settings)
+                arh_object%settings%arh_type = arh_type
+                arh_object%n_ao => oao_object%n_ao
+                arh_object%n_param => oao_object%n_param
+                arh_object%n_particle => oao_object%n_particle
+                arh_object%dm_oao => oao_object%dm_oao
+                arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
+                arh_object%fock_oao = mock_potential(mock_fock_factor(1), &
+                                                     arh_object%dm_oao)
+                arh_object%v_nonlinear_oao = &
+                    mock_potential(mock_v_nonlinear_factor, arh_object%dm_oao)
+                arh_object%dm_list = dm_list
+                arh_object%fock_list = fock_list
+                arh_object%v_nonlinear_list = v_nonlinear_list
+                arh_object%model_stale = .true.
+                mock_requests = [integer(ip) ::]
+                call build_hess_model_cs(error)
+
+                ! determine if the model is assembled from the history without
+                ! evaluating the density matrix or changing the history
+                if (error /= 0) then
+                    write (stderr, *) "test_build_hess_model_cs failed: Produced "// &
+                        "error for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                    deallocate(arh_object)
+                    cycle
+                end if
+                if (arh_object%model_stale) then
+                    write (stderr, *) "test_build_hess_model_cs failed: Hessian "// &
+                        "model still marked stale for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_cs = .false.
+                end if
+                if (size(mock_requests) /= 0) then
+                    write (stderr, *) "test_build_hess_model_cs failed: Density "// &
+                        "matrix evaluating function called for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_cs = .false.
+                end if
+                if (norm2(arh_object%dm_list - dm_list) > tol .or. &
+                    norm2(arh_object%fock_list - fock_list) > tol .or. &
+                    norm2(arh_object%v_nonlinear_list - v_nonlinear_list) > tol) then
+                    write (stderr, *) "test_build_hess_model_cs failed: History "// &
+                        "changed for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                end if
+                if (.not. (allocated(arh_object%expansion_dirs) .and. &
+                           allocated(arh_object%projection_dirs) .and. &
+                           allocated(arh_object%coupling_matrix))) then
+                    write (stderr, *) "test_build_hess_model_cs failed: Low-rank "// &
+                        "Hessian factors not assembled for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_cs = .false.
+                    deallocate(arh_object)
+                    cycle
+                end if
+                if (size(arh_object%coupling_matrix, 1) /= &
+                    size(arh_object%expansion_dirs, 2)) then
+                    write (stderr, *) "test_build_hess_model_cs failed: Coupling "// &
+                        "matrix does not match the expansion directions for "// &
+                        arh_type//" and "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                end if
+
+                ! determine if the linear and non-linear systems of the ARH type are
+                ! constructed
+                if (arh_type == "ms_sr1") then
+                    built = allocated(arh_object%a_inv) .and. &
+                            allocated(arh_object%a_inv_comb) .and. &
+                            allocated(arh_object%linear_potential_dirs) .and. &
+                            allocated(arh_object%nonlinear_potential_dirs)
+                else
+                    built = allocated(arh_object%dm_dirs) .and. &
+                            allocated(arh_object%dm_dirs_nonlinear)
+                    if (arh_type /= "ms_sp") built = &
+                        built .and. allocated(arh_object%linear_potential_dirs) .and. &
+                        allocated(arh_object%nonlinear_potential_dirs)
+                    if (arh_type == "ms_sp" .or. arh_type == "ms_psb") &
+                        built = built .and. allocated(arh_object%a_sym) .and. &
+                                allocated(arh_object%a_sym_nonlinear)
+                end if
+                if (.not. built) then
+                    write (stderr, *) "test_build_hess_model_cs failed: Linear and "// &
+                        "non-linear systems not constructed for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_cs = .false.
+                    deallocate(arh_object)
+                    cycle
+                end if
+                if (arh_type == "ms_sr1") then
+                    n_linear = size(arh_object%linear_potential_dirs, 2)
+                    n_nonlinear = size(arh_object%nonlinear_potential_dirs, 2)
+                else
+                    n_linear = size(arh_object%dm_dirs, 2)
+                    n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+                end if
+
+                ! determine if the linear system keeps the entire history, while the
+                ! non-linear system drops the far and the noisy entries
+                if (n_linear /= n_list) then
+                    write (stderr, *) "test_build_hess_model_cs failed: The linear "// &
+                        "system does not keep the entire history for "//arh_type// &
+                        " and "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                end if
+                if (i_case == 1 .and. n_nonlinear /= n_list) then
+                    write (stderr, *) "test_build_hess_model_cs failed: The "// &
+                        "non-linear system does not keep every independent entry "// &
+                        "for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                else if (i_case == 2 .and. n_nonlinear /= 1) then
+                    write (stderr, *) "test_build_hess_model_cs failed: The "// &
+                        "non-linear system does not drop the history entry beyond "// &
+                        "the step-length cutoff for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                else if (i_case == 3 .and. n_nonlinear >= n_list) then
+                    write (stderr, *) "test_build_hess_model_cs failed: The "// &
+                        "non-linear system does not drop any history entry whose "// &
+                        "response is noise for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_cs = .false.
+                end if
+
+                ! determine if every quantity follows the basis of its own system
+                if (arh_type == "ms_sr1") then
+                    if (size(arh_object%a_inv, 1) /= n_linear .or. &
+                        size(arh_object%a_inv_comb, 1) /= n_nonlinear) then
+                        write (stderr, *) "test_build_hess_model_cs failed: Linear "// &
+                            "and non-linear multisecant SR1 pseudoinverses do not "// &
+                            "match the potential difference directions of their "// &
+                            "system for "//case_name//"."
+                        test_build_hess_model_cs = .false.
+                    end if
+                else
+                    if (arh_type /= "ms_sp") then
+                        if (size(arh_object%linear_potential_dirs, 2) /= n_linear .or. &
+                            size(arh_object%nonlinear_potential_dirs, 2) /= &
+                            n_nonlinear) then
+                            write (stderr, *) "test_build_hess_model_cs failed: "// &
+                                "Potential difference directions are not rebased "// &
+                                "onto the basis of the density matrix difference "// &
+                                "directions of their system for "//arh_type//" and "// &
+                                case_name//"."
+                            test_build_hess_model_cs = .false.
+                        end if
+                    end if
+                    if (arh_type == "ms_sp" .or. arh_type == "ms_psb") then
+                        if (size(arh_object%a_sym, 1) /= n_linear .or. &
+                            size(arh_object%a_sym_nonlinear, 1) /= n_nonlinear) then
+                            write (stderr, *) "test_build_hess_model_cs failed: "// &
+                                "Symmetrized A matrices do not match the density "// &
+                                "matrix difference directions of their system for "// &
+                                arh_type//" and "//case_name//"."
+                            test_build_hess_model_cs = .false.
+                        end if
+                    end if
+                end if
+
+                ! determine if the coupling matrices are symmetric and the density
+                ! matrix difference directions rebased for the well-conditioned
+                ! independent points
+                if (i_case == 1) then
+                    if (arh_type == "ms_sr1") then
+                        if (norm2(arh_object%a_inv - transpose(arh_object%a_inv)) > &
+                            tol .or. norm2(arh_object%a_inv_comb - &
+                                           transpose(arh_object%a_inv_comb)) > tol) then
+                            write (stderr, *) "test_build_hess_model_cs failed: "// &
+                                "Multisecant SR1 pseudoinverses are not symmetric "// &
+                                "for "//case_name//"."
+                            test_build_hess_model_cs = .false.
+                        end if
+                    else
+                        if (arh_type == "ms_sp" .or. arh_type == "ms_psb") then
+                            if (norm2(arh_object%a_sym - &
+                                      transpose(arh_object%a_sym)) > tol .or. &
+                                norm2(arh_object%a_sym_nonlinear - &
+                                      transpose(arh_object%a_sym_nonlinear)) > tol) then
+                                write (stderr, *) "test_build_hess_model_cs "// &
+                                    "failed: Symmetrized A matrices are not "// &
+                                    "symmetric for "//arh_type//" and "//case_name//"."
+                                test_build_hess_model_cs = .false.
+                            end if
+                        end if
+                        if (info == 0 .and. n_linear == n_list) then
+                            if (norm2(matmul(arh_object%dm_dirs, chol_ref_check) - &
+                                      full_dirs_check) > tol) then
+                                write (stderr, *) "test_build_hess_model_cs "// &
+                                    "failed: Density matrix difference directions "// &
+                                    "are not rebased by the inverse of the "// &
+                                    "Cholesky factor of the raw history Gram "// &
+                                    "matrix for "//arh_type//" and "//case_name//"."
+                                test_build_hess_model_cs = .false.
+                            end if
+                        end if
+                    end if
+                end if
+
+                ! deallocate ARH object
+                deallocate(arh_object)
+            end do
+        end do
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_build_hess_model_cs
+
+    logical(c_bool) function test_build_hess_model_os() bind(C)
+        !
+        ! this function tests the subroutine which assembles the open-shell
+        ! approximate Hessian model from the history relative to the current point
+        !
+        use otr_arh, only: build_hess_model_os, arh_object, arh_types
+        use otr_oao_test_reference, only: n_ao, n_particle, n_param
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: mock_requests, identity_matrix, &
+                                      generate_random_density_matrix
+
+        integer(ip), parameter :: n_electrons = 2, n_noisy = 3
+        real(rp), parameter :: noisy_scales(n_noisy) = [1e-3_rp, 3e-3_rp, 1e-2_rp], &
+                               duplicate_offset = 1e-3_rp
+
+        real(rp), allocatable :: dm_list(:, :, :, :), v_same_spin_list(:, :, :, :), &
+                                 v_opposite_spin_list(:, :, :, :), &
+                                 v_nonlinear_list(:, :, :, :)
+        real(rp) :: &
+            perturbation(n_ao, n_ao), embedded_check(n_ao, n_ao, n_particle, 2), &
+            full_dirs_check(n_param, 2, n_particle), chol_ref_check(2, 2, n_particle)
+        integer(ip) :: i, j, i_case, i_type, i_noisy, n_list, n_linear, n_nonlinear, &
+                       n_nonlinear_expected, info(n_particle), error, pivot_order(2)
+        logical :: built
+        character(:), allocatable :: arh_type, case_name
+
+        ! assume tests pass
+        test_build_hess_model_os = .true.
+
+        ! set up the OAO object with an orthonormal AO basis, so that the AO and the
+        ! OAO basis coincide
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%s_inv_sqrt = identity_matrix(n_ao)
+        allocate(oao_object%dm_oao(n_ao, n_ao, n_particle))
+        do i = 1, n_particle
+            oao_object%dm_oao(:, :, i) = &
+                generate_random_density_matrix(n_ao, n_electrons)
+        end do
+
+        ! build the model from a history of independent points, one spanning very
+        ! different step lengths and one whose non-linear response is noise in one
+        ! channel at a time
+        do i_case = 1, 2 + n_particle
+            i_noisy = i_case - 2
+            if (i_noisy > 0) then
+                n_list = n_noisy
+            else
+                n_list = 2
+            end if
+            if (allocated(dm_list)) deallocate(dm_list, v_same_spin_list, &
+                                               v_opposite_spin_list, v_nonlinear_list)
+            allocate(dm_list(n_ao, n_ao, n_particle, n_list), &
+                     v_same_spin_list(n_ao, n_ao, n_particle, n_list), &
+                     v_opposite_spin_list(n_ao, n_ao, n_particle, n_list), &
+                     v_nonlinear_list(n_ao, n_ao, n_particle, n_list))
+            if (i_case == 1) then
+                case_name = "a history of independent points"
+                do i = 1, n_list
+                    do j = 1, n_particle
+                        call random_number(perturbation)
+                        dm_list(:, :, j, i) = oao_object%dm_oao(:, :, j) + 1e-2_rp * &
+                                              (perturbation + transpose(perturbation))
+                    end do
+                end do
+            else if (i_case == 2) then
+                case_name = "a history spanning very different step lengths"
+                do j = 1, n_particle
+                    call random_number(perturbation)
+                    dm_list(:, :, j, 1) = oao_object%dm_oao(:, :, j) + 1e-6_rp * &
+                                          (perturbation + transpose(perturbation))
+                    dm_list(:, :, j, 2) = &
+                        generate_random_density_matrix(n_ao, n_electrons)
+                end do
+            else
+                case_name = &
+                    "a history whose non-linear response is noise in one channel"
+                do i = 1, n_list
+                    do j = 1, n_particle
+                        call random_number(perturbation)
+                        dm_list(:, :, j, i) = &
+                            oao_object%dm_oao(:, :, j) + &
+                            noisy_scales(i) * (perturbation + transpose(perturbation))
+                    end do
+                end do
+
+                ! the last entry barely departs from the direction of the one before
+                ! it, so that it stays linearly independent but contributes a residual
+                ! far below the noise of the response, while still being admitted by
+                ! the step-length screen
+                do j = 1, n_particle
+                    call random_number(perturbation)
+                    dm_list(:, :, j, n_list) = &
+                        dm_list(:, :, j, n_list - 1) + &
+                        duplicate_offset * noisy_scales(n_list - 1) * &
+                        (perturbation + transpose(perturbation))
+                end do
+            end if
+            do i = 1, n_list
+                v_same_spin_list(:, :, :, i) = &
+                    mock_potential(mock_v_same_spin_factor(1), dm_list(:, :, :, i))
+                v_opposite_spin_list(:, :, :, i) = &
+                    mock_potential(mock_v_opposite_spin_factor(1), dm_list(:, :, :, i))
+                v_nonlinear_list(:, :, :, i) = mock_potential(mock_v_nonlinear_factor, &
+                                                              dm_list(:, :, :, i))
+            end do
+
+            ! only the channel under test carries a response that is not a function of
+            ! the density
+            if (i_noisy > 0) call random_number(v_nonlinear_list(:, :, i_noisy, :))
+
+            ! the density matrix difference directions have to be rebased by the
+            ! inverse of the per-channel Cholesky factor of the raw history Gram matrix
+            if (i_case == 1) then
+                do j = 1, n_particle
+                    embedded_check = 0.0_rp
+                    do i = 1, n_list
+                        embedded_check(:, :, j, i) = dm_list(:, :, j, i) - &
+                                                     oao_object%dm_oao(:, :, j)
+                    end do
+                    call ref_pivoted_cholesky( &
+                        embedded_check(:, :, :, 1), embedded_check(:, :, :, 2), &
+                        oao_object%dm_oao, n_param, pivot_order, &
+                        full_dirs_check(:, :, j), chol_ref_check(:, :, j), info(j))
+                    if (info(j) /= 0) then
+                        write (stderr, *) "test_build_hess_model_os failed: "// &
+                            "Reference Cholesky factorization of the raw "// &
+                            "per-channel history Gram matrix failed for "//case_name// &
+                            "."
+                        test_build_hess_model_os = .false.
+                    end if
+                end do
+            end if
+
+            ! build the model for every ARH type on a newly set up ARH object
+            do i_type = 1, size(arh_types)
+                arh_type = trim(arh_types(i_type))
+                allocate(arh_object)
+                call setup_settings(arh_object%settings)
+                arh_object%settings%arh_type = arh_type
+                arh_object%n_ao => oao_object%n_ao
+                arh_object%n_param => oao_object%n_param
+                arh_object%n_particle => oao_object%n_particle
+                arh_object%dm_oao => oao_object%dm_oao
+                arh_object%evaluate_dm_os => mock_evaluate_dm_os
+                arh_object%v_same_spin_oao = &
+                    mock_potential(mock_v_same_spin_factor(1), arh_object%dm_oao)
+                arh_object%v_opposite_spin_oao = &
+                    mock_potential(mock_v_opposite_spin_factor(1), arh_object%dm_oao)
+                arh_object%v_nonlinear_oao = &
+                    mock_potential(mock_v_nonlinear_factor, arh_object%dm_oao)
+                arh_object%dm_list = dm_list
+                arh_object%v_same_spin_list = v_same_spin_list
+                arh_object%v_opposite_spin_list = v_opposite_spin_list
+                arh_object%v_nonlinear_list = v_nonlinear_list
+                arh_object%model_stale = .true.
+                mock_requests = [integer(ip) ::]
+                call build_hess_model_os(error)
+
+                ! determine if the model is assembled from the history without
+                ! evaluating the density matrix or changing the history
+                if (error /= 0) then
+                    write (stderr, *) "test_build_hess_model_os failed: Produced "// &
+                        "error for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_os = .false.
+                    deallocate(arh_object)
+                    cycle
+                end if
+                if (arh_object%model_stale) then
+                    write (stderr, *) "test_build_hess_model_os failed: Hessian "// &
+                        "model still marked stale for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_os = .false.
+                end if
+                if (size(mock_requests) /= 0) then
+                    write (stderr, *) "test_build_hess_model_os failed: Density "// &
+                        "matrix evaluating function called for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_os = .false.
+                end if
+                if (norm2(arh_object%dm_list - dm_list) > tol .or. &
+                    norm2(arh_object%v_same_spin_list - v_same_spin_list) > tol .or. &
+                    norm2(arh_object%v_opposite_spin_list - v_opposite_spin_list) > &
+                    tol .or. &
+                    norm2(arh_object%v_nonlinear_list - v_nonlinear_list) > tol) then
+                    write (stderr, *) "test_build_hess_model_os failed: History "// &
+                        "changed for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_os = .false.
+                end if
+                if (.not. (allocated(arh_object%expansion_dirs) .and. &
+                           allocated(arh_object%projection_dirs) .and. &
+                           allocated(arh_object%coupling_matrix))) then
+                    write (stderr, *) "test_build_hess_model_os failed: Low-rank "// &
+                        "Hessian factors not assembled for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_os = .false.
+                    deallocate(arh_object)
+                    cycle
+                end if
+                if (size(arh_object%coupling_matrix, 1) /= &
+                    size(arh_object%expansion_dirs, 2)) then
+                    write (stderr, *) "test_build_hess_model_os failed: Coupling "// &
+                        "matrix does not match the expansion directions for "// &
+                        arh_type//" and "//case_name//"."
+                    test_build_hess_model_os = .false.
+                end if
+
+                ! determine if the linear and non-linear systems of the ARH type are
+                ! constructed
+                if (arh_type == "ms_sr1") then
+                    built = allocated(arh_object%a_inv) .and. &
+                            allocated(arh_object%a_inv_comb) .and. &
+                            allocated(arh_object%linear_potential_dirs) .and. &
+                            allocated(arh_object%nonlinear_potential_dirs)
+                else
+                    built = allocated(arh_object%dm_dirs) .and. &
+                            allocated(arh_object%dm_dirs_nonlinear)
+                    if (arh_type /= "ms_sp") built = &
+                        built .and. allocated(arh_object%linear_potential_dirs) .and. &
+                        allocated(arh_object%nonlinear_potential_dirs)
+                    if (arh_type == "ms_sp" .or. arh_type == "ms_psb") &
+                        built = built .and. allocated(arh_object%a_sym) .and. &
+                                allocated(arh_object%a_sym_nonlinear)
+                end if
+                if (.not. built) then
+                    write (stderr, *) "test_build_hess_model_os failed: Linear and "// &
+                        "non-linear systems not constructed for "//arh_type//" and "// &
+                        case_name//"."
+                    test_build_hess_model_os = .false.
+                    deallocate(arh_object)
+                    cycle
+                end if
+                if (arh_type == "ms_sr1") then
+                    n_linear = size(arh_object%linear_potential_dirs, 2)
+                    n_nonlinear = size(arh_object%nonlinear_potential_dirs, 2)
+                else
+                    n_linear = size(arh_object%dm_dirs, 2)
+                    n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+                end if
+
+                ! determine if the linear system keeps the entire history, while the
+                ! non-linear system drops the far and the noisy entries, once for
+                ! multisecant SR1 which factorizes both channels together and per
+                ! channel for the ARH family
+                if (n_linear /= n_particle * n_list) then
+                    write (stderr, *) "test_build_hess_model_os failed: The linear "// &
+                        "system does not keep the entire history for "//arh_type// &
+                        " and "//case_name//"."
+                    test_build_hess_model_os = .false.
+                end if
+                if (arh_type == "ms_sr1") then
+                    if (i_case == 1) then
+                        n_nonlinear_expected = n_list
+                    else if (i_case == 2) then
+                        n_nonlinear_expected = 1
+                    else
+                        n_nonlinear_expected = n_list - 1
+                    end if
+                else
+                    if (i_case == 1) then
+                        n_nonlinear_expected = n_particle * n_list
+                    else if (i_case == 2) then
+                        n_nonlinear_expected = n_particle
+                    else
+                        n_nonlinear_expected = n_particle * n_list - 1
+                    end if
+                end if
+                if (i_case == 1 .and. n_nonlinear /= n_nonlinear_expected) then
+                    write (stderr, *) "test_build_hess_model_os failed: The "// &
+                        "non-linear system does not keep every independent entry "// &
+                        "for "//arh_type//" and "//case_name//"."
+                    test_build_hess_model_os = .false.
+                else if (i_case == 2 .and. n_nonlinear /= n_nonlinear_expected) then
+                    write (stderr, *) "test_build_hess_model_os failed: The "// &
+                        "non-linear system does not drop the history entry beyond "// &
+                        "the step-length cutoff in every channel for "//arh_type// &
+                        " and "//case_name//"."
+                    test_build_hess_model_os = .false.
+                else if (i_noisy > 0 .and. n_nonlinear > n_nonlinear_expected) then
+                    write (stderr, *) "test_build_hess_model_os failed: The "// &
+                        "non-linear system does not drop a history entry whose "// &
+                        "response is noise in the channel carrying it for "// &
+                        arh_type//" and "//case_name//"."
+                    test_build_hess_model_os = .false.
+                end if
+
+                ! determine if every quantity follows the basis of its own system
+                if (arh_type == "ms_sr1") then
+                    if (size(arh_object%a_inv, 1) /= n_linear .or. &
+                        size(arh_object%a_inv_comb, 1) /= n_nonlinear) then
+                        write (stderr, *) "test_build_hess_model_os failed: "// &
+                            "Spin-separated and spin-combined multisecant SR1 "// &
+                            "pseudoinverses do not match the potential difference "// &
+                            "directions of their system for "//case_name//"."
+                        test_build_hess_model_os = .false.
+                    end if
+                else
+                    if (arh_type /= "ms_sp") then
+                        if (size(arh_object%linear_potential_dirs, 2) /= n_linear .or. &
+                            size(arh_object%nonlinear_potential_dirs, 2) /= &
+                            n_nonlinear) then
+                            write (stderr, *) "test_build_hess_model_os failed: "// &
+                                "Potential difference directions are not rebased "// &
+                                "onto the basis of the density matrix difference "// &
+                                "directions of their system for "//arh_type//" and "// &
+                                case_name//"."
+                            test_build_hess_model_os = .false.
+                        end if
+                    end if
+                    if (arh_type == "ms_sp" .or. arh_type == "ms_psb") then
+                        if (size(arh_object%a_sym, 1) /= n_linear .or. &
+                            size(arh_object%a_sym_nonlinear, 1) /= n_nonlinear) then
+                            write (stderr, *) "test_build_hess_model_os failed: "// &
+                                "Symmetrized A matrices do not match the density "// &
+                                "matrix difference directions of their system for "// &
+                                arh_type//" and "//case_name//"."
+                            test_build_hess_model_os = .false.
+                        end if
+                    end if
+                end if
+
+                ! determine if the coupling matrices are symmetric and the density
+                ! matrix difference directions rebased for the well-conditioned
+                ! independent points
+                if (i_case == 1) then
+                    if (arh_type == "ms_sr1") then
+                        if (norm2(arh_object%a_inv - transpose(arh_object%a_inv)) > &
+                            tol .or. norm2(arh_object%a_inv_comb - &
+                                           transpose(arh_object%a_inv_comb)) > tol) then
+                            write (stderr, *) "test_build_hess_model_os failed: "// &
+                                "Multisecant SR1 pseudoinverses are not symmetric "// &
+                                "for "//case_name//"."
+                            test_build_hess_model_os = .false.
+                        end if
+                    else
+                        if (arh_type == "ms_sp" .or. arh_type == "ms_psb") then
+                            if (norm2(arh_object%a_sym - &
+                                      transpose(arh_object%a_sym)) > tol .or. &
+                                norm2(arh_object%a_sym_nonlinear - &
+                                      transpose(arh_object%a_sym_nonlinear)) > tol) then
+                                write (stderr, *) "test_build_hess_model_os "// &
+                                    "failed: Symmetrized A matrices are not "// &
+                                    "symmetric for "//arh_type//" and "//case_name//"."
+                                test_build_hess_model_os = .false.
+                            end if
+                        end if
+                        do j = 1, n_particle
+                            if (info(j) /= 0 .or. n_linear /= n_particle * n_list) cycle
+                            if (norm2(matmul(arh_object%dm_dirs( &
+                                :, (j - 1) * n_list + 1:j * n_list), &
+                                chol_ref_check(:, :, j)) - full_dirs_check(:, :, j)) > &
+                                tol) then
+                                write (stderr, *) "test_build_hess_model_os "// &
+                                    "failed: Density matrix difference directions "// &
+                                    "are not rebased by the inverse of the "// &
+                                    "per-channel Cholesky factor for "//arh_type// &
+                                    " and "//case_name//"."
+                                test_build_hess_model_os = .false.
+                            end if
+                        end do
+                    end if
+                end if
+
+                ! deallocate ARH object
+                deallocate(arh_object)
+            end do
+        end do
+
+        ! deallocate OAO object
+        deallocate(oao_object)
+
+    end function test_build_hess_model_os
+
+    logical(c_bool) function test_rebuild_stale_hess_model() bind(C)
+        !
+        ! this function tests the subroutine which rebuilds the approximate Hessian
+        ! model if the objective function has added points to the history since it was
+        ! last assembled
+        !
+        use otr_arh, only: rebuild_stale_hess_model, arh_object
+        use otr_oao_test_reference, only: n_ao
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_unit_tests, only: mock_requests, generate_random_density_matrix
+
+        integer(ip), target :: n_ao_target, n_particle_target, n_param_target
+        real(rp), target :: dm_oao(n_ao, n_ao, 2)
+        integer(ip) :: i, i_case, error
+        logical :: stale
+        character(:), allocatable :: case_name
+
+        ! assume tests pass
+        test_rebuild_stale_hess_model = .true.
+
+        ! a stale model on an empty history has to be rebuilt for the closed- and the
+        ! open-shell case, which discards its low-rank part, while a model that is not
+        ! stale has to be left untouched
+        do i_case = 1, 3
+            if (i_case == 1) then
+                case_name = "for stale closed-shell model"
+                n_particle_target = 1
+            else if (i_case == 2) then
+                case_name = "for stale open-shell model"
+                n_particle_target = 2
+            else
+                case_name = "for model which is not stale"
+                n_particle_target = 2
+            end if
+            stale = i_case /= 3
+            n_ao_target = n_ao
+            n_param_target = n_particle_target * n_ao * (n_ao - 1) / 2
+            do i = 1, n_particle_target
+                dm_oao(:, :, i) = generate_random_density_matrix(n_ao, 1_ip)
+            end do
+            allocate(arh_object)
+            call setup_settings(arh_object%settings)
+            arh_object%settings%arh_type = "ms_sr1"
+            arh_object%n_ao => n_ao_target
+            arh_object%n_particle => n_particle_target
+            arh_object%n_param => n_param_target
+            arh_object%dm_oao => dm_oao(:, :, :n_particle_target)
+            call setup_empty_history(n_particle_target)
+            allocate(arh_object%coupling_matrix(1, 1))
+            arh_object%model_stale = stale
+            mock_requests = [integer(ip) ::]
+            call rebuild_stale_hess_model(error)
+            if (error /= 0) then
+                write (stderr, *) "test_rebuild_stale_hess_model failed: Produced "// &
+                    "error "//case_name//"."
+                test_rebuild_stale_hess_model = .false.
+            end if
+            if (arh_object%model_stale) then
+                write (stderr, *) "test_rebuild_stale_hess_model failed: Hessian "// &
+                    "model still marked stale "//case_name//"."
+                test_rebuild_stale_hess_model = .false.
+            end if
+            if (stale .eqv. allocated(arh_object%coupling_matrix)) then
+                write (stderr, *) "test_rebuild_stale_hess_model failed: Hessian "// &
+                    "model rebuilt wrongly "//case_name//"."
+                test_rebuild_stale_hess_model = .false.
+            end if
+            if (size(mock_requests) /= 0) then
+                write (stderr, *) "test_rebuild_stale_hess_model failed: Density "// &
+                    "matrix evaluating function called "//case_name//"."
+                test_rebuild_stale_hess_model = .false.
+            end if
+            deallocate(arh_object)
+        end do
+
+    end function test_rebuild_stale_hess_model
 
     logical(c_bool) function test_hess_x_arh() bind(C)
         !
@@ -3059,6 +3371,31 @@ contains
         end if
         deallocate(x, hess_x, response)
 
+        ! mark the model stale on an empty history and determine if it is rebuilt
+        ! before it is applied, which leaves only the static part
+        arh_object%settings%arh_type = "ms_sr1"
+        call setup_empty_history(n_particle_target)
+        arh_object%model_stale = .true.
+        allocate(x(n_param), hess_x(n_param))
+        call random_number(x)
+        x_full = ref_unpack_asymm(x, n_particle_target, n_ao)
+        allocate(response(n_ao, n_ao, n_particle_target))
+        response = 0.0_rp
+        expected_hess_x = &
+            ref_hess_x(x_full, response, dm_oao, fock_oo, fock_vv, n_param)
+        call hess_x_arh(x, hess_x, error)
+        if (error /= 0) then
+            write (stderr, *) "test_hess_x_arh failed: Produced error for stale "// &
+                "Hessian model."
+            test_hess_x_arh = .false.
+        end if
+        if (arh_object%model_stale .or. norm2(hess_x - expected_hess_x) > tol) then
+            write (stderr, *) "test_hess_x_arh failed: Stale Hessian model not "// &
+                "rebuilt before it is applied."
+            test_hess_x_arh = .false.
+        end if
+        deallocate(x, hess_x, response)
+
         ! deallocate ARH object
         deallocate(arh_object)
 
@@ -3070,9 +3407,15 @@ contains
         ! approximate Hessian for every ARH type in both the closed- and the
         ! open-shell case
         !
-        use otr_arh, only: arh_types
+        use otr_arh, only: arh_types, inv_hess_x_arh, arh_object
+        use otr_oao, only: oao_object
+        use otr_oao_test_reference, only: n_ao
 
-        integer(ip) :: i
+        integer(ip), target :: n_ao_target, n_particle_target, n_param_target
+        real(rp), target :: dm_oao(n_ao, n_ao, 1), fock_oo(n_ao, n_ao, 1), &
+                            fock_vv(n_ao, n_ao, 1)
+        real(rp), allocatable :: x(:), inv_hess_x(:)
+        integer(ip) :: i, error
 
         ! assume tests pass
         test_inv_hess_x_arh = .true.
@@ -3087,6 +3430,37 @@ contains
                                               "open-shell "//trim(arh_types(i)))) &
                 test_inv_hess_x_arh = .false.
         end do
+
+        ! mark a model with a low-rank part stale on an empty history and determine if
+        ! it is rebuilt before it is inverted, which discards the low-rank part
+        n_ao_target = n_ao
+        n_particle_target = 1
+        n_param_target = n_ao * (n_ao - 1) / 2
+        call generate_fock_partition(n_ao, 1_ip, 2_ip, dm_oao, fock_oo, fock_vv)
+        call setup_arh_and_oao_objects("ms_sr1", dm_oao, fock_oo, fock_vv, &
+                                       n_ao_target, n_particle_target, n_param_target)
+        call setup_empty_history(n_particle_target)
+        allocate(arh_object%expansion_dirs(n_param_target, 1), &
+                 arh_object%projection_dirs(n_param_target, 1), &
+                 arh_object%coupling_matrix(1, 1))
+        arh_object%expansion_dirs = 1.0_rp
+        arh_object%projection_dirs = 1.0_rp
+        arh_object%coupling_matrix = 1.0_rp
+        arh_object%model_stale = .true.
+        allocate(x(n_param_target), inv_hess_x(n_param_target))
+        call random_number(x)
+        call inv_hess_x_arh(x, inv_hess_x, error)
+        if (error /= 0) then
+            write (stderr, *) "test_inv_hess_x_arh failed: Produced error for "// &
+                "stale Hessian model."
+            test_inv_hess_x_arh = .false.
+        end if
+        if (arh_object%model_stale .or. allocated(arh_object%coupling_matrix)) then
+            write (stderr, *) "test_inv_hess_x_arh failed: Stale Hessian model not "// &
+                "rebuilt before it is inverted."
+            test_inv_hess_x_arh = .false.
+        end if
+        deallocate(arh_object, oao_object)
 
     end function test_inv_hess_x_arh
 

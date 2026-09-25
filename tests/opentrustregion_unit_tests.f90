@@ -58,6 +58,16 @@ module opentrustregion_unit_tests
     ! reduced space reaches the full space size
     real(rp) :: overflow_hess(n_param, n_param), overflow_grad(n_param)
 
+    ! quadratic model whose Hessian model carries spurious negative curvature along
+    ! the first coordinate until an objective function evaluation marks it stale, after
+    ! which the next Hessian linear transformation corrects it, as an approximate
+    ! Hessian learning from the evaluated points does, used to test the Hessian refresh
+    ! after rejected steps
+    real(rp), parameter :: refresh_hess_error = 7.0_rp
+    real(rp) :: refresh_true_hess(n_param, n_param), refresh_grad(n_param)
+    logical :: refresh_hess_correct, refresh_model_stale
+    integer(ip) :: n_refresh_obj_func
+
     ! global log message
     character(:), allocatable :: log_message
 
@@ -355,6 +365,46 @@ contains
 
     end subroutine mock_vanishing_extra_trial_vectors
 
+    function refresh_mock_obj_func(delta_vars, error) result(func)
+        !
+        ! this function describes the objective function evaluation for the quadratic
+        ! model used to test the Hessian refresh after rejected steps, which marks the
+        ! Hessian model stale
+        !
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        real(rp) :: func
+
+        error = 0
+        n_refresh_obj_func = n_refresh_obj_func + 1
+        refresh_model_stale = .true.
+        func = dot_product(refresh_grad, delta_vars) + &
+               0.5_rp * dot_product(delta_vars, matmul(refresh_true_hess, delta_vars))
+
+    end function refresh_mock_obj_func
+
+    subroutine refresh_mock_hess_x(x, hess_x, error)
+        !
+        ! this subroutine describes the Hessian linear transformation for the quadratic
+        ! model used to test the Hessian refresh after rejected steps, which carries
+        ! spurious negative curvature along the first coordinate until the first call
+        ! after an objective function evaluation corrects the model
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+
+        error = 0
+        if (refresh_model_stale) then
+            refresh_hess_correct = .true.
+            refresh_model_stale = .false.
+        end if
+        hess_x = matmul(refresh_true_hess, x)
+        if (.not. refresh_hess_correct) &
+            hess_x(1) = hess_x(1) - refresh_hess_error * x(1)
+
+    end subroutine refresh_mock_hess_x
+
     subroutine logger(message)
         !
         ! this subroutine is a mock logging subroutine
@@ -410,6 +460,30 @@ contains
         deallocate(work)
 
     end subroutine diagonalize_test_matrix
+
+    subroutine setup_refresh_model(func, h_diag)
+        !
+        ! this subroutine sets up the quadratic model used to test the Hessian refresh
+        ! after rejected steps: the gradient is small enough for a step along the
+        ! spurious negative curvature of the uncorrected model to be rejected, while
+        ! the corrected model yields an interior Newton step
+        !
+        real(rp), intent(out) :: func, h_diag(:)
+
+        integer(ip) :: i
+
+        refresh_true_hess = 0.0_rp
+        do i = 1, n_param
+            refresh_true_hess(i, i) = real(i + 1, kind=rp)
+        end do
+        refresh_grad = 1e-3_rp
+        refresh_hess_correct = .false.
+        refresh_model_stale = .false.
+        n_refresh_obj_func = 0
+        func = 0.0_rp
+        h_diag = [(refresh_true_hess(i, i), i=1, n_param)]
+
+    end subroutine setup_refresh_model
 
     logical(c_bool) function test_solver() bind(C)
         !
@@ -4220,6 +4294,8 @@ contains
             call run_level_shifted_davidson_test("near minimum", subsystem_solvers(i))
             call run_level_shifted_davidson_test("near saddle point", &
                                                  subsystem_solvers(i))
+            call run_level_shifted_davidson_test("after rejected step", &
+                                                 subsystem_solvers(i))
         end do
 
         ! force the reduced space to grow until it spans the full parameter space, a
@@ -4300,11 +4376,23 @@ contains
                 curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
             end if
 
-            func = hartmann6d_func(curr_vars)
-            call hartmann6d_gradient(curr_vars, grad)
-            grad_norm = norm2(grad)
-            call hartmann6d_hessian(curr_vars)
-            h_diag = [(hess(i, i), i=1, size(h_diag))]
+            ! after a rejected step, the step a Hessian model with spurious negative
+            ! curvature proposes is rejected and the objective function evaluation
+            ! corrects the model, for which the Hessian refresh is requested
+            settings%refresh_hess = region_str == "after rejected step"
+            if (region_str == "after rejected step") then
+                call setup_refresh_model(func, h_diag)
+                grad = refresh_grad
+                grad_norm = norm2(grad)
+                obj_func_funptr => refresh_mock_obj_func
+                hess_x_funptr => refresh_mock_hess_x
+            else
+                func = hartmann6d_func(curr_vars)
+                call hartmann6d_gradient(curr_vars, grad)
+                grad_norm = norm2(grad)
+                call hartmann6d_hessian(curr_vars)
+                h_diag = [(hess(i, i), i=1, size(h_diag))]
+            end if
 
             ! run level-shifted Davidson
             call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
@@ -4348,6 +4436,24 @@ contains
                         "saddle point with "// trim(solver_name) // " solver."
                     test_level_shifted_davidson = .false.
                 end if
+            else if (region_str == "after rejected step") then
+                if (n_refresh_obj_func /= 2) then
+                    write (stderr, *) "test_level_shifted_davidson failed: Step of "// &
+                        "rebuilt reduced space not accepted right after the "// &
+                        "rejected step with " // trim(solver_name) // " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+                if (norm2(grad + matmul(refresh_true_hess, solution)) > &
+                    settings%local_red_factor * grad_norm) then
+                    write (stderr, *) "test_level_shifted_davidson failed: "// &
+                        "Solution does not describe Newton step of corrected "// &
+                        "Hessian model after rejected step with " // &
+                        trim(solver_name) // " solver."
+                    test_level_shifted_davidson = .false.
+                end if
+
+                ! the trust region checks below only apply to the Hartmann function
+                return
             end if
 
             ratio = (hartmann6d_func(curr_vars + solution) - func) / &
@@ -4875,6 +4981,43 @@ contains
             write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not lie at trust region boundary near saddle point "// &
                 "for perturbed system."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! reject the step a Hessian model with spurious negative curvature proposes,
+        ! after which the objective function evaluation has corrected the model, and
+        ! determine if Lanczos starts over with the corrected model when the Hessian
+        ! refresh is requested, so that the next step is the Newton step of the true
+        ! model and accepted
+        call setup_settings(settings)
+        settings%n_random_trial_vectors = 0
+        settings%refresh_hess = .true.
+        call setup_refresh_model(func, h_diag)
+        trust_radius = 0.4_rp
+        obj_func_funptr => refresh_mock_obj_func
+        hess_x_funptr => refresh_mock_hess_x
+        call generalized_lanczos_trust_region( &
+            func, refresh_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
+            settings, trust_radius, solution, solution_norm, lambda, imicro, &
+            max_precision_reached, error)
+        if (error /= 0) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error after rejected step."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (n_refresh_obj_func /= 2) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: Step "// &
+                "of restarted Lanczos not accepted right after the rejected step."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        residual = refresh_grad + matmul(refresh_true_hess, solution)
+        precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
+        if (sqrt(dot_product(residual, residual / precond)) > &
+            settings%local_red_factor * &
+            sqrt(dot_product(refresh_grad, refresh_grad / precond))) then
+            write (stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution does not describe Newton step of corrected Hessian model "// &
+                "after rejected step."
             test_generalized_lanczos_trust_region = .false.
         end if
 

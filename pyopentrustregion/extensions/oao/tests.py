@@ -26,7 +26,7 @@ from pyopentrustregion.tests import (
     print_separator,
     PyInterfaceTests,
 )
-from pyopentrustregion.python_interface import c_real, c_int
+from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
 from pyopentrustregion.extensions.oao.python_interface import EvaluateDMInterface
 
@@ -49,6 +49,7 @@ fortran_tests = {
         "oao_factory_cs",
         "oao_factory_os",
         "oao_sanity_check",
+        "oao_set_solver_settings",
         "obj_func_oao",
         "pack_asymm",
         "precond_oao",
@@ -217,22 +218,38 @@ class OAOPyInterfaceTests(unittest.TestCase):
         # initialize density matrix
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
+        # initialize solver settings object
+        solver_settings = SolverSettings()
+
         # call OAO factory python interface
-        (
-            obj_func_oao,
-            update_orbs_oao,
-            precond_oao,
-            precond_pd_oao,
-            project_oao,
-            get_extra_trial_vectors_oao,
-        ) = oao_factory(
+        obj_func_oao, update_orbs_oao = oao_factory(
             dm_ao,
             ao_overlap,
             n_particle,
             n_ao,
             self.mock_evaluate_dm,
+            solver_settings,
             settings,
         )
+
+        # determine if the OAO routines are wired into the solver settings
+        if any(
+            callback is None
+            for callback in (
+                solver_settings.precond,
+                solver_settings.precond_pd,
+                solver_settings.project,
+                solver_settings.get_extra_trial_vectors,
+                solver_settings.stability_settings.precond,
+                solver_settings.stability_settings.project,
+                solver_settings.stability_settings.get_extra_trial_vectors,
+            )
+        ):
+            print(
+                " test_oao_factory_py_interface failed: OAO routines not wired into "
+                "solver settings."
+            )
+            test_passed = False
 
         # check if logger was called correctly
         if not self.test_logger:
@@ -322,13 +339,13 @@ class OAOPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
-        # call returned OAO projection function
+        # call wired OAO projection function
         vector = np.full(n_param, 1.0, dtype=np.float64)
         try:
-            project_oao(vector)
+            solver_settings.project(vector)
         except RuntimeError:
             print(
-                " test_oao_factory_py_interface failed: Returned OAO projection "
+                " test_oao_factory_py_interface failed: Wired OAO projection "
                 "function raises error."
             )
             test_passed = False
@@ -337,19 +354,19 @@ class OAOPyInterfaceTests(unittest.TestCase):
         if not np.allclose(vector, np.full(n_param, 2.0, dtype=np.float64)):
             print(
                 " test_oao_factory_py_interface failed: Returned projected vector "
-                "of returned OAO projection function wrong."
+                "of wired OAO projection function wrong."
             )
             test_passed = False
 
-        # call returned OAO level-shifted preconditioner function
+        # call wired OAO level-shifted preconditioner function
         residual = np.full(n_param, 1.0, dtype=np.float64)
         precond_residual = np.empty(n_param, dtype=np.float64)
         mu = 5.0
         try:
-            precond_oao(residual, mu, precond_residual)
+            solver_settings.precond(residual, mu, precond_residual)
         except RuntimeError:
             print(
-                " test_oao_factory_py_interface failed: Returned OAO level-shifted "
+                " test_oao_factory_py_interface failed: Wired OAO level-shifted "
                 "preconditioner function raises error."
             )
             test_passed = False
@@ -358,17 +375,17 @@ class OAOPyInterfaceTests(unittest.TestCase):
         if not np.allclose(precond_residual, np.full(n_param, mu, dtype=np.float64)):
             print(
                 " test_oao_factory_py_interface failed: Returned preconditioned "
-                "residual of returned OAO level-shifted preconditioner function wrong."
+                "residual of wired OAO level-shifted preconditioner function wrong."
             )
             test_passed = False
 
-        # call returned OAO positive-definite preconditioner function
+        # call wired OAO positive-definite preconditioner function
         precond_pd_residual = np.empty(n_param, dtype=np.float64)
         try:
-            precond_pd_oao(residual, precond_pd_residual)
+            solver_settings.precond_pd(residual, precond_pd_residual)
         except RuntimeError:
             print(
-                " test_oao_factory_py_interface failed: Returned OAO positive-definite "
+                " test_oao_factory_py_interface failed: Wired OAO positive-definite "
                 "preconditioner function raises error."
             )
             test_passed = False
@@ -379,18 +396,18 @@ class OAOPyInterfaceTests(unittest.TestCase):
         ):
             print(
                 " test_oao_factory_py_interface failed: Returned preconditioned "
-                "residual of returned OAO positive-definite preconditioner function "
+                "residual of wired OAO positive-definite preconditioner function "
                 "wrong."
             )
             test_passed = False
 
-        # call returned OAO extra trial vector function
+        # call wired OAO extra trial vector function
         trial_vectors = np.empty((n_extra_trial_vectors, n_param), dtype=np.float64)
         try:
-            get_extra_trial_vectors_oao(trial_vectors)
+            solver_settings.get_extra_trial_vectors(trial_vectors)
         except RuntimeError:
             print(
-                " test_oao_factory_py_interface failed: Returned OAO extra trial "
+                " test_oao_factory_py_interface failed: Wired OAO extra trial "
                 "vector function raises error."
             )
             test_passed = False
@@ -402,7 +419,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         ):
             print(
                 " test_oao_factory_py_interface failed: Returned trial vectors of "
-                "returned OAO extra trial vector function wrong."
+                "wired OAO extra trial vector function wrong."
             )
             test_passed = False
 
@@ -419,6 +436,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
             n_particle,
             n_ao,
             self.mock_evaluate_dm,
+            SolverSettings(),
             settings,
         )
 

@@ -227,7 +227,7 @@ module opentrustregion
     end type
 
     type, extends(optimizer_settings_type) :: solver_settings_type
-        logical :: stability, line_search
+        logical :: stability, line_search, refresh_hess
         real(rp) :: start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_macro, n_micro
         character(kw_len) :: subsystem_solver, trust_region_shape
@@ -258,8 +258,9 @@ module opentrustregion
                              get_extra_trial_vectors = null(), &
                              stability_hess_x = null(), logger = null(), &
                              stability = .false., line_search = .false., &
-                             hess_symm = .true., initialized = .true., &
-                             conv_tol = 1e-5_rp, start_trust_radius = -1.0_rp, &
+                             refresh_hess = .false., hess_symm = .true., &
+                             initialized = .true., conv_tol = 1e-5_rp, &
+                             start_trust_radius = -1.0_rp, &
                              global_red_factor = 1e-3_rp, local_red_factor = 1e-4_rp, &
                              n_random_trial_vectors = 1, n_extra_trial_vectors = 1, &
                              n_macro = 150, n_micro = 50, &
@@ -3059,6 +3060,21 @@ contains
                                                    micro_converged, settings, &
                                                    trust_radius, max_precision_reached)
             if (max_precision_reached) exit
+
+            ! the Hessian linear transformation may have changed with the objective
+            ! function evaluation at the rejected point, so rebuild the linear
+            ! transformations of the whole reduced space
+            if (.not. accept_step .and. settings%refresh_hess) then
+                do i = 1, n_trial
+                    call hess_x_funptr(red_space_basis(:, i), h_basis(:, i), error)
+                    call add_error_origin(error, error_hess_x, settings)
+                    if (error /= 0) return
+                end do
+                tot_hess_x = tot_hess_x + n_trial
+                call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, &
+                           red_space_basis, n_param, h_basis, n_param, 0.0_rp, &
+                           red_space_hess, n_trial)
+            end if
         end do
 
         ! deallocate quantities from microiterations
@@ -3499,8 +3515,11 @@ contains
                                                    trust_radius, max_precision_reached)
             if (max_precision_reached) exit
 
-            ! restart Lanczos with smaller trust region if step is not accepted
-            restart_lanczos = .not. accept_step
+            ! restart Lanczos with smaller trust region if step is not accepted, unless
+            ! the Hessian linear transformation may have changed with the objective
+            ! function evaluation at the rejected point, which leaves the stored
+            ! Lanczos tridiagonal matrix stale
+            restart_lanczos = .not. accept_step .and. .not. settings%refresh_hess
             end do
 
         ! deallocate arrays

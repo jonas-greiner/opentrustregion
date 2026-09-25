@@ -25,6 +25,8 @@ from pyopentrustregion.python_interface import (
     LoggerInterface,
     adopt_collector,
     Settings,
+    SolverSettings,
+    SolverSettingsC,
     auto_bind_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
@@ -309,12 +311,45 @@ class PrecondPDPyInterface:
         return
 
 
+def attach_wired_callbacks(
+    solver_settings: SolverSettings, exception: Dict[str, Exception]
+) -> None:
+    """
+    this function attaches the routines a factory has wired into the C solver
+    settings
+    """
+    wrappers = {
+        "precond": (precond_interface_type, PrecondPyInterface),
+        "precond_pd": (precond_pd_interface_type, PrecondPDPyInterface),
+        "project": (project_interface_type, ProjectPyInterface),
+        "get_extra_trial_vectors": (
+            get_extra_trial_vectors_interface_type,
+            GetExtraTrialVectorsPyInterface,
+        ),
+    }
+    for settings in (solver_settings, solver_settings.stability_settings):
+        for name, (interface_type, py_interface) in wrappers.items():
+            if not hasattr(settings.settings_c, name):
+                continue
+            settings_c_funptr = getattr(settings.settings_c, name)
+            if not settings_c_funptr:
+                continue
+            setattr(
+                settings,
+                name,
+                py_interface(
+                    interface_type(settings_c_funptr), _otr_exception=exception
+                ),
+            )
+
+
 def oao_factory(
     dm_ao: np.ndarray,
     ao_overlap: np.ndarray,
     n_particle: int,
     n_ao: int,
     evaluate_dm: EvaluateDMType,
+    solver_settings: SolverSettings,
     settings: OAOSettings,
 ) -> Tuple[
     Callable[[np.ndarray], float],
@@ -322,10 +357,6 @@ def oao_factory(
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
-    Callable[[np.ndarray, float, np.ndarray], None],
-    Callable[[np.ndarray, np.ndarray], None],
-    Callable[[np.ndarray], None],
-    Callable[[np.ndarray], None],
 ]:
     # get pointers to arrays
     dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
@@ -367,20 +398,13 @@ def oao_factory(
         evaluate_dm_interface_type,
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
-        POINTER(precond_interface_type),
-        POINTER(precond_pd_interface_type),
-        POINTER(project_interface_type),
-        POINTER(get_extra_trial_vectors_interface_type),
+        POINTER(SolverSettingsC),
         POINTER(OAOSettingsC),
     ]
 
     # call Fortran function
     obj_func_oao_funptr = obj_func_interface_type()
     update_orbs_oao_funptr = update_orbs_interface_type()
-    precond_oao_funptr = precond_interface_type()
-    precond_pd_oao_funptr = precond_pd_interface_type()
-    project_oao_funptr = project_interface_type()
-    get_extra_trial_vectors_oao_funptr = get_extra_trial_vectors_interface_type()
     error = lib.oao_factory(
         dm_ao_ptr,
         ao_overlap_ptr,
@@ -389,10 +413,7 @@ def oao_factory(
         evaluate_dm_interface,
         byref(obj_func_oao_funptr),
         byref(update_orbs_oao_funptr),
-        byref(precond_oao_funptr),
-        byref(precond_pd_oao_funptr),
-        byref(project_oao_funptr),
-        byref(get_extra_trial_vectors_oao_funptr),
+        byref(solver_settings.settings_c),
         byref(settings.settings_c),
     )
 
@@ -406,6 +427,9 @@ def oao_factory(
                 f"OpenTrustRegion OAO factory produced error (code {error})."
             )
 
+    # attach the routines the factory has wired into the solver settings
+    attach_wired_callbacks(solver_settings, exception)
+
     return (
         ObjFuncPyInterface(
             obj_func_funptr=obj_func_oao_funptr,
@@ -418,15 +442,6 @@ def oao_factory(
             saved_objects={
                 "evaluate_dm_interface": evaluate_dm_interface,
             },
-        ),
-        PrecondPyInterface(precond_funptr=precond_oao_funptr, _otr_exception=exception),
-        PrecondPDPyInterface(
-            precond_pd_funptr=precond_pd_oao_funptr, _otr_exception=exception
-        ),
-        ProjectPyInterface(project_funptr=project_oao_funptr, _otr_exception=exception),
-        GetExtraTrialVectorsPyInterface(
-            get_extra_trial_vectors_funptr=get_extra_trial_vectors_oao_funptr,
-            _otr_exception=exception,
         ),
     )
 

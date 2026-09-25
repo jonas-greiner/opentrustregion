@@ -6,8 +6,7 @@
 
 module otr_arh_c_interface
 
-    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type, &
-                               precond_type, precond_pd_type, project_type
+    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
     use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
     use otr_oao_c_interface, only: n_particle, n_ao
     use otr_arh, only: standard_arh_factory_cs => arh_factory_cs, &
@@ -88,29 +87,26 @@ contains
 
     function arh_factory_c_wrapper( &
         dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-        obj_func_arh_c_funptr, update_orbs_arh_c_funptr, precond_arh_c_funptr, &
-        precond_pd_arh_c_funptr, project_arh_c_funptr, settings_c) result(error_c) &
-        bind(C, name="arh_factory")
+        obj_func_arh_c_funptr, update_orbs_arh_c_funptr, solver_settings_c, &
+        settings_c) result(error_c) bind(C, name="arh_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C 
         ! variables to Fortran variables
         !
+        use opentrustregion, only: solver_settings_type
+        use c_interface, only: solver_settings_type_c
         use otr_arh, only: arh_settings_type
         use otr_oao, only: obj_func_type
-        use otr_oao_c_interface, only: &
-            dm_ao_3d_c, obj_func_oao_before_wrapping, precond_oao_before_wrapping, &
-            precond_pd_oao_before_wrapping, project_oao_before_wrapping, &
-            obj_func_oao_c_wrapper, precond_oao_c_wrapper, precond_pd_oao_c_wrapper, &
-            project_oao_c_wrapper
+        use otr_oao_c_interface, only: dm_ao_3d_c, obj_func_oao_before_wrapping, &
+                                       obj_func_oao_c_wrapper, oao_set_solver_settings_c
         use otr_common_c_interface, only: n_param
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
+        type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(arh_settings_type_c), intent(inout) :: settings_c
-        type(c_funptr), intent(out) :: obj_func_arh_c_funptr, &
-                                       update_orbs_arh_c_funptr, precond_arh_c_funptr, &
-                                       precond_pd_arh_c_funptr, project_arh_c_funptr
+        type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         integer(c_ip) :: error_c
 
         real(rp), pointer, contiguous :: dm_ao_2d(:, :)
@@ -120,9 +116,7 @@ contains
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-        procedure(precond_type), pointer :: precond_arh_funptr
-        procedure(precond_pd_type), pointer :: precond_pd_arh_funptr
-        procedure(project_type), pointer :: project_arh_funptr
+        type(solver_settings_type) :: solver_settings
         type(arh_settings_type) :: settings
         integer(ip) :: error
 
@@ -175,30 +169,33 @@ contains
 
         ! call factory function
         if (n_particle == 1) then
-            call arh_factory_cs( &
-                dm_ao_2d, ao_overlap, n_particle, n_ao, evaluate_dm_cs_funptr, &
-                obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
-                precond_pd_arh_funptr, project_arh_funptr, error, settings)
+            call arh_factory_cs(dm_ao_2d, ao_overlap, n_particle, n_ao, &
+                                evaluate_dm_cs_funptr, obj_func_arh_funptr, &
+                                update_orbs_arh_funptr, solver_settings, error, &
+                                settings)
         else
-            call arh_factory_os( &
-                dm_ao_3d, ao_overlap, n_particle, n_ao, evaluate_dm_os_funptr, &
-                obj_func_arh_funptr, update_orbs_arh_funptr, precond_arh_funptr, &
-                precond_pd_arh_funptr, project_arh_funptr, error, settings)
+            call arh_factory_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
+                                evaluate_dm_os_funptr, obj_func_arh_funptr, &
+                                update_orbs_arh_funptr, solver_settings, error, &
+                                settings)
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
         obj_func_oao_before_wrapping => obj_func_arh_funptr
         update_orbs_arh_before_wrapping => update_orbs_arh_funptr
-        precond_oao_before_wrapping => precond_arh_funptr
-        precond_pd_oao_before_wrapping => precond_pd_arh_funptr
-        project_oao_before_wrapping => project_arh_funptr
 
         ! get a C function pointer to the C wrapper functions
         obj_func_arh_c_funptr = c_funloc(obj_func_oao_c_wrapper)
         update_orbs_arh_c_funptr = c_funloc(update_orbs_arh_c_wrapper)
-        precond_arh_c_funptr = c_funloc(precond_oao_c_wrapper)
-        precond_pd_arh_c_funptr = c_funloc(precond_pd_oao_c_wrapper)
-        project_arh_c_funptr = c_funloc(project_oao_c_wrapper)
+
+        ! copy the solver settings
+        if (error == 0) then
+            call oao_set_solver_settings_c(solver_settings, solver_settings_c)
+            solver_settings_c%refresh_hess = &
+                logical(solver_settings%refresh_hess, kind=c_bool)
+            solver_settings_c%hess_symm = &
+                logical(solver_settings%hess_symm, kind=c_bool)
+        end if
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)

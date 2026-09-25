@@ -52,19 +52,12 @@ void init_oao_settings(oao_settings_type *settings);
  * @param n_particle_c                            Number of particles
  * @param n_ao_c                                  Number of AO basis functions
  * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback
- * @param settings_c                              OAO settings
  * @param obj_func_oao_c_funptr                   Output: wrapped objective function
  *                                                pointer
  * @param update_orbs_oao_c_funptr                Output: wrapped update_orbs function
  *                                                pointer
- * @param precond_oao_c_funptr                    Output: wrapped level-shifted
- *                                                preconditioner function pointer
- * @param precond_pd_oao_c_funptr                 Output: wrapped positive-definite
- *                                                preconditioner function pointer
- * @param project_oao_c_funptr                    Output: wrapped projection function
- *                                                pointer
- * @param get_extra_trial_vectors_oao_c_funptr    Output: wrapped extra trial vector
- *                                                function pointer
+ * @param solver_settings_c                       Input/output: solver settings
+ * @param settings_c                              OAO settings
  *
  * @return                                        Integer error code from Fortran
  */
@@ -72,10 +65,7 @@ c_int oao_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_par
                   c_int n_ao_c, evaluate_dm_fp evaluate_dm_c_funptr,
                   obj_func_fp *obj_func_oao_c_funptr,
                   update_orbs_fp *update_orbs_oao_c_funptr,
-                  precond_fp *precond_oao_c_funptr,
-                  precond_pd_fp *precond_pd_oao_c_funptr,
-                  project_fp *project_oao_c_funptr,
-                  get_extra_trial_vectors_fp *get_extra_trial_vectors_oao_c_funptr,
+                  solver_settings_type *solver_settings_c,
                   oao_settings_type *settings_c);
 
 /**
