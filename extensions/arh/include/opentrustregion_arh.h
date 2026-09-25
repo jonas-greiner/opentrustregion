@@ -65,14 +65,10 @@ void init_arh_settings(arh_settings_type *settings);
  * @param n_particle_c               Number of particles
  * @param n_ao_c                     Number of AO basis functions
  * @param evaluate_dm_c_funptr       arh_evaluate_dm_fp union
- * @param settings_c                 ARH settings
  * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
  * @param update_orbs_arh_c_funptr   Output: wrapped update_orbs function pointer
- * @param project_arh_c_funptr       Output: wrapped projection function pointer
- * @param precond_arh_c_funptr       Output: wrapped level-shifted preconditioner
- *                                   function pointer
- * @param precond_pd_arh_c_funptr    Output: wrapped positive-definite
- *                                   preconditioner function pointer
+ * @param solver_settings_c          Input/output: solver settings
+ * @param settings_c                 ARH settings
  *
  * @return                           Integer error code from Fortran
  */
@@ -80,9 +76,8 @@ c_int arh_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_par
                   c_int n_ao_c, arh_evaluate_dm_fp evaluate_dm_c_funptr,
                   obj_func_fp *obj_func_arh_c_funptr,
                   update_orbs_fp *update_orbs_arh_c_funptr,
-                  precond_fp *precond_arh_c_funptr,
-                  precond_pd_fp *precond_pd_arh_c_funptr,
-                  project_fp *project_arh_c_funptr, arh_settings_type *settings_c);
+                  solver_settings_type *solver_settings_c,
+                  arh_settings_type *settings_c);
 
 /**
  * Fortran-callable ARH deconstructor.

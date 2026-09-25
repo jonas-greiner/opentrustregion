@@ -19,21 +19,18 @@ from pyopentrustregion.python_interface import (
     kw_len,
     obj_func_interface_type,
     update_orbs_interface_type,
-    project_interface_type,
-    precond_interface_type,
-    precond_pd_interface_type,
     logger_interface_type,
     LoggerInterface,
     adopt_collector,
     Settings,
+    SolverSettings,
+    SolverSettingsC,
     auto_bind_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
 from pyopentrustregion.extensions.oao.python_interface import (
     ObjFuncPyInterface,
-    PrecondPyInterface,
-    PrecondPDPyInterface,
-    ProjectPyInterface,
+    attach_wired_callbacks,
 )
 
 if TYPE_CHECKING:
@@ -221,6 +218,7 @@ def arh_factory(
     n_particle: int,
     n_ao: int,
     evaluate_dm: Union[EvaluateDMCSType, EvaluateDMOSType],
+    solver_settings: SolverSettings,
     settings: ARHSettings,
 ) -> Tuple[
     Callable[[np.ndarray], float],
@@ -228,9 +226,6 @@ def arh_factory(
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
-    Callable[[np.ndarray, float, np.ndarray], None],
-    Callable[[np.ndarray, np.ndarray], None],
-    Callable[[np.ndarray], None],
 ]:
     # get pointers to arrays
     dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
@@ -285,18 +280,13 @@ def arh_factory(
         ),
         POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
-        POINTER(precond_interface_type),
-        POINTER(precond_pd_interface_type),
-        POINTER(project_interface_type),
+        POINTER(SolverSettingsC),
         POINTER(ARHSettingsC),
     ]
 
     # call Fortran function
     obj_func_arh_funptr = obj_func_interface_type()
     update_orbs_arh_funptr = update_orbs_interface_type()
-    precond_arh_funptr = precond_interface_type()
-    precond_pd_arh_funptr = precond_pd_interface_type()
-    project_arh_funptr = project_interface_type()
     error = lib.arh_factory(
         dm_ao_ptr,
         ao_overlap_ptr,
@@ -305,9 +295,7 @@ def arh_factory(
         evaluate_dm_cs_interface if closed_shell else evaluate_dm_os_interface,
         byref(obj_func_arh_funptr),
         byref(update_orbs_arh_funptr),
-        byref(precond_arh_funptr),
-        byref(precond_pd_arh_funptr),
-        byref(project_arh_funptr),
+        byref(solver_settings.settings_c),
         byref(settings.settings_c),
     )
 
@@ -320,6 +308,9 @@ def arh_factory(
             raise RuntimeError(
                 f"OpenTrustRegion ARH factory produced error (code {error})."
             )
+
+    # attach the routines the factory has wired into the solver settings
+    attach_wired_callbacks(solver_settings, exception)
 
     return (
         ObjFuncPyInterface(
@@ -340,11 +331,6 @@ def arh_factory(
                 ),
             },
         ),
-        PrecondPyInterface(precond_funptr=precond_arh_funptr, _otr_exception=exception),
-        PrecondPDPyInterface(
-            precond_pd_funptr=precond_pd_arh_funptr, _otr_exception=exception
-        ),
-        ProjectPyInterface(project_funptr=project_arh_funptr, _otr_exception=exception),
     )
 
 

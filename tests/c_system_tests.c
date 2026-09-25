@@ -245,6 +245,11 @@ bool test_solver_settings_init(void) {
     fprintf(stderr, "test_solver_settings_init failed: Line search parameter wrong.\n");
     ok = false;
   }
+  if (s.refresh_hess != defaults.refresh_hess) {
+    fprintf(stderr, "test_solver_settings_init failed: Hessian refresh parameter "
+                    "wrong.\n");
+    ok = false;
+  }
   if (fabs(s.conv_tol - defaults.conv_tol) > 1e-15) {
     fprintf(stderr, "test_solver_settings_init failed: Convergence tolerance parameter "
                     "wrong.\n");

@@ -110,27 +110,25 @@ module otr_oao_c_interface
 
 contains
 
-    function oao_factory_c_wrapper(dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, &
-                                   evaluate_dm_c_funptr, obj_func_oao_c_funptr, &
-                                   update_orbs_oao_c_funptr, precond_oao_c_funptr, &
-                                   precond_pd_oao_c_funptr, project_oao_c_funptr, &
-                                   get_extra_trial_vectors_oao_c_funptr, settings_c) &
-        result(error_c) bind(C, name="oao_factory")
+    function oao_factory_c_wrapper( &
+        dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
+        obj_func_oao_c_funptr, update_orbs_oao_c_funptr, solver_settings_c, &
+        settings_c) result(error_c) bind(C, name="oao_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C
         ! variables to Fortran variables
         !
+        use opentrustregion, only: solver_settings_type
+        use c_interface, only: solver_settings_type_c
         use otr_oao, only: oao_settings_type
         use otr_common_c_interface, only: n_param
 
         real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
+        type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(oao_settings_type_c), intent(inout) :: settings_c
-        type(c_funptr), intent(out) :: obj_func_oao_c_funptr, &
-                                       update_orbs_oao_c_funptr, precond_oao_c_funptr, &
-                                       project_oao_c_funptr, precond_pd_oao_c_funptr, &
-                                       get_extra_trial_vectors_oao_c_funptr
+        type(c_funptr), intent(out) :: obj_func_oao_c_funptr, update_orbs_oao_c_funptr
         integer(c_ip) :: error_c
 
         real(rp), pointer, contiguous :: dm_ao_2d(:, :)
@@ -140,11 +138,7 @@ contains
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
         procedure(obj_func_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
-        procedure(precond_type), pointer :: precond_oao_funptr
-        procedure(precond_pd_type), pointer :: precond_pd_oao_funptr
-        procedure(project_type), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_type), pointer :: &
-            get_extra_trial_vectors_oao_funptr
+        type(solver_settings_type) :: solver_settings
         type(oao_settings_type) :: settings
         integer(ip) :: error
 
@@ -194,39 +188,81 @@ contains
         if (n_particle == 1) then
             call oao_factory_cs(dm_ao_2d, ao_overlap, n_particle, n_ao, &
                                 evaluate_dm_cs_funptr, obj_func_oao_funptr, &
-                                update_orbs_oao_funptr, precond_oao_funptr, &
-                                precond_pd_oao_funptr, project_oao_funptr, &
-                                get_extra_trial_vectors_oao_funptr, error, settings)
+                                update_orbs_oao_funptr, solver_settings, error, &
+                                settings)
         else
             call oao_factory_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
                                 evaluate_dm_os_funptr, obj_func_oao_funptr, &
-                                update_orbs_oao_funptr, precond_oao_funptr, &
-                                precond_pd_oao_funptr, project_oao_funptr, &
-                                get_extra_trial_vectors_oao_funptr, error, settings)
+                                update_orbs_oao_funptr, solver_settings, error, &
+                                settings)
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
         obj_func_oao_before_wrapping => obj_func_oao_funptr
         update_orbs_oao_before_wrapping => update_orbs_oao_funptr
-        precond_oao_before_wrapping => precond_oao_funptr
-        precond_pd_oao_before_wrapping => precond_pd_oao_funptr
-        project_oao_before_wrapping => project_oao_funptr
-        get_extra_trial_vectors_oao_before_wrapping => &
-            get_extra_trial_vectors_oao_funptr
 
         ! get a C function pointer to the C wrapper functions
         obj_func_oao_c_funptr = c_funloc(obj_func_oao_c_wrapper)
         update_orbs_oao_c_funptr = c_funloc(update_orbs_oao_c_wrapper)
-        precond_oao_c_funptr = c_funloc(precond_oao_c_wrapper)
-        precond_pd_oao_c_funptr = c_funloc(precond_pd_oao_c_wrapper)
-        project_oao_c_funptr = c_funloc(project_oao_c_wrapper)
-        get_extra_trial_vectors_oao_c_funptr = &
-            c_funloc(get_extra_trial_vectors_oao_c_wrapper)
+
+        ! copy the solver settings
+        if (error == 0) &
+            call oao_set_solver_settings_c(solver_settings, solver_settings_c)
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
 
     end function oao_factory_c_wrapper
+
+    subroutine oao_set_solver_settings_c(solver_settings, solver_settings_c)
+        !
+        ! this subroutine wires the C wrappers of the OAO-basis preconditioners,
+        ! projection and extra trial vectors into C solver settings
+        !
+        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use c_interface, only: solver_settings_type_c, assignment(=)
+
+        type(solver_settings_type), intent(in) :: solver_settings
+        type(solver_settings_type_c), intent(inout) :: solver_settings_c
+
+        ! initialize settings
+        if (.not. solver_settings_c%initialized) &
+            solver_settings_c = default_solver_settings
+
+        ! associate the global procedure pointers to the Fortran function pointers and
+        ! get C function pointers to the C wrapper functions
+        if (associated(solver_settings%precond)) then
+            precond_oao_before_wrapping => solver_settings%precond
+            solver_settings_c%precond = c_funloc(precond_oao_c_wrapper)
+        end if
+        if (associated(solver_settings%precond_pd)) then
+            precond_pd_oao_before_wrapping => solver_settings%precond_pd
+            solver_settings_c%precond_pd = c_funloc(precond_pd_oao_c_wrapper)
+        end if
+        if (associated(solver_settings%project)) then
+            project_oao_before_wrapping => solver_settings%project
+            solver_settings_c%project = c_funloc(project_oao_c_wrapper)
+        end if
+        if (associated(solver_settings%get_extra_trial_vectors)) then
+            get_extra_trial_vectors_oao_before_wrapping => &
+                solver_settings%get_extra_trial_vectors
+            solver_settings_c%get_extra_trial_vectors = &
+                c_funloc(get_extra_trial_vectors_oao_c_wrapper)
+        end if
+        if (associated(solver_settings%stability_settings%precond, &
+                       solver_settings%precond)) &
+            solver_settings_c%stability_settings%precond = &
+            c_funloc(precond_oao_c_wrapper)
+        if (associated(solver_settings%stability_settings%project, &
+                       solver_settings%project)) &
+            solver_settings_c%stability_settings%project = &
+            c_funloc(project_oao_c_wrapper)
+        if (associated(solver_settings%stability_settings%get_extra_trial_vectors, &
+                       solver_settings%get_extra_trial_vectors)) &
+            solver_settings_c%stability_settings%get_extra_trial_vectors = &
+            c_funloc(get_extra_trial_vectors_oao_c_wrapper)
+
+    end subroutine oao_set_solver_settings_c
 
     subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, error)
         !

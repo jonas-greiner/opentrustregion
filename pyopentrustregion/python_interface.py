@@ -458,6 +458,7 @@ class SolverSettingsC(Structure):
         ("logger", c_void_p),
         ("stability", c_bool),
         ("line_search", c_bool),
+        ("refresh_hess", c_bool),
         ("hess_symm", c_bool),
         ("initialized", c_bool),
         ("conv_tol", c_real),

@@ -131,15 +131,16 @@ contains
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &
                                   test_project_c_funptr, &
-                                  test_get_extra_trial_vectors_c_funptr
+                                  test_get_extra_trial_vectors_c_funptr, ref_settings, &
+                                  assignment(=), operator(/=)
+        use c_interface, only: solver_settings_type_c
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_2d_c(:, :), &
                                    dm_ao_3d_c(:, :, :)
         type(c_funptr) :: evaluate_dm_c_funptr, obj_func_oao_c_funptr, &
-                          update_orbs_oao_c_funptr, precond_oao_c_funptr, &
-                          precond_pd_oao_c_funptr, project_oao_c_funptr, &
-                          get_extra_trial_vectors_oao_c_funptr
+                          update_orbs_oao_c_funptr
         type(oao_settings_type_c) :: settings_c
+        type(solver_settings_type_c) :: solver_settings_c
         integer(c_ip) :: n_particle_c, error_c
 
         ! assume tests pass
@@ -167,12 +168,14 @@ contains
         ! initialize logger logical
         test_logger = .true.
 
+        ! solver settings which are not yet initialized
+        solver_settings_c%initialized = .false._c_bool
+
         ! call OAO orbital updating factory C wrapper for closed-shell case
         error_c = oao_factory_c_wrapper( &
             dm_ao_2d_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-            obj_func_oao_c_funptr, update_orbs_oao_c_funptr, precond_oao_c_funptr, &
-            precond_pd_oao_c_funptr, project_oao_c_funptr, &
-            get_extra_trial_vectors_oao_c_funptr, settings_c)
+            obj_func_oao_c_funptr, update_orbs_oao_c_funptr, solver_settings_c, &
+            settings_c)
 
         ! check if logging subroutine was correctly called
         if (.not. test_logger) then
@@ -208,29 +211,45 @@ contains
         end if
         deallocate(dm_ao_2d_c)
 
-        ! test returned level-shifted preconditioner function
+        ! determine if the solver settings were initialized
+        if (.not. solver_settings_c%initialized) then
+            test_oao_factory_c_wrapper = .false.
+            write(stderr, *) "test_oao_factory_c_wrapper failed: Solver settings "// &
+                "not initialized."
+        end if
+
+        ! test functions wired into solver settings
         test_oao_factory_c_wrapper = &
             test_oao_factory_c_wrapper .and. &
-            test_precond_c_funptr(precond_oao_c_funptr, "oao_factory_c_wrapper", &
-                                  " by returned level-shifted preconditioner function")
-
-        ! test returned positive-definite preconditioner function
+            test_precond_c_funptr(solver_settings_c%precond, "oao_factory_c_wrapper", &
+                                  " by wired level-shifted preconditioner function")
         test_oao_factory_c_wrapper = &
             test_oao_factory_c_wrapper .and. test_precond_pd_c_funptr( &
-                precond_pd_oao_c_funptr, "oao_factory_c_wrapper", &
-                " by returned positive-definite preconditioner function")
-
-        ! test returned projection function
+                solver_settings_c%precond_pd, "oao_factory_c_wrapper", &
+                " by wired positive-definite preconditioner function")
         test_oao_factory_c_wrapper = &
             test_oao_factory_c_wrapper .and. &
-            test_project_c_funptr(project_oao_c_funptr, "oao_factory_c_wrapper", &
-                                  " by returned projection function")
-
-        ! test returned extra trial vector function
+            test_project_c_funptr(solver_settings_c%project, "oao_factory_c_wrapper", &
+                                  " by wired projection function")
         test_oao_factory_c_wrapper = &
             test_oao_factory_c_wrapper .and. test_get_extra_trial_vectors_c_funptr( &
-                get_extra_trial_vectors_oao_c_funptr, "oao_factory_c_wrapper", &
-                " by returned extra trial vector function")
+                solver_settings_c%get_extra_trial_vectors, "oao_factory_c_wrapper", &
+                " by wired extra trial vector function")
+
+        ! test functions wired into stability check settings
+        test_oao_factory_c_wrapper = &
+            test_oao_factory_c_wrapper .and. test_precond_c_funptr( &
+                solver_settings_c%stability_settings%precond, "oao_factory_c_wrapper", &
+                " by wired stability check level-shifted preconditioner function")
+        test_oao_factory_c_wrapper = &
+            test_oao_factory_c_wrapper .and. test_project_c_funptr( &
+                solver_settings_c%stability_settings%project, "oao_factory_c_wrapper", &
+                " by wired stability check projection function")
+        test_oao_factory_c_wrapper = &
+            test_oao_factory_c_wrapper .and. test_get_extra_trial_vectors_c_funptr( &
+                solver_settings_c%stability_settings%get_extra_trial_vectors, &
+                "oao_factory_c_wrapper", &
+                " by wired stability check extra trial vector function")
 
         ! check if test has passed
         test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. test_passed
@@ -245,15 +264,25 @@ contains
         ! get C function pointers to Fortran functions
         evaluate_dm_c_funptr = c_funloc(mock_evaluate_dm_os)
 
+        ! set the now initialized solver settings to reference values, which have to
+        ! be kept
+        solver_settings_c = ref_settings
+
         ! call OAO orbital updating factory C wrapper for open-shell case
         error_c = oao_factory_c_wrapper( &
             dm_ao_3d_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-            obj_func_oao_c_funptr, update_orbs_oao_c_funptr, precond_oao_c_funptr, &
-            precond_pd_oao_c_funptr, project_oao_c_funptr, &
-            get_extra_trial_vectors_oao_c_funptr, settings_c)
+            obj_func_oao_c_funptr, update_orbs_oao_c_funptr, solver_settings_c, &
+            settings_c)
 
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
+
+        ! determine if the initialized solver settings were kept
+        if (solver_settings_c /= ref_settings) then
+            test_oao_factory_c_wrapper = .false.
+            write(stderr, *) "test_oao_factory_c_wrapper failed: Initialized "// &
+                "solver settings not kept."
+        end if
 
         ! check if tests for dm_ao_3d_c and evaluate_dm_c_funptr have passed
         test_oao_factory_c_wrapper = test_oao_factory_c_wrapper .and. test_passed
