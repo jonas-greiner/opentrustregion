@@ -38,6 +38,7 @@ contains
         ! wrapper subroutine
         !
         use opentrustregion, only: default_solver_settings
+        use otr_arh, only: arh_n_micro
         use otr_arh_c_interface, only: arh_settings_type_c
         use c_interface, only: obj_func_c_type, update_orbs_c_type, precond_c_type, &
                                precond_pd_c_type, project_c_type, logger_c_type, &
@@ -151,6 +152,7 @@ contains
             c_funloc(mock_get_extra_trial_vectors)
         solver_settings_c%refresh_hess = .true._c_bool
         solver_settings_c%hess_symm = .false._c_bool
+        solver_settings_c%n_micro = int(arh_n_micro, kind=c_ip)
 
         ! set return arguments
         error_c = 0

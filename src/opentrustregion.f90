@@ -3144,7 +3144,14 @@ contains
 
             ! reset problem
             residual = grad
-            if (settings%n_random_trial_vectors > 0) call perturb_vector(residual)
+            if (settings%n_random_trial_vectors > 0) then
+                call perturb_vector(residual)
+                if (associated(settings%project)) then
+                    call settings%project(residual, error)
+                    call add_error_origin(error, error_project, settings)
+                    if (error /= 0) exit
+                end if
+            end if
             solution = 0.0_rp
 
             ! initialize micro iteration convergence flag
@@ -3356,7 +3363,8 @@ contains
         real(rp) :: new_func, func_diff, lowest_eigval, hard_case_step_size, tau, &
                     pred_func, red_factor, conv_tol
         integer(ip) :: n_first_pass, n_second_pass, n_saved, n_red_space
-        logical :: restart_lanczos, accept_step, micro_converged, hard_case, interior
+        logical :: restart_lanczos, accept_step, micro_converged, hard_case, interior, &
+                   new_lanczos
         real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
@@ -3395,10 +3403,18 @@ contains
         do while (.not. accept_step)
             ! reset microiteration convergence threshold
             micro_converged = .false.
+            new_lanczos = .false.
 
             ! reset problem
             residual = grad
-            if (settings%n_random_trial_vectors > 0) call perturb_vector(residual)
+            if (settings%n_random_trial_vectors > 0) then
+                call perturb_vector(residual)
+                if (associated(settings%project)) then
+                    call settings%project(residual, error)
+                    call add_error_origin(error, error_project, settings)
+                    if (error /= 0) exit
+                end if
+            end if
             solution = 0.0_rp
             eigenvec = 0.0_rp
 
@@ -3466,11 +3482,13 @@ contains
                     ! test invariant to a rescaling of the preconditioner
                     conv_tol = max(red_factor * red_space_rhs(1), residual_norm_floor)
 
-                    ! check whether solution satisfies convergence criteria or whether 
-                    ! trust radius needs to be decreased further
+                    ! check whether solution satisfies convergence criteria, otherwise
+                    ! start a new Lanczos process for this trust radius
                     if (abs(lanczos_off_diag(n_red_space) * &
-                            red_space_solution(n_red_space)) > conv_tol) &
+                            red_space_solution(n_red_space)) > conv_tol) then
+                        new_lanczos = .true.
                         exit gltr_minimizer
+                    end if
 
                     ! intialize tau for second pass
                     tau = 1.0_rp
@@ -3497,6 +3515,13 @@ contains
 
             end block gltr_minimizer
             if (error /= 0) exit
+
+            ! start a new Lanczos process without evaluating the function since no
+            ! solution was obtained from the stored Lanczos factorization
+            if (new_lanczos) then
+                restart_lanczos = .false.
+                cycle
+            end if
 
             ! add number of microiterations from first and second pass to total number 
             ! of microiterations
