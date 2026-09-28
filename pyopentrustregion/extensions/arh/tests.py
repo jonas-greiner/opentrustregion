@@ -280,6 +280,12 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 "Hessian not passed on."
             )
             test_passed = False
+        if solver_settings.n_micro != 300:
+            print(
+                " test_arh_factory_py_interface failed: Micro iteration limit not "
+                "passed on."
+            )
+            test_passed = False
 
         # check if logger was called correctly
         if not self.test_logger:

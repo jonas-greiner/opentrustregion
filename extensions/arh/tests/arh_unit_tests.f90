@@ -1491,7 +1491,7 @@ contains
         ! projection and extra trial vectors into the solver settings, requests the
         ! Hessian refresh and reports the symmetry of the approximate Hessian
         !
-        use otr_arh, only: arh_set_solver_settings, precond_arh_ptr
+        use otr_arh, only: arh_set_solver_settings, precond_arh_ptr, arh_n_micro
         use otr_oao, only: precond_pd_oao_ptr, project_oao_ptr, &
                            get_extra_trial_vectors_oao_ptr
         use opentrustregion, only: solver_settings_type, default_solver_settings
@@ -1547,6 +1547,11 @@ contains
                     "refresh not requested "//case_name//"."
                 test_arh_set_solver_settings = .false.
             end if
+            if (solver_settings%n_micro /= arh_n_micro) then
+                write(stderr, *) "test_arh_set_solver_settings failed: Micro "// &
+                    "iteration limit not raised "//case_name//"."
+                test_arh_set_solver_settings = .false.
+            end if
             if (solver_settings%hess_symm .neqv. (arh_type /= "arh")) then
                 write(stderr, *) "test_arh_set_solver_settings failed: Symmetry of "// &
                     "the approximate Hessian of ARH type "//arh_type// &
@@ -1554,11 +1559,12 @@ contains
                 test_arh_set_solver_settings = .false.
             end if
 
-            ! apart from the Hessian refresh and the symmetry of the approximate
-            ! Hessian, uninitialized settings have to be set to their defaults and
-            ! initialized settings have to be kept
+            ! apart from the Hessian refresh, the micro iteration limit and the
+            ! symmetry of the approximate Hessian, uninitialized settings have to be set
+            ! to their defaults and initialized settings have to be kept
             if (i_case == 1) then
                 solver_settings%refresh_hess = default_solver_settings%refresh_hess
+                solver_settings%n_micro = default_solver_settings%n_micro
                 solver_settings%hess_symm = default_solver_settings%hess_symm
                 if (solver_settings /= default_solver_settings) then
                     write(stderr, *) "test_arh_set_solver_settings failed: "// &
@@ -1567,6 +1573,7 @@ contains
                 end if
             else
                 solver_settings%refresh_hess = ref_settings%refresh_hess
+                solver_settings%n_micro = ref_settings%n_micro
                 solver_settings%hess_symm = ref_settings%hess_symm
                 if (solver_settings /= ref_settings) then
                     write(stderr, *) "test_arh_set_solver_settings failed: "// &

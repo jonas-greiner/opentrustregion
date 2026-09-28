@@ -96,6 +96,7 @@ contains
         use otr_arh_c_interface, only: arh_settings_type_c, arh_factory_cs, &
                                        arh_factory_os, arh_factory_c_wrapper
         use otr_arh_mock, only: mock_arh_factory_cs, mock_arh_factory_os, test_passed
+        use otr_arh, only: arh_n_micro
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
         use otr_oao_test_reference, only: n_ao, n_particle, n_ao_c
         use c_interface_unit_tests, only: mock_logger, test_logger
@@ -199,6 +200,11 @@ contains
             write(stderr, *) "test_arh_factory_c_wrapper failed: Symmetry of the "// &
                 "approximate Hessian not passed on."
         end if
+        if (solver_settings_c%n_micro /= arh_n_micro) then
+            test_arh_factory_c_wrapper = .false.
+            write(stderr, *) "test_arh_factory_c_wrapper failed: Micro iteration "// &
+                "limit not passed on."
+        end if
 
         ! test functions wired into solver settings
         test_arh_factory_c_wrapper = &
@@ -258,7 +264,9 @@ contains
         ! deallocate arrays
         deallocate(dm_ao_3d_c, ao_overlap_c)
 
-        ! determine if the initialized solver settings were kept
+        ! determine if the initialized solver settings apart from the micro iteration
+        ! limit were kept
+        solver_settings_c%n_micro = int(ref_settings%n_micro, kind=c_ip)
         if (solver_settings_c /= ref_settings) then
             test_arh_factory_c_wrapper = .false.
             write(stderr, *) "test_arh_factory_c_wrapper failed: Initialized "// &

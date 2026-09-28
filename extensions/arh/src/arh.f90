@@ -29,6 +29,10 @@ module otr_arh
     character(len=kw_len), parameter :: arh_types(5) = &
         [character(len=kw_len) :: "arh", "symm_arh", "ms_psb", "ms_sp", "ms_sr1"]
 
+    ! micro iteration limit of the subsystem solver, which the linear transformations
+    ! of the approximate Hessian make cheap compared to the function evaluations
+    integer(ip), parameter :: arh_n_micro = 300
+
     abstract interface
         subroutine evaluate_dm_cs_type(dm, energy, fock, v_nonlinear, error)
             import :: rp, ip
@@ -254,8 +258,10 @@ contains
         ! vectors into the solver settings and those of its stability check; it also
         ! asks the solver to rebuild the Hessian information of the subsystem solver
         ! after rejected steps, since the objective function adds the rejected point to
-        ! the history, which changes the approximate Hessian, and tells it whether the
-        ! approximate Hessian of the given ARH type is symmetric
+        ! the history, which changes the approximate Hessian, raises the micro
+        ! iteration limit, since the linear transformations of the approximate Hessian
+        ! are cheap, and tells it whether the approximate Hessian of the given ARH type
+        ! is symmetric
         !
         use otr_oao, only: precond_pd_oao, project_oao, get_extra_trial_vectors_oao
 
@@ -284,6 +290,9 @@ contains
 
         ! rebuild the Hessian information after rejected steps
         solver_settings%refresh_hess = .true.
+
+        ! converge the subsystem solver with the cheap approximate Hessian
+        solver_settings%n_micro = arh_n_micro
 
         ! only the standard ARH type breaks the symmetry of the approximate Hessian
         solver_settings%hess_symm = arh_type /= "arh"

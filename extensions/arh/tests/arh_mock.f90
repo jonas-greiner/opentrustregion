@@ -26,9 +26,10 @@ contains
     subroutine mock_arh_set_solver_settings(solver_settings)
         !
         ! this subroutine wires the OAO mock routines into the solver settings and asks
-        ! for the Hessian refresh
+        ! for the Hessian refresh and the raised micro iteration limit
         !
         use opentrustregion, only: solver_settings_type
+        use otr_arh, only: arh_n_micro
         use otr_oao_mock, only: mock_oao_set_solver_settings
 
         type(solver_settings_type), intent(inout) :: solver_settings
@@ -36,6 +37,7 @@ contains
         call mock_oao_set_solver_settings(solver_settings)
         solver_settings%refresh_hess = .true.
         solver_settings%hess_symm = .false.
+        solver_settings%n_micro = arh_n_micro
 
     end subroutine mock_arh_set_solver_settings
 

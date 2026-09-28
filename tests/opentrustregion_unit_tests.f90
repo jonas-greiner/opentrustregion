@@ -52,9 +52,10 @@ module opentrustregion_unit_tests
     real(rp) :: curr_vars(n_param), hess(n_param, n_param), &
                 mock_hess_mat(n_param_mock_hess, n_param_mock_hess)
 
-    ! ill-conditioned quadratic model used to test the guard that triggers when the
-    ! reduced space reaches the full space size
+    ! quadratic models used to test the guard that triggers when the reduced space
+    ! reaches the full space size, the micro iteration limit and the projection
     real(rp) :: overflow_hess(n_param, n_param), overflow_grad(n_param)
+    integer(ip) :: n_overflow_empty_steps = 0
 
     ! quadratic model whose Hessian model carries spurious negative curvature along
     ! the first coordinate until an objective function evaluation marks it stale, after
@@ -188,6 +189,8 @@ contains
         real(rp) :: func
 
         error = 0
+        if (maxval(abs(delta_vars)) <= 0.0_rp) &
+            n_overflow_empty_steps = n_overflow_empty_steps + 1
         func = dot_product(overflow_grad, delta_vars) + &
                0.5_rp * dot_product(delta_vars, matmul(overflow_hess, delta_vars))
 
@@ -484,6 +487,34 @@ contains
         h_diag = [(refresh_true_hess(i, i), i=1, n_param)]
 
     end subroutine setup_refresh_model
+
+    subroutine setup_truncation_model(coupled, func, h_diag)
+        !
+        ! this subroutine sets up the quadratic model used to test the micro iteration
+        ! limit and the projection: a coupled Hessian cannot be inverted by the
+        ! diagonal preconditioner, so that the micro iterations cannot converge within
+        ! a small limit, while a diagonal Hessian preserves the subspace of mock_project
+        !
+        logical, intent(in) :: coupled
+        real(rp), intent(out) :: func, h_diag(:)
+
+        integer(ip) :: i, j
+
+        overflow_hess = 0.0_rp
+        do j = 1, n_param
+            if (coupled) then
+                do i = 1, n_param
+                    overflow_hess(i, j) = 1.0_rp / real(1 + abs(i - j), kind=rp)
+                end do
+            end if
+            overflow_hess(j, j) = overflow_hess(j, j) + real(max(j, 2), kind=rp)
+        end do
+        overflow_grad = 1.0_rp
+        func = 0.0_rp
+        h_diag = [(overflow_hess(i, i), i=1, n_param)]
+        n_overflow_empty_steps = 0
+
+    end subroutine setup_truncation_model
 
     logical(c_bool) function test_solver() bind(C)
         !
@@ -4647,6 +4678,32 @@ contains
         end if
         settings%trust_region_shape = "ellipsoidal"
 
+        ! run truncated conjugate gradient with a random perturbation of the gradient
+        ! and a preconditioner which does not project, and determine if the solution
+        ! stays in the subspace of the projection
+        call setup_settings(settings)
+        settings%n_random_trial_vectors = 1
+        settings%precond_pd => mock_precond_pd
+        settings%project => mock_project
+        call setup_truncation_model(.false., func, h_diag)
+        trust_radius = 10.0_rp
+        obj_func_funptr => overflow_obj_func
+        hess_x_funptr => overflow_hess_x
+        call truncated_conjugate_gradient(func, overflow_grad, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
+                                          trust_radius, solution, solution_norm, &
+                                          imicro, max_precision_reached, error)
+        if (error /= 0) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
+                "error for perturbed gradient."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        if (abs(solution(1) - solution(2)) > tol) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "leaves the subspace of the projection for perturbed gradient."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
     end function test_truncated_conjugate_gradient
 
     logical(c_bool) function test_generalized_lanczos_trust_region() bind(C)
@@ -4975,6 +5032,64 @@ contains
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not describe Newton step of corrected Hessian model "// &
                 "after rejected step."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! run generalized Lanczos trust region with a random perturbation of the
+        ! gradient and a preconditioner which does not project, and determine if the
+        ! solution stays in the subspace of the projection
+        call setup_settings(settings)
+        settings%n_random_trial_vectors = 1
+        settings%precond_pd => mock_precond_pd
+        settings%project => mock_project
+        call setup_truncation_model(.false., func, h_diag)
+        trust_radius = 10.0_rp
+        obj_func_funptr => overflow_obj_func
+        hess_x_funptr => overflow_hess_x
+        call generalized_lanczos_trust_region( &
+            func, overflow_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
+            settings, trust_radius, solution, solution_norm, lambda, imicro, &
+            max_precision_reached, error)
+        if (error /= 0) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error for perturbed gradient."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (abs(solution(1) - solution(2)) > tol) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Solution leaves the subspace of the projection for perturbed gradient."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! run generalized Lanczos trust region without Hessian refresh on a quadratic
+        ! model whose boundary step rotates one parameter by more than pi/4, so that it
+        ! is rejected and retried with the stored Lanczos factorization, which cannot
+        ! converge for the smaller trust radius within the micro iteration limit, and
+        ! determine if a new Lanczos process is started instead of evaluating an empty
+        ! step
+        call setup_settings(settings)
+        settings%n_micro = 2
+        settings%n_random_trial_vectors = 0
+        settings%local_red_factor = 1e-6_rp
+        settings%global_red_factor = 1e-6_rp
+        call setup_truncation_model(.true., func, h_diag)
+        overflow_grad = 0.0_rp
+        overflow_grad(1) = 10.0_rp
+        trust_radius = 2.0_rp
+        obj_func_funptr => overflow_obj_func
+        hess_x_funptr => overflow_hess_x
+        call generalized_lanczos_trust_region( &
+            func, overflow_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
+            settings, trust_radius, solution, solution_norm, lambda, imicro, &
+            max_precision_reached, error)
+        if (error /= 0) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error for retried step."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (n_overflow_empty_steps /= 0) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: Empty "// &
+                "step evaluated for retried step."
             test_generalized_lanczos_trust_region = .false.
         end if
 
