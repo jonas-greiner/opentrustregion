@@ -67,7 +67,6 @@ module otr_oao_c_interface
     end type
 
     ! global variables
-    integer(ip) :: n_particle, n_ao
     real(c_rp), pointer :: dm_ao_3d_c(:, :, :)
 
     procedure(standard_oao_factory_cs), pointer :: oao_factory_cs => &
@@ -140,10 +139,10 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
         type(solver_settings_type) :: solver_settings
         type(oao_settings_type) :: settings
-        integer(ip) :: error
+        integer(ip) :: n_particle, n_ao, error
 
-        ! convert number of AOs to Fortran kind, calculate number of parameters and
-        ! store globally to access assumed size arrays passed from C to Fortran
+        ! convert dimensions to Fortran kind, calculate number of parameters and store
+        ! it globally to access assumed size arrays passed from C to Fortran
         n_particle = int(n_particle_c, kind=ip)
         n_ao = int(n_ao_c, kind=ip)
         n_param = n_particle * n_ao * (n_ao - 1) / 2

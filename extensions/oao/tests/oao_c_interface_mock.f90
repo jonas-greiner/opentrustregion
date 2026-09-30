@@ -7,10 +7,11 @@
 module otr_oao_c_interface_mock
 
     use opentrustregion, only: stderr
-    use c_interface, only: c_rp, c_ip
+    use c_interface, only: c_rp, c_ip, update_orbs_c_type
     use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c, &
                                    oao_deconstructor_c_wrapper
-    use otr_oao_test_reference, only: ref_oao_settings, n_particle, n_ao
+    use otr_oao_test_reference, only: ref_oao_settings
+    use otr_common_test_reference, only: n_particle, n_ao
     use test_reference, only: n_param
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_f_pointer, c_loc
@@ -21,6 +22,8 @@ module otr_oao_c_interface_mock
                                 test_oao_deconstructor_interface = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
+    procedure(update_orbs_c_type), pointer :: mock_update_orbs_oao_ptr => &
+        mock_update_orbs_oao
     procedure(oao_factory_c_wrapper), pointer :: mock_oao_factory_c_wrapper_ptr => &
         mock_oao_factory_c_wrapper
     procedure(init_oao_settings_c), pointer :: mock_init_oao_settings_c_ptr => &
@@ -33,7 +36,7 @@ contains
     function mock_update_orbs_oao(kappa, func, grad, h_diag, hess_x_c_funptr) &
         result(error) bind(C)
         !
-        ! this subroutine is a test subroutine for the orbital update C function
+        ! this function is a test function for the orbital update C function
         !
         use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
         use otr_oao_c_interface, only: dm_ao_3d_c
@@ -115,7 +118,7 @@ contains
                     " by given density matrix evaluating function")
 
             ! check if passed number of AOs is correct
-            if (n_ao_c /= 3) then
+            if (n_ao_c /= n_ao) then
                 write(stderr, *) "test_oao_factory_py_interface failed: Passed "// &
                     "number of AOs wrong."
                 test_oao_factory_interface = .false.

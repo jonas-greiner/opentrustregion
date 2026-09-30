@@ -31,9 +31,9 @@ typedef c_int evaluate_dm_os_fn(const c_real *dm_ao_c, c_real *energy_c, c_real 
                                 c_real *v_nonlinear_c);
 typedef evaluate_dm_os_fn *evaluate_dm_os_fp;
 
-/* Density matrix evaluating callback passed to arh_factory, which is either shape
- * depending on n_particle_c: set the cs member for the closed-shell case
- * (n_particle_c == 1), or the os member for the open-shell case
+/* Density matrix evaluating callback passed to arh_factory_mo or arh_factory_oao,
+ * which is either shape depending on n_particle_c: set the cs member for the
+ * closed-shell case (n_particle_c == 1), or the os member for the open-shell case
  * (n_particle_c == 2) */
 typedef union {
   evaluate_dm_cs_fp cs;
@@ -58,9 +58,39 @@ void init_arh_settings(arh_settings_type *settings);
  * ------------------------------------------------------------------ */
 
 /**
- * Fortran-callable ARH factory interface.
+ * Fortran-callable ARH factory interface for orbitals parameterized in the MO basis,
+ * whose parameters are the occupied-virtual rotations of every particle channel.
  *
- * @param dm_ao_c                    Flattened AO density matrix (size n_ao^2)
+ * @param mo_coeff_c                 Flattened MO coefficients, occupied first,
+ *                                   column-major per particle channel (size n_ao *
+ *                                   n_mo * n_particle); rotated in place
+ * @param ao_overlap_c               Flattened AO overlap matrix (size n_ao^2)
+ * @param n_occ_c                    Number of occupied orbitals of every particle
+ *                                   channel (size n_particle)
+ * @param n_particle_c               Number of particles
+ * @param n_ao_c                     Number of AO basis functions
+ * @param n_mo_c                     Number of MOs
+ * @param evaluate_dm_c_funptr       arh_evaluate_dm_fp union
+ * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
+ * @param update_orbs_arh_c_funptr   Output: wrapped update_orbs function pointer
+ * @param solver_settings_c          Input/output: solver settings
+ * @param settings_c                 ARH settings
+ *
+ * @return                           Integer error code from Fortran
+ */
+c_int arh_factory_mo(c_real *mo_coeff_c, const c_real *ao_overlap_c,
+                     const c_int *n_occ_c, c_int n_particle_c, c_int n_ao_c,
+                     c_int n_mo_c, arh_evaluate_dm_fp evaluate_dm_c_funptr,
+                     obj_func_fp *obj_func_arh_c_funptr,
+                     update_orbs_fp *update_orbs_arh_c_funptr,
+                     solver_settings_type *solver_settings_c,
+                     arh_settings_type *settings_c);
+
+/**
+ * Fortran-callable ARH factory interface for orbitals parameterized in the OAO basis.
+ *
+ * @param dm_ao_c                    Flattened AO density matrix (size n_ao^2 *
+ *                                   n_particle); updated in place
  * @param ao_overlap_c               Flattened AO overlap matrix (size n_ao^2)
  * @param n_particle_c               Number of particles
  * @param n_ao_c                     Number of AO basis functions
@@ -72,12 +102,13 @@ void init_arh_settings(arh_settings_type *settings);
  *
  * @return                           Integer error code from Fortran
  */
-c_int arh_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
-                  c_int n_ao_c, arh_evaluate_dm_fp evaluate_dm_c_funptr,
-                  obj_func_fp *obj_func_arh_c_funptr,
-                  update_orbs_fp *update_orbs_arh_c_funptr,
-                  solver_settings_type *solver_settings_c,
-                  arh_settings_type *settings_c);
+c_int arh_factory_oao(const c_real *dm_ao_c, const c_real *ao_overlap_c,
+                      c_int n_particle_c, c_int n_ao_c,
+                      arh_evaluate_dm_fp evaluate_dm_c_funptr,
+                      obj_func_fp *obj_func_arh_c_funptr,
+                      update_orbs_fp *update_orbs_arh_c_funptr,
+                      solver_settings_type *solver_settings_c,
+                      arh_settings_type *settings_c);
 
 /**
  * Fortran-callable ARH deconstructor.

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import sys
+import operator
 import numpy as np
 from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure, byref
 from dataclasses import dataclass
@@ -31,10 +31,11 @@ from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInt
 from pyopentrustregion.extensions.oao.python_interface import (
     ObjFuncPyInterface,
     attach_wired_callbacks,
+    check_dm_ao,
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any, Union, TypeGuard, Dict
+    from typing import Tuple, Callable, Optional, Any, Union, TypeGuard, Dict, Sequence
 
     EvaluateDMCSType = Callable[
         [np.ndarray, Optional[np.ndarray], Optional[np.ndarray]], float
@@ -212,7 +213,214 @@ class EvaluateDMOSInterface:
         return 0
 
 
-def arh_factory(
+@dataclass
+class ObjFuncMOPyInterface(ObjFuncPyInterface):
+    """
+    this class provides the Python interface to the objective function for orbitals
+    parameterized in the MO basis, mo_coeff_buffer is stored to ensure that the MO
+    coefficients the library works on are not garbage collected
+    """
+
+    mo_coeff_buffer: Optional[np.ndarray] = None
+
+
+@dataclass
+class UpdateOrbsMOPyInterface(UpdateOrbsPyInterface):
+    """
+    this class provides the Python interface to the orbital updating function for
+    orbitals parameterized in the MO basis, which additionally copies the rotated MO
+    coefficients back into the array of the caller whenever the library could not
+    rotate that array in place
+    """
+
+    mo_coeff: Optional[np.ndarray] = None
+    mo_coeff_buffer: Optional[np.ndarray] = None
+
+    def __call__(
+        self, kappa: np.ndarray, grad: np.ndarray, h_diag: np.ndarray
+    ) -> Tuple[float, Callable[[np.ndarray, np.ndarray], None]]:
+        try:
+            return super().__call__(kappa, grad, h_diag)
+        finally:
+            # copy rotated MO coefficients back, also on failure since the buffer may
+            # have been rotated by then
+            if self.mo_coeff is not None and self.mo_coeff_buffer is not None:
+                np.copyto(self.mo_coeff, self.mo_coeff_buffer.swapaxes(-1, -2))
+
+
+def arh_factory_mo(
+    mo_coeff: np.ndarray,
+    ao_overlap: np.ndarray,
+    n_occ: Union[int, Sequence[int]],
+    n_particle: int,
+    n_ao: int,
+    n_mo: int,
+    evaluate_dm: Union[EvaluateDMCSType, EvaluateDMOSType],
+    solver_settings: SolverSettings,
+    settings: ARHSettings,
+) -> Tuple[
+    Callable[[np.ndarray], float],
+    Callable[
+        [np.ndarray, np.ndarray, np.ndarray],
+        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+    ],
+]:
+    # check the MO coefficients against the dimensions and determine if closed-shell or
+    # open-shell formalism is used
+    n_particle, n_ao, n_mo = (operator.index(n) for n in (n_particle, n_ao, n_mo))
+    shape = (n_ao, n_mo) if n_particle == 1 else (n_particle, n_ao, n_mo)
+    if mo_coeff.shape != shape:
+        raise ValueError(
+            f"The MO coefficients have to be of shape {shape} for {n_particle} "
+            f"particle(s), {n_ao} AOs and {n_mo} MOs, got shape {mo_coeff.shape}."
+        )
+    if not np.issubdtype(mo_coeff.dtype, np.floating) or not mo_coeff.flags.writeable:
+        raise ValueError(
+            "The MO coefficients have to be a real floating-point and writeable array, "
+            "since they are rotated in place."
+        )
+    closed_shell = n_particle == 1
+    n_occ_list = [operator.index(occ) for occ in np.atleast_1d(n_occ)]
+    if len(n_occ_list) != n_particle:
+        raise ValueError(
+            "The number of occupied orbitals has to be given for every particle "
+            f"channel ({n_particle}), got {len(n_occ_list)}."
+        )
+    n_occ_c = (c_int * n_particle)(*n_occ_list)
+
+    # pass the MO coefficients column-major, rotating the caller's array in place if
+    # it is stored like that and a buffer copied back after every update otherwise
+    mo_coeff_buffer = np.ascontiguousarray(mo_coeff.swapaxes(-1, -2), dtype=np.float64)
+    in_place = np.shares_memory(mo_coeff_buffer, mo_coeff)
+
+    # the AO overlap matrix is symmetric, so it needs no transposition
+    ao_overlap = np.ascontiguousarray(ao_overlap, dtype=np.float64)
+    if ao_overlap.shape != (n_ao, n_ao):
+        raise ValueError(
+            f"The AO overlap matrix has to be of shape ({n_ao}, {n_ao}), got shape "
+            f"{ao_overlap.shape}."
+        )
+
+    # get pointers to arrays
+    mo_coeff_ptr = mo_coeff_buffer.ctypes.data_as(POINTER(c_real))
+    ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
+
+    # collector for exceptions raised inside the wrapped user callbacks; adopted from
+    # evaluate_dm when it is itself factory-produced so a whole chain of factories
+    # shares one, and handed to solver through the returned object
+    exception = adopt_collector(evaluate_dm)
+
+    # define interfaces for callback functions, whose signature has to match the
+    # formalism
+    if closed_shell and is_evaluate_dm_cs(evaluate_dm):
+        evaluate_dm_cs_interface = evaluate_dm_cs_interface_type(
+            EvaluateDMCSInterface(
+                evaluate_dm, n_ao, n_particle, closed_shell, exception
+            )
+        )
+    elif not closed_shell and is_evaluate_dm_os(evaluate_dm):
+        evaluate_dm_os_interface = evaluate_dm_os_interface_type(
+            EvaluateDMOSInterface(
+                evaluate_dm, n_ao, n_particle, closed_shell, exception
+            )
+        )
+    else:
+        raise TypeError(
+            "evaluate_dm has to take (dm, fock, v_nonlinear) for closed-shell MO "
+            "coefficients and (dm, fock, v_same_spin, v_opposite_spin, v_nonlinear) "
+            "for open-shell MO coefficients."
+        )
+
+    # set interfaces for optional callback functions, these need to be set here since
+    # the interface might need parameters that are not known when the attribute to
+    # settings is set (e.g. n_param)
+    settings.set_optional_callback(
+        "logger", settings.logger, LoggerInterface, logger_interface_type
+    )
+
+    if not hasattr(lib, "arh_factory_mo"):
+        raise RuntimeError(
+            "Please reinstall the package with: "
+            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
+        )
+
+    # define result and argument types
+    lib.arh_factory_mo.restype = c_int
+    lib.arh_factory_mo.argtypes = [
+        POINTER(c_real),
+        POINTER(c_real),
+        POINTER(c_int),
+        c_int,
+        c_int,
+        c_int,
+        (
+            evaluate_dm_cs_interface_type
+            if closed_shell
+            else evaluate_dm_os_interface_type
+        ),
+        POINTER(obj_func_interface_type),
+        POINTER(update_orbs_interface_type),
+        POINTER(SolverSettingsC),
+        POINTER(ARHSettingsC),
+    ]
+
+    # call Fortran function
+    obj_func_arh_funptr = obj_func_interface_type()
+    update_orbs_arh_funptr = update_orbs_interface_type()
+    error = lib.arh_factory_mo(
+        mo_coeff_ptr,
+        ao_overlap_ptr,
+        n_occ_c,
+        n_particle,
+        n_ao,
+        n_mo,
+        evaluate_dm_cs_interface if closed_shell else evaluate_dm_os_interface,
+        byref(obj_func_arh_funptr),
+        byref(update_orbs_arh_funptr),
+        byref(solver_settings.settings_c),
+        byref(settings.settings_c),
+    )
+
+    if error:
+        if "exc" in exception:
+            raise RuntimeError(
+                f"OpenTrustRegion ARH MO factory produced error (code {error})."
+            ) from exception["exc"]
+        else:
+            raise RuntimeError(
+                f"OpenTrustRegion ARH MO factory produced error (code {error})."
+            )
+
+    # attach the routines the factory has wired into the solver settings
+    attach_wired_callbacks(solver_settings, exception)
+
+    return (
+        ObjFuncMOPyInterface(
+            obj_func_funptr=obj_func_arh_funptr,
+            evaluate_dm_interface=(
+                evaluate_dm_cs_interface if closed_shell else evaluate_dm_os_interface
+            ),
+            _otr_exception=exception,
+            mo_coeff_buffer=mo_coeff_buffer,
+        ),
+        UpdateOrbsMOPyInterface(
+            update_orbs_funptr=update_orbs_arh_funptr,
+            _otr_exception=exception,
+            saved_objects={
+                "evaluate_dm_interface": (
+                    evaluate_dm_cs_interface
+                    if closed_shell
+                    else evaluate_dm_os_interface
+                ),
+                "mo_coeff_buffer": mo_coeff_buffer,
+            },
+            mo_coeff=None if in_place else mo_coeff,
+            mo_coeff_buffer=None if in_place else mo_coeff_buffer,
+        ),
+    )
+
+
+def arh_factory_oao(
     dm_ao: np.ndarray,
     ao_overlap: np.ndarray,
     n_particle: int,
@@ -227,30 +435,39 @@ def arh_factory(
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
 ]:
+    # check the density and overlap matrices against the dimensions and determine if
+    # closed-shell or open-shell formalism is used
+    ao_overlap = check_dm_ao(dm_ao, ao_overlap, n_particle, n_ao)
+    closed_shell = n_particle == 1
+
     # get pointers to arrays
     dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
     ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
-
-    # determine if closed-shell or open-shell formalism is used
-    closed_shell = dm_ao.ndim == 2
 
     # collector for exceptions raised inside the wrapped user callbacks; adopted from
     # evaluate_dm when it is itself factory-produced so a whole chain of factories
     # shares one, and handed to solver through the returned object
     exception = adopt_collector(evaluate_dm)
 
-    # define interfaces for callback functions
-    if is_evaluate_dm_cs(evaluate_dm):
+    # define interfaces for callback functions, whose signature has to match the
+    # formalism
+    if closed_shell and is_evaluate_dm_cs(evaluate_dm):
         evaluate_dm_cs_interface = evaluate_dm_cs_interface_type(
             EvaluateDMCSInterface(
                 evaluate_dm, n_ao, n_particle, closed_shell, exception
             )
         )
-    elif is_evaluate_dm_os(evaluate_dm):
+    elif not closed_shell and is_evaluate_dm_os(evaluate_dm):
         evaluate_dm_os_interface = evaluate_dm_os_interface_type(
             EvaluateDMOSInterface(
                 evaluate_dm, n_ao, n_particle, closed_shell, exception
             )
+        )
+    else:
+        raise TypeError(
+            "evaluate_dm has to take (dm, fock, v_nonlinear) for a closed-shell AO "
+            "density matrix and (dm, fock, v_same_spin, v_opposite_spin, v_nonlinear) "
+            "for an open-shell AO density matrix."
         )
 
     # set interfaces for optional callback functions, these need to be set here since
@@ -260,15 +477,15 @@ def arh_factory(
         "logger", settings.logger, LoggerInterface, logger_interface_type
     )
 
-    if not hasattr(lib, "arh_factory"):
+    if not hasattr(lib, "arh_factory_oao"):
         raise RuntimeError(
             "Please reinstall the package with: "
             "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
         )
 
     # define result and argument types
-    lib.arh_factory.restype = c_int
-    lib.arh_factory.argtypes = [
+    lib.arh_factory_oao.restype = c_int
+    lib.arh_factory_oao.argtypes = [
         POINTER(c_real),
         POINTER(c_real),
         c_int,
@@ -287,7 +504,7 @@ def arh_factory(
     # call Fortran function
     obj_func_arh_funptr = obj_func_interface_type()
     update_orbs_arh_funptr = update_orbs_interface_type()
-    error = lib.arh_factory(
+    error = lib.arh_factory_oao(
         dm_ao_ptr,
         ao_overlap_ptr,
         n_particle,
@@ -302,11 +519,11 @@ def arh_factory(
     if error:
         if "exc" in exception:
             raise RuntimeError(
-                f"OpenTrustRegion ARH factory produced error (code {error})."
+                f"OpenTrustRegion ARH OAO factory produced error (code {error})."
             ) from exception["exc"]
         else:
             raise RuntimeError(
-                f"OpenTrustRegion ARH factory produced error (code {error})."
+                f"OpenTrustRegion ARH OAO factory produced error (code {error})."
             )
 
     # attach the routines the factory has wired into the solver settings
@@ -332,6 +549,40 @@ def arh_factory(
             },
         ),
     )
+
+
+# signatures of the factories the ARH factory selects from
+arh_factory_signatures = (
+    ("arh_factory_mo", signature(arh_factory_mo)),
+    ("arh_factory_oao", signature(arh_factory_oao)),
+)
+
+
+def arh_factory(*args: Any, **kwargs: Any) -> Tuple[
+    Callable[[np.ndarray], float],
+    Callable[
+        [np.ndarray, np.ndarray, np.ndarray],
+        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+    ],
+]:
+    # select the orbital basis from the arguments, like the generic arh_factory of the
+    # Fortran interface: the arguments of arh_factory_oao (an AO density matrix) select
+    # the OAO basis and those of arh_factory_mo (MO coefficients with their
+    # occupations and number of MOs) the MO basis
+    matches = []
+    for name, factory_signature in arh_factory_signatures:
+        try:
+            factory_signature.bind(*args, **kwargs)
+        except TypeError:
+            continue
+        matches.append(name)
+    if len(matches) != 1:
+        raise TypeError(
+            "The arguments have to match those of exactly one of arh_factory_mo and "
+            "arh_factory_oao."
+        )
+    factory = arh_factory_mo if matches[0] == "arh_factory_mo" else arh_factory_oao
+    return factory(*args, **kwargs)
 
 
 def arh_deconstructor():

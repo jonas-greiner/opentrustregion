@@ -186,6 +186,7 @@ set(OPENTRUSTREGION_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(ENABLE_OAO)
     message(STATUS "Including orthogonal AO in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/oao/src/oao.f90
         extensions/oao/src/oao_c_interface.f90
@@ -208,6 +209,7 @@ endif()
 if(ENABLE_ARH)
     message(STATUS "Including augmented Roothaan-Hall in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/arh/src/arh.f90
         extensions/arh/src/arh_c_interface.f90
@@ -294,6 +296,8 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     if(ENABLE_OAO)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
+            extensions/common/tests/common_test_reference.f90
+            extensions/common/tests/common_unit_tests.f90
             extensions/oao/tests/oao_test_reference.f90
             extensions/oao/tests/oao_unit_tests.f90
             extensions/oao/tests/oao_c_interface_unit_tests.f90
@@ -315,6 +319,8 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     if(ENABLE_ARH)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
+            extensions/common/tests/common_test_reference.f90
+            extensions/common/tests/common_unit_tests.f90
             extensions/arh/tests/arh_test_reference.f90
             extensions/arh/tests/arh_unit_tests.f90
             extensions/arh/tests/arh_c_interface_unit_tests.f90

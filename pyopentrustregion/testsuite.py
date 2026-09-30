@@ -18,6 +18,11 @@ from pyopentrustregion.tests import (
 
 # try to load extension module tests if available
 try:
+    from pyopentrustregion.extensions.common.tests import CommonTests
+except AttributeError:
+    pass
+
+try:
     from pyopentrustregion.extensions.oao.tests import (
         OAOTests,
         OAOCInterfaceTests,

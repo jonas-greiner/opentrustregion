@@ -8,16 +8,14 @@ module otr_oao_test_reference
 
     use opentrustregion, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
+    use otr_common_test_reference, only: n_particle, n_ao
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
                                            c_associated, c_null_funptr
 
     implicit none
 
-    ! number of particles and AOs
-    integer(ip), parameter :: n_particle = 2_ip, n_ao = 3_ip
+    ! number of parameters of the OAO parameterization
     integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
-    integer(c_ip), parameter :: n_particle_c = int(n_particle, kind=c_ip)
-    integer(c_ip), protected, bind(C, name="test_n_ao") :: n_ao_c = int(n_ao, kind=c_ip)
 
     ! derived types for OAO settings
     type :: ref_oao_settings_type
@@ -64,49 +62,6 @@ module otr_oao_test_reference
 
 contains
 
-    function request_label(outputs, request) result(label)
-        !
-        ! this function describes which optional outputs of a density matrix evaluating
-        ! function a test requests besides the energy, given as the bits of an integer
-        ! in the order of the outputs, for the failure messages of tests which go
-        ! through every combination of them
-        !
-        character(len=*), intent(in) :: outputs(:)
-        integer(ip), intent(in) :: request
-        character(len=:), allocatable :: label
-
-        integer(ip) :: i, n_requested, n_listed
-
-        ! list the energy and every requested output
-        n_requested = count([(btest(request, i - 1), i=1, size(outputs))])
-        n_listed = 0
-        label = " when requesting the energy"
-        do i = 1, size(outputs)
-            if (.not. btest(request, i - 1)) cycle
-            n_listed = n_listed + 1
-            if (n_listed == n_requested) then
-                label = label//" and the "//trim(outputs(i))
-            else
-                label = label//", the "//trim(outputs(i))
-            end if
-        end do
-
-    end function request_label
-
-    function capitalized(text) result(capital)
-        !
-        ! this function returns a text with its first letter capitalized, so that the
-        ! name of an output can start a failure message
-        !
-        character(len=*), intent(in) :: text
-        character(len=len(text)) :: capital
-
-        capital = text
-        if (lge(text(1:1), "a") .and. lle(text(1:1), "z")) &
-            capital(1:1) = achar(iachar(text(1:1)) - iachar("a") + iachar("A"))
-
-    end function capitalized
-
     function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message) &
         result(test_passed)
         !
@@ -115,6 +70,7 @@ contains
         !
         use otr_oao, only: evaluate_dm_cs_type, get_response_cs_type
         use test_reference, only: tol
+        use otr_common_test_reference, only: request_label
 
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
@@ -198,6 +154,7 @@ contains
         !
         use otr_oao_c_interface, only: evaluate_dm_c_type
         use test_reference, only: tol_c
+        use otr_common_test_reference, only: request_label
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
         character(len=*), intent(in) :: test_name, message
@@ -286,6 +243,7 @@ contains
         !
         use otr_oao, only: evaluate_dm_os_type, get_response_os_type
         use test_reference, only: tol
+        use otr_common_test_reference, only: request_label
 
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
@@ -369,6 +327,7 @@ contains
         !
         use otr_oao_c_interface, only: evaluate_dm_c_type
         use test_reference, only: tol_c
+        use otr_common_test_reference, only: request_label
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
         character(len=*), intent(in) :: test_name, message

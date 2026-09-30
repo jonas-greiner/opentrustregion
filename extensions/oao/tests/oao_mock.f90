@@ -84,6 +84,7 @@ contains
         use opentrustregion, only: update_orbs_type, solver_settings_type
         use otr_oao, only: evaluate_dm_cs_type, oao_settings_type
         use otr_oao_test_reference, only: test_evaluate_dm_cs_funptr
+        use otr_common_test_reference, only: n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -118,7 +119,7 @@ contains
         end if
 
         ! check number of AOs
-        if (n_ao /= 3) then
+        if (n_ao /= n_ao_ref) then
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed number of "// &
                 "AOs wrong."
@@ -164,6 +165,7 @@ contains
         use opentrustregion, only: update_orbs_type, solver_settings_type
         use otr_oao, only: evaluate_dm_os_type, oao_settings_type
         use otr_oao_test_reference, only: test_evaluate_dm_os_funptr
+        use otr_common_test_reference, only: n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -198,7 +200,7 @@ contains
         end if
 
         ! check number of AOs
-        if (n_ao /= 3) then
+        if (n_ao /= n_ao_ref) then
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed number of "// &
                 "AOs wrong."

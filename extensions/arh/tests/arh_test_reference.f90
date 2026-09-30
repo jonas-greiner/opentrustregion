@@ -8,8 +8,8 @@ module otr_arh_test_reference
 
     use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
-    use otr_oao_test_reference, only: n_particle, n_ao, ref_oao_settings_type, &
-                                      ref_oao_settings
+    use otr_oao_test_reference, only: ref_oao_settings_type, ref_oao_settings
+    use otr_common_test_reference, only: n_particle, n_occ
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
                                            c_associated
 
@@ -29,6 +29,29 @@ module otr_arh_test_reference
     type(ref_arh_settings_type), parameter :: ref_arh_settings = &
         ref_arh_settings_type(ref_oao_settings_type=ref_oao_settings, &
                               arh_type="symm_arh")
+
+    ! number of MOs for orbitals parameterized in the MO basis, fewer than the shared
+    ! number of AOs, and the numbers of parameters for the shared occupations
+    integer(ip), parameter :: n_mo = 4_ip
+    integer(ip), parameter :: n_param_cs = n_occ(1) * (n_mo - n_occ(1)), &
+                              n_param_os = sum(n_occ * (n_mo - n_occ))
+
+    ! dimensions of the MO coefficients passed through the Python interface
+    integer(c_ip), protected, bind(C, name="test_n_mo") :: n_mo_c = int(n_mo, kind=c_ip)
+    integer(c_ip), protected, bind(C, name="test_n_occ") :: n_occ_c(n_particle) = &
+        int(n_occ, kind=c_ip)
+
+    ! occupation cases for routines acting on every particle channel: closed-shell,
+    ! open-shell, and open-shell with an empty occupied or virtual block
+    integer(ip), parameter :: n_cases = 4_ip
+    integer(ip), parameter :: case_n_particle(n_cases) = &
+        [1_ip, n_particle, n_particle, n_particle]
+    integer(ip), parameter :: case_n_occ(n_particle, n_cases) = &
+        reshape([n_occ(1), 0_ip, n_occ(1), n_occ(2), n_occ(1), 0_ip, n_mo, n_occ(2)], &
+                [n_particle, n_cases])
+    character(len=33), parameter :: case_names(n_cases) = &
+        [character(len=33) :: "closed-shell", "open-shell", &
+         "open-shell empty occupied channel", "open-shell empty virtual channel"]
 
     ! multiples of the density matrix the mock density matrix evaluating functions
     ! return for each optional output, in the order of evaluate_dm_*_outputs
@@ -67,6 +90,28 @@ module otr_arh_test_reference
 
 contains
 
+    function mo_coeff_pattern(n_rows, n_cols, n_channels, offset) result(pattern)
+        !
+        ! this function returns MO coefficients with the given numbers of AOs (rows),
+        ! MOs (columns) and particle channels whose values encode their particle
+        ! channel, AO and MO index (all counted from one) together with an offset
+        !
+        integer(c_ip), intent(in) :: n_rows, n_cols, n_channels
+        real(c_rp), intent(in) :: offset
+        real(c_rp) :: pattern(n_rows, n_cols, n_channels)
+
+        integer(c_ip) :: i, j, k
+
+        do k = 1, n_channels
+            do j = 1, n_cols
+                do i = 1, n_rows
+                    pattern(i, j, k) = offset + real(100 * k + 10 * i + j, kind=c_rp)
+                end do
+            end do
+        end do
+
+    end function mo_coeff_pattern
+
     function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message) &
         result(test_passed)
         !
@@ -75,14 +120,15 @@ contains
         ! for every combination of requested outputs
         !
         use otr_arh, only: evaluate_dm_cs_type
-        use otr_oao_test_reference, only: request_label, capitalized
+        use otr_common_test_reference, only: n_ao, request_label, capitalized
         use test_reference, only: tol
 
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
         logical :: test_passed
 
-        real(rp), target :: dm_ao(n_ao, n_ao), outputs(n_ao, n_ao, 2)
+        real(rp), target :: dm_ao(n_ao, n_ao), &
+                            outputs(n_ao, n_ao, size(evaluate_dm_cs_outputs))
         real(rp), pointer, contiguous :: fock(:, :), v_nonlinear(:, :)
         real(rp) :: energy
         character(len=:), allocatable :: requested
@@ -152,7 +198,7 @@ contains
         ! for every combination of requested outputs
         !
         use otr_arh_c_interface, only: evaluate_dm_cs_c_type
-        use otr_oao_test_reference, only: request_label, capitalized
+        use otr_common_test_reference, only: n_ao, request_label, capitalized
         use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
@@ -160,7 +206,8 @@ contains
         logical :: test_passed
 
         procedure(evaluate_dm_cs_c_type), pointer :: evaluate_dm_funptr
-        real(c_rp), target :: dm_ao(n_ao, n_ao), outputs(n_ao, n_ao, 2)
+        real(c_rp), target :: dm_ao(n_ao, n_ao), &
+                              outputs(n_ao, n_ao, size(evaluate_dm_cs_outputs))
         real(c_rp), pointer :: fock(:, :), v_nonlinear(:, :)
         real(c_rp) :: energy
         character(len=:), allocatable :: requested
@@ -234,15 +281,16 @@ contains
         ! requested outputs
         !
         use otr_arh, only: evaluate_dm_os_type
-        use otr_oao_test_reference, only: request_label, capitalized
+        use otr_common_test_reference, only: n_ao, request_label, capitalized
         use test_reference, only: tol
 
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
         logical :: test_passed
 
-        real(rp), target :: dm_ao(n_ao, n_ao, n_particle), &
-                            outputs(n_ao, n_ao, n_particle, 4)
+        real(rp), target :: &
+            dm_ao(n_ao, n_ao, n_particle), &
+            outputs(n_ao, n_ao, n_particle, size(evaluate_dm_os_outputs))
         real(rp), pointer :: fock(:, :, :), v_same_spin(:, :, :), &
                              v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
         real(rp) :: energy
@@ -316,7 +364,7 @@ contains
         ! requested outputs
         !
         use otr_arh_c_interface, only: evaluate_dm_os_c_type
-        use otr_oao_test_reference, only: request_label, capitalized
+        use otr_common_test_reference, only: n_ao, request_label, capitalized
         use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
@@ -324,8 +372,9 @@ contains
         logical :: test_passed
 
         procedure(evaluate_dm_os_c_type), pointer :: evaluate_dm_funptr
-        real(c_rp), target :: dm_ao(n_ao, n_ao, n_particle), &
-                              outputs(n_ao, n_ao, n_particle, 4)
+        real(c_rp), target :: &
+            dm_ao(n_ao, n_ao, n_particle), &
+            outputs(n_ao, n_ao, n_particle, size(evaluate_dm_os_outputs))
         real(c_rp), pointer :: fock(:, :, :), v_same_spin(:, :, :), &
                                v_opposite_spin(:, :, :), v_nonlinear(:, :, :)
         real(c_rp) :: energy
