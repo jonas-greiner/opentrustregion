@@ -38,34 +38,34 @@ if NUMPY_AVAILABLE:
 fortran_tests = {
     "oao_c_system_tests": ["oao_settings_init"],
     "oao_tests": [
-        "calculate_grad_h_diag",
-        "compute_sqrt_and_inv_sqrt",
+        "calculate_grad_h_diag_oao",
         "get_extra_trial_vectors_oao",
-        "get_hess_eigval_pairs",
-        "hess_x_oao",
+        "get_extra_trial_vectors_oao_callback",
+        "get_hess_eigval_pairs_oao",
+        "hess_x_oao_callback",
         "init_oao_settings",
-        "matrix_exponential",
         "oao_deconstructor",
         "oao_factory_cs",
         "oao_factory_os",
         "oao_sanity_check",
         "oao_set_solver_settings",
-        "obj_func_oao",
+        "obj_func_oao_callback",
         "pack_asymm",
-        "precond_oao",
-        "precond_pd_oao",
+        "precond_oao_callback",
+        "precond_pd_oao_callback",
         "project_asymm",
-        "project_oao",
+        "project_oao_callback",
         "project_symm",
         "purify",
-        "refresh_hess_eigen",
+        "refresh_hess_eigen_oao",
         "refresh_oao_response",
         "rotate_dm_ao",
-        "rotate_from_hess_eigenbasis",
-        "rotate_to_hess_eigenbasis",
+        "rotate_from_hess_eigenbasis_oao",
+        "rotate_orbitals_oao",
+        "rotate_to_hess_eigenbasis_oao",
         "symmetric_transformation",
         "unpack_asymm",
-        "update_orbs_oao",
+        "update_orbs_oao_callback",
     ],
     "oao_c_interface_tests": [
         "assign_oao_c_f",
@@ -212,9 +212,6 @@ class OAOPyInterfaceTests(unittest.TestCase):
         # initialize logging boolean
         self.test_logger = True
 
-        # number of particles
-        n_particle = 1
-
         # initialize density matrix
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
@@ -225,7 +222,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         obj_func_oao, update_orbs_oao = oao_factory(
             dm_ao,
             ao_overlap,
-            n_particle,
+            1,
             n_ao,
             self.mock_evaluate_dm,
             solver_settings,
@@ -439,6 +436,77 @@ class OAOPyInterfaceTests(unittest.TestCase):
             SolverSettings(),
             settings,
         )
+
+        # call oao_factory python interface for invalid density and overlap matrices,
+        # which have to raise an error before the Fortran factory is called
+        read_only_dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
+        read_only_dm_ao.flags.writeable = False
+        invalid_cases = (
+            (
+                "density matrix not matching the number of particles",
+                (np.full(2 * (n_ao,), 1.0), ao_overlap, 2, n_ao, self.mock_evaluate_dm),
+                ValueError,
+            ),
+            (
+                "density matrix not matching the number of AOs",
+                (
+                    np.full(2 * (n_ao,), 1.0),
+                    np.full(2 * (n_ao + 1,), 2.0),
+                    1,
+                    n_ao + 1,
+                    self.mock_evaluate_dm,
+                ),
+                ValueError,
+            ),
+            (
+                "non-contiguous density matrix",
+                (
+                    np.full((n_ao, 2 * n_ao), 1.0)[:, ::2],
+                    ao_overlap,
+                    1,
+                    n_ao,
+                    self.mock_evaluate_dm,
+                ),
+                ValueError,
+            ),
+            (
+                "single-precision density matrix",
+                (
+                    np.full(2 * (n_ao,), 1.0, dtype=np.float32),
+                    ao_overlap,
+                    1,
+                    n_ao,
+                    self.mock_evaluate_dm,
+                ),
+                ValueError,
+            ),
+            (
+                "read-only density matrix",
+                (read_only_dm_ao, ao_overlap, 1, n_ao, self.mock_evaluate_dm),
+                ValueError,
+            ),
+            (
+                "wrongly shaped AO overlap matrix",
+                (
+                    np.full(2 * (n_ao,), 1.0),
+                    ao_overlap[:-1, :-1],
+                    1,
+                    n_ao,
+                    self.mock_evaluate_dm,
+                ),
+                ValueError,
+            ),
+        )
+        for case, args, error_type in invalid_cases:
+            try:
+                oao_factory(*args, SolverSettings(), settings)
+                print(
+                    f" test_oao_factory_py_interface failed: {case} did not raise an "
+                    "error."
+                )
+                test_passed = False
+            except error_type:
+                pass
 
         # check if a density matrix evaluating function which returns no response
         # function although one is requested produces an error

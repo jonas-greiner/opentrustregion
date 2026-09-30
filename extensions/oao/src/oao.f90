@@ -10,6 +10,7 @@ module otr_oao
                                hess_x_type, precond_type, precond_pd_type, &
                                project_type, get_extra_trial_vectors_type, &
                                solver_settings_type
+    use otr_common, only: orbital_basis_type
 
     implicit none
 
@@ -67,33 +68,46 @@ module otr_oao
         end subroutine evaluate_dm_os_type
     end interface
 
-    type :: oao_type
+    type, extends(orbital_basis_type) :: oao_type
         type(oao_settings_type) :: settings
-        integer(ip) :: n_ao, n_param, n_particle
-        real(rp) :: energy = 0.0_rp
-        real(rp), pointer, contiguous :: dm_ao(:, :, :)
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
-                                 fock_oo(:, :, :), fock_vv(:, :, :), grad(:), &
-                                 h_diag(:), hess_eigvecs(:, :, :), hess_eigvals(:, :)
-        logical :: response_stale = .false., hess_eigen_stale = .true.
+                                 fock_oo(:, :, :), fock_vv(:, :, :), &
+                                 hess_eigvecs(:, :, :), hess_eigvals(:, :)
+        logical :: evaluation_stale = .true., response_stale = .true.
         procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
         procedure(get_response_os_type), pointer, nopass :: get_response_os => null()
         procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
         procedure(get_response_cs_type), pointer, nopass :: get_response_cs => null()
+    contains
+        procedure :: rotate_orbitals => rotate_orbitals_oao
+        procedure :: calculate_grad_h_diag => calculate_grad_h_diag_oao
+        procedure :: refresh_hess_eigen => refresh_hess_eigen_oao
+        procedure :: rotate_to_hess_eigenbasis => rotate_to_hess_eigenbasis_oao
+        procedure :: rotate_from_hess_eigenbasis => rotate_from_hess_eigenbasis_oao
+        procedure :: get_hess_eigval_pairs => get_hess_eigval_pairs_oao
+        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_oao
     end type oao_type
 
     ! global variables
     type(oao_type), allocatable, target :: oao_object
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(obj_func_type), pointer :: obj_func_oao_ptr => obj_func_oao
-    procedure(update_orbs_type), pointer :: update_orbs_oao_ptr => update_orbs_oao
-    procedure(hess_x_type), pointer :: hess_x_oao_ptr => hess_x_oao
-    procedure(precond_type), pointer :: precond_oao_ptr => precond_oao
-    procedure(precond_pd_type), pointer :: precond_pd_oao_ptr => precond_pd_oao
-    procedure(project_type), pointer :: project_oao_ptr => project_oao
+    procedure(obj_func_type), pointer :: obj_func_oao_callback_ptr => &
+        obj_func_oao_callback
+    procedure(update_orbs_type), pointer :: update_orbs_oao_callback_ptr => &
+        update_orbs_oao_callback
+    procedure(hess_x_type), pointer :: hess_x_oao_callback_ptr => hess_x_oao_callback
+    procedure(precond_type), pointer :: precond_oao_callback_ptr => precond_oao_callback
+    procedure(precond_pd_type), pointer :: precond_pd_oao_callback_ptr => &
+        precond_pd_oao_callback
+    procedure(project_type), pointer :: project_oao_callback_ptr => project_oao_callback
     procedure(get_extra_trial_vectors_type), pointer :: &
-        get_extra_trial_vectors_oao_ptr => get_extra_trial_vectors_oao
+        get_extra_trial_vectors_oao_callback_ptr => get_extra_trial_vectors_oao_callback
+
+    ! define module procedures for different spin cases
+    interface oao_factory
+        module procedure oao_factory_cs, oao_factory_os
+    end interface oao_factory
 
 contains
 
@@ -128,10 +142,11 @@ contains
 
         ! set pointers to functions
         oao_object%evaluate_dm_cs => evaluate_dm_cs
+        oao_object%evaluate_dm_os => null()
 
         ! get pointers to modified function
-        obj_func_oao_funptr => obj_func_oao
-        update_orbs_oao_funptr => update_orbs_oao
+        obj_func_oao_funptr => obj_func_oao_callback
+        update_orbs_oao_funptr => update_orbs_oao_callback
 
         ! wire the remaining OAO routines into the solver settings
         call oao_set_solver_settings(solver_settings, error)
@@ -165,10 +180,11 @@ contains
 
         ! set pointers to functions
         oao_object%evaluate_dm_os => evaluate_dm_os
+        oao_object%evaluate_dm_cs => null()
 
         ! get pointers to modified function
-        obj_func_oao_funptr => obj_func_oao
-        update_orbs_oao_funptr => update_orbs_oao
+        obj_func_oao_funptr => obj_func_oao_callback
+        update_orbs_oao_funptr => update_orbs_oao_callback
 
         ! wire the remaining OAO routines into the solver settings
         call oao_set_solver_settings(solver_settings, error)
@@ -177,34 +193,37 @@ contains
 
     subroutine oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
         !
-        ! this function performs common OAO initialization operations
+        ! this subroutine performs common OAO initialization operations
         !
+        use otr_common, only: compute_sqrt_and_inv_sqrt
+
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
         class(oao_settings_type), intent(inout) :: settings
 
-        logical :: initialized
+        logical :: reuse
 
         ! perform sanity check
-        call oao_sanity_check(settings, n_ao, error)
+        call oao_sanity_check(settings, n_particle, n_ao, error)
         if (error /= 0) return
 
-        ! allocate objects
+        ! allocate object
         if (.not. allocated(oao_object)) allocate(oao_object)
-
-        ! determine whether object has been initialized
-        initialized = oao_object%settings%initialized
 
         ! set (potentially new) settings
         oao_object%settings = settings
 
-        ! check if object has not been initialized or has been initialize with wrong 
-        ! settings
-        if (.not. initialized .or. &
-            (initialized .and. &
-             (oao_object%n_particle /= n_particle .or. oao_object%n_ao /= n_ao))) then
+        ! determine whether the object was already set up for the same dimensions,
+        ! which the square roots of the overlap matrix, allocated only once computed,
+        ! indicate, reading the dimensions only once it was set up at all
+        reuse = allocated(oao_object%s_inv_sqrt)
+        if (reuse) &
+            reuse = oao_object%n_particle == n_particle .and. oao_object%n_ao == n_ao
+
+        ! set up the object anew otherwise
+        if (.not. reuse) then
             ! deallocate arrays if they are already allocated
             if (allocated(oao_object%s_sqrt)) deallocate(oao_object%s_sqrt)
             if (allocated(oao_object%s_inv_sqrt)) deallocate(oao_object%s_inv_sqrt)
@@ -213,43 +232,57 @@ contains
             if (allocated(oao_object%fock_vv)) deallocate(oao_object%fock_vv)
             if (allocated(oao_object%hess_eigvecs)) &
                 deallocate(oao_object%hess_eigvecs, oao_object%hess_eigvals)
-            oao_object%hess_eigen_stale = .true.
+            if (allocated(oao_object%grad)) deallocate(oao_object%grad)
+            if (allocated(oao_object%h_diag)) deallocate(oao_object%h_diag)
 
             ! number of particles
             oao_object%n_particle = n_particle
 
             ! get number of atomic orbitals
             oao_object%n_ao = n_ao
-            
-            ! starting density matrix
-            oao_object%dm_ao => dm_ao
+
+            ! get number of non-redundant parameters
+            oao_object%n_param = n_particle * n_ao * (n_ao - 1) / 2
 
             ! get square root and inverse square root of AO overlap matrix
             call compute_sqrt_and_inv_sqrt(ao_overlap, oao_object%s_sqrt, &
-                                           oao_object%s_inv_sqrt, error)
+                                           oao_object%s_inv_sqrt, oao_object%settings, &
+                                           error)
             if (error /= 0) return
-
-            ! get per spin contribution to density matrix in orthogonalized AO basis
-            oao_object%dm_oao = symmetric_transformation(oao_object%s_sqrt, dm_ao)
 
             ! allocate matrices
             allocate(oao_object%fock_oo(n_ao, n_ao, oao_object%n_particle), &
                      oao_object%fock_vv(n_ao, n_ao, oao_object%n_particle))
         end if
 
-        ! get number of non-redundant parameters
-        oao_object%n_param = n_particle * n_ao * (n_ao - 1) / 2
+        ! starting density matrix, also in the orthogonalized AO basis
+        oao_object%dm_ao => dm_ao
+        oao_object%dm_oao = symmetric_transformation(oao_object%s_sqrt, dm_ao)
+
+        ! nothing has been evaluated at the starting density yet, so drop any
+        ! quantities left from a previous calculation
+        oao_object%evaluation_stale = .true.
+        oao_object%response_stale = .true.
+        oao_object%hess_eigen_stale = .true.
+        oao_object%get_response_cs => null()
+        oao_object%get_response_os => null()
+
+        ! allocate gradient and Hessian diagonal
+        if (.not. allocated(oao_object%grad)) &
+            allocate(oao_object%grad(oao_object%n_param))
+        if (.not. allocated(oao_object%h_diag)) &
+            allocate(oao_object%h_diag(oao_object%n_param))
 
     end subroutine oao_factory_common
 
-    subroutine oao_sanity_check(settings, n_ao, error)
+    subroutine oao_sanity_check(settings, n_particle, n_ao, error)
         !
         ! this subroutine performs a sanity check for OAO input parameters
         !
         use opentrustregion, only: verbosity_error, string_to_lowercase
 
         class(oao_settings_type), intent(inout) :: settings
-        integer(ip), intent(in) :: n_ao
+        integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
 
         ! initialize error flag
@@ -258,6 +291,15 @@ contains
         ! check that number of AOs is positive
         if (n_ao < 1) then
             call settings%log("Number of AOs should be larger than 0.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that there is one particle channel for the closed-shell and two for
+        ! the open-shell case
+        if (n_particle < 1 .or. n_particle > 2) then
+            call settings%log("Number of particles should be 1 or 2.", &
                               verbosity_error, .true.)
             error = 1
             return
@@ -283,18 +325,18 @@ contains
         end if
 
         ! set callback functions of the solver and its stability check
-        solver_settings%precond => precond_oao
-        solver_settings%precond_pd => precond_pd_oao
-        solver_settings%project => project_oao
-        solver_settings%get_extra_trial_vectors => get_extra_trial_vectors_oao
-        solver_settings%stability_settings%precond => precond_oao
-        solver_settings%stability_settings%project => project_oao
+        solver_settings%precond => precond_oao_callback
+        solver_settings%precond_pd => precond_pd_oao_callback
+        solver_settings%project => project_oao_callback
+        solver_settings%get_extra_trial_vectors => get_extra_trial_vectors_oao_callback
+        solver_settings%stability_settings%precond => precond_oao_callback
+        solver_settings%stability_settings%project => project_oao_callback
         solver_settings%stability_settings%get_extra_trial_vectors => &
-            get_extra_trial_vectors_oao
+            get_extra_trial_vectors_oao_callback
 
     end subroutine oao_set_solver_settings
 
-    function obj_func_oao(kappa, error) result(energy)
+    function obj_func_oao_callback(kappa, error) result(energy)
         !
         ! this function defines the energy evaluation in OAO basis
         !
@@ -309,8 +351,8 @@ contains
 
         ! get rotated density matrix in AO basis
         allocate(rot_dm_ao(oao_object%n_ao, oao_object%n_ao, oao_object%n_particle))
-        call rotate_dm_ao(kappa, oao_object%n_particle, oao_object%n_ao, rot_dm_ao, &
-                          error)
+        call rotate_dm_ao(kappa, oao_object%dm_oao, oao_object%s_inv_sqrt, rot_dm_ao, &
+                          oao_object%settings, error)
         if (error /= 0) return
 
         ! calculate the mean-field energy
@@ -321,14 +363,14 @@ contains
         end if
         if (error /= 0) return
 
-    end function obj_func_oao
+    end function obj_func_oao_callback
 
-    subroutine update_orbs_oao(kappa, func, grad, h_diag, hess_x_funptr, error)
+    subroutine update_orbs_oao_callback(kappa, func, grad, h_diag, hess_x_funptr, error)
         !
-        ! this function defines the energy, gradient, and Hessian diagonal evaluation 
+        ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation in the OAO basis
         !
-        use opentrustregion, only: hess_x_type, numerical_zero
+        use opentrustregion, only: hess_x_type
 
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
@@ -337,28 +379,24 @@ contains
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle
-        real(rp), allocatable :: fock_ao(:, :, :), fock_oao(:, :, :)
-        external :: dgemm
+        real(rp), allocatable :: fock_ao(:, :, :)
 
         ! initialize error flag
         error = 0
 
-        ! check if orbitals are actually rotated
-        if ((sum(abs(kappa)) > 0.0_rp) .or. &
-            (abs(oao_object%energy) <= numerical_zero) .or. &
-            oao_object%response_stale .or. (.not. ( &
-                allocated(oao_object%grad) .and. allocated(oao_object%h_diag) .and. &
-                (associated(oao_object%get_response_cs) .or. &
-                 associated(oao_object%get_response_os))))) then
+        ! evaluate at the rotated orbitals, or at the current ones if these have not
+        ! been evaluated yet or their response is stale
+        if ((sum(abs(kappa)) > 0.0_rp) .or. oao_object%evaluation_stale .or. &
+            oao_object%response_stale) then
             ! number of AOs
             n_ao = oao_object%n_ao
 
             ! number of particles
             n_particle = oao_object%n_particle
 
-            ! rotate density matrix
-            call rotate_dm_ao(kappa, n_particle, n_ao,  oao_object%dm_ao, error, &
-                              oao_object%dm_oao)
+            ! rotate orbitals, which have not been evaluated until this succeeds
+            oao_object%evaluation_stale = .true.
+            call oao_object%rotate_orbitals(kappa, oao_object%settings, error)
             if (error /= 0) return
 
             ! get energy, Fock matrix, and response function
@@ -377,25 +415,14 @@ contains
                 return
             end if
 
-            ! transform Fock matrix to OAO basis
-            fock_oao = symmetric_transformation(oao_object%s_inv_sqrt, fock_ao)
+            ! calculate gradient, Hessian diagonal and static part of the Hessian from
+            ! the Fock matrix in the OAO basis
+            call oao_object%calculate_grad_h_diag( &
+                symmetric_transformation(oao_object%s_inv_sqrt, fock_ao))
             deallocate(fock_ao)
 
-            ! calculate gradient and Hessian diagonal
-            if (.not. allocated(oao_object%grad)) &
-                allocate(oao_object%grad(oao_object%n_param))
-            if (.not. allocated(oao_object%h_diag)) &
-                allocate(oao_object%h_diag(oao_object%n_param))
-            call calculate_grad_h_diag(oao_object%dm_oao, fock_oao, n_particle, n_ao, &
-                                       oao_object%grad, oao_object%h_diag, &
-                                       oao_object%fock_oo, oao_object%fock_vv)
-            deallocate(fock_oao)
-
-            ! the static Hessian part was just rebuilt, so any cached
-            ! eigendecomposition of it is now stale
-            oao_object%hess_eigen_stale = .true.
-
-            ! the response callbacks were just rebuilt at the current density
+            ! the rotated density matrix and its response have been evaluated
+            oao_object%evaluation_stale = .false.
             oao_object%response_stale = .false.
         end if
 
@@ -403,13 +430,13 @@ contains
         func = oao_object%energy
         grad = oao_object%grad
         h_diag = oao_object%h_diag
-        hess_x_funptr => hess_x_oao
+        hess_x_funptr => hess_x_oao_callback
         
-    end subroutine update_orbs_oao
+    end subroutine update_orbs_oao_callback
 
-    subroutine hess_x_oao(x, hess_x, error)
+    subroutine hess_x_oao_callback(x, hess_x, error)
         !
-        ! this function defines the Hessian linear transformation in the orthogonal AO 
+        ! this function defines the Hessian linear transformation in the orthogonal AO
         ! basis
         !
         real(rp), intent(in), target :: x(:)
@@ -476,9 +503,9 @@ contains
 
         ! project the combined static and response contributions onto the
         ! occupied-virtual and virtual-occupied subspace; the static part is already
-        ! confined to that subspace in exact arithmetic, but the projection on the full 
-        ! Hessian linear transformation is free since the Fock response has to be 
-        ! projected anyways and the full projection can prevent some numerical leakage  
+        ! confined to that subspace in exact arithmetic, but the projection on the full
+        ! Hessian linear transformation is free since the Fock response has to be
+        ! projected anyways and the full projection can prevent some numerical leakage
         ! into theredundant subspace
         hess_x_full = project_asymm(hess_x_full + fock_response, oao_object%dm_oao)
         deallocate(fock_response)
@@ -491,12 +518,12 @@ contains
         end if
         deallocate(hess_x_full)
 
-    end subroutine hess_x_oao
+    end subroutine hess_x_oao_callback
 
-    subroutine project_oao(vector, error)
+    subroutine project_oao_callback(vector, error)
         !
-        ! this subroutine discards the redundant occupied-occupied and virtual-virtual 
-        ! rotations from a vector describing an orbital rotation in-place, retaining 
+        ! this subroutine discards the redundant occupied-occupied and virtual-virtual
+        ! rotations from a vector describing an orbital rotation in-place, retaining
         ! only its occupied-virtual and virtual-occupied contributions
         !
         real(rp), intent(inout), target :: vector(:)
@@ -518,14 +545,14 @@ contains
         vector = pack_asymm(projected_vector_full, size(vector, kind=ip))
         deallocate(projected_vector_full)
 
-    end subroutine project_oao
+    end subroutine project_oao_callback
 
-    subroutine precond_oao(residual, mu, precond_residual, error)
+    subroutine precond_oao_callback(residual, mu, precond_residual, error)
         !
         ! this subroutine defines a level-shifted preconditioner based on the exact
         ! eigendecomposition of the static part of the Hessian
         !
-        use opentrustregion, only: precond_floor
+        use otr_common, only: level_shifted_divisors
 
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -538,324 +565,69 @@ contains
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        if (oao_object%hess_eigen_stale) then
-            call refresh_hess_eigen(error)
-            if (error /= 0) return
-        end if
+        call oao_object%refresh_hess_eigen(oao_object%settings, error)
+        if (error /= 0) return
 
         ! rotate residual into the eigenbasis of the static Hessian part
-        rotated_residual = rotate_to_hess_eigenbasis(residual)
+        rotated_residual = oao_object%rotate_to_hess_eigenbasis(residual)
 
         ! get pairwise sums of eigenvalues
-        eigval_pairs = get_hess_eigval_pairs()
+        eigval_pairs = oao_object%get_hess_eigval_pairs()
 
         ! apply level-shifted diagonal scaling in the eigenbasis
-        eigval_pairs = eigval_pairs - mu
-        where (abs(eigval_pairs) < precond_floor) eigval_pairs = precond_floor
-        rotated_residual = rotated_residual / eigval_pairs
+        rotated_residual = rotated_residual / level_shifted_divisors(eigval_pairs, mu)
 
         ! rotate back to the original basis
-        precond_residual = rotate_from_hess_eigenbasis(rotated_residual)
+        precond_residual = oao_object%rotate_from_hess_eigenbasis(rotated_residual)
 
-    end subroutine precond_oao
+    end subroutine precond_oao_callback
 
-    subroutine precond_pd_oao(residual, precond_residual, error)
+    subroutine precond_pd_oao_callback(residual, precond_residual, error)
         !
-        ! this subroutine defines the positive-definite preconditioner based on the 
+        ! this subroutine defines the positive-definite preconditioner based on the
         ! exact eigendecomposition of the static part of the Hessian
         !
-        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+        use otr_common, only: positive_definite_divisors
 
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
 
         real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
-        real(rp) :: floor_val
 
         ! initialize error flag
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        if (oao_object%hess_eigen_stale) then
-            call refresh_hess_eigen(error)
-            if (error /= 0) return
-        end if
+        call oao_object%refresh_hess_eigen(oao_object%settings, error)
+        if (error /= 0) return
 
         ! rotate residual into the eigenbasis of the static Hessian part
-        rotated_residual = rotate_to_hess_eigenbasis(residual)
+        rotated_residual = oao_object%rotate_to_hess_eigenbasis(residual)
 
         ! get pairwise sums of eigenvalues
-        eigval_pairs = get_hess_eigval_pairs()
+        eigval_pairs = oao_object%get_hess_eigval_pairs()
 
-        ! set floor value while guarding against vanishing eigenvalue pairs
-        floor_val = max(precond_rel_floor_factor * maxval(abs(eigval_pairs)), &
-                        precond_floor)
-        eigval_pairs = abs(eigval_pairs)
-        where (eigval_pairs < floor_val) eigval_pairs = floor_val
-        rotated_residual = rotated_residual / eigval_pairs
+        ! apply positive-definite diagonal scaling in the eigenbasis
+        rotated_residual = rotated_residual / positive_definite_divisors(eigval_pairs)
 
         ! rotate back to the original basis
-        precond_residual = rotate_from_hess_eigenbasis(rotated_residual)
+        precond_residual = oao_object%rotate_from_hess_eigenbasis(rotated_residual)
 
-    end subroutine precond_pd_oao
+    end subroutine precond_pd_oao_callback
 
-    subroutine get_extra_trial_vectors_oao(trial_vectors, error)
+    subroutine get_extra_trial_vectors_oao_callback(trial_vectors, error)
         !
-        ! this subroutine returns curvature-informed extra trial vectors for the
-        ! solver's initial trial space: the orbital rotations between those
-        ! occupied-virtual eigenvector pairs of the static Hessian part whose
-        ! eigenvalue sums are most negative
+        ! this subroutine returns the extra trial vectors of the OAO basis for the
+        ! solver's initial trial space
         !
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, n_extra, i, j, k, idx, ivec, min_idx
-        real(rp), allocatable :: eigval_pairs(:), dm_eigvecs(:, :), unit_vector(:)
-        logical, allocatable :: is_occupied(:, :)
-        real(rp), external :: ddot
-        external :: dgemm
+        call oao_object%get_extra_trial_vectors(trial_vectors, oao_object%settings, &
+                                                error)
 
-        ! initialize error flag
-        error = 0
-
-        ! a vanishing vector tells the solver that no direction is contributed for that
-        ! slot, which is what is returned for every slot left unfilled below
-        trial_vectors = 0.0_rp
-
-        ! number of AOs, particles and requested vectors
-        n_ao = oao_object%n_ao
-        n_particle = oao_object%n_particle
-        n_extra = size(trial_vectors, 2, kind=ip)
-
-        ! refresh the eigendecomposition if the static Hessian part has changed
-        if (oao_object%hess_eigen_stale) then
-            call refresh_hess_eigen(error)
-            if (error /= 0) return
-        end if
-
-        ! determine which eigenvectors span the occupied space; the eigenspaces of the
-        ! static Hessian part coincide with the occupied and virtual subspaces, so the
-        ! density matrix expectation value of each eigenvector is either one or zero
-        allocate(is_occupied(n_ao, n_particle), dm_eigvecs(n_ao, n_ao))
-        do k = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, oao_object%dm_oao(:, :, k), &
-                       n_ao, oao_object%hess_eigvecs(:, :, k), n_ao, 0.0_rp, &
-                       dm_eigvecs, n_ao)
-            do i = 1, n_ao
-                is_occupied(i, k) = ddot(n_ao, oao_object%hess_eigvecs(:, i, k), 1_ip, &
-                                         dm_eigvecs(:, i), 1_ip) > 0.5_rp
-            end do
-        end do
-        deallocate(dm_eigvecs)
-
-        ! get pairwise sums of eigenvalues and exclude the redundant pairs, which are
-        ! the ones whose two eigenvectors lie in the same subspace
-        eigval_pairs = get_hess_eigval_pairs()
-        idx = 1
-        do k = 1, n_particle
-            do j = 1, n_ao
-                do i = 1, j - 1
-                    if (is_occupied(i, k) .eqv. is_occupied(j, k)) &
-                        eigval_pairs(idx) = huge(1.0_rp)
-                    idx = idx + 1
-                end do
-            end do
-        end do
-        deallocate(is_occupied)
-
-        ! fill the requested slots with the rotations belonging to the most negative
-        ! remaining eigenvalue pairs, stopping as soon as none is negative any more
-        allocate(unit_vector(oao_object%n_param))
-        do ivec = 1, n_extra
-            min_idx = minloc(eigval_pairs, dim=1)
-            if (eigval_pairs(min_idx) >= 0.0_rp) exit
-            unit_vector = 0.0_rp
-            unit_vector(min_idx) = 1.0_rp
-            trial_vectors(:, ivec) = rotate_from_hess_eigenbasis(unit_vector)
-            eigval_pairs(min_idx) = huge(1.0_rp)
-        end do
-        deallocate(eigval_pairs, unit_vector)
-
-    end subroutine get_extra_trial_vectors_oao
-
-    subroutine refresh_hess_eigen(error)
-        !
-        ! this subroutine diagonalizes the static part of the Hessian for each particle 
-        ! channel and caches the result; this operator is symmetric and, since the
-        ! occupied-occupied/virtual-virtual blocks of the Fock matrix are sandwiched
-        ! between the (idempotent) density matrix and its complement, its eigenspaces
-        ! coincide with the occupied and virtual subspaces even though 
-        ! occupied-occupied and virtual-virtual parts of the Fock matrix are not 
-        ! individually diagonal in the OAO basis
-        !
-        use opentrustregion, only: verbosity_error
-
-        integer(ip), intent(out) :: error
-
-        integer(ip) :: n_ao, n_particle, i, lwork, info
-        real(rp), allocatable :: a(:, :), work(:)
-        character(300) :: msg
-        external :: dsyev
-
-        ! initialize error flag
-        error = 0
-
-        ! number of AOs and particles
-        n_ao = oao_object%n_ao
-        n_particle = oao_object%n_particle
-
-        ! allocate cache arrays if necessary
-        if (.not. allocated(oao_object%hess_eigvecs)) &
-            allocate(oao_object%hess_eigvecs(n_ao, n_ao, n_particle), &
-                     oao_object%hess_eigvals(n_ao, n_particle))
-
-        allocate(a(n_ao, n_ao))
-        do i = 1, n_particle
-            ! form the static part for this particle channel, dsyev overwrites it
-            a = oao_object%fock_vv(:, :, i) - oao_object%fock_oo(:, :, i)
-
-            ! query optimal workspace size
-            lwork = -1
-            allocate(work(1))
-            call dsyev("V", "U", n_ao, a, n_ao, oao_object%hess_eigvals(:, i), work, &
-                       lwork, info)
-            lwork = int(work(1))
-            deallocate(work)
-            allocate(work(lwork))
-
-            ! perform eigendecomposition
-            call dsyev("V", "U", n_ao, a, n_ao, oao_object%hess_eigvals(:, i), work, &
-                       lwork, info)
-            deallocate(work)
-
-            ! check for successful execution
-            if (info /= 0) then
-                write (msg, '(A, I0)') "Eigendecomposition of static Hessian part "// &
-                    "failed: Error in DSYEV, info = ", info
-                call oao_object%settings%log(msg, verbosity_error, .true.)
-                error = 1
-                deallocate(a)
-                return
-            end if
-
-            oao_object%hess_eigvecs(:, :, i) = a
-        end do
-        deallocate(a)
-
-        ! the cached eigendecomposition now matches the current static Hessian part
-        oao_object%hess_eigen_stale = .false.
-
-    end subroutine refresh_hess_eigen
-
-    function rotate_to_hess_eigenbasis(vector) result(rotated)
-        !
-        ! this function rotates a packed antisymmetric orbital-rotation vector into
-        ! the eigenbasis of the cached static Hessian part, one particle channel at
-        ! a time
-        !
-        real(rp), intent(in) :: vector(:)
-        real(rp), allocatable :: rotated(:)
-
-        integer(ip) :: n_ao, n_particle, i
-        real(rp), allocatable :: full(:, :, :), rotated_full(:, :, :), temp(:, :)
-        external :: dgemm
-
-        ! number of AOs and particles
-        n_ao = oao_object%n_ao
-        n_particle = oao_object%n_particle
-
-        ! unpack vector
-        full = unpack_asymm(vector, n_particle, n_ao)
-
-        ! rotate each particle channel by the cached eigenvectors
-        allocate(rotated_full(n_ao, n_ao, n_particle), temp(n_ao, n_ao))
-        do i = 1, n_particle
-            call dgemm("T", "N", n_ao, n_ao, n_ao, 1.0_rp, &
-                       oao_object%hess_eigvecs(:, :, i), n_ao, full(:, :, i), n_ao, &
-                       0.0_rp, temp, n_ao)
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, temp, n_ao, &
-                       oao_object%hess_eigvecs(:, :, i), n_ao, 0.0_rp, &
-                       rotated_full(:, :, i), n_ao)
-        end do
-        deallocate(full, temp)
-
-        ! pack vector
-        rotated = pack_asymm(rotated_full, size(vector, kind=ip))
-        deallocate(rotated_full)
-
-    end function rotate_to_hess_eigenbasis
-
-    function rotate_from_hess_eigenbasis(vector) result(rotated)
-        !
-        ! this function rotates a packed antisymmetric orbital-rotation vector out
-        ! of the eigenbasis of the cached static Hessian part, one particle channel
-        ! at a time
-        !
-        real(rp), intent(in) :: vector(:)
-        real(rp), allocatable :: rotated(:)
-
-        integer(ip) :: n_ao, n_particle, i
-        real(rp), allocatable :: full(:, :, :), rotated_full(:, :, :), temp(:, :)
-        external :: dgemm
-
-        ! number of AOs and particles
-        n_ao = oao_object%n_ao
-        n_particle = oao_object%n_particle
-
-        ! unpack vector
-        full = unpack_asymm(vector, n_particle, n_ao)
-
-        ! rotate each particle channel by the cached eigenvectors
-        allocate(rotated_full(n_ao, n_ao, n_particle), temp(n_ao, n_ao))
-        do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, &
-                       oao_object%hess_eigvecs(:, :, i), n_ao, full(:, :, i), n_ao, &
-                       0.0_rp, temp, n_ao)
-            call dgemm("N", "T", n_ao, n_ao, n_ao, 1.0_rp, temp, n_ao, &
-                       oao_object%hess_eigvecs(:, :, i), n_ao, 0.0_rp, &
-                       rotated_full(:, :, i), n_ao)
-        end do
-        deallocate(full, temp)
-
-        ! pack vector
-        rotated = pack_asymm(rotated_full, size(vector, kind=ip))
-        deallocate(rotated_full)
-
-    end function rotate_from_hess_eigenbasis
-
-    function get_hess_eigval_pairs() result(eigval_pairs)
-        !
-        ! this function returns the pairwise sums of the cached static-Hessian-part
-        ! eigenvalues, packed in the same order as h_diag
-        !
-        real(rp), allocatable :: eigval_pairs(:)
-
-        integer(ip) :: n_ao, n_particle, i, j, k, idx
-
-        ! number of AOs and particles
-        n_ao = oao_object%n_ao
-        n_particle = oao_object%n_particle
-
-        ! construct pairwise sums of eigenvalues
-        allocate(eigval_pairs(oao_object%n_param))
-        idx = 1
-        do k = 1, n_particle
-            do j = 1, n_ao
-                do i = 1, j - 1
-                    eigval_pairs(idx) = oao_object%hess_eigvals(i, k) + &
-                                        oao_object%hess_eigvals(j, k)
-                    idx = idx + 1
-                end do
-            end do
-        end do
-        if (n_particle == 1) then
-            eigval_pairs = 4.0_rp * eigval_pairs
-        else
-            eigval_pairs = 2.0_rp * eigval_pairs
-        end if
-
-    end function get_hess_eigval_pairs
+    end subroutine get_extra_trial_vectors_oao_callback
 
     subroutine init_oao_settings(self, error)
         !
@@ -903,7 +675,7 @@ contains
         ! initialize error flag
         error = 0
 
-        ! rebuild response, the energy is discarded since the caller already holds it 
+        ! rebuild response, the energy is discarded since the caller already holds it
         ! for the current density
         if (associated(oao_object%evaluate_dm_os)) then
             call oao_object%evaluate_dm_os( &
@@ -921,12 +693,375 @@ contains
 
     end subroutine refresh_oao_response
 
-    subroutine rotate_dm_ao(kappa, n_particle, n_ao, rot_dm_ao, error, rot_dm_oao)
+    subroutine rotate_orbitals_oao(self, kappa, settings, error)
         !
-        ! this subroutine returns the rotated density matrix in AO basis
+        ! this subroutine moves the current orbitals by the orbital rotation kappa,
+        ! updating the density matrix in the AO and in the OAO basis
         !
+        class(oao_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:)
-        integer(ip), intent(in) :: n_particle, n_ao
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_oao(:, :, :)
+
+        ! rotate density matrix
+        allocate(rot_dm_ao, mold=self%dm_ao)
+        allocate(rot_dm_oao, mold=self%dm_oao)
+        call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, settings, &
+                          error, rot_dm_oao)
+        if (error /= 0) return
+        self%dm_ao = rot_dm_ao
+        self%dm_oao = rot_dm_oao
+
+        ! the density was moved but the response was not rebuilt
+        self%response_stale = .true.
+
+    end subroutine rotate_orbitals_oao
+
+    subroutine calculate_grad_h_diag_oao(self, fock)
+        !
+        ! this subroutine calculates the gradient, Hessian diagonal and static part of
+        ! the Hessian at the current density from its Fock matrix in the OAO basis,
+        ! storing the static part as the occupied-occupied and virtual-virtual parts of
+        ! the Fock matrix
+        !
+        class(oao_type), intent(inout) :: self
+        real(rp), intent(in) :: fock(:, :, :)
+
+        integer(ip) :: n_ao, n_particle, i, j, k, idx
+        real(rp), allocatable :: dm_fock_oao(:, :), fock_dm_oao(:, :), &
+                                 fock_ov(:, :, :), fock_vo(:, :, :), grad_full(:, :, :)
+        external :: dgemm
+
+        ! number of AOs and particles
+        n_ao = self%n_ao
+        n_particle = self%n_particle
+
+        ! get contributions to Fock matrix based on occupancies
+        allocate(dm_fock_oao(n_ao, n_ao), fock_dm_oao(n_ao, n_ao), &
+                 fock_ov(n_ao, n_ao, n_particle), fock_vo(n_ao, n_ao, n_particle))
+        do i = 1, n_particle
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, self%dm_oao(:, :, i), n_ao, &
+                       fock(:, :, i), n_ao, 0.0_rp, dm_fock_oao, n_ao)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_fock_oao, n_ao, &
+                       self%dm_oao(:, :, i), n_ao, 0.0_rp, self%fock_oo(:, :, i), &
+                       n_ao) ! DFD
+            fock_ov(:, :, i) = dm_fock_oao - self%fock_oo(:, :, i) ! DF(I-D)
+            fock_vo(:, :, i) = transpose(fock_ov(:, :, i)) ! (I_D)FD
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, fock(:, :, i), n_ao, &
+                       self%dm_oao(:, :, i), n_ao, 0.0_rp, fock_dm_oao, n_ao)
+            self%fock_vv(:, :, i) = fock(:, :, i) - dm_fock_oao - fock_dm_oao + &
+                                    self%fock_oo(:, :, i) ! (I_D)F(I_D)
+        end do
+        deallocate(dm_fock_oao, fock_dm_oao)
+
+        ! construct gradient
+        if (n_particle == 1) then
+            grad_full = 4.0_rp * (fock_ov - fock_vo)
+        else
+            grad_full = 2.0_rp * (fock_ov - fock_vo)
+        end if
+        deallocate(fock_ov, fock_vo)
+
+        ! pack gradient
+        self%grad = pack_asymm(grad_full, self%n_param)
+
+        ! construct Hessian diagonal
+        idx = 1
+        do k = 1, n_particle
+            do j = 1, n_ao
+                do i = 1, j - 1
+                    self%h_diag(idx) = self%fock_vv(i, i, k) + self%fock_vv(j, j, k) - &
+                                       self%fock_oo(i, i, k) - self%fock_oo(j, j, k)
+                    idx = idx + 1
+                end do
+            end do
+        end do
+        if (n_particle == 1) then
+            self%h_diag = 4.0_rp * self%h_diag
+        else
+            self%h_diag = 2.0_rp * self%h_diag
+        end if
+
+        ! the static Hessian part was just rebuilt, so any cached eigendecomposition of
+        ! it is now stale
+        self%hess_eigen_stale = .true.
+
+    end subroutine calculate_grad_h_diag_oao
+
+    subroutine refresh_hess_eigen_oao(self, settings, error)
+        !
+        ! this subroutine diagonalizes the static part of the Hessian for each particle
+        ! channel and caches the result if the static part has changed since it was
+        ! last diagonalized; this operator is symmetric and, since the
+        ! occupied-occupied/virtual-virtual blocks of the Fock matrix are sandwiched
+        ! between the (idempotent) density matrix and its complement, its eigenspaces
+        ! coincide with the occupied and virtual subspaces even though
+        ! occupied-occupied and virtual-virtual parts of the Fock matrix are not
+        ! individually diagonal in the OAO basis
+        !
+        use opentrustregion, only: verbosity_error
+
+        class(oao_type), intent(inout) :: self
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_ao, n_particle, i, lwork, info
+        real(rp), allocatable :: a(:, :), work(:)
+        character(300) :: msg
+        external :: dsyev
+
+        ! initialize error flag
+        error = 0
+
+        ! keep the cached eigendecomposition if the static part has not changed
+        if (.not. self%hess_eigen_stale) return
+
+        ! number of AOs and particles
+        n_ao = self%n_ao
+        n_particle = self%n_particle
+
+        ! allocate cache arrays if necessary
+        if (.not. allocated(self%hess_eigvecs)) allocate(self%hess_eigvecs( &
+            n_ao, n_ao, n_particle), self%hess_eigvals(n_ao, n_particle))
+
+        allocate(a(n_ao, n_ao))
+        do i = 1, n_particle
+            ! form the static part for this particle channel, dsyev overwrites it
+            a = self%fock_vv(:, :, i) - self%fock_oo(:, :, i)
+
+            ! query optimal workspace size
+            lwork = -1
+            allocate(work(1))
+            call dsyev("V", "U", n_ao, a, n_ao, self%hess_eigvals(:, i), work, lwork, &
+                       info)
+            lwork = int(work(1))
+            deallocate(work)
+            allocate(work(lwork))
+
+            ! perform eigendecomposition
+            call dsyev("V", "U", n_ao, a, n_ao, self%hess_eigvals(:, i), work, lwork, &
+                       info)
+            deallocate(work)
+
+            ! check for successful execution
+            if (info /= 0) then
+                write (msg, '(A, I0)') "Eigendecomposition of static Hessian part "// &
+                    "failed: Error in DSYEV, info = ", info
+                call settings%log(msg, verbosity_error, .true.)
+                error = 1
+                deallocate(a)
+                return
+            end if
+
+            self%hess_eigvecs(:, :, i) = a
+        end do
+        deallocate(a)
+
+        ! the cached eigendecomposition now matches the current static Hessian part
+        self%hess_eigen_stale = .false.
+
+    end subroutine refresh_hess_eigen_oao
+
+    function rotate_to_hess_eigenbasis_oao(self, vector) result(rotated)
+        !
+        ! this function rotates a packed antisymmetric orbital-rotation vector into the
+        ! eigenbasis of the cached static Hessian part, one particle channel at a time
+        !
+        class(oao_type), intent(in) :: self
+        real(rp), intent(in) :: vector(:)
+        real(rp), allocatable :: rotated(:)
+
+        integer(ip) :: n_ao, n_particle, i
+        real(rp), allocatable :: full(:, :, :), rotated_full(:, :, :), temp(:, :)
+        external :: dgemm
+
+        ! number of AOs and particles
+        n_ao = self%n_ao
+        n_particle = self%n_particle
+
+        ! unpack vector
+        full = unpack_asymm(vector, n_particle, n_ao)
+
+        ! rotate each particle channel by the cached eigenvectors
+        allocate(rotated_full(n_ao, n_ao, n_particle), temp(n_ao, n_ao))
+        do i = 1, n_particle
+            call dgemm("T", "N", n_ao, n_ao, n_ao, 1.0_rp, self%hess_eigvecs(:, :, i), &
+                       n_ao, full(:, :, i), n_ao, 0.0_rp, temp, n_ao)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, temp, n_ao, &
+                       self%hess_eigvecs(:, :, i), n_ao, 0.0_rp, &
+                       rotated_full(:, :, i), n_ao)
+        end do
+        deallocate(full, temp)
+
+        ! pack vector
+        rotated = pack_asymm(rotated_full, self%n_param)
+        deallocate(rotated_full)
+
+    end function rotate_to_hess_eigenbasis_oao
+
+    function rotate_from_hess_eigenbasis_oao(self, vector) result(rotated)
+        !
+        ! this function rotates a packed antisymmetric orbital-rotation vector out of
+        ! the eigenbasis of the cached static Hessian part, one particle channel at a
+        ! time
+        !
+        class(oao_type), intent(in) :: self
+        real(rp), intent(in) :: vector(:)
+        real(rp), allocatable :: rotated(:)
+
+        integer(ip) :: n_ao, n_particle, i
+        real(rp), allocatable :: full(:, :, :), rotated_full(:, :, :), temp(:, :)
+        external :: dgemm
+
+        ! number of AOs and particles
+        n_ao = self%n_ao
+        n_particle = self%n_particle
+
+        ! unpack vector
+        full = unpack_asymm(vector, n_particle, n_ao)
+
+        ! rotate each particle channel by the cached eigenvectors
+        allocate(rotated_full(n_ao, n_ao, n_particle), temp(n_ao, n_ao))
+        do i = 1, n_particle
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, self%hess_eigvecs(:, :, i), &
+                       n_ao, full(:, :, i), n_ao, 0.0_rp, temp, n_ao)
+            call dgemm("N", "T", n_ao, n_ao, n_ao, 1.0_rp, temp, n_ao, &
+                       self%hess_eigvecs(:, :, i), n_ao, 0.0_rp, &
+                       rotated_full(:, :, i), n_ao)
+        end do
+        deallocate(full, temp)
+
+        ! pack vector
+        rotated = pack_asymm(rotated_full, self%n_param)
+        deallocate(rotated_full)
+
+    end function rotate_from_hess_eigenbasis_oao
+
+    function get_hess_eigval_pairs_oao(self) result(eigval_pairs)
+        !
+        ! this function returns the pairwise sums of the cached static-Hessian-part
+        ! eigenvalues, packed in the same order as h_diag
+        !
+        class(oao_type), intent(in) :: self
+        real(rp), allocatable :: eigval_pairs(:)
+
+        integer(ip) :: n_ao, n_particle, i, j, k, idx
+
+        ! number of AOs and particles
+        n_ao = self%n_ao
+        n_particle = self%n_particle
+
+        ! construct pairwise sums of eigenvalues
+        allocate(eigval_pairs(self%n_param))
+        idx = 1
+        do k = 1, n_particle
+            do j = 1, n_ao
+                do i = 1, j - 1
+                    eigval_pairs(idx) = self%hess_eigvals(i, k) + &
+                                        self%hess_eigvals(j, k)
+                    idx = idx + 1
+                end do
+            end do
+        end do
+        if (n_particle == 1) then
+            eigval_pairs = 4.0_rp * eigval_pairs
+        else
+            eigval_pairs = 2.0_rp * eigval_pairs
+        end if
+
+    end function get_hess_eigval_pairs_oao
+
+    subroutine get_extra_trial_vectors_oao(self, trial_vectors, settings, error)
+        !
+        ! this subroutine returns curvature-informed extra trial vectors for the
+        ! solver's initial trial space: the orbital rotations between those
+        ! occupied-virtual eigenvector pairs of the static Hessian part whose
+        ! eigenvalue sums are most negative
+        !
+        class(oao_type), intent(inout) :: self
+        real(rp), intent(out) :: trial_vectors(:, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_ao, n_particle, n_extra, i, j, k, idx, ivec, min_idx
+        real(rp), allocatable :: eigval_pairs(:), dm_eigvecs(:, :), unit_vector(:)
+        logical, allocatable :: is_occupied(:, :)
+        real(rp), external :: ddot
+        external :: dgemm
+
+        ! initialize error flag
+        error = 0
+
+        ! a vanishing vector tells the solver that no direction is contributed for that
+        ! slot, which is what is returned for every slot left unfilled below
+        trial_vectors = 0.0_rp
+
+        ! number of AOs, particles and requested vectors
+        n_ao = self%n_ao
+        n_particle = self%n_particle
+        n_extra = size(trial_vectors, 2, kind=ip)
+
+        ! refresh the eigendecomposition if the static Hessian part has changed
+        call self%refresh_hess_eigen(settings, error)
+        if (error /= 0) return
+
+        ! determine which eigenvectors span the occupied space; the eigenspaces of the
+        ! static Hessian part coincide with the occupied and virtual subspaces, so the
+        ! density matrix expectation value of each eigenvector is either one or zero
+        allocate(is_occupied(n_ao, n_particle), dm_eigvecs(n_ao, n_ao))
+        do k = 1, n_particle
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, self%dm_oao(:, :, k), n_ao, &
+                       self%hess_eigvecs(:, :, k), n_ao, 0.0_rp, dm_eigvecs, n_ao)
+            do i = 1, n_ao
+                is_occupied(i, k) = ddot(n_ao, self%hess_eigvecs(:, i, k), 1_ip, &
+                                         dm_eigvecs(:, i), 1_ip) > 0.5_rp
+            end do
+        end do
+        deallocate(dm_eigvecs)
+
+        ! get pairwise sums of eigenvalues and exclude the redundant pairs, which are
+        ! the ones whose two eigenvectors lie in the same subspace
+        eigval_pairs = self%get_hess_eigval_pairs()
+        idx = 1
+        do k = 1, n_particle
+            do j = 1, n_ao
+                do i = 1, j - 1
+                    if (is_occupied(i, k) .eqv. is_occupied(j, k)) &
+                        eigval_pairs(idx) = huge(1.0_rp)
+                    idx = idx + 1
+                end do
+            end do
+        end do
+        deallocate(is_occupied)
+
+        ! fill the requested slots with the rotations belonging to the most negative
+        ! remaining eigenvalue pairs, stopping as soon as none is negative any more
+        allocate(unit_vector(self%n_param))
+        do ivec = 1, n_extra
+            min_idx = minloc(eigval_pairs, dim=1)
+            if (eigval_pairs(min_idx) >= 0.0_rp) exit
+            unit_vector = 0.0_rp
+            unit_vector(min_idx) = 1.0_rp
+            trial_vectors(:, ivec) = self%rotate_from_hess_eigenbasis(unit_vector)
+            eigval_pairs(min_idx) = huge(1.0_rp)
+        end do
+        deallocate(eigval_pairs, unit_vector)
+
+    end subroutine get_extra_trial_vectors_oao
+
+    subroutine rotate_dm_ao(kappa, dm_oao, s_inv_sqrt, rot_dm_ao, settings, error, &
+                            rot_dm_oao)
+        !
+        ! this subroutine returns the density matrix in the OAO basis rotated by the
+        ! orbital rotation kappa, transformed to the AO basis by the inverse square
+        ! root of the AO overlap matrix
+        !
+        use otr_common, only: matrix_exponential
+
+        real(rp), intent(in) :: kappa(:), dm_oao(:, :, :), s_inv_sqrt(:, :)
+        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         real(rp), intent(out) :: rot_dm_ao(:, :, :)
         real(rp), intent(out), target, optional :: rot_dm_oao(:, :, :)
@@ -934,16 +1069,20 @@ contains
         real(rp), allocatable :: kappa_full(:, :, :), temp(:, :)
         real(rp), pointer :: rot_dm_oao_ptr(:, :, :)
         real(rp), allocatable, target :: u(:, :, :), rot_dm_oao_local(:, :, :)
-        integer(ip) :: i
+        integer(ip) :: n_ao, n_particle, i
 
         ! initialize error flag
         error = 0
+
+        ! number of AOs and particles
+        n_ao = size(dm_oao, 1, kind=ip)
+        n_particle = size(dm_oao, 3, kind=ip)
 
         ! get rotation matrix
         allocate(u(n_ao, n_ao, n_particle))
         kappa_full = unpack_asymm(kappa, n_particle, n_ao)
         do i = 1, n_particle
-            u(:, :, i) = matrix_exponential(kappa_full(:, :, i), error)
+            u(:, :, i) = matrix_exponential(kappa_full(:, :, i), settings, error)
             if (error /= 0) return
         end do
 
@@ -958,8 +1097,8 @@ contains
         ! rotate density matrix
         allocate(temp(n_ao, n_ao))
         do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, oao_object%dm_oao(:, :, i), &
-                       n_ao, u(:, :, i), n_ao, 0.0_rp, temp, n_ao)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, i), n_ao, &
+                       u(:, :, i), n_ao, 0.0_rp, temp, n_ao)
             call dgemm("T", "N", n_ao, n_ao, n_ao, 1.0_rp, u(:, :, i), n_ao, temp, &
                        n_ao, 0.0_rp, rot_dm_oao_ptr(:, :, i), n_ao)
         end do
@@ -968,87 +1107,22 @@ contains
         call purify(rot_dm_oao_ptr)
 
         ! transform density matrix from OAO basis to AO basis
-        rot_dm_ao = symmetric_transformation(oao_object%s_inv_sqrt, rot_dm_oao_ptr)
+        rot_dm_ao = symmetric_transformation(s_inv_sqrt, rot_dm_oao_ptr)
 
         ! deallocate local memory if needed
         if (.not. present(rot_dm_oao)) deallocate(rot_dm_oao_local)
 
     end subroutine rotate_dm_ao
 
-    subroutine calculate_grad_h_diag(dm_oao, fock_oao, n_particle, n_ao, grad, h_diag, &
-                                     fock_oo, fock_vv)
-        !
-        ! this function calculates the gradient and Hessian diagonal in OAO basis while 
-        ! also returning the occupied-occupied and virtual-virtual parts of the Fock 
-        ! matrix
-        !
-        real(rp), intent(in) :: dm_oao(:, :, :), fock_oao(:, :, :)
-        integer(ip), intent(in) :: n_particle, n_ao
-        real(rp), intent(out) :: grad(:), h_diag(:)
-        real(rp), intent(out) :: fock_oo(:, :, :), fock_vv(:, :, :)
-
-        integer(ip) :: i, j, k, idx
-        real(rp), allocatable :: dm_fock_oao(:, :), fock_dm_oao(:, :), &
-                                 fock_ov(:, :, :), fock_vo(:, :, :), grad_full(:, :, :)
-        external :: dgemm
-
-        ! get contributions to Fock matrix based on occupancies
-        allocate(dm_fock_oao(n_ao, n_ao), fock_dm_oao(n_ao, n_ao), &
-                 fock_ov(n_ao, n_ao, n_particle), fock_vo(n_ao, n_ao, n_particle))
-        do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_oao(:, :, i), n_ao, &
-                       fock_oao(:, :, i), n_ao, 0.0_rp, dm_fock_oao, n_ao)   
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, dm_fock_oao, n_ao, &
-                       dm_oao(:, :, i), n_ao, 0.0_rp, fock_oo(:, :, i), &
-                       n_ao) ! DFD
-            fock_ov(:, :, i) = dm_fock_oao - fock_oo(:, :, i) ! DF(I-D)
-            fock_vo(:, :, i) = transpose(fock_ov(:, :, i)) ! (I_D)FD
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, fock_oao(:, :, i), n_ao, &
-                       dm_oao(:, :, i), n_ao, 0.0_rp, fock_dm_oao, n_ao)
-            fock_vv(:, :, i) = fock_oao(:, :, i) - dm_fock_oao - fock_dm_oao + &
-                               fock_oo(:, :, i) ! (I_D)F(I_D)
-        end do
-        deallocate(dm_fock_oao, fock_dm_oao)
-
-        ! construct gradient
-        if (n_particle == 1) then
-            grad_full = 4.0_rp * (fock_ov - fock_vo)
-        else
-            grad_full = 2.0_rp * (fock_ov - fock_vo)
-        end if
-        deallocate(fock_ov, fock_vo)
-
-        ! pack gradient
-        grad = pack_asymm(grad_full, size(grad, kind=ip))
-
-        ! construct Hessian diagonal
-        idx = 1
-        do k = 1, n_particle
-            do j = 1, n_ao
-                do i = 1, j - 1
-                    h_diag(idx) = fock_vv(i, i, k) + fock_vv(j, j, k) - &
-                                  fock_oo(i, i, k) - fock_oo(j, j, k)
-                    idx = idx + 1
-                end do
-            end do
-        end do
-        if (n_particle == 1) then
-            h_diag = 4.0_rp * h_diag
-        else
-            h_diag = 2.0_rp * h_diag
-        end if
-
-    end subroutine calculate_grad_h_diag
-
     function project_asymm(matrix, dm_oao) result(projected_matrix)
         !
         ! this function projects a matrix onto the occupied-virtual and
-        ! virtual-occupied subspace of the provided density matrix and returns the 
+        ! virtual-occupied subspace of the provided density matrix and returns the
         ! result in antisymmetric form, discarding the redundant occupied-occupied and
-        ! virtual-virtual contributions; for a symmetric matrix (e.g. a Fock
-        ! response) this antisymmetrizes the retained occupied-virtual block, while
-        ! for an already antisymmetric matrix (e.g. an orbital rotation) it reproduces 
-        ! its occupied-virtual and virtual-occupied contributions unchanged
+        ! virtual-virtual contributions; for a symmetric matrix (e.g. a Fock response)
+        ! this antisymmetrizes the retained occupied-virtual block, while for an
+        ! already antisymmetric matrix (e.g. an orbital rotation) it reproduces its
+        ! occupied-virtual and virtual-occupied contributions unchanged
         !
         real(rp), intent(in) :: matrix(:, :, :), dm_oao(:, :, :)
         real(rp), allocatable :: projected_matrix(:, :, :)
@@ -1087,8 +1161,8 @@ contains
     function project_symm(x_full, dm_oao) result(projected_matrix)
         !
         ! this function projects an antisymmetric orbital-rotation matrix onto the
-        ! occupied-virtual and virtual-occupied subspace of the provided density matrix 
-        ! and returns the result in symmetric form, i.e. the density matrix response to 
+        ! occupied-virtual and virtual-occupied subspace of the provided density matrix
+        ! and returns the result in symmetric form, i.e. the density matrix response to
         ! the rotation, discarding the redundant occupied-occupied and virtual-virtual
         ! contributions
         !
@@ -1173,7 +1247,7 @@ contains
 
     function unpack_asymm(matrix_nonred, n_particle, n_ao) result(matrix)
         !
-        ! this function unpacks an antisymmetric matrix and returns the resulting 
+        ! this function unpacks an antisymmetric matrix and returns the resulting
         ! unpacked matrix
         !
         real(rp), intent(in) :: matrix_nonred(:)
@@ -1202,7 +1276,7 @@ contains
 
     function pack_asymm(matrix, n_param) result(matrix_nonred)
         !
-        ! this function packs an antisymmetric matrix for RHF while deallocating the 
+        ! this function packs an antisymmetric matrix for RHF while deallocating the
         ! original unpacked matrix
         !
         real(rp), intent(in) :: matrix(:, :, :)
@@ -1226,162 +1300,5 @@ contains
         end do
 
     end function pack_asymm
-
-    subroutine compute_sqrt_and_inv_sqrt(A, sqrtA, inv_sqrtA, error)
-        ! 
-        ! this subroutine calculates the square root and inverse square root of a 
-        ! matrix
-        !
-        use opentrustregion, only: solver_settings_type, verbosity_error
-
-        real(rp), intent(in)  :: A(:, :)
-        real(rp), allocatable, intent(out) :: sqrtA(:, :), inv_sqrtA(:, :)
-        integer(ip), intent(out) :: error
-
-        integer(ip) :: n_ao, lwork, info, i
-        real(rp), allocatable :: eigvecs(:, :), eigvals(:), work(:)
-        character(300) :: msg
-        external :: dsyev, dgemm
-
-        ! initialize error flag
-        error = 0
-
-        ! get number of AOs
-        n_ao = size(A, 1)
-
-        ! allocate eigenvector and eigenvalue arrays
-        allocate(eigvecs(n_ao, n_ao), eigvals(n_ao))
-
-        ! copy input because dsyev overwrites it
-        eigvecs = A
-
-        ! query optimal workspace size
-        lwork = -1
-        allocate(work(1))
-        call dsyev("V", "U", n_ao, eigvecs, n_ao, eigvals, work, lwork, info)
-        lwork = int(work(1))
-        deallocate(work)
-        allocate(work(lwork))
-
-        ! perform eigendecomposition
-        call dsyev("V", "U", n_ao, eigvecs, n_ao, eigvals, work, lwork, info)
-
-        ! deallocatework array
-        deallocate(work)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write (msg, '(A, I0)') "Eigendecomposition failed: Error in DSYEV, "// &
-                "info = ", info
-            call oao_object%settings%log(msg, verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
-        ! get square roots of eigenvalues
-        eigvals = sqrt(eigvals)
-
-        ! allocateand initialize output matrices
-        allocate(sqrtA(n_ao, n_ao), inv_sqrtA(n_ao, n_ao))
-        sqrtA = 0.0_rp
-        inv_sqrtA = 0.0_rp
-
-        ! construct the square root and inverse square root of A
-        do i = 1, n_ao
-            call dgemm("N","T", n_ao, n_ao, 1_ip, eigvals(i), eigvecs(:, i), n_ao, &
-                       eigvecs(:, i), n_ao, 1.0_rp, sqrtA, n_ao)
-            call dgemm("N","T", n_ao, n_ao, 1_ip, 1.0_rp / eigvals(i), eigvecs(:, i), &
-                       n_ao, eigvecs(:, i), n_ao, 1.0_rp, inv_sqrtA, n_ao)
-        end do
-
-        deallocate(eigvecs, eigvals)
-
-    end subroutine compute_sqrt_and_inv_sqrt
-
-    function matrix_exponential(A, error) result(expA)
-        !
-        ! this function calculates the matrix exponential of a real antisymmetric 
-        ! matrix using the scaling and squaring method applied to the Taylor expansion
-        ! of the exponential, the scale factor is derived from the Frobenius norm which 
-        ! is an upper bound for the spectral norm, convergence is tested against the
-        ! last term of the expansion which works because the sum of the Frobenius norms
-        ! of two matrices is larger than the Frobenius norm of the sum of both matrices
-        !
-        use opentrustregion, only: solver_settings_type, verbosity_error
-
-        real(rp), intent(in) :: A(:, :)
-        integer(ip), intent(out) :: error
-        real(rp), allocatable :: expA(:, :)
-
-        integer(ip) :: n, i, power
-        real(rp) :: scale, fac, A_norm
-        real(rp), allocatable :: An(:, :), tmp(:, :)
-        external :: dgemm
-
-        ! initialize error flag
-        error = 0
-
-        ! matrix size
-        n = size(A, 1)
-
-        ! workspace allocation
-        allocate(An(n, n), tmp(n, n), expA(n, n))
-
-        ! compute Frobenius norm of A
-        A_norm = sqrt(sum(A**2))
-
-        ! determine scale factor
-        power = 3
-        if (A_norm > 1.0_rp) then
-            power = power + int(ceiling(log(A_norm) / log(2.0_rp)))
-        end if
-        scale = 2.0_rp**(-power)
-
-        ! initialize exponential and product of matrices
-        expA = 0.0_rp
-        An = 0.0_rp
-        do i = 1, n
-            expA(i, i) = 1.0_rp
-            An(i, i) = 1.0_rp
-        end do
-
-        ! perform Taylor expansion
-        i = 1
-        fac = 1.0_rp
-        do while (A_norm > 1e-12_rp)
-            ! get factorial
-            fac = fac / real(i, rp)
-
-            ! multiply another matrix and change scale factor accordingly
-            call dgemm('N','N', n, n, n, scale, A, n, An, n, 0.0_rp, tmp, n)
-            An = tmp
-
-            ! add next expansion order
-            expA = expA + fac * An
-
-            ! convergence check for last expansion order
-            A_norm = fac * sqrt(sum(An**2))
-
-            ! check if maximum number of iterations is reached
-            i = i + 1
-            ! check for errors
-            if (i > 100) then
-                call oao_object%settings%log( &
-                    "Maximum number of iterations for Taylor expansion of matrix "// &
-                    "exponential reached.", verbosity_error, .true.)
-                error = 1
-                return
-            end if
-        end do
-        deallocate(An)
-
-        ! squaring step
-        do i = 1, power
-            call dgemm('N', 'N', n, n, n, 1.0_rp, expA, n, expA, n, 0.0_rp, tmp, n)
-            expA = tmp
-        end do
-        deallocate(tmp)
-
-    end function matrix_exponential
 
 end module otr_oao

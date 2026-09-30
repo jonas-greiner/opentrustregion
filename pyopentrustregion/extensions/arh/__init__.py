@@ -4,4 +4,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from .python_interface import ARHSettings, arh_factory, arh_deconstructor
+from .python_interface import (
+    ARHSettings,
+    arh_factory,
+    arh_factory_mo,
+    arh_factory_oao,
+    arh_deconstructor,
+)

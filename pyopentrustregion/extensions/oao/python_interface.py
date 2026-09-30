@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-import sys
+import operator
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, Structure
+from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, cast, Structure
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
@@ -316,7 +316,9 @@ def attach_wired_callbacks(
 ) -> None:
     """
     this function attaches the routines a factory has wired into the C solver
-    settings
+    settings, skipping the C callbacks the solver built from the Python functions of
+    the settings, which the settings already hold and which a wrapper around them would
+    outlive once the solver replaces them
     """
     wrappers = {
         "precond": (precond_interface_type, PrecondPyInterface),
@@ -332,7 +334,11 @@ def attach_wired_callbacks(
             if not hasattr(settings.settings_c, name):
                 continue
             settings_c_funptr = getattr(settings.settings_c, name)
-            if not settings_c_funptr:
+            own_interface = getattr(settings.settings_c, name + "_interface", None)
+            if not settings_c_funptr or (
+                own_interface is not None
+                and settings_c_funptr == cast(own_interface, c_void_p).value
+            ):
                 continue
             setattr(
                 settings,
@@ -341,6 +347,44 @@ def attach_wired_callbacks(
                     interface_type(settings_c_funptr), _otr_exception=exception
                 ),
             )
+
+
+def check_dm_ao(
+    dm_ao: np.ndarray, ao_overlap: np.ndarray, n_particle: int, n_ao: int
+) -> np.ndarray:
+    """
+    this function checks that an AO density matrix has the given dimensions, as an
+    (n_ao, n_ao) array for the closed-shell case and as a (2, n_ao, n_ao) array for the
+    open-shell case, and that it can be updated in place, since the factories keep
+    pointing at it, and returns the AO overlap matrix of these dimensions as a
+    contiguous array
+    """
+    n_particle, n_ao = operator.index(n_particle), operator.index(n_ao)
+    shape = (n_ao, n_ao) if n_particle == 1 else (n_particle, n_ao, n_ao)
+    if dm_ao.shape != shape:
+        raise ValueError(
+            f"The AO density matrix has to be of shape {shape} for {n_particle} "
+            f"particle(s) and {n_ao} AOs, got shape {dm_ao.shape}."
+        )
+    if (
+        dm_ao.dtype != np.float64
+        or not dm_ao.flags.c_contiguous
+        or not dm_ao.flags.writeable
+    ):
+        raise ValueError(
+            "The AO density matrix has to be a writeable and C-contiguous float64 "
+            "array, since it is updated in place."
+        )
+
+    # the AO overlap matrix is symmetric, so it needs no transposition
+    ao_overlap = np.ascontiguousarray(ao_overlap, dtype=np.float64)
+    if ao_overlap.shape != (n_ao, n_ao):
+        raise ValueError(
+            f"The AO overlap matrix has to be of shape ({n_ao}, {n_ao}), got shape "
+            f"{ao_overlap.shape}."
+        )
+
+    return ao_overlap
 
 
 def oao_factory(
@@ -358,12 +402,14 @@ def oao_factory(
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
 ]:
+    # check the density and overlap matrices against the dimensions and determine if
+    # closed-shell or open-shell formalism is used
+    ao_overlap = check_dm_ao(dm_ao, ao_overlap, n_particle, n_ao)
+    closed_shell = n_particle == 1
+
     # get pointers to arrays
     dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
     ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
-
-    # determine if closed-shell or open-shell formalism is used
-    closed_shell = dm_ao.ndim == 2
 
     # collector for exceptions raised inside the wrapped user callbacks; adopted from
     # evaluate_dm when it is itself factory-produced so a whole chain of factories

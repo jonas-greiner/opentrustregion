@@ -409,7 +409,7 @@ OpenTrustRegion (OTR) supports additional optional modules that can be enabled d
 
 ### Orthogonal Atomic Orbitals (OAO)
 
-This extension provides orbital optimization in the orthogonalized atomic orbital (AO) basis for RHF and UHF. It is the foundation the ARH extension is built on, and can also be used on its own when the exact Hessian-vector product (rather than ARH's history-based approximation) is preferred.
+This extension provides orbital optimization in the orthogonalized atomic orbital (OAO) basis for RHF and UHF. It is the foundation of ARH's OAO basis, and can also be used on its own when the exact Hessian-vector product (rather than ARH's history-based approximation) is preferred.
 
 #### Installation
 
@@ -433,9 +433,9 @@ The routine `oao_factory` constructs and returns OAO versions of the energy and 
 
 #### Required Arguments
 
-- **`dm_ao`** (real array): Represents the starting AO density matrix and is updated throughout the calculation with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations, which is (`n_particle`, `n_ao`, `n_ao`) in Python.
+- **`dm_ao`** (real array): Represents the starting AO density matrix and is updated throughout the calculation with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations, which is (2, `n_ao`, `n_ao`) in Python, where it has to be a writeable, C-contiguous `float64` array, since it is updated in place.
 - **`ao_overlap`** (real array): Represents the AO overlap matrix with dimension (`n_ao`, `n_ao`).
-- **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell)
+- **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell).
 - **`n_ao`** (integer): Specifies the number of AOs.
 - **`evaluate_dm`** (subroutine):  
   Accepts an AO density matrix and returns:
@@ -452,7 +452,7 @@ The routine `oao_factory` constructs and returns OAO versions of the energy and 
   - **`precond_pd`**: OAO positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`project`**: OAO projection onto the non-redundant orbital rotations, also for the stability check.
   - **`get_extra_trial_vectors`**: OAO extra trial vectors, the orbital rotations between those occupied-virtual eigenvector pairs of the static part of the Hessian whose eigenvalue sums are most negative, also for the stability check.
-- **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
+- **`error`** (integer): An integer code indicating the success or failure of the factory. The error code structure is explained below.
 - **`oao_settings`** (oao_settings_type): Settings object which controls optional arguments as described below.
 
 ---
@@ -462,7 +462,7 @@ The following Fortran snippet demonstrates how to use the OAO interface:
 ```fortran
 use opentrustregion, only: ip, rp, solver_settings_type, solver, obj_func_type, &
                            update_orbs_type
-use otr_oao, only: oao_factory_cs, oao_settings_type, evaluate_dm_cs_type, &
+use otr_oao, only: oao_factory, oao_settings_type, evaluate_dm_cs_type, &
                    oao_deconstructor
 
 type(solver_settings_type) :: settings
@@ -487,9 +487,9 @@ oao_settings%verbose = 1
 call settings%init(error)
 
 ! get OAO routines and wire the remaining ones into the settings
-call oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
-                    obj_func_oao_funptr, update_orbs_oao_funptr, settings, error, &
-                    oao_settings)
+call oao_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
+                 obj_func_oao_funptr, update_orbs_oao_funptr, settings, error, &
+                 oao_settings)
 
 ! set number of parameters
 n_param = n_ao * (n_ao - 1) / 2
@@ -555,7 +555,7 @@ The following Python snippet demonstrates the equivalent usage through the Pytho
 from pyopentrustregion import SolverSettings, solver
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
 
-dm_ao = np.asarray(dm_ao, dtype=np.float64)
+dm_ao = np.ascontiguousarray(dm_ao, dtype=np.float64)
 ao_overlap = np.asarray(ao_overlap, dtype=np.float64)
 
 # initialize OAO settings
@@ -589,7 +589,7 @@ oao_deconstructor()
 - OAO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden. `oao_settings_type` does not add any settings of its own beyond the base ones.
 - `oao_factory` returns two procedures, `obj_func` and `update_orbs`, which are passed to the normal `solver`, and wires `precond`, `precond_pd`, `project`, and `get_extra_trial_vectors` into the solver settings. All other solver settings set before the call are kept. To use the `solver`'s own default diagonal preconditioner or no extra trial vectors instead, reset the corresponding setting and its stability check counterpart after the factory call.
 - Unlike ARH, OAO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `evaluate_dm`, rather than a history-based approximation.
-- Clean up OAO resources and get final AO density matrix by calling `oao_deconstructor`.
+- Clean up OAO resources by calling `oao_deconstructor`; the final AO density matrix is the one passed to the factory, which is updated in place.
 
 ### Quasi-Newton Extension
 
@@ -745,7 +745,7 @@ The quasi-Newton factory function can be fine-tuned using the following settings
 
 ### Augmented Roothaan–Hall (ARH)
 
-This extension provides access to the augmented Roothaan-Hall method for RHF, ROHF, and UHF in the orthogonalized atomic orbital (AO) basis.
+This extension provides access to the augmented Roothaan-Hall method for RHF and UHF, with the orbitals parameterized either in the molecular orbital (MO) basis (`arh_factory_mo`), the default, or in the orthogonalized atomic orbital (OAO) basis (`arh_factory_oao`), both available under these names and with the same arguments in Fortran, C and Python. Fortran and Python additionally provide `arh_factory`, which accepts the arguments of either basis factory and forwards them to the one they match, the generic interface in Fortran and a helper in Python; C, which cannot overload functions, calls the basis factories directly. Both bases share the same history-based approximation of the Hessian and every ARH type.
 
 #### Installation
 
@@ -761,17 +761,14 @@ or, when installing the Python package:
 CMAKE_FLAGS='-DENABLE_ARH=ON' pip install .
 ```
 
-This exposes an `arh_factory` function that prepares ARH-specific callbacks for energy and orbital updates and wires ARH-specific preconditioning, projection, and extra trial vectors into the solver settings.
+This exposes the `arh_factory_mo` and `arh_factory_oao` functions, which prepare ARH-specific callbacks for energy and orbital updates and wire ARH-specific preconditioning, extra trial vectors and, in the OAO basis, projection into the solver settings.
 
 #### Usage
 
-The routine `arh_factory` constructs and returns ARH versions of the energy and orbital updating functions, and wires ARH versions of the preconditioning, projection, and extra trial vector functions into the solver settings. This routine requires the following input arguments:
+The ARH factories construct and return ARH versions of the energy and orbital updating functions, and wire ARH versions of the preconditioning and extra trial vector functions into the solver settings. Both bases take the following arguments, together with the orbitals of their basis described in the two parts below:
 
-#### Required Arguments
-
-- **`dm_ao`** (real array): Represents the starting AO density matrix and is updated throughout the calculation with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations, which is (`n_particle`, `n_ao`, `n_ao`) in Python.
 - **`ao_overlap`** (real array): Represents the AO overlap matrix with dimension (`n_ao`, `n_ao`).
-- **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell)
+- **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell).
 - **`n_ao`** (integer): Specifies the number of AOs.
 - **`evaluate_dm`** (subroutine):  
   Accepts an AO density matrix and returns:
@@ -785,18 +782,156 @@ The routine `arh_factory` constructs and returns ARH versions of the energy and 
   Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` in Python, and the callback must not build it.
 - **`obj_func_arh`** (subroutine): Returned ARH objective function as defined for the `solver` subroutine.
 - **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.
-- **`settings`** (solver_settings_type): Solver settings object, which is initialized first if it is not initialized yet. Its `refresh_hess` is set, since every energy evaluation adds the evaluated point to the ARH history and thereby changes the approximate Hessian, its `n_micro` is raised to 300, since the linear transformations of the approximate Hessian are cheap compared to energy evaluations and a subsystem solve stopped by the micro iteration limit is rejected, its `hess_symm` is set according to `arh_type`, and the following ARH routines are wired into it:
+- **`settings`** (solver_settings_type): Solver settings object, which is initialized first if it is not initialized yet. Its `refresh_hess` is set, since every energy evaluation adds the evaluated point to the ARH history and thereby changes the approximate Hessian, its `n_micro` is set to 300, since the linear transformations of the approximate Hessian are cheap compared to energy evaluations and a subsystem solve stopped by the micro iteration limit is rejected, its `hess_symm` is set according to `arh_type`, and the following ARH routines are wired into it:
   - **`precond`**: ARH level-shifted preconditioner, which applies the exact, level-shifted inverse of the full ARH approximate Hessian using the Sherman-Morrison-Woodbury identity, also for the stability check.
-  - **`precond_pd`**: ARH positive-definite preconditioner, identical to OAO's own, based on the exact eigendecomposition of the static part of the Hessian.
-  - **`project`**: ARH projection onto the non-redundant orbital rotations, identical to OAO's own, also for the stability check.
-  - **`get_extra_trial_vectors`**: ARH extra trial vectors, identical to OAO's own, since they only depend on the static part of the Hessian, also for the stability check.
-- **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
+  - **`precond_pd`**: ARH positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
+  - **`get_extra_trial_vectors`**: ARH extra trial vectors, which only depend on the static part of the Hessian, also for the stability check.
+
+  How the two bases treat the projection is described in their parts below.
+- **`error`** (integer): An integer code indicating the success or failure of the factory. The error code structure is explained below.
 - **`arh_settings`** (arh_settings_type): Settings object which controls optional arguments as described below.
 
+##### Orbitals in the MO basis
+
+In the MO basis, the parameters are only the occupied-virtual rotations of every particle channel, so that the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels. These parameters are non-redundant, so the factory wires no projection into the solver settings and leaves the projection to the caller, such as a symmetry projection. `precond_pd` divides by the magnitudes of the scaled pseudo-canonical orbital energy differences, floored relative to the largest of them, and `get_extra_trial_vectors` returns the rotations between the pseudo-canonical occupied and virtual orbitals with the most negative differences. For `n_mo` equal to `n_ao`, the approximate Hessian equals that of the OAO basis in MO coordinates. Besides the common arguments, `arh_factory_mo` takes, in the order `mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, ...`:
+
+- **`mo_coeff`** (real array): Represents the starting MO coefficients, orthonormal with respect to the AO overlap matrix and with the occupied orbitals of every particle channel first, which are rotated in place throughout the calculation, with dimension (`n_ao`, `n_mo`) for closed-shell and (`n_ao`, `n_mo`, 2) for open-shell calculations, which is (`n_ao`, `n_mo`) and (2, `n_ao`, `n_mo`) in Python. The C interface expects the matrix of every particle channel in column-major order; the Python interface accepts any memory layout and precision of a writeable floating-point array and copies the rotated MO coefficients back after every orbital update if they cannot be rotated in place.
+- **`n_occ`** (integer or integer array): Specifies the number of occupied orbitals, a single integer for closed-shell and one per particle channel for open-shell calculations, which may differ between the channels.
+- **`n_mo`** (integer): Specifies the number of MOs, which must not exceed the number of AOs.
+
+The following Fortran snippet demonstrates how to use the ARH interface in the MO basis:
+
+```fortran
+use opentrustregion, only: ip, rp, solver_settings_type, solver, obj_func_type, &
+                           update_orbs_type
+use otr_arh, only: arh_factory, arh_settings_type, evaluate_dm_cs_type, &
+                   arh_deconstructor
+
+type(solver_settings_type) :: settings
+type(arh_settings_type) :: arh_settings
+procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
+procedure(obj_func_type), pointer :: obj_func_arh_funptr
+procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+integer(ip) :: n_occ, n_particle, n_ao, n_mo, n_param, error
+real(rp), allocatable, target :: mo_coeff(:, :)
+real(rp), allocatable :: ao_overlap(:, :)
+
+! set callback function pointers to existing implementations
+evaluate_dm_funptr => evaluate_dm
+
+! initialize ARH settings
+call arh_settings%init(error)
+
+! override default settings
+arh_settings%verbose = 1
+
+! initialize settings
+call settings%init(error)
+
+! get ARH routines and wire the remaining ones into the settings
+call arh_factory(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                 evaluate_dm_funptr, obj_func_arh_funptr, update_orbs_arh_funptr, &
+                 settings, error, arh_settings)
+
+! set number of parameters
+n_param = n_occ * (n_mo - n_occ)
+
+! call solver
+call solver(update_orbs_arh_funptr, obj_func_arh_funptr, n_param, error, settings)
+
+! deallocate ARH objects
+call arh_deconstructor()
+```
 
 ---
 
-The following Fortran snippet demonstrates how to use the ARH interface:
+The following C snippet demonstrates equivalent usage through the C interface:
+
+```C
+#include "opentrustregion.h"
+#include "opentrustregion_arh.h"
+
+c_int n_occ[1], n_particle, n_ao, n_mo, n_param;
+c_real *mo_coeff, *ao_overlap;
+
+// set callback function pointers to existing implementations
+arh_evaluate_dm_fp evaluate_dm_funptr;
+evaluate_dm_funptr.cs = (void*)evaluate_dm;
+
+// initialize ARH settings
+arh_settings_type arh_settings = arh_settings_init();
+
+// override default settings
+arh_settings.verbose = 1;
+
+// initialize settings
+solver_settings_type settings = solver_settings_init();
+
+// get callback functions and wire the remaining ones into the settings
+obj_func_fp obj_func_arh_funptr;
+update_orbs_fp update_orbs_arh_funptr;
+c_int error = arh_factory_mo(mo_coeff,
+                             ao_overlap,
+                             n_occ,
+                             n_particle,
+                             n_ao,
+                             n_mo,
+                             evaluate_dm_funptr,
+                             &obj_func_arh_funptr,
+                             &update_orbs_arh_funptr,
+                             &settings,
+                             &arh_settings);
+
+// set number of parameters
+n_param = n_occ[0] * (n_mo - n_occ[0]);
+
+// call solver
+error = solver(update_orbs_arh_funptr, obj_func_arh_funptr, n_param, &settings);
+
+// deallocate ARH objects
+arh_deconstructor();
+```
+
+---
+
+The following Python snippet demonstrates the equivalent usage through the Python interface:
+
+```python
+from pyopentrustregion import SolverSettings, solver
+from pyopentrustregion.extensions.arh import ARHSettings, arh_factory, arh_deconstructor
+
+# initialize ARH settings
+arh_settings = ARHSettings()
+
+# override default settings
+arh_settings.verbose = 1
+
+# initialize settings
+settings = SolverSettings()
+
+# get callback functions and wire the remaining ones into the settings
+obj_func_arh, update_orbs_arh = arh_factory(
+    mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, settings,
+    arh_settings
+)
+
+# set number of parameters
+n_param = sum(occ * (n_mo - occ) for occ in np.atleast_1d(n_occ))
+
+# call solver
+solver(obj_func_arh, update_orbs_arh, n_param, settings)
+
+# deallocate ARH objects
+arh_deconstructor()
+```
+
+##### Orbitals in the OAO basis
+
+In the OAO basis, the parameters are the rotations between all orthogonalized AOs, packed as the `n_ao * (n_ao - 1) / 2` elements of an antisymmetric matrix per particle channel. These parameters are redundant, so the factory also wires the projection onto the non-redundant rotations of the OAO extension into the solver settings, also for the stability check, replacing a projection that is already set; `precond_pd` and `get_extra_trial_vectors` are those of the OAO extension. Besides the common arguments, `arh_factory_oao` takes, in the order `dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm, ...`:
+
+- **`dm_ao`** (real array): Represents the starting AO density matrix and is updated throughout the calculation with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations, which is (2, `n_ao`, `n_ao`) in Python, where it has to be a writeable, C-contiguous `float64` array, since it is updated in place.
+
+The following Fortran snippet demonstrates how to use the ARH interface in the OAO basis:
 
 ```fortran
 use opentrustregion, only: ip, rp, solver_settings_type, solver, obj_func_type, &
@@ -867,15 +1002,15 @@ solver_settings_type settings = solver_settings_init();
 // get callback functions and wire the remaining ones into the settings
 obj_func_fp obj_func_arh_funptr;
 update_orbs_fp update_orbs_arh_funptr;
-c_int error = arh_factory(dm_ao, 
-                          ao_overlap, 
-                          n_particle, 
-                          n_ao,
-                          evaluate_dm_funptr,
-                          &obj_func_arh_funptr,
-                          &update_orbs_arh_funptr,
-                          &settings,
-                          &arh_settings);
+c_int error = arh_factory_oao(dm_ao,
+                              ao_overlap,
+                              n_particle,
+                              n_ao,
+                              evaluate_dm_funptr,
+                              &obj_func_arh_funptr,
+                              &update_orbs_arh_funptr,
+                              &settings,
+                              &arh_settings);
 
 // set number of parameters
 n_param = n_ao * (n_ao - 1) / 2;
@@ -895,8 +1030,7 @@ The following Python snippet demonstrates the equivalent usage through the Pytho
 from pyopentrustregion import SolverSettings, solver
 from pyopentrustregion.extensions.arh import ARHSettings, arh_factory, arh_deconstructor
 
-dm_ao = np.asarray(dm_ao, dtype=np.float64)
-ao_overlap = np.asarray(ao_overlap, dtype=np.float64)
+dm_ao = np.ascontiguousarray(dm_ao, dtype=np.float64)
 
 # initialize ARH settings
 arh_settings = ARHSettings()
@@ -924,15 +1058,16 @@ arh_deconstructor()
 
 ---
 
-- `dm_ao`, `ao_overlap`, `n_particle` and `n_ao` are assumed to be prepared elsewhere.
+- `mo_coeff` or `dm_ao`, `ao_overlap` and the dimensions are assumed to be prepared elsewhere.
 - `evaluate_dm` is a callback procedure provided elsewhere.
 - ARH settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
-- `arh_factory` returns two procedures, `obj_func` and `update_orbs`, which are passed to the normal `solver`, wires `precond`, `precond_pd`, `project`, and `get_extra_trial_vectors` into the solver settings and sets its `refresh_hess`, `n_micro`, and `hess_symm`. All other solver settings set before the call are kept. To use the `solver`'s own default diagonal preconditioner or no extra trial vectors instead, reset the corresponding setting and its stability check counterpart after the factory call. `refresh_hess` has to stay set: the ARH approximate Hessian changes with every energy evaluation, so without it the subsystem solver would continue from Hessian information of two different models after a rejected step.
+- `arh_factory` in Fortran and Python is equivalent to calling `arh_factory_mo` or `arh_factory_oao` with the same arguments.
+- The factories return two procedures, `obj_func` and `update_orbs`, which are passed to the normal `solver`, wire `precond`, `precond_pd`, `get_extra_trial_vectors` and, in the OAO basis, `project` into the solver settings and set its `refresh_hess`, `n_micro`, and `hess_symm`. All other solver settings set before the call are kept. To use the `solver`'s own default diagonal preconditioner or no extra trial vectors instead, reset the corresponding setting and its stability check counterpart after the factory call. `refresh_hess` has to stay set: the ARH approximate Hessian changes with every energy evaluation, so without it the subsystem solver would continue from Hessian information of two different models after a rejected step.
 - Of the five `arh_type` options below, only `"arh"` breaks Hessian symmetry; `"symm_arh"`, `"ms_psb"`, `"ms_sp"`, and the default `"ms_sr1"` are symmetric. The factory sets `hess_symm` of the solver settings accordingly.
-- Clean up ARH resources and get final AO density matrix by calling `arh_deconstructor`.
+- Clean up ARH resources by calling `arh_deconstructor`; the final orbitals are the MO coefficients or AO density matrix passed to the factory, which are updated in place.
 
 #### Optional Settings
-The ARH factory function can be fine-tuned using the following settings:
+The ARH factories can be fine-tuned using the following settings:
 
 - **`arh_type`** (string): Specifies which ARH type to use. Options include:
   - `"arh"`: standard ARH method which is not symmetric but fulfills all multisecant conditions,
@@ -940,7 +1075,7 @@ The ARH factory function can be fine-tuned using the following settings:
   - `"ms_psb"`: multisecant Powell symmetric Broyden which is only symmetric and fulfills all multisecant conditions for HF and other methods for which the energy is quadratic in the density matrix,
   - `"ms_sp"`: subspace-projected multisecant method,
   - `"ms_sr1"`: multisecant symmetric-rank-1 method, which treats the linear (Coulomb and exact exchange) part of the response exactly through a dedicated regularized system and the non-linear (exchange-correlation) part through a separate, independently regularized multisecant system.
-- **`verbose`** (integer): Controls the verbosity of output during the stability check.
+- **`verbose`** (integer): Controls the verbosity of output of the ARH routines.
 
 ### Subspace Gradient-Enhanced Kriging Extension
 
