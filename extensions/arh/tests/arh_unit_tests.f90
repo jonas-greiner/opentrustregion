@@ -857,8 +857,9 @@ contains
         do i = 1, n
             y_norm = sqrt(max(dot_product(vecs(:, i), matmul(y_gram, vecs(:, i))), &
                               0.0_rp))
-            if (abs(vals(i)) > thresh .and. abs(vals(i)) >= ms_sr1_skip_thresh * &
-                y_norm) diag(i, i) = 1.0_rp / vals(i)
+            if (abs(vals(i)) > thresh .and. &
+                abs(vals(i)) >= ms_sr1_skip_thresh * y_norm) &
+                diag(i, i) = 1.0_rp / vals(i)
         end do
 
         a_inv = matmul(vecs, matmul(diag, transpose(vecs)))
@@ -4508,8 +4509,8 @@ contains
             write (stderr, *) "test_history_columns_arh_oao failed: Incorrect "// &
                 "dimensions of history columns."
             test_history_columns_arh_oao = .false.
-        else if (norm2(cols - reshape(diff, [n_ao * n_ao * n_particle, n_list])) > &
-                 tol) then
+        else if ( &
+            norm2(cols - reshape(diff, [n_ao * n_ao * n_particle, n_list])) > tol) then
             write (stderr, *) "test_history_columns_arh_oao failed: History "// &
                 "columns are not the flattened difference matrices."
             test_history_columns_arh_oao = .false.
@@ -4581,8 +4582,9 @@ contains
             write (stderr, *) "test_history_channel_rows_arh_mo failed: Incorrect "// &
                 "dimensions."
             test_history_channel_rows_arh_mo = .false.
-        else if (any(rows /= reshape([1_ip, n_mo**2, n_mo**2 + 1_ip, 2_ip * n_mo**2], &
-                                     [2, 2]))) then
+        else if (any( &
+            rows /= reshape([1_ip, n_mo**2, n_mo**2 + 1_ip, 2_ip * n_mo**2], [2, 2]))) &
+            then
             write (stderr, *) "test_history_channel_rows_arh_mo failed: Incorrect rows."
             test_history_channel_rows_arh_mo = .false.
         end if
@@ -5923,8 +5925,9 @@ contains
             call factorize_history(history_cols, chol, map, n_accepted, keep, &
                                    min_residual)
             gram = matmul(transpose(history_cols), history_cols)
-            if (n_accepted /= size(expected_map) .or. size(map) /= &
-                size(expected_map) .or. any(shape(chol) /= size(expected_map))) then
+            if (n_accepted /= size(expected_map) .or. &
+                size(map) /= size(expected_map) .or. &
+                any(shape(chol) /= size(expected_map))) then
                 write (stderr, *) "test_factorize_history failed: Incorrect number "// &
                     "of accepted columns for "//case_name//"."
                 passed = .false.

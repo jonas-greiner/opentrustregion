@@ -17,10 +17,9 @@ module otr_common_c_interface
 
 contains
 
-    function update_orbs_c_wrapper_impl(update_orbs_before_wrapping, &
-                                        hess_x_before_wrapping_funptr, &
-                                        hess_x_c_wrapper_funptr, kappa_c, func_c, &
-                                        grad_c, h_diag_c, hess_x_c_funptr) &
+    function update_orbs_c_wrapper_impl( &
+        update_orbs_before_wrapping, hess_x_before_wrapping_funptr, &
+        hess_x_c_wrapper_funptr, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr) &
         result(error_c)
         !
         ! this function wraps the orbital update subroutine to convert Fortran 
@@ -30,8 +29,7 @@ contains
         use c_interface, only: hess_x_c_type
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_before_wrapping
-        procedure(hess_x_type), intent(out), pointer :: &
-            hess_x_before_wrapping_funptr
+        procedure(hess_x_type), intent(out), pointer :: hess_x_before_wrapping_funptr
         procedure(hess_x_c_type) :: hess_x_c_wrapper_funptr
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c

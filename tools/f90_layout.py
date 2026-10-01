@@ -39,7 +39,11 @@ The layout of a statement is the best one under these rules:
    constructor, an array section, or the shape of an array in a declaration or an
    allocate statement is not split if it fits whole on a line, and neither are the
    contents of a group holding a single argument or index hung after its opening
-   bracket. Second, among the layouts with the fewest lines: a group containing no
+   bracket, nor a comparison (``==``, ``/=``, ``<``, ``<=``, ``>``, ``>=``, their dotted
+   forms, ``.eqv.`` and ``.neqv.``) that fits whole on a continuation line with a
+   hanging indent, which extends from the start of its left to the end of its right
+   operand, as far as the nearest looser operator, comma, assignment or bracket on
+   either side. Second, among the layouts with the fewest lines: a group containing no
    other bracket group apart from grouping parentheses is not split if it fits whole,
    and no group that fits whole has its contents hung after its opening bracket. A
    group fits whole if it fits where it stands, where a break directly before it would
@@ -441,6 +445,10 @@ PRECEDENCE.update({op: 5 for op in ("==", "/=", "<", "<=", ">", ">=")})
 PRECEDENCE.update({f".{op}.": 5 for op in ("eq", "ne", "lt", "le", "gt", "ge")})
 PRECEDENCE.update({"+": 7, "-": 7, "*": 8, "/": 8, "**": 9})
 
+# the operators whose two operands are kept on one line under rule 4
+COMPARISONS = {"==", "/=", "<", "<=", ">", ">=", ".eqv.", ".neqv."}
+COMPARISONS.update(f".{op}." for op in ("eq", "ne", "lt", "le", "gt", "ge"))
+
 
 @dataclass
 class Structure:
@@ -456,6 +464,7 @@ class Structure:
     events: Dict[int, List[tuple]]
     candidates: List[int]  # positions a line may be broken at, ascending
     inner: Dict[int, int]  # breaks -> number of groups with a looser break in them
+    comparisons: List[Tuple[int, int]]  # (start, end) of every comparison
     strings: Dict[int, str]  # breaks inside a string literal -> its quote character
     lengths: Dict[int, int]  # breaks inside a string literal -> length of the literal
     multi_entity: bool  # whether this is a declaration of several entities
@@ -519,6 +528,8 @@ def structure(code: str, text: str, breaks: List[int]) -> Structure:
 
     depth, assigned, in_list, entities = 0, None, False, 0
     initializers = []
+    # every operator, comma and assignment as (start, end, rank, group, operator)
+    ops: List[Tuple[int, int, int, int, str]] = []
     i = 0
     while i < end:
         ch = code[i]
@@ -546,6 +557,7 @@ def structure(code: str, text: str, breaks: List[int]) -> Structure:
         if ch == ",":
             candidates.add(i + 1)
             binds[i + 1] = bind(PRECEDENCE[","])
+            ops.append((i, i + 1, PRECEDENCE[","], groups[-1], ","))
             if in_list and depth == 0:
                 add(i, ("entity_end",))
                 entities += 1
@@ -569,6 +581,7 @@ def structure(code: str, text: str, breaks: List[int]) -> Structure:
             nxt = code[i + 1] if i + 1 < len(code) else " "
             if nxt != "=" and prev not in "=/<>":
                 op_end = i + 2 if nxt == ">" else i + 1
+                ops.append((i, op_end, -1, groups[-1], "="))
                 if in_list:
                     add(op_end - 1, ("anchor", next_content(code, op_end), "init"))
                     candidates.add(op_end)
@@ -592,7 +605,9 @@ def structure(code: str, text: str, breaks: List[int]) -> Structure:
                 op = i + 1
         if op is not None:
             candidates.add(op)
-            binds[op] = bind(PRECEDENCE[lower[i:op].strip()])
+            name = lower[i:op].strip()
+            binds[op] = bind(PRECEDENCE[name])
+            ops.append((i, op, PRECEDENCE[name], groups[-1], name))
             i = op
             continue
         i += 1
@@ -646,6 +661,24 @@ def structure(code: str, text: str, breaks: List[int]) -> Structure:
 
     candidates = {b for b in candidates if 0 < b < end and next_content(code, b) < end}
     candidates.update(strings)
+
+    # the extent of every comparison, bounded on either side by the nearest operator,
+    # comma or assignment of its bracket group that binds more loosely, or else by the
+    # group itself
+    extents = []
+    for first, last, rank, group, name in ops:
+        if name not in COMPARISONS:
+            continue
+        left = group + 1 if group >= 0 else 0
+        right = match.get(group, end) if group >= 0 else end
+        for other_first, other_last, other_rank, other_group, _ in ops:
+            if other_group != group or other_rank >= rank:
+                continue
+            if other_last <= first:
+                left = max(left, other_last)
+            elif other_first >= last:
+                right = min(right, other_first)
+        extents.append((next_content(code, left), len(code[:right].rstrip())))
 
     # an array constructor, an array section, or the shape of an array in a declaration
     # or an allocate statement
@@ -730,7 +763,14 @@ def structure(code: str, text: str, breaks: List[int]) -> Structure:
             matrices.append((open_at, close_at, row_ends))
 
     return Structure(
-        events, sorted(candidates), inner, strings, lengths, entities > 1, matrices
+        events,
+        sorted(candidates),
+        inner,
+        extents,
+        strings,
+        lengths,
+        entities > 1,
+        matrices,
     )
 
 
@@ -747,9 +787,9 @@ FITS, LEAF, ARRAY, SINGLE = 1, 2, 4, 8
 # after it
 Anchor = Tuple[str, Optional[int], int, int, int]
 
-# the cost of a layout in the order it is minimized (array-like groups split, lines,
-# other groups split, operands split), and its breaks, negated so that the latest
-# breaks sort first
+# the cost of a layout in the order it is minimized (array-like groups and comparisons
+# split, lines, other groups split, operands split), and its breaks, negated so that
+# the latest breaks sort first
 Score = Tuple[int, int, int, int, Tuple[int, ...]]
 
 
@@ -790,6 +830,16 @@ class Layout:
             for b in self.s.candidates
             if b in self.forced or not any(a < b < c for a, c in self.inside)
         ]
+        # the comparisons a break splits, counting only those that fit whole on a
+        # continuation line with a hanging indent
+        whole_comparisons = [
+            (a, c)
+            for a, c in self.s.comparisons
+            if base + HANG + c - a + len(" &") <= LIMIT
+        ]
+        self.compared = {
+            b: sum(a < b < c for a, c in whole_comparisons) for b in self.candidates
+        }
 
     def scan(
         self, s: int, b: int, indent: int, stack: Tuple[Anchor, ...]
@@ -913,6 +963,7 @@ class Layout:
                     elif whole & LEAF or (whole and hung):
                         groups += 1
                 split = self.s.inner.get(b, 0)
+                arrays += self.compared.get(b, 0)
                 groups += b in self.whole_strings
                 n = b if b in self.s.strings else next_content(self.j.code, b)
                 sub = search(n, self.next_indent(b, new_stack), new_stack)
@@ -926,9 +977,9 @@ class Layout:
                             (-b,) + sub[4],
                         )
                     )
-            # fewest array-like groups split, then fewest lines, then fewest other
-            # groups split against rule 4, then fewest split operands, then the latest
-            # first break, the latest second break, ...
+            # fewest array-like groups and comparisons split, then fewest lines, then
+            # fewest other groups split against rule 4, then fewest split operands, then
+            # the latest first break, the latest second break, ...
             return min(options) if options else None
 
         result = search(next_content(self.j.code, 0), self.base, ())
