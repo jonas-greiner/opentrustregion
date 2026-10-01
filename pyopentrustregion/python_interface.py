@@ -465,6 +465,7 @@ class SolverSettingsC(Structure):
         ("start_trust_radius", c_real),
         ("global_red_factor", c_real),
         ("local_red_factor", c_real),
+        ("grad_noise", c_real),
         ("n_random_trial_vectors", c_int),
         ("n_extra_trial_vectors", c_int),
         ("n_macro", c_int),

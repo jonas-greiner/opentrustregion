@@ -221,7 +221,7 @@ module opentrustregion
 
     type, extends(optimizer_settings_type) :: solver_settings_type
         logical :: stability, line_search, refresh_hess
-        real(rp) :: start_trust_radius, global_red_factor, local_red_factor
+        real(rp) :: start_trust_radius, global_red_factor, local_red_factor, grad_noise
         integer(ip) :: n_macro, n_micro
         character(len=kw_len) :: subsystem_solver, trust_region_shape
         type(stability_settings_type) :: stability_settings
@@ -249,8 +249,8 @@ module opentrustregion
             stability_hess_x=null(), logger=null(), stability=.false., &
             line_search=.false., refresh_hess=.false., hess_symm=.true., &
             initialized=.true., conv_tol=1e-5_rp, start_trust_radius=-1.0_rp, &
-            global_red_factor=1e-3_rp, local_red_factor=1e-4_rp, &
-            n_random_trial_vectors=1, n_extra_trial_vectors=1, n_macro=150, &
+            global_red_factor=1e-3_rp, local_red_factor=1e-4_rp, grad_noise=1e-4_rp, &
+            n_random_trial_vectors=0, n_extra_trial_vectors=1, n_macro=150, &
             n_micro=50, jacobi_davidson_start=30, seed=42, verbose=0, &
             subsystem_solver="davidson_ls", trust_region_shape="none", &
             stability_settings=default_stability_settings)
@@ -1919,9 +1919,16 @@ contains
                         if (count_hess_x) tot_hess_x = tot_hess_x + 1
                     end if
                 else
-                    ! precondition residual
-                    call level_shifted_diag_precond(residual(:, i), 0.0_rp, h_diag, &
-                                                    basis_vec, settings, error)
+                    ! precondition residual, level-shifted to the stability threshold:
+                    ! without a shift, a preconditioner which inverts an approximate
+                    ! Hessian amplifies the directions in which that Hessian is nearly
+                    ! singular, such as a rotation that leaves the energy unchanged at
+                    ! a symmetry-broken point, so that the trial space can converge to
+                    ! the vanishing eigenvalue of such a direction before reaching a
+                    ! negative one; the shift bounds this amplification by the
+                    ! curvature the check has to resolve anyway
+                    call level_shifted_diag_precond(residual(:, i), stability_thresh, &
+                                                    h_diag, basis_vec, settings, error)
                     if (error /= 0) return
 
                     ! orthonormalize to current space to get new basis vector
@@ -2759,16 +2766,17 @@ contains
         logical, intent(out) :: jacobi_davidson_started, max_precision_reached
 
         real(rp), allocatable :: &
-            red_space_basis(:, :), h_basis(:, :), red_space_hess(:, :), &
-            red_space_solution(:), basis_vec(:), h_basis_vec(:), h_solution(:), &
-            residual(:), solution_normalized(:), last_solution_normalized(:), &
-            row_vec(:), col_vec(:), red_space_hess_right_eigvecs(:, :), &
-            red_space_hess_left_eigvecs(:, :), red_space_hess_eigvals_re(:)
+            perturbed_grad(:), red_space_basis(:, :), h_basis(:, :), &
+            red_space_hess(:, :), red_space_solution(:), basis_vec(:), h_basis_vec(:), &
+            h_solution(:), residual(:), solution_normalized(:), &
+            last_solution_normalized(:), row_vec(:), col_vec(:), &
+            red_space_hess_right_eigvecs(:, :), red_space_hess_left_eigvecs(:, :), &
+            red_space_hess_eigvals_re(:)
         complex(rp), allocatable :: red_space_hess_eigvals(:)
         integer(ip) :: n_trial, i, initial_imicro, min_idx
         logical :: accept_step, micro_converged, newton
-        real(rp) :: residual_norm, red_factor, initial_residual_norm, new_func, &
-                    minres_tol
+        real(rp) :: perturbed_grad_norm, residual_norm, red_factor, &
+                    initial_residual_norm, new_func, minres_tol
         real(rp), parameter :: solution_overlap_thresh = 0.5_rp, &
                                residual_norm_max_red_factor = 0.8_rp
         real(rp), external :: dnrm2, ddot
@@ -2777,9 +2785,25 @@ contains
         ! initialize error flag
         error = 0
 
+        ! solve the subproblem for a gradient perturbed by a small random vector, which
+        ! keeps the solution from remaining exactly within the symmetry subspace of the
+        ! current point when the Hessian (in particular an approximate one) carries no
+        ! negative curvature out of that subspace
+        perturbed_grad = grad
+        perturbed_grad_norm = grad_norm
+        if (settings%grad_noise > 0.0_rp) then
+            call perturb_vector(perturbed_grad, settings%grad_noise)
+            if (associated(settings%project)) then
+                call settings%project(perturbed_grad, error)
+                call add_error_origin(error, error_project, settings)
+                if (error /= 0) return
+            end if
+            perturbed_grad_norm = dnrm2(n_param, perturbed_grad, 1_ip)
+        end if
+
         ! generate trial vectors
-        red_space_basis = &
-            generate_trial_vectors(grad, grad_norm, h_diag, settings, error)
+        red_space_basis = generate_trial_vectors(perturbed_grad, perturbed_grad_norm, &
+                                                 h_diag, settings, error)
         if (error /= 0) return
 
         ! number of trial vectors
@@ -2825,8 +2849,8 @@ contains
 
                 if (string_in("ls", settings%subsystem_solver)) then
                     ! perform bisection to find the level shift
-                    call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
-                                      red_space_hess_eigvals, &
+                    call bisection_mu(red_space_hess, perturbed_grad_norm, &
+                                      red_space_basis, red_space_hess_eigvals, &
                                       red_space_hess_right_eigvecs, &
                                       red_space_hess_left_eigvecs, trust_radius, &
                                       solution, red_space_solution, mu, settings, error)
@@ -2839,9 +2863,9 @@ contains
                     min_idx = minloc(red_space_hess_eigvals%re, dim=1)
                     if (red_space_hess_eigvals(min_idx)%re > newton_eigval_thresh) then
                         call newton_step( &
-                            grad_norm, red_space_basis, red_space_hess_eigvals_re, &
-                            red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                            solution, red_space_solution)
+                            perturbed_grad_norm, red_space_basis, &
+                            red_space_hess_eigvals_re, red_space_hess_right_eigvecs, &
+                            red_space_hess_left_eigvecs, solution, red_space_solution)
                         if (error /= 0) return
                         mu = 0.0_rp
                         if (dnrm2(n_param, solution, 1_ip) < trust_radius) &
@@ -2851,7 +2875,7 @@ contains
                     ! perform bisection on augmented Hessian to find the level shift
                     if (.not. newton) then
                         call bisection_ah( &
-                            red_space_hess, grad_norm, red_space_basis, &
+                            red_space_hess, perturbed_grad_norm, red_space_basis, &
                             red_space_hess_eigvals_re, red_space_hess_right_eigvecs, &
                             red_space_hess_left_eigvecs, trust_radius, solution, &
                             red_space_solution, mu, settings, error)
@@ -2868,7 +2892,7 @@ contains
                            red_space_solution, 1_ip, 0.0_rp, h_solution, 1_ip)
 
                 ! calculate residual
-                residual = grad + h_solution - mu * solution
+                residual = perturbed_grad + h_solution - mu * solution
 
                 ! calculate residual norm
                 residual_norm = dnrm2(n_param, residual, 1_ip)
@@ -2892,8 +2916,8 @@ contains
                 end if
 
                 ! check if micro iterations have converged
-                if (residual_norm < max(red_factor * grad_norm, residual_norm_floor)) &
-                    then
+                if (residual_norm < &
+                    max(red_factor * perturbed_grad_norm, residual_norm_floor)) then
                     micro_converged = .true.
                     exit
                 ! check if Jacobi-Davidson is used and has not been started
@@ -3022,8 +3046,9 @@ contains
             ! once after this loop exits
             accept_step = accept_trust_region_step( &
                 solution, dnrm2(n_param, solution, 1_ip), func, new_func - func, &
-                ddot(n_param, solution, 1_ip, grad + 0.5_rp * h_solution, 1_ip), &
-                micro_converged, settings, trust_radius, max_precision_reached)
+                ddot(n_param, solution, 1_ip, perturbed_grad + 0.5_rp * h_solution, &
+                     1_ip), micro_converged, settings, trust_radius, &
+                max_precision_reached)
             if (max_precision_reached) exit
 
             ! the Hessian linear transformation may have changed with the objective
@@ -3108,8 +3133,8 @@ contains
 
             ! reset problem
             residual = grad
-            if (settings%n_random_trial_vectors > 0) then
-                call perturb_vector(residual)
+            if (settings%grad_noise > 0.0_rp) then
+                call perturb_vector(residual, settings%grad_noise)
                 if (associated(settings%project)) then
                     call settings%project(residual, error)
                     call add_error_origin(error, error_project, settings)
@@ -3366,8 +3391,8 @@ contains
 
             ! reset problem
             residual = grad
-            if (settings%n_random_trial_vectors > 0) then
-                call perturb_vector(residual)
+            if (settings%grad_noise > 0.0_rp) then
+                call perturb_vector(residual, settings%grad_noise)
                 if (associated(settings%project)) then
                     call settings%project(residual, error)
                     call add_error_origin(error, error_project, settings)
@@ -3628,6 +3653,14 @@ contains
             write(msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
                 settings%n_random_trial_vectors, "."
             call settings%log(msg, verbosity_warning)
+        end if
+
+        ! check that the gradient perturbation is not negative
+        if (settings%grad_noise < 0.0_rp) then
+            call settings%log("Gradient noise should not be negative.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
         end if
 
         ! check whether the extra trial vector function has anything to fill
@@ -4403,13 +4436,14 @@ contains
 
     end subroutine gltr_second_pass
 
-    subroutine perturb_vector(vector)
+    subroutine perturb_vector(vector, noise)
         !
-        ! this subroutine perturbs the input vector by a random vector
+        ! this subroutine perturbs the input vector by a random vector whose norm is
+        ! the given fraction of the norm of the input vector
         !
         real(rp), intent(inout) :: vector(:)
+        real(rp), intent(in) :: noise
 
-        real(rp), parameter :: random_noise_scale = 1e-4_rp
         integer(ip) :: n_param
         real(rp), allocatable :: random_vector(:)
         real(rp), external :: dnrm2
@@ -4421,8 +4455,8 @@ contains
             call random_number(random_vector)
             random_vector = 2.0_rp * random_vector - 1.0_rp
         end do
-        vector = vector + random_noise_scale * dnrm2(n_param, vector, 1_ip) * &
-                 random_vector / dnrm2(n_param, random_vector, 1_ip)
+        vector = vector + noise * dnrm2(n_param, vector, 1_ip) * random_vector / &
+                 dnrm2(n_param, random_vector, 1_ip)
         deallocate(random_vector)
 
     end subroutine perturb_vector

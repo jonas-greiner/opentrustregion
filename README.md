@@ -202,7 +202,8 @@ The optimization process can be fine-tuned using the following settings:
   - `"tcg"`: truncated conjugate gradient method,
   - `"gltr"`: generalized Lanczos trust region method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
-- **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations.
+- **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations of the Davidson-family subsystem solvers.
+- **`grad_noise`** (real): Relative size of the random vector the gradient is perturbed by before every subsystem solve, as a fraction of the gradient norm, projected with `project` when provided (`0` disables the perturbation). The perturbation keeps the solution from remaining exactly within a symmetry subspace of the starting point, which an approximate Hessian with no negative curvature outside that subspace cannot otherwise leave, and goes to zero together with the gradient at convergence.
 - **`n_extra_trial_vectors`** (integer): Number of non-random trial vectors added alongside the gradient direction to initialize the micro iterations, on top of the `n_random_trial_vectors` random ones. These are taken from `get_extra_trial_vectors` when that callback is provided, and are otherwise unit vectors along the lowest Hessian diagonal elements, added only where those indicate negative curvature. Vectors that vanish or are linearly dependent on the gradient direction are dropped.
 - **`start_trust_radius`** (real): Initial trust radius.
 - **`trust_region_shape`** (string): Only used by the `"tcg"` and `"gltr"` subsystem solvers (the Davidson-family solvers always use a spherical trust region). Options include:
@@ -214,7 +215,7 @@ The optimization process can be fine-tuned using the following settings:
 - **`global_red_factor`** (real): Reduction factor for the residual during micro iterations in the global region.
 - **`local_red_factor`** (real): Reduction factor for the residual during micro iterations in the local region.
 - **`verbose`** (integer): Controls the verbosity of output during optimization.
-- **`seed`** (integer): Seed value for generating random trial vectors.
+- **`seed`** (integer): Seed value for generating random trial vectors and the random gradient perturbation.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout.
 - **`stability_settings`** (stability_settings_type): Settings object controlling the internal stability check that is automatically performed upon convergence when `stability` is `True` or when starting at a stationary point (see the Stability Check section below). If `stability_settings%precond`, `stability_settings%project`, or `stability_settings%logger` are left unset, they default to the corresponding `precond`, `project`, and `logger` supplied to `solver`. `stability_settings%verbose` is raised to at least the solver's own `verbose` level.
 
