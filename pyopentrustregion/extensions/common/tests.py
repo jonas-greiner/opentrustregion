@@ -12,7 +12,9 @@ from pyopentrustregion.tests import lib, add_tests, print_separator
 # define all tests in alphabetical order
 fortran_tests = {
     "common_tests": [
+        "channel_rows",
         "compute_sqrt_and_inv_sqrt",
+        "init_orbital_settings",
         "level_shifted_divisors",
         "matrix_exponential",
         "positive_definite_divisors",

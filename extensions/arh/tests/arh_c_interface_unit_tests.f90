@@ -100,8 +100,9 @@ contains
         use otr_arh_mock, only: mock_arh_factory_mo_cs, mock_arh_factory_mo_os, &
                                 test_passed, mo_coeff_3d
         use otr_arh, only: arh_n_micro
-        use otr_arh_test_reference, only: assignment(=), ref_arh_settings, n_mo, &
+        use otr_arh_test_reference, only: assignment(=), ref_arh_settings, &
                                           mo_coeff_pattern
+        use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c
         use otr_common_unit_tests, only: shell_names
         use c_interface_unit_tests, only: mock_logger, test_logger, mock_project

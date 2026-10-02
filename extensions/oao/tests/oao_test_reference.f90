@@ -8,7 +8,8 @@ module otr_oao_test_reference
 
     use opentrustregion, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
-    use otr_common_test_reference, only: n_particle, n_ao
+    use otr_common_test_reference, only: n_particle, n_ao, ref_orbital_settings_type, &
+                                         ref_orbital_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
                                            c_associated, c_null_funptr
 
@@ -18,8 +19,7 @@ module otr_oao_test_reference
     integer(ip), parameter :: n_param = n_particle * n_ao * (n_ao - 1) / 2
 
     ! derived types for OAO settings
-    type :: ref_oao_settings_type
-        integer(ip) :: verbose
+    type, extends(ref_orbital_settings_type) :: ref_oao_settings_type
     end type
 
     type, bind(C) :: ref_oao_settings_type_c
@@ -28,7 +28,7 @@ module otr_oao_test_reference
 
     ! general reference parameters
     type(ref_oao_settings_type), parameter :: ref_oao_settings = &
-        ref_oao_settings_type(verbose=3)
+        ref_oao_settings_type(ref_orbital_settings_type=ref_orbital_settings)
 
     ! multiples of the density matrix the mock density matrix evaluating functions
     ! return for each optional output, in the order of evaluate_dm_outputs
@@ -734,8 +734,8 @@ contains
         !
         use otr_oao, only: oao_settings_type
 
-        class(oao_settings_type), intent(in) :: lhs
-        class(ref_oao_settings_type), intent(in) :: rhs
+        type(oao_settings_type), intent(in) :: lhs
+        type(ref_oao_settings_type), intent(in) :: rhs
 
         not_equal_oao_to_ref = .not. (lhs == rhs)
 
@@ -793,7 +793,7 @@ contains
         !
         use otr_oao, only: oao_settings_type
 
-        class(oao_settings_type), intent(in) :: lhs, rhs
+        type(oao_settings_type), intent(in) :: lhs, rhs
 
         not_equal_oao = .not. (lhs == rhs)
 

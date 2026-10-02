@@ -146,6 +146,39 @@ contains
 
     end function generate_random_density_matrix
 
+    logical(c_bool) function test_init_orbital_settings() bind(C)
+        !
+        ! this function tests the subroutine which initializes the settings shared by
+        ! the extensions parameterizing the orbitals in an orbital basis
+        !
+        use otr_common, only: orbital_settings_type, &
+                              default_settings => default_orbital_settings
+        use otr_common_test_reference, only: operator(==)
+
+        type(orbital_settings_type) :: settings
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_init_orbital_settings = .true.
+
+        ! initialize settings
+        call settings%init(error)
+
+        ! check for error
+        if (error /= 0) then
+            write(stderr, *) "test_init_orbital_settings failed: Function raised error."
+            test_init_orbital_settings = .false.
+        end if
+
+        ! check settings
+        if (.not. (settings == default_settings)) then
+            write(stderr, *) "test_init_orbital_settings failed: Settings not "// &
+                "initialized correctly."
+            test_init_orbital_settings = .false.
+        end if
+
+    end function test_init_orbital_settings
+
     logical(c_bool) function test_matrix_exponential() bind(C)
         !
         ! this function tests the function which calculates the matrix exponential of a
@@ -349,5 +382,29 @@ contains
         end if
 
     end function test_positive_definite_divisors
+
+    logical(c_bool) function test_channel_rows() bind(C)
+        !
+        ! this function tests the function which returns the first and last row of
+        ! every particle channel in a column stacking the channels one after another
+        !
+        use otr_common, only: channel_rows
+
+        integer(ip) :: rows(2, 3)
+
+        ! assume tests pass
+        test_channel_rows = .true.
+
+        ! call function for channels of different lengths, including an empty one, and
+        ! determine if the channels follow each other without gaps
+        rows = channel_rows([4_ip, 0_ip, 3_ip])
+        if (any(rows /= reshape([1_ip, 4_ip, &
+                                 5_ip, 4_ip, &
+                                 5_ip, 7_ip], [2, 3]))) then
+            write(stderr, *) "test_channel_rows failed: Incorrect rows."
+            test_channel_rows = .false.
+        end if
+
+    end function test_channel_rows
 
 end module otr_common_unit_tests

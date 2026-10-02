@@ -33,6 +33,11 @@ except AttributeError:
     pass
 
 try:
+    from pyopentrustregion.extensions.mo.tests import MOTests
+except AttributeError:
+    pass
+
+try:
     from pyopentrustregion.extensions.quasi_newton.tests import (
         QNCInterfaceTests,
         QNPyInterfaceTests,

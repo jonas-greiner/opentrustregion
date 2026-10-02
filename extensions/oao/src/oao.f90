@@ -10,17 +10,18 @@ module otr_oao
                                hess_x_type, precond_type, precond_pd_type, &
                                project_type, get_extra_trial_vectors_type, &
                                solver_settings_type
-    use otr_common, only: orbital_basis_type
+    use otr_common, only: orbital_settings_type, default_orbital_settings, &
+                          orbital_basis_type
 
     implicit none
 
-    type, extends(settings_type) :: oao_settings_type
+    type, extends(orbital_settings_type) :: oao_settings_type
     contains
         procedure :: init => init_oao_settings
     end type
 
     type(oao_settings_type), parameter :: default_oao_settings = &
-        oao_settings_type(logger=null(), initialized=.true., verbose=0)
+        oao_settings_type(orbital_settings_type=default_orbital_settings)
 
     abstract interface
         subroutine get_response_cs_type(dm, response, error)
@@ -69,7 +70,7 @@ module otr_oao
     end interface
 
     type, extends(orbital_basis_type) :: oao_type
-        type(oao_settings_type) :: settings
+        type(orbital_settings_type) :: settings
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
                                  fock_oo(:, :, :), fock_vv(:, :, :), &
                                  hess_eigvecs(:, :, :), hess_eigvals(:, :)
@@ -201,7 +202,7 @@ contains
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
-        class(oao_settings_type), intent(inout) :: settings
+        class(orbital_settings_type), intent(in) :: settings
 
         logical :: reuse
 
@@ -281,7 +282,7 @@ contains
         !
         use opentrustregion, only: verbosity_error, string_to_lowercase
 
-        class(oao_settings_type), intent(inout) :: settings
+        class(orbital_settings_type), intent(in) :: settings
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
 

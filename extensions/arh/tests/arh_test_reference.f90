@@ -8,15 +8,16 @@ module otr_arh_test_reference
 
     use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
-    use otr_oao_test_reference, only: ref_oao_settings_type, ref_oao_settings
-    use otr_common_test_reference, only: n_particle, n_occ
+    use otr_common_test_reference, only: n_particle, n_occ, ref_orbital_settings_type, &
+                                         ref_orbital_settings
+    use otr_mo_test_reference, only: n_mo
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
                                            c_associated
 
     implicit none
 
     ! derived types for ARH settings
-    type, extends(ref_oao_settings_type) :: ref_arh_settings_type
+    type, extends(ref_orbital_settings_type) :: ref_arh_settings_type
         character(len=kw_len, kind=c_char) :: arh_type
     end type
 
@@ -27,31 +28,13 @@ module otr_arh_test_reference
 
     ! general reference parameters
     type(ref_arh_settings_type), parameter :: ref_arh_settings = &
-        ref_arh_settings_type(ref_oao_settings_type=ref_oao_settings, &
+        ref_arh_settings_type(ref_orbital_settings_type=ref_orbital_settings, &
                               arh_type="symm_arh")
-
-    ! number of MOs for orbitals parameterized in the MO basis, fewer than the shared
-    ! number of AOs, and the numbers of parameters for the shared occupations
-    integer(ip), parameter :: n_mo = 4_ip
-    integer(ip), parameter :: n_param_cs = n_occ(1) * (n_mo - n_occ(1)), &
-                              n_param_os = sum(n_occ * (n_mo - n_occ))
 
     ! dimensions of the MO coefficients passed through the Python interface
     integer(c_ip), protected, bind(C, name="test_n_mo") :: n_mo_c = int(n_mo, kind=c_ip)
     integer(c_ip), protected, bind(C, name="test_n_occ") :: n_occ_c(n_particle) = &
         int(n_occ, kind=c_ip)
-
-    ! occupation cases for routines acting on every particle channel: closed-shell,
-    ! open-shell, and open-shell with an empty occupied or virtual block
-    integer(ip), parameter :: n_cases = 4_ip
-    integer(ip), parameter :: case_n_particle(n_cases) = &
-        [1_ip, n_particle, n_particle, n_particle]
-    integer(ip), parameter :: case_n_occ(n_particle, n_cases) = &
-        reshape([n_occ(1), 0_ip, n_occ(1), n_occ(2), n_occ(1), 0_ip, n_mo, n_occ(2)], &
-                [n_particle, n_cases])
-    character(len=33), parameter :: case_names(n_cases) = &
-        [character(len=33) :: "closed-shell", "open-shell", &
-         "open-shell empty occupied channel", "open-shell empty virtual channel"]
 
     ! multiples of the density matrix the mock density matrix evaluating functions
     ! return for each optional output, in the order of evaluate_dm_*_outputs
@@ -473,16 +456,19 @@ contains
         ! reference values
         !
         use otr_arh, only: arh_settings_type
-        use otr_oao_test_reference, only: assignment(=)
 
         type(arh_settings_type), intent(out) :: lhs
         type(ref_arh_settings_type), intent(in) :: rhs
 
-        ! set OAO settings using type extension
-        lhs%oao_settings_type = rhs%ref_oao_settings_type
+        ! unassociate function pointers
+        lhs%logger => null()
 
         ! set reference values
+        lhs%verbose = rhs%verbose
         lhs%arh_type = rhs%arh_type
+
+        ! set initialization logical
+        lhs%initialized = .true.
 
     end subroutine assign_ref_to_arh
 
@@ -525,13 +511,11 @@ contains
         ! reference values
         !
         use otr_arh, only: arh_settings_type
-        use otr_oao_test_reference, only: operator(==)
 
         type(arh_settings_type), intent(in) :: lhs
         type(ref_arh_settings_type), intent(in) :: rhs
 
-        equal_arh_to_ref = lhs%oao_settings_type == rhs%ref_oao_settings_type .and. &
-                           (lhs%arh_type == rhs%arh_type)
+        equal_arh_to_ref = lhs%verbose == rhs%verbose .and. lhs%arh_type == rhs%arh_type
 
     end function equal_arh_to_ref
 
@@ -587,12 +571,10 @@ contains
         ! different ARH settings
         !
         use otr_arh, only: arh_settings_type
-        use otr_oao_test_reference, only: operator(==)
 
         type(arh_settings_type), intent(in) :: lhs, rhs
 
-        equal_arh = lhs%oao_settings_type == rhs%oao_settings_type .and. &
-                    (lhs%arh_type == rhs%arh_type)
+        equal_arh = lhs%verbose == rhs%verbose .and. lhs%arh_type == rhs%arh_type
 
     end function equal_arh
 
