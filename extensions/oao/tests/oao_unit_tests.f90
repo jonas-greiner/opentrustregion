@@ -356,8 +356,7 @@ contains
                            update_orbs_oao_callback_ptr, precond_oao_callback_ptr
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_oao_test_reference, only: operator(==)
-        use otr_common_test_reference, only: n_ao, n_occ
+        use otr_common_test_reference, only: n_ao, n_occ, operator(==)
 
         integer(ip), parameter :: n_particle = 1, n_param = n_ao * (n_ao - 1) / 2
 
@@ -410,7 +409,7 @@ contains
             test_oao_factory_cs = .false.
             return
         end if
-        if (.not. (oao_object%settings == settings)) then
+        if (.not. (oao_object%settings == settings%orbital_settings_type)) then
             write (stderr, *) "test_oao_factory_cs failed: Settings not stored "// &
                 "correctly."
             test_oao_factory_cs = .false.
@@ -511,7 +510,7 @@ contains
                 "new starting density."
             test_oao_factory_cs = .false.
         end if
-        if (.not. (oao_object%settings == settings_new)) then
+        if (.not. (oao_object%settings == settings_new%orbital_settings_type)) then
             write (stderr, *) "test_oao_factory_cs failed: New settings not taken "// &
                 "over for a new starting density."
             test_oao_factory_cs = .false.

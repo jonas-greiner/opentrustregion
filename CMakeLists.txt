@@ -44,15 +44,21 @@ option(${otr}_ENABLE_XHOST "Optimize for current machine's instruction set" ON)
 message(STATUS "Showing option ${otr}_ENABLE_XHOST: ${${otr}_ENABLE_XHOST}")
 
 # optional extension modules, all off by default
+option(ENABLE_MO "Include molecular orbital extension in OpenTrustRegion" OFF)
 option(ENABLE_OAO "Include orthogonal AO extension in OpenTrustRegion" OFF)
 option(ENABLE_QUASI_NEWTON "Include quasi-Newton extension in OpenTrustRegion" OFF)
 option(ENABLE_ARH "Include augmented Roothaan-Hall extension in OpenTrustRegion" OFF)
 option(ENABLE_S_GEK
        "Include subspace gradient-enhanced kriging extension in OpenTrustRegion" OFF)
+if(ENABLE_ARH AND NOT ENABLE_MO)
+    message(STATUS "Including molecular orbital extension module as a dependency for augmented Roothaan-Hall")
+    set(ENABLE_MO ON CACHE BOOL "Enabled by ARH dependency" FORCE)
+endif()
 if(ENABLE_ARH AND NOT ENABLE_OAO)
     message(STATUS "Including orthogonal AO extension module as a dependency for augmented Roothaan-Hall")
     set(ENABLE_OAO ON CACHE BOOL "Enabled by ARH dependency" FORCE)
 endif()
+message(STATUS "Showing option ENABLE_MO: ${ENABLE_MO}")
 message(STATUS "Showing option ENABLE_OAO: ${ENABLE_OAO}")
 message(STATUS "Showing option ENABLE_QUASI_NEWTON: ${ENABLE_QUASI_NEWTON}")
 message(STATUS "Showing option ENABLE_ARH: ${ENABLE_ARH}")
@@ -183,6 +189,13 @@ set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
 set(OPENTRUSTREGION_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # conditionally add extension files
+if(ENABLE_MO)
+    message(STATUS "Including molecular orbitals in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common.f90
+        extensions/mo/src/mo.f90
+    )
+endif()
 if(ENABLE_OAO)
     message(STATUS "Including orthogonal AO in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
@@ -293,6 +306,15 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
         tests/c_system_tests.c)
 
     # conditionally add extension tests
+    if(ENABLE_MO)
+        list(APPEND OPENTRUSTREGION_TESTS
+            extensions/common/tests/common_mock.f90
+            extensions/common/tests/common_test_reference.f90
+            extensions/common/tests/common_unit_tests.f90
+            extensions/mo/tests/mo_test_reference.f90
+            extensions/mo/tests/mo_unit_tests.f90
+        )
+    endif()
     if(ENABLE_OAO)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90

@@ -17,6 +17,20 @@ module otr_common_test_reference
                               n_occ(n_particle) = [2_ip, 1_ip]
     integer(c_ip), protected, bind(C, name="test_n_ao") :: n_ao_c = int(n_ao, kind=c_ip)
 
+    ! derived type for the settings shared by the extensions parameterizing the
+    ! orbitals in an orbital basis
+    type :: ref_orbital_settings_type
+        integer(ip) :: verbose
+    end type
+
+    ! general reference parameters
+    type(ref_orbital_settings_type), parameter :: ref_orbital_settings = &
+        ref_orbital_settings_type(verbose = 3)
+
+    interface operator(==)
+        module procedure equal_orbital
+    end interface
+
 contains
 
     function request_label(outputs, request) result(label)
@@ -61,5 +75,18 @@ contains
             capital(1:1) = achar(iachar(text(1:1)) - iachar("a") + iachar("A"))
 
     end function capitalized
+
+    logical function equal_orbital(lhs, rhs)
+        !
+        ! this function overloads the comparison operator to compare the settings
+        ! shared by the extensions parameterizing the orbitals in an orbital basis
+        !
+        use otr_common, only: orbital_settings_type
+
+        type(orbital_settings_type), intent(in) :: lhs, rhs
+
+        equal_orbital = lhs%verbose == rhs%verbose
+
+    end function equal_orbital
 
 end module otr_common_test_reference

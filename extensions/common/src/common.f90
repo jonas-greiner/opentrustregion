@@ -10,6 +10,16 @@ module otr_common
 
     implicit none
 
+    ! settings shared by the extensions parameterizing the orbitals in an orbital
+    ! basis, which the orbital objects hold
+    type, extends(settings_type) :: orbital_settings_type
+    contains
+        procedure :: init => init_orbital_settings
+    end type orbital_settings_type
+
+    type(orbital_settings_type), parameter :: default_orbital_settings = &
+        orbital_settings_type(logger = null(), initialized = .true., verbose = 0)
+
     ! orbital basis in which the orbital rotations are parameterized, holding the
     ! quantities every basis has, whose type-bound procedures perform the operations
     ! every basis provides: moving the current orbitals, the gradient and Hessian
@@ -86,6 +96,33 @@ module otr_common
     end interface
 
 contains
+
+    subroutine init_orbital_settings(self, error)
+        !
+        ! this subroutine initializes the settings shared by the extensions
+        ! parameterizing the orbitals in an orbital basis
+        !
+        use opentrustregion, only: verbosity_error
+
+        class(orbital_settings_type), intent(out) :: self
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        select type(settings => self)
+        type is (orbital_settings_type)
+            settings = default_orbital_settings
+        class default
+            call settings%log("Orbital settings could not be initialized because "// &
+                              "initialization routine received the wrong type. The "// &
+                              "type orbital_settings_type was likely subclassed "// &
+                              "without providing an initialization routine.", &
+                              verbosity_error, .true.)
+            error = 1
+        end select
+
+    end subroutine init_orbital_settings
 
     subroutine compute_sqrt_and_inv_sqrt(A, sqrtA, inv_sqrtA, settings, error)
         !
@@ -286,5 +323,26 @@ contains
         where (divisors < floor_val) divisors = floor_val
 
     end function positive_definite_divisors
+
+    function channel_rows(lengths) result(rows)
+        !
+        ! this function returns the first and last row of every particle channel in a
+        ! column which stacks the contributions of the channels, of the given lengths,
+        ! one after another
+        !
+        integer(ip), intent(in) :: lengths(:)
+        integer(ip) :: rows(2, size(lengths))
+
+        integer(ip) :: i, offset
+
+        ! stack the channels one after another
+        offset = 0
+        do i = 1, size(lengths, kind=ip)
+            rows(1, i) = offset + 1
+            rows(2, i) = offset + lengths(i)
+            offset = rows(2, i)
+        end do
+
+    end function channel_rows
 
 end module otr_common

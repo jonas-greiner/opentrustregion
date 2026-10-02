@@ -94,8 +94,8 @@ contains
         ! wrapper, which is the same for both spin cases apart from the occupations
         !
         use otr_arh, only: arh_settings_type
-        use otr_arh_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern, &
-                                          operator(/=)
+        use otr_arh_test_reference, only: mo_coeff_pattern, operator(/=)
+        use otr_mo_test_reference, only: n_mo_ref => n_mo
         use otr_common_test_reference, only: n_ao_ref => n_ao, n_occ_ref => n_occ
         use c_interface, only: c_ip, c_rp
 
