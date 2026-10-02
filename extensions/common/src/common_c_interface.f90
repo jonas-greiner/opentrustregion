@@ -46,7 +46,7 @@ contains
         hess_x_c_wrapper_funptr, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr) &
         result(error_c)
         !
-        ! this function wraps the orbital update subroutine to convert Fortran 
+        ! this function wraps the orbital update subroutine to convert Fortran
         ! variables to C variables
         !
         use opentrustregion, only: update_orbs_type, hess_x_type
@@ -99,7 +99,7 @@ contains
 
     function hess_x_c_wrapper_impl(hess_x_funptr, x_c, hess_x_c) result(error_c)
         !
-        ! this function wraps the Hessian linear transformation to convert Fortran 
+        ! this function wraps the Hessian linear transformation to convert Fortran
         ! variables to C variables
         !
         use opentrustregion, only: hess_x_type

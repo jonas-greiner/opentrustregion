@@ -6,10 +6,9 @@
 
 module otr_arh
 
-    use opentrustregion, only: rp, ip, kw_len, settings_type, obj_func_type, &
-                               update_orbs_type, hess_x_type, precond_type, &
-                               precond_pd_type, get_extra_trial_vectors_type, &
-                               solver_settings_type
+    use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
+                               hess_x_type, precond_type, precond_pd_type, &
+                               get_extra_trial_vectors_type, solver_settings_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
                           orbital_basis_type, channel_rows
     use otr_oao, only: oao_type
@@ -221,8 +220,11 @@ contains
         !
         ! this function returns a modified ARH orbital updating function for the
         ! closed-shell case, with the orbitals parameterized in the MO basis, and wires
-        ! the ARH routines into the solver settings; the MO coefficients are rotated in
-        ! place, so they have to outlive the calculation
+        ! the ARH preconditioners and extra trial vectors into the solver settings,
+        ! which it also asks to rebuild the Hessian information of the subsystem solver
+        ! after rejected steps and tells whether the approximate Hessian is symmetric;
+        ! the MO coefficients are rotated in place, so they have to outlive the
+        ! calculation
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -264,8 +266,11 @@ contains
         !
         ! this function returns a modified ARH orbital updating function for the
         ! open-shell case, with the orbitals parameterized in the MO basis, and wires
-        ! the ARH routines into the solver settings; the MO coefficients are rotated in
-        ! place, so they have to outlive the calculation
+        ! the ARH preconditioners and extra trial vectors into the solver settings,
+        ! which it also asks to rebuild the Hessian information of the subsystem solver
+        ! after rejected steps and tells whether the approximate Hessian is symmetric;
+        ! the MO coefficients are rotated in place, so they have to outlive the
+        ! calculation
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -337,11 +342,12 @@ contains
                                   solver_settings, error, settings)
         !
         ! this function returns a modified ARH orbital updating function for the
-        ! closed-shell case, with the orbitals parameterized in the OAO basis, and wires
-        ! the ARH preconditioners, projection and extra trial vectors into the solver
-        ! settings, which it also asks to rebuild the Hessian information of the
+        ! closed-shell case, with the orbitals parameterized in the OAO basis, and
+        ! wires the ARH preconditioners, projection and extra trial vectors into the
+        ! solver settings, which it also asks to rebuild the Hessian information of the
         ! subsystem solver after rejected steps and tells whether the approximate
-        ! Hessian is symmetric
+        ! Hessian is symmetric; the density matrix is updated in place, so it has to
+        ! outlive the calculation
         !
         use otr_oao, only: project_oao_callback
 
@@ -390,7 +396,8 @@ contains
         ! the ARH preconditioners, projection and extra trial vectors into the solver
         ! settings, which it also asks to rebuild the Hessian information of the
         ! subsystem solver after rejected steps and tells whether the approximate
-        ! Hessian is symmetric
+        ! Hessian is symmetric; the density matrix is updated in place, so it has to
+        ! outlive the calculation
         !
         use otr_oao, only: project_oao_callback
 
@@ -648,8 +655,6 @@ contains
         ! and the Hessian linear transformation on the basis of augmented Roothaan-Hall
         ! for the closed-shell case
         !
-        use opentrustregion, only: hess_x_type
-
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -736,8 +741,6 @@ contains
         ! and the Hessian linear transformation on the basis of augmented Roothaan-Hall
         ! for the open-shell case
         !
-        use opentrustregion, only: hess_x_type
-
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)

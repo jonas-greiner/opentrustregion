@@ -96,13 +96,14 @@ contains
         ! parameterized in the MO basis for the closed- and the open-shell case
         !
         use otr_arh_c_interface, only: arh_settings_type_c, arh_factory_mo_cs, &
-                                       arh_factory_mo_os, arh_factory_mo_c_wrapper
+                                       arh_factory_mo_os, arh_factory_mo_c_wrapper, &
+                                       update_orbs_arh_before_wrapping
         use otr_arh_mock, only: mock_arh_factory_mo_cs, mock_arh_factory_mo_os, &
-                                test_passed, mo_coeff_3d
+                                test_passed
+        use otr_mo_mock, only: mo_coeff_3d, mock_update_orbs
         use otr_arh, only: arh_n_micro
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
-        use otr_mo_test_reference, only: mo_coeff_pattern
-        use otr_mo_test_reference, only: n_mo
+        use otr_mo_test_reference, only: mo_coeff_pattern, n_mo
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c
         use otr_common_unit_tests, only: shell_names
         use c_interface_unit_tests, only: mock_logger, test_logger, mock_project
@@ -110,6 +111,11 @@ contains
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &
                                   test_get_extra_trial_vectors_c_funptr, ref_settings, &
                                   assignment(=), operator(/=), n_param_ref => n_param
+        use otr_mo_c_interface, only: &
+            obj_func_mo_before_wrapping, precond_mo_before_wrapping, &
+            precond_pd_mo_before_wrapping, get_extra_trial_vectors_mo_before_wrapping
+        use otr_common_mock, only: mock_obj_func, mock_precond, mock_precond_pd, &
+                                   mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
 
@@ -168,6 +174,11 @@ contains
                 solver_settings_c%stability_settings%project = c_funloc(mock_project)
             end if
 
+            ! clear the callback slots, which only the factory call may set
+            nullify(obj_func_mo_before_wrapping, update_orbs_arh_before_wrapping, &
+                    precond_mo_before_wrapping, precond_pd_mo_before_wrapping, &
+                    get_extra_trial_vectors_mo_before_wrapping)
+
             ! call ARH MO factory C wrapper
             error_c = arh_factory_mo_c_wrapper( &
                 mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
@@ -192,6 +203,22 @@ contains
                 test_arh_factory_mo_c_wrapper = .false.
                 write (stderr, *) "test_arh_factory_mo_c_wrapper failed: Returned "// &
                     "error code wrong for the "//case_name//" case."
+            end if
+
+            ! check if the callback slots point to the returned and wired functions,
+            ! without which calling these below would crash
+            if (.not. ( &
+                associated(obj_func_mo_before_wrapping, mock_obj_func) .and. &
+                associated(update_orbs_arh_before_wrapping, mock_update_orbs) .and. &
+                associated(precond_mo_before_wrapping, mock_precond) .and. &
+                associated(precond_pd_mo_before_wrapping, mock_precond_pd) .and. &
+                associated(get_extra_trial_vectors_mo_before_wrapping, &
+                           mock_get_extra_trial_vectors))) then
+                test_arh_factory_mo_c_wrapper = .false.
+                write (stderr, *) "test_arh_factory_mo_c_wrapper failed: Callback "// &
+                    "slots not set for the "//case_name//" case."
+                nullify(mo_coeff_3d)
+                return
             end if
 
             ! determine if the number of parameters of the MO basis, the number of
@@ -309,10 +336,11 @@ contains
         ! parameterized in the OAO basis for the closed- and the open-shell case
         !
         use otr_arh_c_interface, only: arh_settings_type_c, arh_factory_oao_cs, &
-                                       arh_factory_oao_os, arh_factory_oao_c_wrapper
+                                       arh_factory_oao_os, arh_factory_oao_c_wrapper, &
+                                       update_orbs_arh_before_wrapping
         use otr_arh_mock, only: mock_arh_factory_oao_cs, mock_arh_factory_oao_os, &
                                 test_passed
-        use otr_oao_mock, only: dm_ao_3d
+        use otr_oao_mock, only: dm_ao_3d, mock_update_orbs, mock_project_oao
         use otr_arh, only: arh_n_micro
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_ao_c
@@ -323,6 +351,12 @@ contains
                                   test_project_c_funptr, &
                                   test_get_extra_trial_vectors_c_funptr, ref_settings, &
                                   assignment(=), operator(/=), n_param_ref => n_param
+        use otr_oao_c_interface, only: &
+            obj_func_oao_before_wrapping, precond_oao_before_wrapping, &
+            precond_pd_oao_before_wrapping, &
+            get_extra_trial_vectors_oao_before_wrapping, project_oao_before_wrapping
+        use otr_common_mock, only: mock_obj_func, mock_precond, mock_precond_pd, &
+                                   mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
 
@@ -374,7 +408,13 @@ contains
                 solver_settings_c = ref_settings
             end if
 
-            ! call ARH factory C wrapper
+            ! clear the callback slots, which only the factory call may set
+            nullify(obj_func_oao_before_wrapping, update_orbs_arh_before_wrapping, &
+                    precond_oao_before_wrapping, precond_pd_oao_before_wrapping, &
+                    get_extra_trial_vectors_oao_before_wrapping, &
+                    project_oao_before_wrapping)
+
+            ! call ARH OAO factory C wrapper
             error_c = arh_factory_oao_c_wrapper( &
                 dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
                 obj_func_c_funptr, update_orbs_c_funptr, solver_settings_c, settings_c)
@@ -397,6 +437,23 @@ contains
                 test_arh_factory_oao_c_wrapper = .false.
                 write (stderr, *) "test_arh_factory_oao_c_wrapper failed: Returned "// &
                     "error code wrong for the "//case_name//" case."
+            end if
+
+            ! check if the callback slots point to the returned and wired functions,
+            ! without which calling these below would crash
+            if (.not. ( &
+                associated(obj_func_oao_before_wrapping, mock_obj_func) .and. &
+                associated(update_orbs_arh_before_wrapping, mock_update_orbs) .and. &
+                associated(precond_oao_before_wrapping, mock_precond) .and. &
+                associated(precond_pd_oao_before_wrapping, mock_precond_pd) .and. &
+                associated(get_extra_trial_vectors_oao_before_wrapping, &
+                           mock_get_extra_trial_vectors) .and. &
+                associated(project_oao_before_wrapping, mock_project_oao))) then
+                test_arh_factory_oao_c_wrapper = .false.
+                write (stderr, *) "test_arh_factory_oao_c_wrapper failed: Callback "// &
+                    "slots not set for the "//case_name//" case."
+                nullify(dm_ao_3d)
+                return
             end if
 
             ! determine if the number of parameters of the OAO basis was set

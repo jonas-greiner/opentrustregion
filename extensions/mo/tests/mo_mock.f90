@@ -15,7 +15,10 @@ module otr_mo_mock
     implicit none
 
     logical :: test_passed
-    real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
+
+    ! MO coefficients passed to the mock MO factories, which the mock orbital updating
+    ! function overwrites to test that they are rotated in place
+    real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :) => null()
 
     ! create function pointers to ensure that routines comply with interface
     procedure(mo_factory_cs), pointer :: mock_mo_factory_cs_ptr => mock_mo_factory_cs

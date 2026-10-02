@@ -172,11 +172,12 @@ contains
         ! reference values
         !
         use otr_mo, only: mo_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(mo_settings_type), intent(in) :: lhs
         type(ref_mo_settings_type), intent(in) :: rhs
 
-        equal_mo_to_ref = lhs%verbose == rhs%verbose
+        equal_mo_to_ref = lhs%orbital_settings_type == rhs%ref_orbital_settings_type
 
     end function equal_mo_to_ref
 
@@ -232,10 +233,11 @@ contains
         ! different MO settings
         !
         use otr_mo, only: mo_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(mo_settings_type), intent(in) :: lhs, rhs
 
-        equal_mo = lhs%verbose == rhs%verbose
+        equal_mo = lhs%orbital_settings_type == rhs%orbital_settings_type
 
     end function equal_mo
 

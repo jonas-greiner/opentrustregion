@@ -130,11 +130,12 @@ contains
         ! reference values
         !
         use otr_oao, only: oao_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(oao_settings_type), intent(in) :: lhs
         type(ref_oao_settings_type), intent(in) :: rhs
 
-        equal_oao_to_ref = lhs%verbose == rhs%verbose
+        equal_oao_to_ref = lhs%orbital_settings_type == rhs%ref_orbital_settings_type
 
     end function equal_oao_to_ref
 
@@ -179,7 +180,7 @@ contains
 
         type(oao_settings_type_c), intent(in) :: lhs
         type(ref_oao_settings_type), intent(in) :: rhs
-        
+
         not_equal_oao_c_to_ref = .not. (lhs == rhs)
 
     end function not_equal_oao_c_to_ref
@@ -190,14 +191,15 @@ contains
         ! different OAO settings
         !
         use otr_oao, only: oao_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(oao_settings_type), intent(in) :: lhs, rhs
-        
-        equal_oao = lhs%verbose == rhs%verbose
+
+        equal_oao = lhs%orbital_settings_type == rhs%orbital_settings_type
 
     end function equal_oao
 
-    logical function not_equal_oao(lhs, rhs) 
+    logical function not_equal_oao(lhs, rhs)
         !
         ! this function overloads the negated comparison operator to compare OAO
         ! settings to different OAO settings
@@ -205,7 +207,7 @@ contains
         use otr_oao, only: oao_settings_type
 
         type(oao_settings_type), intent(in) :: lhs, rhs
-        
+
         not_equal_oao = .not. (lhs == rhs)
 
     end function not_equal_oao
@@ -220,7 +222,7 @@ contains
 
         type(oao_settings_type_c), intent(in) :: lhs_c
         type(oao_settings_type), intent(in) :: rhs
-        
+
         type(oao_settings_type) :: lhs
 
         lhs = lhs_c
@@ -238,7 +240,7 @@ contains
 
         type(oao_settings_type_c), intent(in) :: lhs_c
         type(oao_settings_type), intent(in) :: rhs
-        
+
         not_equal_oao_c = .not. (lhs_c == rhs)
 
     end function not_equal_oao_c

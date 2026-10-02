@@ -21,6 +21,10 @@ module otr_common_unit_tests
     ! unchanged input
     integer(ip), allocatable :: mock_requests(:)
 
+    ! sum of the density matrix passed in the latest call to the mock density matrix
+    ! evaluating functions, so that tests can check which density matrix is evaluated
+    real(rp) :: mock_dm_sum
+
     ! multiplier of the density matrix returned by the mock density matrix evaluating
     ! functions, which differs between the first and any subsequent call, further
     ! multipliers for extension-specific potentials follow the same convention
@@ -125,6 +129,7 @@ contains
                               merge(2_ip, 0_ip, present(get_response_funptr)))
 
         error = 0
+        mock_dm_sum = sum(dm)
         energy = sum(dm)
         if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
         if (present(get_response_funptr)) get_response_funptr => mock_get_response_cs
@@ -150,6 +155,7 @@ contains
                               merge(2_ip, 0_ip, present(get_response_funptr)))
 
         error = 0
+        mock_dm_sum = sum(dm)
         energy = sum(dm)
         if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
         if (present(get_response_funptr)) get_response_funptr => mock_get_response_os
@@ -455,21 +461,22 @@ contains
         ! assume tests pass
         test_refresh_response_orbital_basis = .true.
 
-        ! set up the mock orbital basis with a density matrix
+        ! set up the mock orbital basis and a density matrix for every particle channel
         call setup_settings(basis%settings)
         basis%n_ao = n_ao
-        basis%n_particle = n_particle
         do i = 1, n_particle
             dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
         end do
-        basis%dm_ao => dm_ao
 
         ! loop over the closed-shell and the open-shell case
         do i_shell = 1, 2
             case_name = trim(shell_names(i_shell))
 
-            ! set the mock density matrix evaluating function and mark the response as
-            ! stale as ARH would after moving the density on its own
+            ! store the density matrices of the particle channels of the case, set the
+            ! mock density matrix evaluating function and mark the response as stale as
+            ! ARH would after moving the density on its own
+            basis%n_particle = i_shell
+            basis%dm_ao => dm_ao(:, :, :i_shell)
             if (i_shell == 1) then
                 basis%evaluate_dm_cs => mock_evaluate_dm_cs
             else
@@ -480,11 +487,17 @@ contains
             mock_requests = [integer(ip) ::]
 
             ! call routine and determine if the density matrix evaluating function was
-            ! called to rebuild only the response and if the flag was cleared
+            ! called for the stored density matrix to rebuild only the response and if
+            ! the flag was cleared
             call basis%refresh_response(error)
             if (error /= 0) then
                 write (stderr, *) "test_refresh_response_orbital_basis failed: "// &
                     "Produced error for the "//case_name//" case."
+                test_refresh_response_orbital_basis = .false.
+            end if
+            if (abs(mock_dm_sum - sum(dm_ao(:, :, :i_shell))) > tol) then
+                write (stderr, *) "test_refresh_response_orbital_basis failed: "// &
+                    "Stored density matrix not evaluated for the "//case_name//" case."
                 test_refresh_response_orbital_basis = .false.
             end if
             if (size(mock_requests) /= 1) then

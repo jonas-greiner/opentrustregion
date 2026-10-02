@@ -28,8 +28,14 @@ from pyopentrustregion.tests import (
     print_separator,
     PyInterfaceTests,
 )
-from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
+from pyopentrustregion.python_interface import (
+    c_real,
+    c_int,
+    update_orbs_interface_type,
+    SolverSettings,
+)
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory, mo_deconstructor
+from pyopentrustregion.extensions.mo.python_interface import UpdateOrbsMOPyInterface
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -452,8 +458,8 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         # call MO factory python interface for MO coefficients stored row-major and
         # column-major, release them together with the returned functions, and
-        # determine if the array owning their memory is not kept alive by the buffers
-        # shared between factories
+        # determine if neither the array owning their memory nor the buffer the library
+        # rotates is kept alive by the buffers shared between factories
         for column_major in (False, True):
             mo_coeff = initial_mo_coeff(1, column_major, np.float64)
             mo_coeff_ref = weakref.ref(
@@ -469,15 +475,50 @@ class MOPyInterfaceTests(unittest.TestCase):
                 self.mock_evaluate_dm,
             )
             returned = [mo_factory(*args, SolverSettings(), settings)]
+            mo_coeff_buffer_ref = weakref.ref(returned[0][0].mo_coeff_buffer)
             del mo_coeff, args, returned
             gc.collect()
-            if mo_coeff_ref() is not None:
+            if mo_coeff_ref() is not None or mo_coeff_buffer_ref() is not None:
                 print(
                     " test_mo_factory_py_interface failed: MO coefficients stored "
-                    f"{'column' if column_major else 'row'}-major kept alive after "
-                    "being released together with the returned functions."
+                    f"{'column' if column_major else 'row'}-major or their buffer "
+                    "kept alive after being released together with the returned "
+                    "functions."
                 )
                 test_passed = False
+
+        # call an MO orbital updating function whose library routine rotates the buffer
+        # of row-major MO coefficients and fails, which has to raise an error and still
+        # copy the rotated MO coefficients back to the caller
+        mo_coeff = initial_mo_coeff(1, False, np.float64)
+        mo_coeff_buffer = np.ascontiguousarray(mo_coeff.swapaxes(-1, -2))
+
+        def failing_update_orbs(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_ptr):
+            mo_coeff_buffer[:] = mo_coeff_pattern(1, 1000.0)[0].T
+            return 1
+
+        failing_update_orbs_funptr = update_orbs_interface_type(failing_update_orbs)
+        update_orbs_mo = UpdateOrbsMOPyInterface(
+            update_orbs_funptr=failing_update_orbs_funptr,
+            saved_objects={},
+            mo_coeff=mo_coeff,
+            mo_coeff_buffer=mo_coeff_buffer,
+        )
+        try:
+            update_orbs_mo(kappa, grad, h_diag)
+            print(
+                " test_mo_factory_py_interface failed: Failing MO orbital updating "
+                "function did not raise an error."
+            )
+            test_passed = False
+        except RuntimeError:
+            pass
+        if not np.allclose(mo_coeff, mo_coeff_pattern(1, 1000.0)[0]):
+            print(
+                " test_mo_factory_py_interface failed: MO coefficients rotated by a "
+                "failing MO orbital updating function not copied back."
+            )
+            test_passed = False
 
         # invalid inputs have to raise an error before the library is called
         read_only_mo_coeff = mo_coeff_pattern(1, 0.0)[0]

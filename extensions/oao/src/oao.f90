@@ -232,7 +232,7 @@ contains
         !
         ! this subroutine performs a sanity check for OAO input parameters
         !
-        use opentrustregion, only: verbosity_error, string_to_lowercase
+        use opentrustregion, only: verbosity_error
 
         class(orbital_settings_type), intent(in) :: settings
         integer(ip), intent(in) :: n_particle, n_ao
@@ -249,8 +249,8 @@ contains
             return
         end if
 
-        ! check that there is one particle channel for the closed-shell and two for
-        ! the open-shell case
+        ! check that there is one particle channel for the closed-shell and two for the
+        ! open-shell case
         if (n_particle < 1 .or. n_particle > 2) then
             call settings%log("Number of particles should be 1 or 2.", &
                               verbosity_error, .true.)
@@ -323,8 +323,6 @@ contains
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation in the OAO basis
         !
-        use opentrustregion, only: hess_x_type
-
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)

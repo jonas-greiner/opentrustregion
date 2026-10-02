@@ -2486,12 +2486,13 @@ contains
         test_precond_pd_arh_callback = .true.
 
         ! set up the ARH object in the MO basis with an eigendecomposition whose
-        ! eigenvalue pairs, the open-shell differences 2 (e_v - e_o), are all 2, so
-        ! that the preconditioner of the orbital basis halves the residual
+        ! eigenvalue pairs, the open-shell differences 2 (e_v - e_o), are all -2, so
+        ! that the positive-definite preconditioner of the orbital basis, which divides
+        ! by their magnitudes, halves the residual, unlike the level-shifted one
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         call setup_arh_and_mo_objects(mo_coeff, ao_overlap, n_occ)
-        call setup_identity_mo_eigenbasis(0.0_rp, 1.0_rp)
+        call setup_identity_mo_eigenbasis(1.0_rp, 0.0_rp)
         allocate(residual(mo_object%n_param), precond_residual(mo_object%n_param))
         call random_number(residual)
 

@@ -38,6 +38,8 @@ from pyopentrustregion.extensions.arh import (
     arh_factory_oao,
     arh_deconstructor,
 )
+from pyopentrustregion.extensions.mo import MOSettings, mo_factory
+from pyopentrustregion.extensions.mo.tests import MOPyInterfaceTests
 from pyopentrustregion.extensions.oao.tests import n_ao
 
 if NUMPY_AVAILABLE:
@@ -243,6 +245,8 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
         return np.sum(dm_ao)
 
+    mock_evaluate_dm = MOPyInterfaceTests.mock_evaluate_dm
+    mock_get_response = MOPyInterfaceTests.mock_get_response
     mock_logger = PyInterfaceTests.mock_logger
 
     # replace original library with mock library
@@ -426,6 +430,16 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
+            # check if MO coefficients stored column-major in double precision are
+            # rotated in place and all others copied back
+            in_place = column_major and dtype == np.float64
+            if (update_orbs_arh.mo_coeff is None) != in_place:
+                print(
+                    " test_arh_factory_mo_py_interface failed: MO coefficients "
+                    f"{'not ' if in_place else ''}rotated in place for the {case} case."
+                )
+                test_passed = False
+
             # check if the rotated MO coefficients reached the caller
             expected = mo_coeff_pattern(n_particle, 1000.0)
             if n_particle == 1:
@@ -474,6 +488,55 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     f"the {case} case."
                 )
                 test_passed = False
+
+        # call the MO factory and then the ARH MO factory python interface for the same
+        # row-major MO coefficients, as PySCF does, which have to share the buffer the
+        # library rotates, since the MO object only points to the buffer of the latest
+        # call
+        mo_coeff = mo_coeff_pattern(1, 0.0)[0]
+        mo_settings = MOSettings()
+        self.assign_ref_to_settings(mo_settings)
+        mo_mock_passed = c_bool.in_dll(lib, "test_mo_factory_interface")
+        with patch(
+            "pyopentrustregion.python_interface.lib.mo_factory", lib.mock_mo_factory
+        ):
+            returned_mo = mo_factory(
+                mo_coeff,
+                ao_overlap,
+                n_occ[0],
+                1,
+                n_ao,
+                n_mo,
+                self.mock_evaluate_dm,
+                SolverSettings(),
+                mo_settings,
+            )
+        returned_arh = arh_factory_mo(
+            mo_coeff,
+            ao_overlap,
+            n_occ[0],
+            1,
+            n_ao,
+            n_mo,
+            self.mock_evaluate_dm_cs,
+            SolverSettings(),
+            settings,
+        )
+        if not mo_mock_passed.value or not mock_passed.value:
+            print(
+                " test_arh_factory_mo_py_interface failed: Mock factories received "
+                "wrong input when called one after the other for the same array."
+            )
+            test_passed = False
+        mo_mock_passed.value = True
+        mock_passed.value = True
+        if returned_mo[0].mo_coeff_buffer is not returned_arh[0].mo_coeff_buffer:
+            print(
+                " test_arh_factory_mo_py_interface failed: Buffer of the MO "
+                "coefficients not shared between the MO and the ARH MO factory for the "
+                "same array."
+            )
+            test_passed = False
 
         # invalid inputs have to raise an error before the library is called
         read_only_mo_coeff = mo_coeff_pattern(1, 0.0)[0]

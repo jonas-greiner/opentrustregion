@@ -18,7 +18,10 @@ from pyopentrustregion.tests import (
 
 # try to load extension module tests if available
 try:
-    from pyopentrustregion.extensions.common.tests import CommonTests
+    from pyopentrustregion.extensions.common.tests import (
+        CommonTests,
+        CommonPyInterfaceTests,
+    )
 except AttributeError:
     pass
 

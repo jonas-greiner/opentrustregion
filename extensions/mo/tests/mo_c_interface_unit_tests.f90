@@ -20,10 +20,13 @@ contains
         ! this function tests the C wrapper for the MO factory for the closed- and the
         ! open-shell case
         !
-        use otr_mo_c_interface, only: mo_settings_type_c, mo_factory_cs, &
-                                      mo_factory_os, mo_factory_c_wrapper
+        use otr_mo_c_interface, only: &
+            mo_settings_type_c, mo_factory_cs, mo_factory_os, mo_factory_c_wrapper, &
+            obj_func_mo_before_wrapping, update_orbs_mo_before_wrapping, &
+            precond_mo_before_wrapping, precond_pd_mo_before_wrapping, &
+            get_extra_trial_vectors_mo_before_wrapping
         use otr_mo_mock, only: mock_mo_factory_cs, mock_mo_factory_os, test_passed, &
-                               mo_coeff_3d
+                               mo_coeff_3d, mock_update_orbs
         use otr_mo_test_reference, only: assignment(=), ref_mo_settings, n_mo, &
                                          n_param_cs, n_param_os, mo_coeff_pattern
         use otr_common_test_reference, only: n_ao, n_occ, n_particle, n_ao_c
@@ -33,6 +36,8 @@ contains
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &
                                   test_get_extra_trial_vectors_c_funptr, ref_settings, &
                                   assignment(=), operator(/=), n_param_ref => n_param
+        use otr_common_mock, only: mock_obj_func, mock_precond, mock_precond_pd, &
+                                   mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
         use otr_common_c_interface_unit_tests, only: mock_evaluate_dm_cs, &
@@ -92,6 +97,11 @@ contains
                 solver_settings_c%stability_settings%project = c_funloc(mock_project)
             end if
 
+            ! clear the callback slots, which only the factory call may set
+            nullify(obj_func_mo_before_wrapping, update_orbs_mo_before_wrapping, &
+                    precond_mo_before_wrapping, precond_pd_mo_before_wrapping, &
+                    get_extra_trial_vectors_mo_before_wrapping)
+
             ! call MO factory C wrapper
             error_c = mo_factory_c_wrapper( &
                 mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, &
@@ -116,6 +126,22 @@ contains
                 test_mo_factory_c_wrapper = .false.
                 write (stderr, *) "test_mo_factory_c_wrapper failed: Returned "// &
                     "error code wrong for the "//case_name//" case."
+            end if
+
+            ! check if the callback slots point to the returned and wired functions,
+            ! without which calling these below would crash
+            if (.not. ( &
+                associated(obj_func_mo_before_wrapping, mock_obj_func) .and. &
+                associated(update_orbs_mo_before_wrapping, mock_update_orbs) .and. &
+                associated(precond_mo_before_wrapping, mock_precond) .and. &
+                associated(precond_pd_mo_before_wrapping, mock_precond_pd) .and. &
+                associated(get_extra_trial_vectors_mo_before_wrapping, &
+                           mock_get_extra_trial_vectors))) then
+                test_mo_factory_c_wrapper = .false.
+                write (stderr, *) "test_mo_factory_c_wrapper failed: Callback "// &
+                    "slots not set for the "//case_name//" case."
+                nullify(mo_coeff_3d)
+                return
             end if
 
             ! determine if the number of parameters of the MO basis was set
