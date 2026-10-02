@@ -28,7 +28,7 @@ from pyopentrustregion.tests import (
 )
 from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
-from pyopentrustregion.extensions.oao.python_interface import EvaluateDMInterface
+from pyopentrustregion.extensions.common.python_interface import EvaluateDMInterface
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -43,8 +43,10 @@ fortran_tests = {
         "get_extra_trial_vectors_oao_callback",
         "get_hess_eigval_pairs_oao",
         "hess_x_oao_callback",
+        "hess_x_static_oao",
         "init_oao_settings",
         "oao_deconstructor",
+        "oao_factory_common",
         "oao_factory_cs",
         "oao_factory_os",
         "oao_sanity_check",
@@ -58,7 +60,6 @@ fortran_tests = {
         "project_symm",
         "purify",
         "refresh_hess_eigen_oao",
-        "refresh_oao_response",
         "rotate_dm_ao",
         "rotate_from_hess_eigenbasis_oao",
         "rotate_orbitals_oao",

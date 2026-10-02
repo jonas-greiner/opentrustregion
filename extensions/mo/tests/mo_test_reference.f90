@@ -29,4 +29,23 @@ module otr_mo_test_reference
         [character(33) :: "closed-shell", "open-shell", &
          "open-shell empty occupied channel", "open-shell empty virtual channel"]
 
+    interface operator(==)
+        module procedure equal_mo
+    end interface
+
+contains
+
+    logical function equal_mo(lhs, rhs)
+        !
+        ! this function overloads the comparison operator to compare MO settings to
+        ! different MO settings
+        !
+        use otr_mo, only: mo_settings_type
+
+        type(mo_settings_type), intent(in) :: lhs, rhs
+
+        equal_mo = lhs%verbose == rhs%verbose
+
+    end function equal_mo
+
 end module otr_mo_test_reference

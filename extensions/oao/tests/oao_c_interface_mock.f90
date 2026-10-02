@@ -62,15 +62,15 @@ contains
         ! wrapper subroutine
         !
         use opentrustregion, only: default_solver_settings
-        use otr_oao_c_interface, only: oao_settings_type_c
+        use otr_oao_c_interface, only: oao_settings_type_c, dm_ao_3d_c
         use c_interface, only: obj_func_c_type, update_orbs_c_type, precond_c_type, &
                                precond_pd_c_type, project_c_type, logger_c_type, &
                                get_extra_trial_vectors_c_type, solver_settings_type_c, &
                                assignment(=)
-        use otr_oao_c_interface, only: dm_ao_3d_c
         use test_reference, only: tol_c
-        use otr_oao_test_reference, only: test_evaluate_dm_cs_c_funptr, &
-                                          test_evaluate_dm_os_c_funptr, operator(/=)
+        use otr_oao_test_reference, only: operator(/=)
+        use otr_common_test_reference, only: test_evaluate_dm_cs_c_funptr, &
+                                             test_evaluate_dm_os_c_funptr
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
                                           mock_precond_pd, mock_project, &
                                           mock_get_extra_trial_vectors

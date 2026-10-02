@@ -27,12 +27,12 @@ from pyopentrustregion.python_interface import (
     SolverSettingsC,
     auto_bind_fields,
 )
-from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
-from pyopentrustregion.extensions.oao.python_interface import (
+from pyopentrustregion.extensions.common.python_interface import (
     ObjFuncPyInterface,
+    UpdateOrbsPyInterface,
     attach_wired_callbacks,
-    check_dm_ao,
 )
+from pyopentrustregion.extensions.oao.python_interface import check_dm_ao
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any, Union, TypeGuard, Dict, Sequence

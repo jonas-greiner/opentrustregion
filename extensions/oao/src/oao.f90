@@ -11,7 +11,7 @@ module otr_oao
                                project_type, get_extra_trial_vectors_type, &
                                solver_settings_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
-                          orbital_basis_type
+                          orbital_basis_type, evaluate_dm_cs_type, evaluate_dm_os_type
 
     implicit none
 
@@ -23,62 +23,12 @@ module otr_oao
     type(oao_settings_type), parameter :: default_oao_settings = &
         oao_settings_type(orbital_settings_type = default_orbital_settings)
 
-    abstract interface
-        subroutine get_response_cs_type(dm, response, error)
-            import :: rp, ip
-
-            real(rp), intent(in), target, contiguous :: dm(:, :)
-            real(rp), intent(out), target, contiguous :: response(:, :)
-            integer(ip), intent(out) :: error
-        end subroutine get_response_cs_type
-    end interface
-
-    abstract interface
-        subroutine get_response_os_type(dm, response, error)
-            import :: rp, ip
-
-            real(rp), intent(in), target :: dm(:, :, :)
-            real(rp), intent(out), target :: response(:, :, :)
-            integer(ip), intent(out) :: error
-        end subroutine get_response_os_type
-    end interface
-
-    abstract interface
-        subroutine evaluate_dm_cs_type(dm, energy, fock, get_response_funptr, error)
-            import :: rp, ip
-
-            real(rp), intent(in), target, contiguous :: dm(:, :)
-            real(rp), intent(out) :: energy
-            real(rp), intent(out), optional, target, contiguous :: fock(:, :)
-            procedure(get_response_cs_type), intent(out), optional, pointer :: &
-                get_response_funptr
-            integer(ip), intent(out) :: error
-        end subroutine evaluate_dm_cs_type
-    end interface
-
-    abstract interface
-        subroutine evaluate_dm_os_type(dm, energy, fock, get_response_funptr, error)
-            import :: rp, ip
-
-            real(rp), intent(in), target :: dm(:, :, :)
-            real(rp), intent(out) :: energy
-            real(rp), intent(out), optional, target :: fock(:, :, :)
-            procedure(get_response_os_type), intent(out), optional, pointer :: &
-                get_response_funptr
-            integer(ip), intent(out) :: error
-        end subroutine evaluate_dm_os_type
-    end interface
-
+    ! orbitals parameterized in the OAO basis, which points to the density matrix of
+    ! the caller, which it updates in place
     type, extends(orbital_basis_type) :: oao_type
-        type(orbital_settings_type) :: settings
         real(rp), allocatable :: s_sqrt(:, :), s_inv_sqrt(:, :), dm_oao(:, :, :), &
                                  fock_oo(:, :, :), fock_vv(:, :, :), &
                                  hess_eigvecs(:, :, :), hess_eigvals(:, :)
-        logical :: evaluation_stale = .true., response_stale = .true.
-        procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
-        procedure(get_response_os_type), pointer, nopass :: get_response_os => null()
-        procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
-        procedure(get_response_cs_type), pointer, nopass :: get_response_cs => null()
     contains
         procedure :: rotate_orbitals => rotate_orbitals_oao
         procedure :: calculate_grad_h_diag => calculate_grad_h_diag_oao
@@ -118,7 +68,8 @@ contains
         !
         ! this function returns a modified OAO orbital updating function for the
         ! closed-shell case and wires the OAO preconditioners, projection and extra
-        ! trial vectors into the solver settings
+        ! trial vectors into the solver settings; the density matrix is updated in
+        ! place, so it has to outlive the calculation
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -160,7 +111,8 @@ contains
         !
         ! this function returns a modified OAO orbital updating function for the
         ! open-shell case and wires the OAO preconditioners, projection and extra trial
-        ! vectors into the solver settings
+        ! vectors into the solver settings; the density matrix is updated in place, so
+        ! it has to outlive the calculation
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -339,7 +291,7 @@ contains
 
     function obj_func_oao_callback(kappa, error) result(energy)
         !
-        ! this function defines the energy evaluation in OAO basis
+        ! this function defines the energy evaluation in the OAO basis
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -437,18 +389,19 @@ contains
 
     subroutine hess_x_oao_callback(x, hess_x, error)
         !
-        ! this function defines the Hessian linear transformation in the orthogonal AO
-        ! basis
+        ! this function defines the Hessian linear transformation in the OAO basis, the
+        ! static part from the occupied-occupied and virtual-virtual parts of the Fock
+        ! matrix together with the response of the Fock matrix to the density matrix
+        ! response to the trial vector, projected onto the occupied-virtual and
+        ! virtual-occupied subspace
         !
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, n_param, i
+        integer(ip) :: n_ao, n_particle, n_param
         real(rp), allocatable :: x_full(:, :, :), dm_response(:, :, :), &
                                  fock_response(:, :, :), hess_x_full(:, :, :)
-
-        external :: dgemm
 
         ! initialize error flag
         error = 0
@@ -465,7 +418,7 @@ contains
         ! rebuild the response if the density was moved without it being updated, since
         ! the static and response parts would otherwise refer to different points
         if (oao_object%response_stale) then
-            call refresh_oao_response(error)
+            call oao_object%refresh_response(error)
             if (error /= 0) return
         end if
 
@@ -473,14 +426,7 @@ contains
         x_full = unpack_asymm(x, n_particle, n_ao)
 
         ! get static part
-        allocate(hess_x_full(n_ao, n_ao, n_particle))
-        do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, &
-                       oao_object%fock_vv(:, :, i) - oao_object%fock_oo(:, :, i), &
-                       n_ao, x_full(:, :, i), n_ao, 0.0_rp, hess_x_full(:, :, i), n_ao)
-            hess_x_full(:, :, i) = hess_x_full(:, :, i) - &
-                                   transpose(hess_x_full(:, :, i))
-        end do
+        hess_x_full = hess_x_static_oao(x_full, oao_object%fock_oo, oao_object%fock_vv)
 
         ! get density matrix response to trial vector
         dm_response = project_symm(x_full, oao_object%dm_oao)
@@ -507,7 +453,7 @@ contains
         ! confined to that subspace in exact arithmetic, but the projection on the full
         ! Hessian linear transformation is free since the Fock response has to be
         ! projected anyways and the full projection can prevent some numerical leakage
-        ! into theredundant subspace
+        ! into the redundant subspace
         hess_x_full = project_asymm(hess_x_full + fock_response, oao_object%dm_oao)
         deallocate(fock_response)
 
@@ -553,33 +499,13 @@ contains
         ! this subroutine defines a level-shifted preconditioner based on the exact
         ! eigendecomposition of the static part of the Hessian
         !
-        use otr_common, only: level_shifted_divisors
-
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
-
-        ! initialize error flag
-        error = 0
-
-        ! refresh the eigendecomposition if the static Hessian part has changed
-        call oao_object%refresh_hess_eigen(oao_object%settings, error)
-        if (error /= 0) return
-
-        ! rotate residual into the eigenbasis of the static Hessian part
-        rotated_residual = oao_object%rotate_to_hess_eigenbasis(residual)
-
-        ! get pairwise sums of eigenvalues
-        eigval_pairs = oao_object%get_hess_eigval_pairs()
-
-        ! apply level-shifted diagonal scaling in the eigenbasis
-        rotated_residual = rotated_residual / level_shifted_divisors(eigval_pairs, mu)
-
-        ! rotate back to the original basis
-        precond_residual = oao_object%rotate_from_hess_eigenbasis(rotated_residual)
+        call oao_object%precond(residual, mu, precond_residual, oao_object%settings, &
+                                error)
 
     end subroutine precond_oao_callback
 
@@ -588,32 +514,12 @@ contains
         ! this subroutine defines the positive-definite preconditioner based on the
         ! exact eigendecomposition of the static part of the Hessian
         !
-        use otr_common, only: positive_definite_divisors
-
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
-
-        ! initialize error flag
-        error = 0
-
-        ! refresh the eigendecomposition if the static Hessian part has changed
-        call oao_object%refresh_hess_eigen(oao_object%settings, error)
-        if (error /= 0) return
-
-        ! rotate residual into the eigenbasis of the static Hessian part
-        rotated_residual = oao_object%rotate_to_hess_eigenbasis(residual)
-
-        ! get pairwise sums of eigenvalues
-        eigval_pairs = oao_object%get_hess_eigval_pairs()
-
-        ! apply positive-definite diagonal scaling in the eigenbasis
-        rotated_residual = rotated_residual / positive_definite_divisors(eigval_pairs)
-
-        ! rotate back to the original basis
-        precond_residual = oao_object%rotate_from_hess_eigenbasis(rotated_residual)
+        call oao_object%precond_pd(residual, precond_residual, oao_object%settings, &
+                                   error)
 
     end subroutine precond_pd_oao_callback
 
@@ -663,36 +569,6 @@ contains
         if (allocated(oao_object)) deallocate(oao_object)
 
     end subroutine oao_deconstructor
-
-    subroutine refresh_oao_response(error)
-        !
-        ! this subroutine rebuilds the response callbacks at the currently stored
-        ! density matrix
-        !
-        integer(ip), intent(out) :: error
-
-        real(rp) :: energy
-
-        ! initialize error flag
-        error = 0
-
-        ! rebuild response, the energy is discarded since the caller already holds it
-        ! for the current density
-        if (associated(oao_object%evaluate_dm_os)) then
-            call oao_object%evaluate_dm_os( &
-                oao_object%dm_ao, energy, &
-                get_response_funptr=oao_object%get_response_os, error=error)
-        else
-            call oao_object%evaluate_dm_cs( &
-                oao_object%dm_ao(:, :, 1), energy, &
-                get_response_funptr=oao_object%get_response_cs, error=error)
-        end if
-        if (error /= 0) return
-
-        ! the response callbacks were just rebuilt at the current density
-        oao_object%response_stale = .false.
-
-    end subroutine refresh_oao_response
 
     subroutine rotate_orbitals_oao(self, kappa, settings, error)
         !
@@ -986,8 +862,8 @@ contains
         class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, n_extra, i, j, k, idx, ivec, min_idx
-        real(rp), allocatable :: eigval_pairs(:), dm_eigvecs(:, :), unit_vector(:)
+        integer(ip) :: n_ao, n_particle, i, j, k, idx
+        real(rp), allocatable :: eigval_pairs(:), dm_eigvecs(:, :)
         logical, allocatable :: is_occupied(:, :)
         real(rp), external :: ddot
         external :: dgemm
@@ -995,14 +871,9 @@ contains
         ! initialize error flag
         error = 0
 
-        ! a vanishing vector tells the solver that no direction is contributed for that
-        ! slot, which is what is returned for every slot left unfilled below
-        trial_vectors = 0.0_rp
-
-        ! number of AOs, particles and requested vectors
+        ! number of AOs and particles
         n_ao = self%n_ao
         n_particle = self%n_particle
-        n_extra = size(trial_vectors, 2, kind=ip)
 
         ! refresh the eigendecomposition if the static Hessian part has changed
         call self%refresh_hess_eigen(settings, error)
@@ -1038,17 +909,8 @@ contains
         deallocate(is_occupied)
 
         ! fill the requested slots with the rotations belonging to the most negative
-        ! remaining eigenvalue pairs, stopping as soon as none is negative any more
-        allocate(unit_vector(self%n_param))
-        do ivec = 1, n_extra
-            min_idx = minloc(eigval_pairs, dim=1)
-            if (eigval_pairs(min_idx) >= 0.0_rp) exit
-            unit_vector = 0.0_rp
-            unit_vector(min_idx) = 1.0_rp
-            trial_vectors(:, ivec) = self%rotate_from_hess_eigenbasis(unit_vector)
-            eigval_pairs(min_idx) = huge(1.0_rp)
-        end do
-        deallocate(eigval_pairs, unit_vector)
+        ! remaining eigenvalue pairs
+        call self%fill_extra_trial_vectors(eigval_pairs, trial_vectors)
 
     end subroutine get_extra_trial_vectors_oao
 
@@ -1114,6 +976,36 @@ contains
         if (.not. present(rot_dm_oao)) deallocate(rot_dm_oao_local)
 
     end subroutine rotate_dm_ao
+
+    function hess_x_static_oao(x_full, fock_oo, fock_vv) result(hess_x_full)
+        !
+        ! this function applies the static part of the Hessian in the OAO basis (which
+        ! is built from the occupied-occupied and virtual-virtual parts of the Fock
+        ! matrix) to the unpacked trial vector of every particle channel, leaving the
+        ! projection onto the occupied-virtual and virtual-occupied subspace, the
+        ! scaling and the packing to the caller, so that the exact Hessian linear
+        ! transformation can project the static and response parts together
+        !
+        real(rp), intent(in) :: x_full(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
+        real(rp), allocatable :: hess_x_full(:, :, :)
+
+        integer(ip) :: n_ao, i
+        external :: dgemm
+
+        ! number of AOs
+        n_ao = size(x_full, 1, kind=ip)
+
+        ! apply the static part (F_vv - F_oo) X - h.c. to every particle channel
+        allocate(hess_x_full, mold=x_full)
+        do i = 1, size(x_full, 3, kind=ip)
+            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, &
+                       fock_vv(:, :, i) - fock_oo(:, :, i), n_ao, x_full(:, :, i), &
+                       n_ao, 0.0_rp, hess_x_full(:, :, i), n_ao)
+            hess_x_full(:, :, i) = hess_x_full(:, :, i) - &
+                                   transpose(hess_x_full(:, :, i))
+        end do
+
+    end function hess_x_static_oao
 
     function project_asymm(matrix, dm_oao) result(projected_matrix)
         !

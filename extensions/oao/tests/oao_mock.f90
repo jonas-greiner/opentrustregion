@@ -82,9 +82,10 @@ contains
         ! orbital updating function for the closed-shell case
         !
         use opentrustregion, only: update_orbs_type, solver_settings_type
-        use otr_oao, only: evaluate_dm_cs_type, oao_settings_type
-        use otr_oao_test_reference, only: test_evaluate_dm_cs_funptr
-        use otr_common_test_reference, only: n_ao_ref => n_ao
+        use otr_oao, only: oao_settings_type
+        use otr_common, only: evaluate_dm_cs_type
+        use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
+                                             n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -163,9 +164,10 @@ contains
         ! orbital updating function for the open-shell case
         !
         use opentrustregion, only: update_orbs_type, solver_settings_type
-        use otr_oao, only: evaluate_dm_os_type, oao_settings_type
-        use otr_oao_test_reference, only: test_evaluate_dm_os_funptr
-        use otr_common_test_reference, only: n_ao_ref => n_ao
+        use otr_oao, only: oao_settings_type
+        use otr_common, only: evaluate_dm_os_type
+        use otr_common_test_reference, only: test_evaluate_dm_os_funptr, &
+                                             n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)

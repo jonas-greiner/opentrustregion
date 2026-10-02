@@ -14,9 +14,10 @@ module otr_oao_c_interface
                            project_c_type, get_extra_trial_vectors_c_type
     use otr_oao, only: standard_oao_factory_cs => oao_factory_cs, &
                        standard_oao_factory_os => oao_factory_os, &
-                       standard_oao_deconstructor => oao_deconstructor, &
-                       evaluate_dm_cs_type, evaluate_dm_os_type, get_response_cs_type, &
-                       get_response_os_type
+                       standard_oao_deconstructor => oao_deconstructor
+    use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
+                          get_response_cs_type, get_response_os_type
+    use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
                                            c_funloc, c_f_procpointer, c_associated, &
                                            c_null_funptr
@@ -34,30 +35,6 @@ module otr_oao_c_interface
     procedure(project_type), pointer :: project_oao_before_wrapping => null()
     procedure(get_extra_trial_vectors_type), pointer :: &
         get_extra_trial_vectors_oao_before_wrapping => null()
-
-    ! C-interoperable interfaces for the callback functions
-    abstract interface
-        function evaluate_dm_c_type(dm_ao_c, energy_c, fock_c, get_response_c_funptr) &
-            result(error_c) bind(C)
-            import :: c_rp, c_ip, c_funptr
-
-            real(c_rp), intent(in), target :: dm_ao_c(*)
-            real(c_rp), intent(out) :: energy_c
-            real(c_rp), intent(out), optional :: fock_c(*)
-            type(c_funptr), intent(out), optional :: get_response_c_funptr
-            integer(c_ip) :: error_c
-        end function evaluate_dm_c_type
-    end interface
-
-    abstract interface
-        function get_response_c_type(dm_ao_c, response_c) result(error_c) bind(C)
-            import :: c_rp, c_ip
-    
-            real(c_rp), intent(in), target :: dm_ao_c(*)
-            real(c_rp), intent(out), target :: response_c(*)
-            integer(c_ip) :: error_c
-        end function get_response_c_type
-    end interface
 
     ! derived type for OAO settings
     type, bind(C) :: oao_settings_type_c
@@ -298,6 +275,8 @@ contains
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the open-shell case
         !
+        use otr_common_c_interface, only: evaluate_dm_f_wrapper_impl
+
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), optional, target :: fock(:, :, :)
@@ -305,52 +284,22 @@ contains
             get_response_funptr
         integer(ip), intent(out) :: error
 
-        real(c_rp) :: energy_c
-        real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :)
         type(c_funptr) :: get_response_c_funptr
-        integer(c_ip) :: error_c
 
-        ! convert arguments to C kind
-        nullify(fock_c)
-        if (rp == c_rp) then
-            dm_c => dm
-            if (present(fock)) fock_c => fock
-        else
-            allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-            dm_c = real(dm, kind=c_rp)
-            if (present(fock)) allocate(fock_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-        end if
-
-        ! call density matrix evaluating C function
+        ! call density matrix evaluating C function, and associate a returned C pointer
+        ! to the response function with a Fortran procedure pointer
         if (present(get_response_funptr)) then
-            error_c = evaluate_dm_before_wrapping(dm_c, energy_c, fock_c, &
-                                                  get_response_c_funptr)
-        else
-            error_c = evaluate_dm_before_wrapping(dm_c, energy_c, fock_c)
-        end if
-
-        ! convert arguments to Fortran kind
-        energy = real(energy_c, kind=rp)
-        error = int(error_c, kind=ip)
-        if (rp /= c_rp) then
-            if (present(fock)) then
-                fock = real(fock_c, kind=rp)
-                deallocate(fock_c)
-            end if
-            deallocate(dm_c)
-        end if
-
-        ! associate the input C pointer to get_response function to a Fortran procedure
-        ! pointer
-        if (present(get_response_funptr)) then
+            call evaluate_dm_f_wrapper_impl(evaluate_dm_before_wrapping, dm, energy, &
+                                            error, fock, get_response_c_funptr)
             get_response_funptr => null()
-            if (error_c == 0) then
+            if (error == 0) then
                 call c_f_procpointer(cptr=get_response_c_funptr, &
                                      fptr=get_response_before_wrapping)
-
-                ! associate procedure pointer to wrapper function
                 get_response_funptr => get_response_os_f_wrapper
             end if
+        else
+            call evaluate_dm_f_wrapper_impl(evaluate_dm_before_wrapping, dm, energy, &
+                                            error, fock)
         end if
 
     end subroutine evaluate_dm_os_f_wrapper
@@ -377,32 +326,14 @@ contains
         ! this subroutine wraps the response subroutine to convert Fortran variables to
         ! C variables
         !
+        use otr_common_c_interface, only: get_response_f_wrapper_impl
+
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
 
-        real(c_rp), pointer :: dm_c(:, :, :), response_c(:, :, :)
-        integer(c_ip) :: error_c
-
-        ! convert arguments to C kind
-        if (rp == c_rp) then
-            dm_c => dm
-            response_c => response
-        else
-            allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)), &
-                     response_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-            dm_c = real(dm, kind=c_rp)
-        end if
-
-        ! call response C function
-        error_c = get_response_before_wrapping(dm_c, response_c)
-
-        ! convert arguments to Fortran kind
-        error = int(error_c, kind=ip)
-        if (rp /= c_rp) then
-            response = real(response_c, kind=rp)
-            deallocate(dm_c, response_c)
-        end if
+        call get_response_f_wrapper_impl(get_response_before_wrapping, dm, response, &
+                                         error)
 
     end subroutine get_response_os_f_wrapper
 
@@ -411,33 +342,13 @@ contains
         ! this function wraps the objective function subroutine to convert Fortran
         ! variables to C variables
         !
-        use otr_common_c_interface, only: n_param
+        use otr_common_c_interface, only: obj_func_c_wrapper_impl
 
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
         integer(c_ip) :: error_c
 
-        real(rp) :: func
-        real(rp), pointer :: kappa(:)
-        integer(ip) :: error
-
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            kappa => kappa_c(:n_param)
-        else
-            allocate(kappa(n_param))
-            kappa = real(kappa_c(:n_param), kind=rp)
-        end if
-
-        ! call obj_func Fortran function
-        func = obj_func_oao_before_wrapping(kappa, error)
-
-        ! convert arguments to Fortran kind
-        func_c = real(func, kind=c_rp)
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            deallocate(kappa)
-        end if
+        error_c = obj_func_c_wrapper_impl(obj_func_oao_before_wrapping, kappa_c, func_c)
 
     end function obj_func_oao_c_wrapper
 
@@ -485,36 +396,15 @@ contains
         ! this function wraps the level-shifted preconditioner subroutine to convert
         ! Fortran variables to C variables
         !
-        use otr_common_c_interface, only: n_param
+        use otr_common_c_interface, only: precond_c_wrapper_impl
 
         real(c_rp), intent(in), target :: residual_c(*)
         real(c_rp), intent(in) :: mu_c
         real(c_rp), intent(out), target :: precond_residual_c(*)
         integer(c_ip) :: error_c
 
-        real(rp) :: mu
-        real(rp), pointer :: residual(:), precond_residual(:)
-        integer(ip) :: error
-
-        ! convert arguments to Fortran kind
-        mu = real(mu_c, kind=rp)
-        if (rp == c_rp) then
-            residual => residual_c(:n_param)
-            precond_residual => precond_residual_c(:n_param)
-        else
-            allocate(residual(n_param), precond_residual(n_param))
-            residual = real(residual_c(:n_param), kind=rp)
-        end if
-
-        ! call preconditioner Fortran subroutine
-        call precond_oao_before_wrapping(residual, mu, precond_residual, error)
-
-        ! convert arguments to Fortran kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
-            deallocate(residual, precond_residual)
-        end if
+        error_c = precond_c_wrapper_impl(precond_oao_before_wrapping, residual_c, &
+                                         mu_c, precond_residual_c)
 
     end function precond_oao_c_wrapper
 
@@ -524,33 +414,14 @@ contains
         ! this function wraps the positive-definite preconditioner subroutine to
         ! convert Fortran variables to C variables
         !
-        use otr_common_c_interface, only: n_param
+        use otr_common_c_interface, only: precond_pd_c_wrapper_impl
 
         real(c_rp), intent(in), target :: residual_c(*)
         real(c_rp), intent(out), target :: precond_residual_c(*)
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: residual(:), precond_residual(:)
-        integer(ip) :: error
-
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            residual => residual_c(:n_param)
-            precond_residual => precond_residual_c(:n_param)
-        else
-            allocate(residual(n_param), precond_residual(n_param))
-            residual = real(residual_c(:n_param), kind=rp)
-        end if
-
-        ! call preconditioner Fortran subroutine
-        call precond_pd_oao_before_wrapping(residual, precond_residual, error)
-
-        ! convert arguments to Fortran kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
-            deallocate(residual, precond_residual)
-        end if
+        error_c = precond_pd_c_wrapper_impl(precond_pd_oao_before_wrapping, &
+                                            residual_c, precond_residual_c)
 
     end function precond_pd_oao_c_wrapper
 
@@ -593,34 +464,15 @@ contains
         ! this function wraps the extra trial vector subroutine to convert Fortran
         ! variables to C variables
         !
-        use otr_common_c_interface, only: n_param
+        use otr_common_c_interface, only: get_extra_trial_vectors_c_wrapper_impl
 
         real(c_rp), intent(out), target :: trial_vectors_c(*)
         integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: trial_vectors(:, :)
-        integer(ip) :: n_extra_trial_vectors, error
-
-        ! convert arguments to Fortran kind
-        n_extra_trial_vectors = int(n_extra_trial_vectors_c, kind=ip)
-        if (rp == c_rp) then
-            call c_f_pointer(c_loc(trial_vectors_c(1)), trial_vectors, &
-                             [n_param, n_extra_trial_vectors])
-        else
-            allocate(trial_vectors(n_param, n_extra_trial_vectors))
-        end if
-
-        ! call extra trial vector Fortran subroutine
-        call get_extra_trial_vectors_oao_before_wrapping(trial_vectors, error)
-
-        ! convert arguments to C kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            trial_vectors_c(:n_param * n_extra_trial_vectors) = real( &
-                reshape(trial_vectors, [n_param * n_extra_trial_vectors]), kind=c_rp)
-            deallocate(trial_vectors)
-        end if
+        error_c = get_extra_trial_vectors_c_wrapper_impl( &
+            get_extra_trial_vectors_oao_before_wrapping, trial_vectors_c, &
+            n_extra_trial_vectors_c)
 
     end function get_extra_trial_vectors_oao_c_wrapper
 

@@ -193,6 +193,7 @@ if(ENABLE_MO)
     message(STATUS "Including molecular orbitals in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
         extensions/common/src/common.f90
+        extensions/common/src/common_c_interface.f90
         extensions/mo/src/mo.f90
     )
 endif()
@@ -205,6 +206,7 @@ if(ENABLE_OAO)
         extensions/oao/src/oao_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include
     )
 endif()
@@ -311,6 +313,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_mock.f90
             extensions/common/tests/common_test_reference.f90
             extensions/common/tests/common_unit_tests.f90
+            extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/mo/tests/mo_test_reference.f90
             extensions/mo/tests/mo_unit_tests.f90
         )
@@ -320,6 +323,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_mock.f90
             extensions/common/tests/common_test_reference.f90
             extensions/common/tests/common_unit_tests.f90
+            extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/oao/tests/oao_test_reference.f90
             extensions/oao/tests/oao_unit_tests.f90
             extensions/oao/tests/oao_c_interface_unit_tests.f90
@@ -343,6 +347,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_mock.f90
             extensions/common/tests/common_test_reference.f90
             extensions/common/tests/common_unit_tests.f90
+            extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/arh/tests/arh_test_reference.f90
             extensions/arh/tests/arh_unit_tests.f90
             extensions/arh/tests/arh_c_interface_unit_tests.f90
@@ -420,6 +425,12 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT ${runtime_component}
 )
+if(ENABLE_OAO)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT ${runtime_component}
+    )
+endif()
 if(ENABLE_OAO)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
