@@ -26,6 +26,7 @@ try:
     from pyopentrustregion.extensions.mo.tests import (
         MOTests,
         MOCInterfaceTests,
+        MOPyInterfaceTests,
         MOCSystemTests,
     )
 except AttributeError:

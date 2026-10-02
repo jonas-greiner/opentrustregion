@@ -12,7 +12,6 @@ module otr_arh_c_interface_mock
     use otr_arh_c_interface, only: arh_factory_mo_c_wrapper, &
                                    arh_factory_oao_c_wrapper, init_arh_settings_c, &
                                    arh_deconstructor_c_wrapper
-    use c_interface, only: update_orbs_c_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_f_pointer, c_loc, &
                                            c_null_funptr
@@ -24,8 +23,6 @@ module otr_arh_c_interface_mock
                                 test_arh_deconstructor_interface = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_c_type), pointer :: mock_update_orbs_mo_c_ptr => &
-        mock_update_orbs_mo_c
     procedure(arh_factory_mo_c_wrapper), pointer :: &
         mock_arh_factory_mo_c_wrapper_ptr => mock_arh_factory_mo_c_wrapper
     procedure(arh_factory_oao_c_wrapper), pointer :: &
@@ -36,31 +33,6 @@ module otr_arh_c_interface_mock
         mock_arh_deconstructor_c_wrapper_ptr => mock_arh_deconstructor_c_wrapper
 
 contains
-
-    function mock_update_orbs_mo_c(kappa, func, grad, h_diag, hess_x_c_funptr) &
-        result(error) bind(C)
-        !
-        ! this function is a test function for the orbital update C function for
-        ! orbitals parameterized in the MO basis, which overwrites the MO coefficients
-        ! with a pattern encoding their indices
-        !
-        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
-        use otr_mo_c_interface, only: mo_coeff_3d_c
-        use otr_mo_test_reference, only: mo_coeff_pattern
-
-        real(c_rp), intent(in), target :: kappa(*)
-        real(c_rp), intent(out) :: func
-        real(c_rp), intent(out), target :: grad(*), h_diag(*)
-        type(c_funptr), intent(out) :: hess_x_c_funptr
-        integer(c_ip) :: error
-
-        error = mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr)
-
-        mo_coeff_3d_c = mo_coeff_pattern(size(mo_coeff_3d_c, 1, kind=c_ip), &
-                                         size(mo_coeff_3d_c, 2, kind=c_ip), &
-                                         size(mo_coeff_3d_c, 3, kind=c_ip), 1000.0_c_rp)
-
-    end function mock_update_orbs_mo_c
 
     function mock_arh_factory_mo_c_wrapper( &
         mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
@@ -77,10 +49,11 @@ contains
         use otr_mo_c_interface, only: mo_coeff_3d_c
         use c_interface, only: logger_c_type, solver_settings_type_c, assignment(=)
         use test_reference, only: tol_c
-        use otr_arh_test_reference, only: &
-            test_evaluate_dm_os_c_funptr, test_evaluate_dm_cs_c_funptr, &
-            n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, operator(/=)
-        use otr_mo_test_reference, only: mo_coeff_pattern
+        use otr_arh_test_reference, only: test_evaluate_dm_os_c_funptr, &
+                                          test_evaluate_dm_cs_c_funptr, operator(/=)
+        use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
+                                         mo_coeff_pattern
+        use otr_mo_c_interface_mock, only: mock_update_orbs_mo
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
                                           mock_precond_pd, mock_get_extra_trial_vectors
@@ -168,7 +141,7 @@ contains
         ! without wiring a projection, since the parameters are non-redundant, so that
         ! the projection is left to the caller
         obj_func_arh_c_funptr = c_funloc(mock_obj_func)
-        update_orbs_arh_c_funptr = c_funloc(mock_update_orbs_mo_c)
+        update_orbs_arh_c_funptr = c_funloc(mock_update_orbs_mo)
         if (.not. solver_settings_c%initialized) &
             solver_settings_c = default_solver_settings
         solver_settings_c%precond = c_funloc(mock_precond)

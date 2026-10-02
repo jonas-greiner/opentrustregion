@@ -8,9 +8,8 @@ module otr_arh_test_reference
 
     use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
-    use otr_common_test_reference, only: n_particle, n_occ, ref_orbital_settings_type, &
+    use otr_common_test_reference, only: n_particle, ref_orbital_settings_type, &
                                          ref_orbital_settings
-    use otr_mo_test_reference, only: n_mo
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
                                            c_associated
 
@@ -30,11 +29,6 @@ module otr_arh_test_reference
     type(ref_arh_settings_type), parameter :: ref_arh_settings = &
         ref_arh_settings_type(ref_orbital_settings_type = ref_orbital_settings, &
                               arh_type = "symm_arh")
-
-    ! dimensions of the MO coefficients passed through the Python interface
-    integer(c_ip), protected, bind(C, name="test_n_mo") :: n_mo_c = int(n_mo, kind=c_ip)
-    integer(c_ip), protected, bind(C, name="test_n_occ") :: n_occ_c(n_particle) = &
-        int(n_occ, kind=c_ip)
 
     ! multiples of the density matrix the mock density matrix evaluating functions
     ! return for each optional output, in the order of evaluate_dm_*_outputs
