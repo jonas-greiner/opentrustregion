@@ -195,6 +195,11 @@ if(ENABLE_MO)
         extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/mo/src/mo.f90
+        extensions/mo/src/mo_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/mo/include
     )
 endif()
 if(ENABLE_OAO)
@@ -316,6 +321,9 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/mo/tests/mo_test_reference.f90
             extensions/mo/tests/mo_unit_tests.f90
+            extensions/mo/tests/mo_c_interface_unit_tests.f90
+            extensions/mo/tests/mo_mock.f90
+            extensions/mo/tests/mo_c_system_tests.c
         )
     endif()
     if(ENABLE_OAO)
@@ -425,8 +433,14 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT ${runtime_component}
 )
-if(ENABLE_OAO)
+if(ENABLE_OAO OR ENABLE_MO)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT ${runtime_component}
+    )
+endif()
+if(ENABLE_MO)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/mo/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             COMPONENT ${runtime_component}
     )

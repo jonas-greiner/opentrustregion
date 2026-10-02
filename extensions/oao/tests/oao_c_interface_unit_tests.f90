@@ -8,7 +8,7 @@ module otr_oao_c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol, tol_c
+    use test_reference, only: tol
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_funloc, c_associated
 
     implicit none
@@ -200,15 +200,15 @@ contains
 
     end function test_oao_factory_c_wrapper
 
-    logical(c_bool) function test_evaluate_dm_f_wrapper() bind(C)
+    logical(c_bool) function test_evaluate_dm_oao_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the density matrix evaluating
         ! function
         !
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type
-        use otr_oao_c_interface, only: evaluate_dm_before_wrapping, &
-                                       evaluate_dm_cs_f_wrapper, &
-                                       evaluate_dm_os_f_wrapper
+        use otr_oao_c_interface, only: evaluate_dm_oao_before_wrapping, &
+                                       evaluate_dm_oao_cs_f_wrapper, &
+                                       evaluate_dm_oao_os_f_wrapper
         use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
                                              test_evaluate_dm_os_funptr
         use otr_common_unit_tests, only: mock_requests
@@ -220,54 +220,56 @@ contains
         integer(ip) :: request
 
         ! inject mock subroutine
-        evaluate_dm_before_wrapping => mock_evaluate_dm_cs
+        evaluate_dm_oao_before_wrapping => mock_evaluate_dm_cs
 
         ! get pointer to subroutine
-        evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
+        evaluate_dm_cs_funptr => evaluate_dm_oao_cs_f_wrapper
 
         ! test density matrix evaluating wrapper, which is called once for every
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        test_evaluate_dm_f_wrapper = test_evaluate_dm_cs_funptr( &
-            evaluate_dm_cs_funptr, "evaluate_dm_f_wrapper", "")
+        test_evaluate_dm_oao_f_wrapper = test_evaluate_dm_cs_funptr( &
+            evaluate_dm_cs_funptr, "evaluate_dm_oao_f_wrapper", "")
         if (size(mock_requests) /= 4 .or. &
             .not. all([(any(mock_requests == request), request=0, 3)])) then
-            write(stderr, *) "test_evaluate_dm_f_wrapper failed: Outputs passed on "// &
-                "to density matrix evaluating C function for closed-shell case wrong."
-            test_evaluate_dm_f_wrapper = .false.
+            write(stderr, *) "test_evaluate_dm_oao_f_wrapper failed: Outputs "// &
+                "passed on to density matrix evaluating C function for "// &
+                "closed-shell case wrong."
+            test_evaluate_dm_oao_f_wrapper = .false.
         end if
 
         ! inject mock subroutine
-        evaluate_dm_before_wrapping => mock_evaluate_dm_os
+        evaluate_dm_oao_before_wrapping => mock_evaluate_dm_os
 
         ! get pointer to subroutine
-        evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
+        evaluate_dm_os_funptr => evaluate_dm_oao_os_f_wrapper
 
         ! test density matrix evaluating wrapper, which is called once for every
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        test_evaluate_dm_f_wrapper = &
-            test_evaluate_dm_f_wrapper .and. test_evaluate_dm_os_funptr( &
-                evaluate_dm_os_funptr, "evaluate_dm_f_wrapper", "")
+        test_evaluate_dm_oao_f_wrapper = &
+            test_evaluate_dm_oao_f_wrapper .and. test_evaluate_dm_os_funptr( &
+                evaluate_dm_os_funptr, "evaluate_dm_oao_f_wrapper", "")
         if (size(mock_requests) /= 4 .or. &
             .not. all([(any(mock_requests == request), request=0, 3)])) then
-            write(stderr, *) "test_evaluate_dm_f_wrapper failed: Outputs passed on "// &
-                "to density matrix evaluating C function for open-shell case wrong."
-            test_evaluate_dm_f_wrapper = .false.
+            write(stderr, *) "test_evaluate_dm_oao_f_wrapper failed: Outputs "// &
+                "passed on to density matrix evaluating C function for open-shell "// &
+                "case wrong."
+            test_evaluate_dm_oao_f_wrapper = .false.
         end if
 
-    end function test_evaluate_dm_f_wrapper
+    end function test_evaluate_dm_oao_f_wrapper
 
-    logical(c_bool) function test_get_response_f_wrapper() bind(C)
+    logical(c_bool) function test_get_response_oao_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the response function
         !
         use otr_common, only: get_response_cs_type, get_response_os_type
-        use otr_oao_c_interface, only: get_response_before_wrapping, &
-                                       get_response_cs_f_wrapper, &
-                                       get_response_os_f_wrapper
+        use otr_oao_c_interface, only: get_response_oao_before_wrapping, &
+                                       get_response_oao_cs_f_wrapper, &
+                                       get_response_oao_os_f_wrapper
         use otr_common_test_reference, only: test_get_response_cs_funptr, &
                                              test_get_response_os_funptr
         use otr_common_c_interface_unit_tests, only: mock_get_response_cs, &
@@ -277,27 +279,27 @@ contains
         procedure(get_response_os_type), pointer :: get_response_os_funptr
 
         ! inject mock subroutine
-        get_response_before_wrapping => mock_get_response_cs
+        get_response_oao_before_wrapping => mock_get_response_cs
 
         ! get pointer to subroutine
-        get_response_cs_funptr => get_response_cs_f_wrapper
+        get_response_cs_funptr => get_response_oao_cs_f_wrapper
 
         ! test response function wrapper
-        test_get_response_f_wrapper = test_get_response_cs_funptr( &
-            get_response_cs_funptr, "get_response_f_wrapper", "")
+        test_get_response_oao_f_wrapper = test_get_response_cs_funptr( &
+            get_response_cs_funptr, "get_response_oao_f_wrapper", "")
 
         ! inject mock subroutine
-        get_response_before_wrapping => mock_get_response_os
+        get_response_oao_before_wrapping => mock_get_response_os
 
         ! get pointer to subroutine
-        get_response_os_funptr => get_response_os_f_wrapper
+        get_response_os_funptr => get_response_oao_os_f_wrapper
 
         ! test response function wrapper
-        test_get_response_f_wrapper = &
-            test_get_response_f_wrapper .and. test_get_response_os_funptr( &
-                get_response_os_funptr, "get_response_f_wrapper", "")
+        test_get_response_oao_f_wrapper = &
+            test_get_response_oao_f_wrapper .and. test_get_response_os_funptr( &
+                get_response_os_funptr, "get_response_oao_f_wrapper", "")
 
-    end function test_get_response_f_wrapper
+    end function test_get_response_oao_f_wrapper
 
     logical(c_bool) function test_obj_func_oao_c_wrapper() bind(C)
         !
@@ -306,14 +308,14 @@ contains
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_oao_c_interface, only: obj_func_oao_before_wrapping, &
                                        obj_func_oao_c_wrapper
-        use otr_oao_mock, only: mock_obj_func_oao
+        use otr_common_mock, only: mock_obj_func
         use test_reference, only: test_obj_func_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
 
         ! inject mock subroutine
-        obj_func_oao_before_wrapping => mock_obj_func_oao
+        obj_func_oao_before_wrapping => mock_obj_func
 
         ! test objective function
         test_obj_func_oao_c_wrapper = test_obj_func_c_funptr( &
@@ -372,14 +374,14 @@ contains
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_oao_c_interface, only: precond_oao_before_wrapping, &
                                        precond_oao_c_wrapper
-        use otr_oao_mock, only: mock_precond_oao
+        use otr_common_mock, only: mock_precond
         use test_reference, only: test_precond_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
 
         ! inject mock subroutine
-        precond_oao_before_wrapping => mock_precond_oao
+        precond_oao_before_wrapping => mock_precond
 
         ! test preconditioner function
         test_precond_oao_c_wrapper = test_precond_c_funptr( &
@@ -395,14 +397,14 @@ contains
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_oao_c_interface, only: precond_pd_oao_before_wrapping, &
                                        precond_pd_oao_c_wrapper
-        use otr_oao_mock, only: mock_precond_pd_oao
+        use otr_common_mock, only: mock_precond_pd
         use test_reference, only: test_precond_pd_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
 
         ! inject mock subroutine
-        precond_pd_oao_before_wrapping => mock_precond_pd_oao
+        precond_pd_oao_before_wrapping => mock_precond_pd
 
         ! test preconditioner function
         test_precond_pd_oao_c_wrapper = test_precond_pd_c_funptr( &
@@ -439,14 +441,14 @@ contains
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_oao_c_interface, only: get_extra_trial_vectors_oao_before_wrapping, &
                                        get_extra_trial_vectors_oao_c_wrapper
-        use otr_oao_mock, only: mock_get_extra_trial_vectors_oao
+        use otr_common_mock, only: mock_get_extra_trial_vectors
         use test_reference, only: test_get_extra_trial_vectors_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
 
         ! inject mock subroutine
-        get_extra_trial_vectors_oao_before_wrapping => mock_get_extra_trial_vectors_oao
+        get_extra_trial_vectors_oao_before_wrapping => mock_get_extra_trial_vectors
 
         ! test extra trial vector function
         test_get_extra_trial_vectors_oao_c_wrapper = &
@@ -507,9 +509,6 @@ contains
 
         ! call OAO orbital updating deconstructor C wrapper
         call oao_deconstructor_c_wrapper()
-
-        ! check if test has passed
-        test_oao_deconstructor_c_wrapper = test_passed
 
         ! check if test has passed
         if (.not. test_passed) then

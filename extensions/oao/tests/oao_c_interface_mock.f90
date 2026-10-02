@@ -75,7 +75,8 @@ contains
                                           mock_precond_pd, mock_project, &
                                           mock_get_extra_trial_vectors
 
-        real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
+        real(c_rp), intent(inout), target :: dm_ao_c(*)
+        real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(c_funptr), intent(out) :: obj_func_oao_c_funptr, update_orbs_oao_c_funptr

@@ -71,9 +71,9 @@ fortran_tests = {
     "oao_c_interface_tests": [
         "assign_oao_c_f",
         "assign_oao_f_c",
-        "evaluate_dm_f_wrapper",
+        "evaluate_dm_oao_f_wrapper",
         "get_extra_trial_vectors_oao_c_wrapper",
-        "get_response_f_wrapper",
+        "get_response_oao_f_wrapper",
         "hess_x_oao_c_wrapper",
         "init_oao_settings_c",
         "oao_deconstructor_c_wrapper",

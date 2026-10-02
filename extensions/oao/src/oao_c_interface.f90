@@ -25,8 +25,9 @@ module otr_oao_c_interface
     implicit none
 
     ! define procedure pointer which will point to the Fortran procedures
-    procedure(evaluate_dm_c_type), pointer :: evaluate_dm_before_wrapping => null()
-    procedure(get_response_c_type), pointer :: get_response_before_wrapping => null()
+    procedure(evaluate_dm_c_type), pointer :: evaluate_dm_oao_before_wrapping => null()
+    procedure(get_response_c_type), pointer :: get_response_oao_before_wrapping => &
+        null()
     procedure(obj_func_type), pointer :: obj_func_oao_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_oao_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_oao_before_wrapping => null()
@@ -43,8 +44,9 @@ module otr_oao_c_interface
         integer(c_ip) :: verbose
     end type
 
-    ! global variables
-    real(c_rp), pointer :: dm_ao_3d_c(:, :, :)
+    ! density matrix passed from C, which is updated from its Fortran copy after every
+    ! orbital update if the real kinds differ
+    real(c_rp), pointer :: dm_ao_3d_c(:, :, :) => null()
 
     procedure(standard_oao_factory_cs), pointer :: oao_factory_cs => &
         standard_oao_factory_cs
@@ -54,14 +56,14 @@ module otr_oao_c_interface
         standard_oao_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_f_wrapper_ptr => &
-        evaluate_dm_cs_f_wrapper
-    procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_f_wrapper_ptr => &
-        evaluate_dm_os_f_wrapper
-    procedure(get_response_cs_type), pointer :: get_response_cs_f_wrapper_ptr => &
-        get_response_cs_f_wrapper
-    procedure(get_response_os_type), pointer :: get_response_os_f_wrapper_ptr => &
-        get_response_os_f_wrapper
+    procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_oao_cs_f_wrapper_ptr => &
+        evaluate_dm_oao_cs_f_wrapper
+    procedure(evaluate_dm_os_type), pointer :: evaluate_dm_oao_os_f_wrapper_ptr => &
+        evaluate_dm_oao_os_f_wrapper
+    procedure(get_response_cs_type), pointer :: get_response_oao_cs_f_wrapper_ptr => &
+        get_response_oao_cs_f_wrapper
+    procedure(get_response_os_type), pointer :: get_response_oao_os_f_wrapper_ptr => &
+        get_response_oao_os_f_wrapper
     procedure(obj_func_c_type), pointer :: obj_func_oao_c_wrapper_ptr => &
         obj_func_oao_c_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_oao_c_wrapper_ptr => &
@@ -99,7 +101,8 @@ contains
         use otr_oao, only: oao_settings_type
         use otr_common_c_interface, only: n_param
 
-        real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
+        real(c_rp), intent(inout), target :: dm_ao_c(*)
+        real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
@@ -148,13 +151,13 @@ contains
 
         ! associate the input C pointers to Fortran procedure pointers
         call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                             fptr=evaluate_dm_before_wrapping)
+                             fptr=evaluate_dm_oao_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
-            evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
+            evaluate_dm_cs_funptr => evaluate_dm_oao_cs_f_wrapper
         else
-            evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
+            evaluate_dm_os_funptr => evaluate_dm_oao_os_f_wrapper
         end if
 
         ! convert settings
@@ -240,7 +243,8 @@ contains
 
     end subroutine oao_set_solver_settings_c
 
-    subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, error)
+    subroutine evaluate_dm_oao_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, &
+                                            error)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the closed-shell case
@@ -260,17 +264,18 @@ contains
         nullify(fock_3d, get_response_funptr)
         if (present(fock)) fock_3d(1:size(fock, 1), 1:size(fock, 2), 1:1) => fock
         if (present(get_response_cs_funptr)) then
-            call evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, get_response_funptr, &
-                                          error)
+            call evaluate_dm_oao_os_f_wrapper(dm_3d, energy, fock_3d, &
+                                              get_response_funptr, error)
             get_response_cs_funptr => null()
-            if (error == 0) get_response_cs_funptr => get_response_cs_f_wrapper
+            if (error == 0) get_response_cs_funptr => get_response_oao_cs_f_wrapper
         else
-            call evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, error=error)
+            call evaluate_dm_oao_os_f_wrapper(dm_3d, energy, fock_3d, error=error)
         end if
 
-    end subroutine evaluate_dm_cs_f_wrapper
+    end subroutine evaluate_dm_oao_cs_f_wrapper
 
-    subroutine evaluate_dm_os_f_wrapper(dm, energy, fock, get_response_funptr, error)
+    subroutine evaluate_dm_oao_os_f_wrapper(dm, energy, fock, get_response_funptr, &
+                                            error)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the open-shell case
@@ -289,22 +294,22 @@ contains
         ! call density matrix evaluating C function, and associate a returned C pointer
         ! to the response function with a Fortran procedure pointer
         if (present(get_response_funptr)) then
-            call evaluate_dm_f_wrapper_impl(evaluate_dm_before_wrapping, dm, energy, &
-                                            error, fock, get_response_c_funptr)
+            call evaluate_dm_f_wrapper_impl(evaluate_dm_oao_before_wrapping, dm, &
+                                            energy, error, fock, get_response_c_funptr)
             get_response_funptr => null()
             if (error == 0) then
                 call c_f_procpointer(cptr=get_response_c_funptr, &
-                                     fptr=get_response_before_wrapping)
-                get_response_funptr => get_response_os_f_wrapper
+                                     fptr=get_response_oao_before_wrapping)
+                get_response_funptr => get_response_oao_os_f_wrapper
             end if
         else
-            call evaluate_dm_f_wrapper_impl(evaluate_dm_before_wrapping, dm, energy, &
-                                            error, fock)
+            call evaluate_dm_f_wrapper_impl(evaluate_dm_oao_before_wrapping, dm, &
+                                            energy, error, fock)
         end if
 
-    end subroutine evaluate_dm_os_f_wrapper
+    end subroutine evaluate_dm_oao_os_f_wrapper
 
-    subroutine get_response_cs_f_wrapper(dm, response, error)
+    subroutine get_response_oao_cs_f_wrapper(dm, response, error)
         !
         ! this subroutine wraps the response subroutine to convert Fortran variables to
         ! C variables
@@ -317,11 +322,11 @@ contains
 
         dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
         response_3d(1:size(response, 1), 1:size(response, 2), 1:1) => response
-        call get_response_os_f_wrapper(dm_3d, response_3d, error)
+        call get_response_oao_os_f_wrapper(dm_3d, response_3d, error)
 
-    end subroutine get_response_cs_f_wrapper
+    end subroutine get_response_oao_cs_f_wrapper
 
-    subroutine get_response_os_f_wrapper(dm, response, error)
+    subroutine get_response_oao_os_f_wrapper(dm, response, error)
         !
         ! this subroutine wraps the response subroutine to convert Fortran variables to
         ! C variables
@@ -332,10 +337,10 @@ contains
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
 
-        call get_response_f_wrapper_impl(get_response_before_wrapping, dm, response, &
-                                         error)
+        call get_response_f_wrapper_impl(get_response_oao_before_wrapping, dm, &
+                                         response, error)
 
-    end subroutine get_response_os_f_wrapper
+    end subroutine get_response_oao_os_f_wrapper
 
     function obj_func_oao_c_wrapper(kappa_c, func_c) result(error_c) bind(C)
         !
@@ -371,6 +376,7 @@ contains
             update_orbs_oao_before_wrapping, hess_x_oao_before_wrapping, &
             hess_x_oao_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr)
 
+        ! update the density matrix passed from C if it could not be updated in place
         if (rp /= c_rp) dm_ao_3d_c = real(oao_object%dm_ao, kind=c_rp)
 
     end function update_orbs_oao_c_wrapper
@@ -478,7 +484,7 @@ contains
 
     subroutine init_oao_settings_c(settings_c) bind(C, name="init_oao_settings")
         !
-        ! this subroutine initializes the OAO solver settings
+        ! this subroutine initializes the OAO settings
         !
         use otr_oao, only: default_oao_settings
 

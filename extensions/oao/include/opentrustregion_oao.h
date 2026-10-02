@@ -34,7 +34,7 @@ void init_oao_settings(oao_settings_type *settings);
  * Fortran-callable OAO factory interface.
  *
  * @param dm_ao_c                                 Flattened AO density matrix (size
- *                                                n_ao^2)
+ *                                                n_ao^2 * n_particle); updated in place
  * @param ao_overlap_c                            Flattened AO overlap matrix (size
  *                                                n_ao^2)
  * @param n_particle_c                            Number of particles
@@ -49,7 +49,7 @@ void init_oao_settings(oao_settings_type *settings);
  *
  * @return                                        Integer error code from Fortran
  */
-c_int oao_factory(const c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
+c_int oao_factory(c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
                   c_int n_ao_c, evaluate_dm_fp evaluate_dm_c_funptr,
                   obj_func_fp *obj_func_oao_c_funptr,
                   update_orbs_fp *update_orbs_oao_c_funptr,

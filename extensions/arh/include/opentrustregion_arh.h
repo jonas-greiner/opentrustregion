@@ -102,9 +102,8 @@ c_int arh_factory_mo(c_real *mo_coeff_c, const c_real *ao_overlap_c,
  *
  * @return                           Integer error code from Fortran
  */
-c_int arh_factory_oao(const c_real *dm_ao_c, const c_real *ao_overlap_c,
-                      c_int n_particle_c, c_int n_ao_c,
-                      arh_evaluate_dm_fp evaluate_dm_c_funptr,
+c_int arh_factory_oao(c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
+                      c_int n_ao_c, arh_evaluate_dm_fp evaluate_dm_c_funptr,
                       obj_func_fp *obj_func_arh_c_funptr,
                       update_orbs_fp *update_orbs_arh_c_funptr,
                       solver_settings_type *solver_settings_c,
