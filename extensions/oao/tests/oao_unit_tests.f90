@@ -14,83 +14,32 @@ module otr_oao_unit_tests
 
 contains
 
-    subroutine mock_get_response_cs(dm, response, error)
+    subroutine setup_identity_oao_eigenbasis(eigval)
         !
-        ! this subroutine is a mock response function for the closed-shell case
+        ! this subroutine sets up the module-global OAO object with the shared
+        ! dimensions and an up-to-date eigendecomposition of the static part of the
+        ! Hessian in the OAO basis itself with the given eigenvalue for every
+        ! eigenvector, so that all eigenvalue pairs are the same and routines using the
+        ! eigendecomposition reduce to a scaling
         !
-        real(rp), intent(in), target, contiguous :: dm(:, :)
-        real(rp), intent(out), target, contiguous :: response(:, :)
-        integer(ip), intent(out) :: error
+        use otr_oao, only: oao_object
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_oao_test_reference, only: n_param
+        use otr_common_test_reference, only: n_ao, n_particle
+        use otr_common_unit_tests, only: identity_matrix
 
-        error = 0
-        response = 2.0_rp * dm
+        real(rp), intent(in) :: eigval
 
-    end subroutine mock_get_response_cs
+        allocate(oao_object)
+        call setup_settings(oao_object%settings)
+        oao_object%n_ao = n_ao
+        oao_object%n_particle = n_particle
+        oao_object%n_param = n_param
+        oao_object%hess_eigvecs = spread(identity_matrix(n_ao), 3, n_particle)
+        allocate(oao_object%hess_eigvals(n_ao, n_particle), source=eigval)
+        oao_object%hess_eigen_stale = .false.
 
-    subroutine mock_get_response_os(dm, response, error)
-        !
-        ! this subroutine is a mock response function for the open-shell case
-        !
-        real(rp), intent(in), target :: dm(:, :, :)
-        real(rp), intent(out), target :: response(:, :, :)
-        integer(ip), intent(out) :: error
-
-        error = 0
-        response = 2.0_rp * dm
-
-    end subroutine mock_get_response_os
-
-    subroutine mock_evaluate_dm_cs(dm, energy, fock, get_response_funptr, error)
-        !
-        ! this subroutine is a mock density matrix evaluating function for the
-        ! closed-shell case, which returns a multiple of the density matrix that
-        ! changes between calls so that non-vanishing differences are produced
-        !
-        use otr_oao, only: get_response_cs_type
-        use otr_common_unit_tests, only: mock_factor, mock_fock_factor, record_mock_call
-
-        real(rp), intent(in), target, contiguous :: dm(:, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target, contiguous :: fock(:, :)
-        procedure(get_response_cs_type), intent(out), optional, pointer :: &
-            get_response_funptr
-        integer(ip), intent(out) :: error
-
-        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
-                              merge(2_ip, 0_ip, present(get_response_funptr)))
-
-        error = 0
-        energy = sum(dm)
-        if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
-        if (present(get_response_funptr)) get_response_funptr => mock_get_response_cs
-
-    end subroutine mock_evaluate_dm_cs
-
-    subroutine mock_evaluate_dm_os(dm, energy, fock, get_response_funptr, error)
-        !
-        ! this subroutine is a mock density matrix evaluating function for the
-        ! open-shell case, which returns a multiple of the density matrix that changes
-        ! between calls so that non-vanishing differences are produced
-        !
-        use otr_oao, only: get_response_os_type
-        use otr_common_unit_tests, only: mock_factor, mock_fock_factor, record_mock_call
-
-        real(rp), intent(in), target :: dm(:, :, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target :: fock(:, :, :)
-        procedure(get_response_os_type), intent(out), optional, pointer :: &
-            get_response_funptr
-        integer(ip), intent(out) :: error
-
-        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
-                              merge(2_ip, 0_ip, present(get_response_funptr)))
-
-        error = 0
-        energy = sum(dm)
-        if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
-        if (present(get_response_funptr)) get_response_funptr => mock_get_response_os
-
-    end subroutine mock_evaluate_dm_os
+    end subroutine setup_identity_oao_eigenbasis
 
     function ref_unpack_asymm(matrix_nonred, n_particle_in, n_ao_in) result(matrix)
         !
@@ -189,7 +138,27 @@ contains
 
     end function ref_project_symm
 
-    function ref_hess_x(x_full, response, dm_oao, fock_oo, fock_vv, n_param) &
+    function ref_hess_x_static_oao(x_full, fock_oo, fock_vv) result(hess_x_full)
+        !
+        ! this function independently reproduces the static part of the Hessian in the
+        ! OAO basis, (F_vv - F_oo) X - h.c. for the unpacked trial vector X of every
+        ! particle channel, before its projection, scaling and packing
+        !
+        real(rp), intent(in) :: x_full(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
+        real(rp) :: hess_x_full(size(x_full, 1), size(x_full, 2), size(x_full, 3))
+
+        integer(ip) :: i
+
+        do i = 1, size(x_full, 3, kind=ip)
+            hess_x_full(:, :, i) = matmul(fock_vv(:, :, i) - fock_oo(:, :, i), &
+                                          x_full(:, :, i))
+            hess_x_full(:, :, i) = hess_x_full(:, :, i) - &
+                                   transpose(hess_x_full(:, :, i))
+        end do
+
+    end function ref_hess_x_static_oao
+
+    function ref_hess_x_oao(x_full, response, dm_oao, fock_oo, fock_vv, n_param) &
         result(hess_x)
         !
         ! this function assembles a Hessian linear transformation in the OAO basis from
@@ -200,26 +169,18 @@ contains
         integer(ip), intent(in) :: n_param
         real(rp) :: hess_x(n_param)
 
-        integer(ip) :: i
         real(rp) :: hess_x_full(size(x_full, 1), size(x_full, 2), size(x_full, 3))
-
-        ! get static part
-        do i = 1, size(x_full, 3)
-            hess_x_full(:, :, i) = matmul(fock_vv(:, :, i) - fock_oo(:, :, i), &
-                                          x_full(:, :, i))
-            hess_x_full(:, :, i) = hess_x_full(:, :, i) - &
-                                   transpose(hess_x_full(:, :, i))
-        end do
 
         ! project the combined static and response contributions onto the
         ! occupied-virtual and virtual-occupied subspace, matching the production code
-        hess_x_full = ref_project_asymm(hess_x_full + response, dm_oao)
+        hess_x_full = ref_project_asymm( &
+            ref_hess_x_static_oao(x_full, fock_oo, fock_vv) + response, dm_oao)
 
         ! pack Hessian linear transformation
         hess_x = merge(4.0_rp, 2.0_rp, size(x_full, 3) == 1) * &
                  ref_pack_asymm(hess_x_full, n_param)
 
-    end function ref_hess_x
+    end function ref_hess_x_oao
 
     subroutine ref_diagonalize_static_part(fock_oo, fock_vv, eigvecs, eigvals)
         !
@@ -252,16 +213,18 @@ contains
 
     end subroutine ref_diagonalize_static_part
 
-    function ref_rotate_to_eigenbasis_oao(vector, eigvecs, n_particle, n_ao) &
-        result(rotated)
+    function ref_rotate_eigenbasis_oao(vector, eigvecs, n_particle, n_ao, &
+                                       to_eigenbasis) result(rotated)
         !
-        ! this function independently rotates a packed antisymmetric vector into a
-        ! given eigenbasis, one particle channel at a time, reproducing the
-        ! corresponding OAO routine so that tests of routines which rotate into the
-        ! eigenbasis internally do not depend on it
+        ! this function independently rotates a packed antisymmetric vector into or out
+        ! of a given eigenbasis, by rotating the unpacked antisymmetric matrix X of
+        ! every particle channel as U^T X U or as U X U^T, reproducing the
+        ! corresponding OAO routines so that tests of routines which rotate into or out
+        ! of the eigenbasis internally do not depend on them
         !
         real(rp), intent(in) :: vector(:), eigvecs(:, :, :)
         integer(ip), intent(in) :: n_particle, n_ao
+        logical, intent(in) :: to_eigenbasis
         real(rp) :: rotated(size(vector))
 
         real(rp) :: full(n_ao, n_ao, n_particle), rotated_full(n_ao, n_ao, n_particle)
@@ -269,37 +232,17 @@ contains
 
         full = ref_unpack_asymm(vector, n_particle, n_ao)
         do i = 1, n_particle
-            rotated_full(:, :, i) = matmul(transpose(eigvecs(:, :, i)), &
-                                           matmul(full(:, :, i), eigvecs(:, :, i)))
+            if (to_eigenbasis) then
+                rotated_full(:, :, i) = matmul(transpose(eigvecs(:, :, i)), &
+                                               matmul(full(:, :, i), eigvecs(:, :, i)))
+            else
+                rotated_full(:, :, i) = matmul(eigvecs(:, :, i), matmul( &
+                    full(:, :, i), transpose(eigvecs(:, :, i))))
+            end if
         end do
-
         rotated = ref_pack_asymm(rotated_full, size(vector, kind=ip))
 
-    end function ref_rotate_to_eigenbasis_oao
-
-    function ref_rotate_from_eigenbasis_oao(vector, eigvecs, n_particle, n_ao) &
-        result(rotated)
-        !
-        ! this function independently rotates a packed antisymmetric vector out of a
-        ! given eigenbasis, one particle channel at a time, reproducing the
-        ! corresponding OAO routine so that tests of routines which rotate out of the
-        ! eigenbasis internally do not depend on it
-        !
-        real(rp), intent(in) :: vector(:), eigvecs(:, :, :)
-        integer(ip), intent(in) :: n_particle, n_ao
-        real(rp) :: rotated(size(vector))
-
-        real(rp) :: eigvecs_t(n_ao, n_ao, n_particle)
-        integer(ip) :: i
-
-        ! rotating out of an eigenbasis is rotating into the one spanned by the rows of
-        ! its eigenvectors
-        do i = 1, n_particle
-            eigvecs_t(:, :, i) = transpose(eigvecs(:, :, i))
-        end do
-        rotated = ref_rotate_to_eigenbasis_oao(vector, eigvecs_t, n_particle, n_ao)
-
-    end function ref_rotate_from_eigenbasis_oao
+    end function ref_rotate_eigenbasis_oao
 
     function ref_hess_eigval_pairs_oao(eigvals, n_particle, n_ao, n_param) &
         result(eigval_pairs)
@@ -328,42 +271,78 @@ contains
 
     end function ref_hess_eigval_pairs_oao
 
-    function ref_precond_eigenbasis_oao(residual, eigvecs, divisors, n_particle, n_ao) &
-        result(precond_residual)
+    function check_rotate_hess_eigenbasis_oao(to_eigenbasis) result(passed)
         !
-        ! this function independently applies a preconditioner which is diagonal in a
-        ! given eigenbasis to a packed antisymmetric residual, by rotating it into the
-        ! eigenbasis, dividing it by the given divisors and rotating it back
+        ! this function checks the rotation of a random packed antisymmetric vector
+        ! into or out of the eigenbasis of the static part of the Hessian for the OAO
+        ! basis
         !
-        real(rp), intent(in) :: residual(:), eigvecs(:, :, :), divisors(:)
-        integer(ip), intent(in) :: n_particle, n_ao
-        real(rp) :: precond_residual(size(residual))
+        use otr_oao, only: oao_type
+        use otr_oao_test_reference, only: n_param
+        use otr_common_test_reference, only: n_ao, n_particle
+        use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
-        precond_residual = ref_rotate_from_eigenbasis_oao( &
-            ref_rotate_to_eigenbasis_oao(residual, eigvecs, n_particle, n_ao) / &
-            divisors, eigvecs, n_particle, n_ao)
+        logical, intent(in) :: to_eigenbasis
+        logical :: passed
 
-    end function ref_precond_eigenbasis_oao
+        type(oao_type) :: oao
+        real(rp) :: eigvecs(n_ao, n_ao, n_particle), vector(n_param), rotated(n_param)
+        integer(ip) :: j
+        character(len=:), allocatable :: test_name
+
+        ! assume test passes
+        passed = .true.
+        test_name = trim(merge("test_rotate_to_hess_eigenbasis_oao  ", &
+                               "test_rotate_from_hess_eigenbasis_oao", to_eigenbasis))
+
+        ! generate random orthogonal eigenvectors for every particle channel
+        do j = 1, n_particle
+            eigvecs(:, :, j) = generate_random_orthogonal_matrix(n_ao)
+        end do
+        call random_number(vector)
+
+        ! set up the OAO object
+        oao%n_ao = n_ao
+        oao%n_particle = n_particle
+        oao%n_param = n_param
+        oao%hess_eigvecs = eigvecs
+
+        ! call routine and determine if the rotation matches
+        if (to_eigenbasis) then
+            rotated = oao%rotate_to_hess_eigenbasis(vector)
+        else
+            rotated = oao%rotate_from_hess_eigenbasis(vector)
+        end if
+        if (norm2(rotated - ref_rotate_eigenbasis_oao(vector, eigvecs, n_particle, &
+                                                      n_ao, to_eigenbasis)) > tol) then
+            write(stderr, *) test_name//" failed: Incorrect rotation."
+            passed = .false.
+        end if
+
+    end function check_rotate_hess_eigenbasis_oao
 
     logical(c_bool) function test_oao_factory_cs() bind(C)
         !
         ! this function tests the subroutine which returns the modified OAO orbital
         ! updating function for the closed-shell case
         !
-        use otr_common_unit_tests, only: identity_matrix, generate_random_density_matrix
         use otr_oao, only: oao_factory_cs, oao_object, oao_settings_type, &
-                           evaluate_dm_cs_type, obj_func_oao_callback_ptr, &
-                           update_orbs_oao_callback_ptr, precond_oao_callback_ptr
+                           obj_func_oao_callback_ptr, update_orbs_oao_callback_ptr, &
+                           precond_oao_callback_ptr
+        use otr_common, only: evaluate_dm_cs_type
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_ao, n_occ, operator(==)
+        use otr_common_test_reference, only: n_ao, n_occ
+        use otr_common_unit_tests, only: identity_matrix, &
+                                         generate_random_density_matrix, &
+                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
 
-        integer(ip), parameter :: n_particle = 1, n_param = n_ao * (n_ao - 1) / 2
+        integer(ip), parameter :: n_particle = 1
 
-        real(rp), target :: dm_ao(n_ao, n_ao), dm_ao_new(n_ao, n_ao)
+        real(rp), target :: dm_ao(n_ao, n_ao)
         real(rp) :: ao_overlap(n_ao, n_ao)
         integer(ip) :: error
-        type(oao_settings_type) :: settings, settings_new
+        type(oao_settings_type) :: settings
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
@@ -375,21 +354,16 @@ contains
         ! setup settings object
         call setup_settings(settings)
 
-        ! initialize density matrix and an orthonormal AO basis, so that the AO and the
-        ! OAO basis coincide
+        ! initialize density matrix and an orthonormal AO basis
         dm_ao = generate_random_density_matrix(n_ao, n_occ(1))
         ao_overlap = identity_matrix(n_ao)
 
         ! initialize callback function pointers
         evaluate_dm_funptr => mock_evaluate_dm_cs
 
-        ! leave an OAO object from an open-shell calculation with a different number of
-        ! AOs behind, which has to be set up anew
+        ! leave an OAO object from an open-shell calculation behind, whose density
+        ! matrix evaluating function has to be cleared
         allocate(oao_object)
-        oao_object%n_ao = n_ao + 1
-        oao_object%n_particle = n_particle
-        allocate(oao_object%s_inv_sqrt(n_ao + 1, n_ao + 1), oao_object%grad(1), &
-                 oao_object%h_diag(1))
         oao_object%evaluate_dm_os => mock_evaluate_dm_os
 
         ! call routine and determine if an error is produced
@@ -403,57 +377,27 @@ contains
             return
         end if
 
-        ! determine if OAO object is set up correctly
-        if (.not. allocated(oao_object)) then
-            write(stderr, *) "test_oao_factory_cs failed: OAO object not allocated."
+        ! determine if the OAO object points to the density matrix of the caller as its
+        ! only particle channel, the remaining common setup is covered by the test of
+        ! the common setup
+        if (.not. associated(oao_object%dm_ao)) then
+            write(stderr, *) "test_oao_factory_cs failed: Density matrix not "// &
+                "associated."
             test_oao_factory_cs = .false.
+            deallocate(oao_object)
             return
         end if
-        if (.not. (oao_object%settings == settings%orbital_settings_type)) then
-            write(stderr, *) "test_oao_factory_cs failed: Settings not stored "// &
-                "correctly."
+        if (any(shape(oao_object%dm_ao) /= [n_ao, n_ao, n_particle])) then
+            write(stderr, *) "test_oao_factory_cs failed: Density matrix not "// &
+                "associated as a single particle channel."
             test_oao_factory_cs = .false.
+            deallocate(oao_object)
+            return
         end if
-        if (oao_object%n_ao /= n_ao) then
-            write(stderr, *) "test_oao_factory_cs failed: Number of AOs not stored "// &
-                "correctly."
-            test_oao_factory_cs = .false.
-        end if
-        if (oao_object%n_particle /= n_particle) then
-            write(stderr, *) "test_oao_factory_cs failed: Number of particles not "// &
-                "stored correctly."
-            test_oao_factory_cs = .false.
-        end if
-        if (oao_object%n_param /= n_param) then
-            write(stderr, *) "test_oao_factory_cs failed: Number of parameters not "// &
-                "stored correctly."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. allocated(oao_object%grad)) then
-            write(stderr, *) "test_oao_factory_cs failed: Gradient not allocated."
-            test_oao_factory_cs = .false.
-        else if (size(oao_object%grad) /= n_param) then
-            write(stderr, *) "test_oao_factory_cs failed: Gradient not allocated "// &
-                "with the number of parameters."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. allocated(oao_object%h_diag)) then
-            write(stderr, *) "test_oao_factory_cs failed: Hessian diagonal not "// &
-                "allocated."
-            test_oao_factory_cs = .false.
-        else if (size(oao_object%h_diag) /= n_param) then
-            write(stderr, *) "test_oao_factory_cs failed: Hessian diagonal not "// &
-                "allocated with the number of parameters."
-            test_oao_factory_cs = .false.
-        end if
-        if (norm2(oao_object%dm_oao(:, :, 1) - dm_ao) > tol) then
-            write(stderr, *) "test_oao_factory_cs failed: Density matrix not set "// &
-                "up correctly."
-            test_oao_factory_cs = .false.
-        end if
-        if (norm2(oao_object%s_inv_sqrt - identity_matrix(n_ao)) > tol) then
-            write(stderr, *) "test_oao_factory_cs failed: Overlap matrix inverse "// &
-                "square root not set up correctly."
+        dm_ao(1, 1) = dm_ao(1, 1) + 1.0_rp
+        if (norm2(oao_object%dm_ao(:, :, 1) - dm_ao) > tol) then
+            write(stderr, *) "test_oao_factory_cs failed: Density matrix of the "// &
+                "caller not taken over."
             test_oao_factory_cs = .false.
         end if
         if (.not. associated(oao_object%evaluate_dm_cs, mock_evaluate_dm_cs)) then
@@ -478,109 +422,11 @@ contains
                 "updating function is wrong."
             test_oao_factory_cs = .false.
         end if
+
         ! determine if the OAO routines are wired into the solver settings
         if (.not. associated(solver_settings%precond, precond_oao_callback_ptr)) then
             write(stderr, *) "test_oao_factory_cs failed: OAO routines not wired "// &
                 "into solver settings."
-            test_oao_factory_cs = .false.
-        end if
-
-        ! leave quantities evaluated at the previous density behind, mark the overlap
-        ! matrix roots, leave only the gradient allocated and call routine again with
-        ! the same dimensions and new settings for a new starting density, and
-        ! determine if the overlap matrix roots are kept while the new settings and
-        ! density matrix are taken over, nothing evaluated before is kept and the
-        ! Hessian diagonal is allocated
-        dm_ao_new = generate_random_density_matrix(n_ao, n_occ(1))
-        settings_new = settings
-        settings_new%verbose = settings%verbose + 1
-        deallocate(oao_object%h_diag)
-        oao_object%s_inv_sqrt = 2.0_rp * identity_matrix(n_ao)
-        oao_object%evaluation_stale = .false.
-        oao_object%response_stale = .false.
-        oao_object%hess_eigen_stale = .false.
-        oao_object%get_response_cs => mock_get_response_cs
-        oao_object%get_response_os => mock_get_response_os
-        call oao_factory_cs(dm_ao_new, ao_overlap, n_particle, n_ao, &
-                            evaluate_dm_funptr, obj_func_oao_funptr, &
-                            update_orbs_oao_funptr, solver_settings, error, &
-                            settings_new)
-        if (error /= 0) then
-            write(stderr, *) "test_oao_factory_cs failed: Produced error for a new "// &
-                "starting density."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. (oao_object%settings == settings_new%orbital_settings_type)) then
-            write(stderr, *) "test_oao_factory_cs failed: New settings not taken "// &
-                "over for a new starting density."
-            test_oao_factory_cs = .false.
-        end if
-        if (norm2(oao_object%s_inv_sqrt - 2.0_rp * identity_matrix(n_ao)) > tol) then
-            write(stderr, *) "test_oao_factory_cs failed: Overlap matrix roots "// &
-                "recomputed for the same dimensions."
-            test_oao_factory_cs = .false.
-        end if
-        if (norm2(oao_object%dm_ao(:, :, 1) - dm_ao_new) > tol) then
-            write(stderr, *) "test_oao_factory_cs failed: New starting density "// &
-                "matrix not taken over."
-            test_oao_factory_cs = .false.
-        end if
-        if (norm2(oao_object%dm_oao(:, :, 1) - dm_ao_new) > tol) then
-            write(stderr, *) "test_oao_factory_cs failed: New starting density "// &
-                "matrix not transformed to the OAO basis."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. oao_object%evaluation_stale) then
-            write(stderr, *) "test_oao_factory_cs failed: Evaluation not marked "// &
-                "stale for a new starting density."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. oao_object%response_stale) then
-            write(stderr, *) "test_oao_factory_cs failed: Response not marked "// &
-                "stale for a new starting density."
-            test_oao_factory_cs = .false.
-        end if
-        if (associated(oao_object%get_response_cs) .or. &
-            associated(oao_object%get_response_os)) then
-            write(stderr, *) "test_oao_factory_cs failed: Response function kept "// &
-                "for a new starting density."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. oao_object%hess_eigen_stale) then
-            write(stderr, *) "test_oao_factory_cs failed: Eigendecomposition not "// &
-                "marked stale for a new starting density."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. allocated(oao_object%h_diag)) then
-            write(stderr, *) "test_oao_factory_cs failed: Hessian diagonal not "// &
-                "allocated when only the gradient was allocated."
-            test_oao_factory_cs = .false.
-        else if (size(oao_object%h_diag) /= n_param) then
-            write(stderr, *) "test_oao_factory_cs failed: Hessian diagonal not "// &
-                "allocated with the number of parameters when only the gradient "// &
-                "was allocated."
-            test_oao_factory_cs = .false.
-        end if
-
-        ! leave an OAO object behind whose previous setup failed before the square
-        ! roots of the overlap matrix were computed and call routine again, and
-        ! determine if the object is set up anew although the dimensions match
-        deallocate(oao_object%s_inv_sqrt)
-        call oao_factory_cs(dm_ao_new, ao_overlap, n_particle, n_ao, &
-                            evaluate_dm_funptr, obj_func_oao_funptr, &
-                            update_orbs_oao_funptr, solver_settings, error, settings)
-        if (error /= 0) then
-            write(stderr, *) "test_oao_factory_cs failed: Produced error for an "// &
-                "object whose previous setup failed."
-            test_oao_factory_cs = .false.
-        end if
-        if (.not. allocated(oao_object%s_inv_sqrt)) then
-            write(stderr, *) "test_oao_factory_cs failed: Overlap matrix roots not "// &
-                "computed for an object whose previous setup failed."
-            test_oao_factory_cs = .false.
-        else if (norm2(oao_object%s_inv_sqrt - identity_matrix(n_ao)) > tol) then
-            write(stderr, *) "test_oao_factory_cs failed: Incorrect overlap matrix "// &
-                "roots for an object whose previous setup failed."
             test_oao_factory_cs = .false.
         end if
         deallocate(oao_object)
@@ -592,13 +438,16 @@ contains
         ! this function tests the subroutine which returns the modified OAO orbital
         ! updating function for the open-shell case
         !
-        use otr_common_unit_tests, only: identity_matrix, generate_random_density_matrix
         use otr_oao, only: oao_factory_os, oao_object, oao_settings_type, &
-                           evaluate_dm_os_type, obj_func_oao_callback_ptr, &
-                           update_orbs_oao_callback_ptr, precond_oao_callback_ptr
+                           obj_func_oao_callback_ptr, update_orbs_oao_callback_ptr, &
+                           precond_oao_callback_ptr
+        use otr_common, only: evaluate_dm_os_type
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
+        use otr_common_unit_tests, only: identity_matrix, &
+                                         generate_random_density_matrix, &
+                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
@@ -615,8 +464,7 @@ contains
         ! setup settings object
         call setup_settings(settings)
 
-        ! initialize density matrices and an orthonormal AO basis, so that the AO and
-        ! the OAO basis coincide
+        ! initialize density matrices and an orthonormal AO basis
         do i = 1, n_particle
             dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
         end do
@@ -625,15 +473,9 @@ contains
         ! initialize callback function pointers
         evaluate_dm_funptr => mock_evaluate_dm_os
 
-        ! leave a closed-shell OAO object with the same number of AOs behind, which has
-        ! to be set up anew, with square roots of the overlap matrix so that reusing it
-        ! instead does not access unallocated arrays
+        ! leave an OAO object from a closed-shell calculation behind, whose density
+        ! matrix evaluating function has to be cleared
         allocate(oao_object)
-        oao_object%n_ao = n_ao
-        oao_object%n_particle = 1
-        oao_object%s_sqrt = identity_matrix(n_ao)
-        oao_object%s_inv_sqrt = identity_matrix(n_ao)
-        allocate(oao_object%fock_oo(n_ao, n_ao, 1))
         oao_object%evaluate_dm_cs => mock_evaluate_dm_cs
 
         ! call routine and determine if an error is produced
@@ -647,21 +489,11 @@ contains
             return
         end if
 
-        ! determine if the OAO object is set up anew for the open-shell case, the
-        ! remaining common setup is covered by the closed-shell test
-        if (oao_object%n_particle /= n_particle) then
-            write(stderr, *) "test_oao_factory_os failed: Number of particles not "// &
-                "stored correctly."
-            test_oao_factory_os = .false.
-        end if
-        if (size(oao_object%fock_oo, 3) /= n_particle) then
-            write(stderr, *) "test_oao_factory_os failed: Fock matrix blocks not "// &
-                "allocated for every particle channel."
-            test_oao_factory_os = .false.
-        end if
-        if (norm2(oao_object%dm_oao - dm_ao) > tol) then
-            write(stderr, *) "test_oao_factory_os failed: Density matrices not set "// &
-                "up correctly."
+        ! determine if the OAO object points to the density matrix of the caller, the
+        ! remaining common setup is covered by the test of the common setup
+        if (.not. associated(oao_object%dm_ao, dm_ao)) then
+            write(stderr, *) "test_oao_factory_os failed: Density matrix of the "// &
+                "caller not taken over."
             test_oao_factory_os = .false.
         end if
         if (.not. associated(oao_object%evaluate_dm_os, mock_evaluate_dm_os)) then
@@ -686,6 +518,7 @@ contains
                 "updating function is wrong."
             test_oao_factory_os = .false.
         end if
+
         ! determine if the OAO routines are wired into the solver settings
         if (.not. associated(solver_settings%precond, precond_oao_callback_ptr)) then
             write(stderr, *) "test_oao_factory_os failed: OAO routines not wired "// &
@@ -695,6 +528,270 @@ contains
         deallocate(oao_object)
 
     end function test_oao_factory_os
+
+    logical(c_bool) function test_oao_factory_common() bind(C)
+        !
+        ! this function tests the subroutine which performs the common OAO
+        ! initialization operations, which sets the OAO object up anew unless it was
+        ! already set up for the same dimensions, for the closed- and the open-shell
+        ! case
+        !
+        use otr_common, only: orbital_settings_type
+        use otr_oao, only: oao_factory_common, oao_object
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, operator(==)
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_common_unit_tests, only: generate_random_density_matrix, shell_names, &
+                                         mock_get_response_cs, mock_get_response_os, &
+                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
+
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle_ref), &
+                            dm_ao_new(n_ao, n_ao, n_particle_ref)
+        real(rp) :: ao_overlap(n_ao, n_ao), overlap_diag(n_ao), s_sqrt(n_ao, n_ao), &
+                    s_inv_sqrt(n_ao, n_ao)
+        integer(ip) :: n_particle, n_ao_old, i, error
+        type(orbital_settings_type) :: settings
+        character(len=:), allocatable :: shell
+
+        ! assume tests pass
+        test_oao_factory_common = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! initialize a random diagonal AO overlap matrix, whose square roots are
+        ! diagonal with the square roots of its elements, so that the density matrix in
+        ! the OAO basis differs from the one in the AO basis
+        call random_number(overlap_diag)
+        overlap_diag = 0.5_rp + overlap_diag
+        ao_overlap = 0.0_rp
+        s_sqrt = 0.0_rp
+        s_inv_sqrt = 0.0_rp
+        do i = 1, n_ao
+            ao_overlap(i, i) = overlap_diag(i)
+            s_sqrt(i, i) = sqrt(overlap_diag(i))
+            s_inv_sqrt(i, i) = 1.0_rp / sqrt(overlap_diag(i))
+        end do
+
+        do n_particle = 1, n_particle_ref
+            shell = trim(shell_names(n_particle))
+
+            ! initialize random density matrices
+            do i = 1, n_particle_ref
+                dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
+                dm_ao_new(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
+            end do
+
+            ! leave an OAO object from a calculation with a different number of AOs
+            ! (closed shell) or with a different number of particle channels for the
+            ! same number of AOs (open shell) behind and determine if it is set up anew
+            n_ao_old = merge(n_ao + 1, n_ao, n_particle == 1)
+            allocate(oao_object)
+            oao_object%n_ao = n_ao_old
+            oao_object%n_particle = 3 - n_particle
+            allocate(oao_object%s_sqrt(n_ao_old, n_ao_old), &
+                     oao_object%s_inv_sqrt(n_ao_old, n_ao_old), &
+                     oao_object%fock_oo(n_ao_old, n_ao_old, 3 - n_particle), &
+                     oao_object%grad(1), oao_object%h_diag(1))
+            oao_object%s_sqrt = 0.0_rp
+            oao_object%s_inv_sqrt = 0.0_rp
+            call oao_factory_common(dm_ao(:, :, :n_particle), ao_overlap, n_particle, &
+                                    n_ao, error, settings)
+            if (error /= 0) then
+                write(stderr, *) "test_oao_factory_common failed: Produced error "// &
+                    "for the "//shell//" object left from another calculation."
+                test_oao_factory_common = .false.
+            end if
+            if (.not. check_oao_object(dm_ao(:, :, :n_particle), s_sqrt, shell// &
+                                       " object left from another calculation")) &
+                test_oao_factory_common = .false.
+            if (norm2(oao_object%s_inv_sqrt - s_inv_sqrt) > tol) then
+                write(stderr, *) "test_oao_factory_common failed: Inverse square "// &
+                    "root of the overlap matrix not computed for the "//shell// &
+                    " object left from another calculation."
+                test_oao_factory_common = .false.
+            end if
+
+            ! leave evaluated quantities with their response functions, the density
+            ! matrix evaluating function, marked square roots of the overlap matrix and
+            ! only the gradient allocated behind and call routine again with new
+            ! settings and a new starting density, and determine if the object is kept
+            ! while the new settings and density are taken over, its evaluated state is
+            ! discarded, the density matrix evaluating function, which only the
+            ! factories set, is kept and the Hessian diagonal is allocated
+            oao_object%evaluation_stale = .false.
+            oao_object%response_stale = .false.
+            oao_object%hess_eigen_stale = .false.
+            oao_object%get_response_cs => mock_get_response_cs
+            oao_object%get_response_os => mock_get_response_os
+            if (n_particle == 1) then
+                oao_object%evaluate_dm_cs => mock_evaluate_dm_cs
+            else
+                oao_object%evaluate_dm_os => mock_evaluate_dm_os
+            end if
+            oao_object%s_sqrt = 2.0_rp * s_sqrt
+            oao_object%s_inv_sqrt = 0.5_rp * s_inv_sqrt
+            deallocate(oao_object%h_diag)
+            settings%verbose = settings%verbose + 1
+            call oao_factory_common(dm_ao_new(:, :, :n_particle), ao_overlap, &
+                                    n_particle, n_ao, error, settings)
+            if (error /= 0) then
+                write(stderr, *) "test_oao_factory_common failed: Produced error "// &
+                    "for the reused "//shell//" object."
+                test_oao_factory_common = .false.
+            end if
+            if (.not. check_oao_object(dm_ao_new(:, :, :n_particle), 2.0_rp * s_sqrt, &
+                                       "reused "//shell//" object")) &
+                test_oao_factory_common = .false.
+            if (norm2(oao_object%s_inv_sqrt - 0.5_rp * s_inv_sqrt) > tol) then
+                write(stderr, *) "test_oao_factory_common failed: Square roots of "// &
+                    "the overlap matrix recomputed for the reused "//shell//" object."
+                test_oao_factory_common = .false.
+            end if
+            if (.not. (associated(oao_object%evaluate_dm_cs, mock_evaluate_dm_cs) .or. &
+                       associated(oao_object%evaluate_dm_os, mock_evaluate_dm_os))) then
+                write(stderr, *) "test_oao_factory_common failed: Density matrix "// &
+                    "evaluating function not kept for the reused "//shell//" object."
+                test_oao_factory_common = .false.
+            end if
+
+            ! leave an OAO object behind whose previous setup failed before the square
+            ! roots of the overlap matrix were computed and determine if it is set up
+            ! anew although the dimensions match
+            deallocate(oao_object%s_inv_sqrt)
+            call oao_factory_common(dm_ao(:, :, :n_particle), ao_overlap, n_particle, &
+                                    n_ao, error, settings)
+            if (error /= 0) then
+                write(stderr, *) "test_oao_factory_common failed: Produced error "// &
+                    "for the "//shell//" object whose previous setup failed."
+                test_oao_factory_common = .false.
+            end if
+            if (.not. check_oao_object(dm_ao(:, :, :n_particle), s_sqrt, &
+                                       shell//" object whose previous setup failed")) &
+                test_oao_factory_common = .false.
+            if (.not. allocated(oao_object%s_inv_sqrt)) then
+                write(stderr, *) "test_oao_factory_common failed: Inverse square "// &
+                    "root of the overlap matrix not computed for the "//shell// &
+                    " object whose previous setup failed."
+                test_oao_factory_common = .false.
+            else if (norm2(oao_object%s_inv_sqrt - s_inv_sqrt) > tol) then
+                write(stderr, *) "test_oao_factory_common failed: Incorrect "// &
+                    "inverse square root of the overlap matrix for the "//shell// &
+                    " object whose previous setup failed."
+                test_oao_factory_common = .false.
+            end if
+
+            ! call routine for an invalid number of particle channels and determine if
+            ! the sanity check rejects it before the object is changed
+            oao_object%hess_eigen_stale = .false.
+            call oao_factory_common(dm_ao(:, :, :n_particle), ao_overlap, 3_ip, n_ao, &
+                                    error, settings)
+            if (error == 0) then
+                write(stderr, *) "test_oao_factory_common failed: Error not thrown "// &
+                    "for an invalid number of particle channels for the "//shell// &
+                    " object."
+                test_oao_factory_common = .false.
+            end if
+            if (oao_object%hess_eigen_stale) then
+                write(stderr, *) "test_oao_factory_common failed: OAO object "// &
+                    "changed for an invalid number of particle channels for the "// &
+                    shell//" object."
+                test_oao_factory_common = .false.
+            end if
+
+            ! deallocate OAO object
+            deallocate(oao_object)
+        end do
+
+    contains
+
+        function check_oao_object(caller_dm_ao, expected_s_sqrt, case_name) &
+            result(passed)
+            !
+            ! this function checks if the OAO object is set up for the given density
+            ! matrix of the caller and the number of AOs and particle channels of the
+            ! current shell, with the density matrix transformed to the OAO basis with
+            ! the given square root of the overlap matrix, the evaluated state with its
+            ! response functions discarded and the settings stored
+            !
+            real(rp), intent(in), target :: caller_dm_ao(:, :, :)
+            real(rp), intent(in) :: expected_s_sqrt(:, :)
+            character(len=*), intent(in) :: case_name
+            logical :: passed
+
+            integer(ip) :: n_param, k
+
+            ! assume test passes
+            passed = .true.
+
+            ! the checks below compare arrays of these dimensions
+            n_param = n_particle * n_ao * (n_ao - 1) / 2
+            if (any([oao_object%n_ao, oao_object%n_particle, oao_object%n_param] /= &
+                    [n_ao, n_particle, n_param])) then
+                write(stderr, *) "test_oao_factory_common failed: Incorrect "// &
+                    "dimensions for the "//case_name//"."
+                passed = .false.
+                return
+            end if
+
+            ! determine if the density matrix of the caller, its transformation to the
+            ! OAO basis, the Fock matrix blocks, the gradient and Hessian diagonal, the
+            ! discarded evaluated state and the settings are set up
+            if (.not. associated(oao_object%dm_ao, caller_dm_ao)) then
+                write(stderr, *) "test_oao_factory_common failed: Density matrix "// &
+                    "of the caller not taken over for the "//case_name//"."
+                passed = .false.
+            end if
+            do k = 1, n_particle
+                if (norm2(oao_object%dm_oao(:, :, k) - matmul(expected_s_sqrt, matmul( &
+                    caller_dm_ao(:, :, k), expected_s_sqrt))) > tol) then
+                    write(stderr, *) "test_oao_factory_common failed: Density "// &
+                        "matrix not transformed to the OAO basis for the "// &
+                        case_name//"."
+                    passed = .false.
+                end if
+            end do
+            if (any([size(oao_object%fock_oo, 3), size(oao_object%fock_vv, 3)] /= &
+                    n_particle)) then
+                write(stderr, *) "test_oao_factory_common failed: Fock matrix "// &
+                    "blocks not allocated for every particle channel for the "// &
+                    case_name//"."
+                passed = .false.
+            end if
+            if (.not. (allocated(oao_object%grad) .and. allocated(oao_object%h_diag))) &
+                then
+                write(stderr, *) "test_oao_factory_common failed: Gradient or "// &
+                    "Hessian diagonal not allocated for the "//case_name//"."
+                passed = .false.
+            else if (any([size(oao_object%grad), size(oao_object%h_diag)] /= n_param)) &
+                then
+                write(stderr, *) "test_oao_factory_common failed: Gradient or "// &
+                    "Hessian diagonal not allocated with the number of parameters "// &
+                    "for the "//case_name//"."
+                passed = .false.
+            end if
+            if (.not. (oao_object%evaluation_stale .and. &
+                       oao_object%response_stale .and. oao_object%hess_eigen_stale)) &
+                then
+                write(stderr, *) "test_oao_factory_common failed: Evaluated state "// &
+                    "not discarded for the "//case_name//"."
+                passed = .false.
+            end if
+            if (associated(oao_object%get_response_cs) .or. &
+                associated(oao_object%get_response_os)) then
+                write(stderr, *) "test_oao_factory_common failed: Response "// &
+                    "function kept for the "//case_name//"."
+                passed = .false.
+            end if
+            if (.not. (oao_object%settings == settings)) then
+                write(stderr, *) "test_oao_factory_common failed: Settings not "// &
+                    "stored for the "//case_name//"."
+                passed = .false.
+            end if
+
+        end function check_oao_object
+
+    end function test_oao_factory_common
 
     logical(c_bool) function test_oao_sanity_check() bind(C)
         !
@@ -825,7 +922,8 @@ contains
         !
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
-            generate_random_symm_matrix, mock_requests, shell_names
+            generate_random_symm_matrix, mock_requests, shell_names, &
+            mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: obj_func_oao_callback, oao_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_param
@@ -956,7 +1054,10 @@ contains
         !
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
-            generate_random_symm_matrix, mock_fock_factor, mock_requests, shell_names
+            generate_random_symm_matrix, mock_fock_factor, mock_requests, shell_names, &
+            mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_cs, &
+            mock_evaluate_dm_os, mock_evaluate_dm_failing_cs, &
+            mock_evaluate_dm_failing_os
         use otr_oao, only: update_orbs_oao_callback, oao_object, hess_x_oao_callback_ptr
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: setup_settings
@@ -1188,50 +1289,6 @@ contains
 
     contains
 
-        subroutine mock_evaluate_dm_failing_cs(dm, energy_out, fock_out, &
-                                               get_response_funptr_out, error_out)
-            !
-            ! this subroutine is a mock density matrix evaluating function for the
-            ! closed-shell case, which fails
-            !
-            use otr_oao, only: get_response_cs_type
-
-            real(rp), intent(in), target, contiguous :: dm(:, :)
-            real(rp), intent(out) :: energy_out
-            real(rp), intent(out), optional, target, contiguous :: fock_out(:, :)
-            procedure(get_response_cs_type), intent(out), optional, pointer :: &
-                get_response_funptr_out
-            integer(ip), intent(out) :: error_out
-
-            error_out = 1
-            energy_out = sum(dm)
-            if (present(fock_out)) fock_out = 0.0_rp
-            if (present(get_response_funptr_out)) get_response_funptr_out => null()
-
-        end subroutine mock_evaluate_dm_failing_cs
-
-        subroutine mock_evaluate_dm_failing_os(dm, energy_out, fock_out, &
-                                               get_response_funptr_out, error_out)
-            !
-            ! this subroutine is a mock density matrix evaluating function for the
-            ! open-shell case, which fails
-            !
-            use otr_oao, only: get_response_os_type
-
-            real(rp), intent(in), target :: dm(:, :, :)
-            real(rp), intent(out) :: energy_out
-            real(rp), intent(out), optional, target :: fock_out(:, :, :)
-            procedure(get_response_os_type), intent(out), optional, pointer :: &
-                get_response_funptr_out
-            integer(ip), intent(out) :: error_out
-
-            error_out = 1
-            energy_out = sum(dm)
-            if (present(fock_out)) fock_out = 0.0_rp
-            if (present(get_response_funptr_out)) get_response_funptr_out => null()
-
-        end subroutine mock_evaluate_dm_failing_os
-
         function check_update_orbs_oao_stage(n_calls, stage) result(passed)
             !
             ! this function calls the OAO orbital updating function at the current
@@ -1273,13 +1330,11 @@ contains
         !
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
-            generate_random_symm_matrix, mock_requests, shell_names
+            generate_random_symm_matrix, mock_requests, mock_response_factor, &
+            shell_names, mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_os
         use otr_oao, only: hess_x_oao_callback, oao_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
-
-        ! multiplier the mock response function applies to the density matrix response
-        real(rp), parameter :: mock_response_factor = 2.0_rp
 
         integer(ip) :: n_particle, n_param
         real(rp), target :: dm_oao(n_ao, n_ao, n_particle_ref)
@@ -1341,9 +1396,9 @@ contains
                     s_inv_sqrt, matmul(mock_response_factor * matmul( &
                         s_inv_sqrt, matmul(delta_dm(:, :, i), s_inv_sqrt)), s_inv_sqrt))
             end do
-            expected_hess_x = ref_hess_x(x_full, response, dm_oao(:, :, :n_particle), &
-                                         fock_oo(:, :, :n_particle), &
-                                         fock_vv(:, :, :n_particle), n_param)
+            expected_hess_x = ref_hess_x_oao( &
+                x_full, response, dm_oao(:, :, :n_particle), &
+                fock_oo(:, :, :n_particle), fock_vv(:, :, :n_particle), n_param)
 
             ! call routine and determine if values of resulting Hessian linear
             ! transformation match
@@ -1379,6 +1434,17 @@ contains
         if (size(mock_requests) /= 1) then
             write(stderr, *) "test_hess_x_oao_callback failed: Stale response was "// &
                 "not refreshed."
+            test_hess_x_oao_callback = .false.
+        end if
+        if (any(mock_requests /= 2)) then
+            write(stderr, *) "test_hess_x_oao_callback failed: Incorrect outputs "// &
+                "requested from density matrix evaluating function while "// &
+                "refreshing a stale response."
+            test_hess_x_oao_callback = .false.
+        end if
+        if (oao_object%response_stale) then
+            write(stderr, *) "test_hess_x_oao_callback failed: Response still "// &
+                "marked stale after being refreshed."
             test_hess_x_oao_callback = .false.
         end if
         if (norm2(hess_x - expected_hess_x) > tol) then
@@ -1460,63 +1526,34 @@ contains
 
     logical(c_bool) function test_precond_oao_callback() bind(C)
         !
-        ! this function tests the subroutine that defines a level-shifted
-        ! preconditioner based on the exact eigendecomposition of the static part of
-        ! the Hessian
+        ! this function tests the subroutine which defines a level-shifted
+        ! preconditioner of the OAO basis, which applies the one of the orbital basis
+        ! to the OAO object
         !
-        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
         use otr_oao, only: precond_oao_callback, oao_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use opentrustregion, only: precond_floor
-        use otr_oao_test_reference, only: n_param
-        use otr_common_test_reference, only: n_ao, n_particle
 
-        real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
-                    eigvecs(n_ao, n_ao, n_particle), eigvals(n_ao, n_particle), &
-                    divisors(n_param), residual(n_param), precond_residual(n_param), &
-                    expected(n_param), mu
-        integer(ip) :: j, error
+        real(rp), parameter :: mu = 0.3_rp
+
+        real(rp), allocatable :: residual(:), precond_residual(:)
+        integer(ip) :: error
 
         ! assume tests pass
         test_precond_oao_callback = .true.
 
-        ! generate random Fock matrix contributions, ensuring a non-diagonal static
-        ! part, and a residual vector and level shift
-        do j = 1, n_particle
-            fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
-            fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
-        end do
+        ! set up the OAO object with an eigendecomposition whose eigenvalue pairs, the
+        ! open-shell sums 2 (e_i + e_j), shifted by the level shift are all 2, so that
+        ! the preconditioner of the orbital basis halves the residual
+        call setup_identity_oao_eigenbasis((2.0_rp + mu) / 4.0_rp)
+        allocate(residual(oao_object%n_param), precond_residual(oao_object%n_param))
         call random_number(residual)
-        mu = 0.3_rp
 
-        ! set up the OAO object with an eigendecomposition left from an earlier static
-        ! part, which is marked stale by default
-        allocate(oao_object)
-        call setup_settings(oao_object%settings)
-        oao_object%n_ao = n_ao
-        oao_object%n_particle = n_particle
-        oao_object%n_param = n_param
-        oao_object%fock_oo = fock_oo
-        oao_object%fock_vv = fock_vv
-        oao_object%hess_eigvecs = spread(identity_matrix(n_ao), 3, n_particle)
-        allocate(oao_object%hess_eigvals(n_ao, n_particle), source=1.0_rp)
-
-        ! independently diagonalize the static part and construct the expected
-        ! preconditioned residual
-        call ref_diagonalize_static_part(fock_oo, fock_vv, eigvecs, eigvals)
-        divisors = ref_hess_eigval_pairs_oao(eigvals, n_particle, n_ao, n_param) - mu
-        where (abs(divisors) < precond_floor) divisors = precond_floor
-        expected = &
-            ref_precond_eigenbasis_oao(residual, eigvecs, divisors, n_particle, n_ao)
-
-        ! call routine and determine if values of the preconditioned residual match,
-        ! which requires the eigendecomposition to be refreshed
+        ! call routine and determine if the residual is halved
         call precond_oao_callback(residual, mu, precond_residual, error)
         if (error /= 0) then
             write(stderr, *) "test_precond_oao_callback failed: Produced error."
             test_precond_oao_callback = .false.
         end if
-        if (norm2(precond_residual - expected) > tol) then
+        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
             write(stderr, *) "test_precond_oao_callback failed: Incorrect "// &
                 "preconditioned residual."
             test_precond_oao_callback = .false.
@@ -1529,63 +1566,32 @@ contains
 
     logical(c_bool) function test_precond_pd_oao_callback() bind(C)
         !
-        ! this function tests the subroutine that defines the positive-definite
-        ! preconditioner based on the exact eigendecomposition of the static part of
-        ! the Hessian
+        ! this function tests the subroutine which defines the positive-definite
+        ! preconditioner of the OAO basis, which applies the one of the orbital basis
+        ! to the OAO object
         !
-        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
         use otr_oao, only: precond_pd_oao_callback, oao_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use opentrustregion, only: precond_floor, precond_rel_floor_factor
-        use otr_oao_test_reference, only: n_param
-        use otr_common_test_reference, only: n_ao, n_particle
 
-        real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
-                    eigvecs(n_ao, n_ao, n_particle), eigvals(n_ao, n_particle), &
-                    divisors(n_param), residual(n_param), precond_residual(n_param), &
-                    expected(n_param), floor_val
-        integer(ip) :: j, error
+        real(rp), allocatable :: residual(:), precond_residual(:)
+        integer(ip) :: error
 
         ! assume tests pass
         test_precond_pd_oao_callback = .true.
 
-        ! generate random Fock matrix contributions, ensuring a non-diagonal static
-        ! part, and a residual vector
-        do j = 1, n_particle
-            fock_oo(:, :, j) = generate_random_symm_matrix(n_ao)
-            fock_vv(:, :, j) = generate_random_symm_matrix(n_ao)
-        end do
+        ! set up the OAO object with an eigendecomposition whose eigenvalue pairs, the
+        ! open-shell sums 2 (e_i + e_j), are all 2, so that the preconditioner of the
+        ! orbital basis halves the residual
+        call setup_identity_oao_eigenbasis(0.5_rp)
+        allocate(residual(oao_object%n_param), precond_residual(oao_object%n_param))
         call random_number(residual)
 
-        ! set up the OAO object with an eigendecomposition left from an earlier static
-        ! part, which is marked stale by default
-        allocate(oao_object)
-        call setup_settings(oao_object%settings)
-        oao_object%n_ao = n_ao
-        oao_object%n_particle = n_particle
-        oao_object%n_param = n_param
-        oao_object%fock_oo = fock_oo
-        oao_object%fock_vv = fock_vv
-        oao_object%hess_eigvecs = spread(identity_matrix(n_ao), 3, n_particle)
-        allocate(oao_object%hess_eigvals(n_ao, n_particle), source=1.0_rp)
-
-        ! independently diagonalize the static part and construct the expected
-        ! preconditioned residual
-        call ref_diagonalize_static_part(fock_oo, fock_vv, eigvecs, eigvals)
-        divisors = abs(ref_hess_eigval_pairs_oao(eigvals, n_particle, n_ao, n_param))
-        floor_val = max(precond_rel_floor_factor * maxval(divisors), precond_floor)
-        where (divisors < floor_val) divisors = floor_val
-        expected = &
-            ref_precond_eigenbasis_oao(residual, eigvecs, divisors, n_particle, n_ao)
-
-        ! call routine and determine if values of the preconditioned residual match,
-        ! which requires the eigendecomposition to be refreshed
+        ! call routine and determine if the residual is halved
         call precond_pd_oao_callback(residual, precond_residual, error)
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_oao_callback failed: Produced error."
             test_precond_pd_oao_callback = .false.
         end if
-        if (norm2(precond_residual - expected) > tol) then
+        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
             write(stderr, *) "test_precond_pd_oao_callback failed: Incorrect "// &
                 "preconditioned residual."
             test_precond_pd_oao_callback = .false.
@@ -1713,93 +1719,6 @@ contains
         end if
 
     end function test_oao_deconstructor
-
-    logical(c_bool) function test_refresh_oao_response() bind(C)
-        !
-        ! this function tests the subroutine which rebuilds the OAO response callbacks
-        ! at the currently stored density matrix
-        !
-        use otr_oao, only: refresh_oao_response, oao_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ
-        use otr_common_unit_tests, only: generate_random_density_matrix, &
-                                         mock_requests, shell_names
-
-        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
-        integer(ip) :: i, i_shell, error
-        logical :: response_set
-        character(len=:), allocatable :: case_name
-
-        ! assume tests pass
-        test_refresh_oao_response = .true.
-
-        ! set up the OAO object with a density matrix
-        allocate(oao_object)
-        call setup_settings(oao_object%settings)
-        oao_object%n_ao = n_ao
-        oao_object%n_particle = n_particle
-        do i = 1, n_particle
-            dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
-        end do
-        oao_object%dm_ao => dm_ao
-
-        ! loop over the closed-shell and the open-shell case
-        do i_shell = 1, 2
-            case_name = trim(shell_names(i_shell))
-
-            ! set the mock density matrix evaluating function and mark the response as
-            ! stale as ARH would after moving the density on its own
-            if (i_shell == 1) then
-                oao_object%evaluate_dm_cs => mock_evaluate_dm_cs
-            else
-                oao_object%evaluate_dm_cs => null()
-                oao_object%evaluate_dm_os => mock_evaluate_dm_os
-            end if
-            oao_object%response_stale = .true.
-            mock_requests = [integer(ip) :: ]
-
-            ! call routine and determine if the density matrix evaluating function was
-            ! called to rebuild only the response and if the flag was cleared
-            call refresh_oao_response(error)
-            if (error /= 0) then
-                write(stderr, *) "test_refresh_oao_response failed: Produced error "// &
-                    "for the "//case_name//" case."
-                test_refresh_oao_response = .false.
-            end if
-            if (size(mock_requests) /= 1) then
-                write(stderr, *) "test_refresh_oao_response failed: Density matrix "// &
-                    "evaluating function was not called for the "//case_name//" case."
-                test_refresh_oao_response = .false.
-            end if
-            if (any(mock_requests /= 2)) then
-                write(stderr, *) "test_refresh_oao_response failed: Incorrect "// &
-                    "outputs requested from density matrix evaluating function for "// &
-                    "the "//case_name//" case."
-                test_refresh_oao_response = .false.
-            end if
-            if (i_shell == 1) then
-                response_set = &
-                    associated(oao_object%get_response_cs, mock_get_response_cs)
-            else
-                response_set = &
-                    associated(oao_object%get_response_os, mock_get_response_os)
-            end if
-            if (.not. response_set) then
-                write(stderr, *) "test_refresh_oao_response failed: Response "// &
-                    "function not updated for the "//case_name//" case."
-                test_refresh_oao_response = .false.
-            end if
-            if (oao_object%response_stale) then
-                write(stderr, *) "test_refresh_oao_response failed: Response still "// &
-                    "marked stale after being refreshed for the "//case_name//" case."
-                test_refresh_oao_response = .false.
-            end if
-        end do
-
-        ! deallocate OAO object
-        deallocate(oao_object)
-
-    end function test_refresh_oao_response
 
     logical(c_bool) function test_rotate_orbitals_oao() bind(C)
         !
@@ -2062,87 +1981,19 @@ contains
 
     logical(c_bool) function test_rotate_to_hess_eigenbasis_oao() bind(C)
         !
-        ! this function tests the function that rotates a packed antisymmetric vector
-        ! into the eigenbasis of the cached static Hessian part
+        ! this function tests the function which rotates a packed antisymmetric vector
+        ! into the eigenbasis of the static part of the Hessian for the OAO basis
         !
-        use otr_oao, only: oao_type
-        use otr_oao_test_reference, only: n_param
-        use otr_common_test_reference, only: n_ao, n_particle
-        use otr_common_unit_tests, only: generate_random_orthogonal_matrix
-
-        type(oao_type) :: oao
-        real(rp) :: eigvecs(n_ao, n_ao, n_particle), vector(n_param), &
-                    expected(n_param), rotated(n_param)
-        integer(ip) :: j
-
-        ! assume tests pass
-        test_rotate_to_hess_eigenbasis_oao = .true.
-
-        ! generate random orthogonal eigenvectors for every particle channel
-        do j = 1, n_particle
-            eigvecs(:, :, j) = generate_random_orthogonal_matrix(n_ao)
-        end do
-        call random_number(vector)
-
-        ! set up the OAO object
-        oao%n_ao = n_ao
-        oao%n_particle = n_particle
-        oao%n_param = n_param
-        oao%hess_eigvecs = eigvecs
-
-        ! independently construct the expected rotated vector
-        expected = ref_rotate_to_eigenbasis_oao(vector, eigvecs, n_particle, n_ao)
-
-        ! call routine and determine if values match
-        rotated = oao%rotate_to_hess_eigenbasis(vector)
-        if (norm2(rotated - expected) > tol) then
-            write(stderr, *) "test_rotate_to_hess_eigenbasis_oao failed: Incorrect "// &
-                "vector when rotating into the eigenbasis."
-            test_rotate_to_hess_eigenbasis_oao = .false.
-        end if
+        test_rotate_to_hess_eigenbasis_oao = check_rotate_hess_eigenbasis_oao(.true.)
 
     end function test_rotate_to_hess_eigenbasis_oao
 
     logical(c_bool) function test_rotate_from_hess_eigenbasis_oao() bind(C)
         !
-        ! this function tests the function that rotates a packed antisymmetric vector
-        ! out of the eigenbasis of the cached static Hessian part
+        ! this function tests the function which rotates a packed antisymmetric vector
+        ! out of the eigenbasis of the static part of the Hessian for the OAO basis
         !
-        use otr_oao, only: oao_type
-        use otr_oao_test_reference, only: n_param
-        use otr_common_test_reference, only: n_ao, n_particle
-        use otr_common_unit_tests, only: generate_random_orthogonal_matrix
-
-        type(oao_type) :: oao
-        real(rp) :: eigvecs(n_ao, n_ao, n_particle), vector(n_param), &
-                    expected(n_param), rotated(n_param)
-        integer(ip) :: j
-
-        ! assume tests pass
-        test_rotate_from_hess_eigenbasis_oao = .true.
-
-        ! generate random orthogonal eigenvectors for every particle channel
-        do j = 1, n_particle
-            eigvecs(:, :, j) = generate_random_orthogonal_matrix(n_ao)
-        end do
-        call random_number(vector)
-
-        ! set up the OAO object
-        oao%n_ao = n_ao
-        oao%n_particle = n_particle
-        oao%n_param = n_param
-        oao%hess_eigvecs = eigvecs
-
-        ! independently construct the expected rotated vector
-        expected = ref_rotate_from_eigenbasis_oao(vector, eigvecs, n_particle, n_ao)
-
-        ! call routine and determine if values match
-        rotated = oao%rotate_from_hess_eigenbasis(vector)
-        if (norm2(rotated - expected) > tol) then
-            write(stderr, *) "test_rotate_from_hess_eigenbasis_oao failed: "// &
-                "Incorrect vector when rotating out of the eigenbasis."
-            test_rotate_from_hess_eigenbasis_oao = .false.
-        end if
+        test_rotate_from_hess_eigenbasis_oao = check_rotate_hess_eigenbasis_oao(.false.)
 
     end function test_rotate_from_hess_eigenbasis_oao
 
@@ -2278,8 +2129,8 @@ contains
             do i = 1, size(ref_idx, kind=ip)
                 unit_vector = 0.0_rp
                 unit_vector(ref_idx(i)) = 1.0_rp
-                expected = ref_rotate_from_eigenbasis_oao(unit_vector, eigvecs, &
-                                                          n_particle, n_ao)
+                expected = ref_rotate_eigenbasis_oao(unit_vector, eigvecs, n_particle, &
+                                                     n_ao, .false.)
                 if (norm2(trial_vectors(:, i) - expected) > tol) then
                     write(stderr, *) "test_get_extra_trial_vectors_oao failed: "// &
                         "Incorrect extra trial vector for the "//case_name//" case."
@@ -2396,6 +2247,49 @@ contains
         end if
 
     end function test_rotate_dm_ao
+
+    logical(c_bool) function test_hess_x_static_oao() bind(C)
+        !
+        ! this function tests the function which applies the static part of the Hessian
+        ! in the OAO basis to unpacked trial vectors
+        !
+        use otr_common_unit_tests, only: generate_random_symm_matrix, shell_names
+        use otr_oao, only: hess_x_static_oao
+        use otr_common_test_reference, only: n_ao, n_particle_ref => n_particle
+
+        real(rp) :: fock_oo(n_ao, n_ao, n_particle_ref), &
+                    fock_vv(n_ao, n_ao, n_particle_ref)
+        real(rp), allocatable :: x(:), x_full(:, :, :)
+        integer(ip) :: n_particle, i
+
+        ! assume tests pass
+        test_hess_x_static_oao = .true.
+
+        ! generate random Fock matrix contributions, which differ between the particle
+        ! channels
+        do i = 1, n_particle_ref
+            fock_oo(:, :, i) = generate_random_symm_matrix(n_ao)
+            fock_vv(:, :, i) = generate_random_symm_matrix(n_ao)
+        end do
+
+        ! loop over the closed-shell and the open-shell case and determine if the
+        ! static part of random unpacked trial vectors matches
+        do n_particle = 1, n_particle_ref
+            allocate(x(n_particle * n_ao * (n_ao - 1) / 2))
+            call random_number(x)
+            x_full = ref_unpack_asymm(x, n_particle, n_ao)
+            if (norm2(hess_x_static_oao(x_full, fock_oo(:, :, :n_particle), &
+                                        fock_vv(:, :, :n_particle)) - &
+                      ref_hess_x_static_oao(x_full, fock_oo(:, :, :n_particle), &
+                                            fock_vv(:, :, :n_particle))) > tol) then
+                write(stderr, *) "test_hess_x_static_oao failed: Incorrect static "// &
+                    "part for the "//trim(shell_names(n_particle))//" case."
+                test_hess_x_static_oao = .false.
+            end if
+            deallocate(x)
+        end do
+
+    end function test_hess_x_static_oao
 
     logical(c_bool) function test_project_asymm() bind(C)
         !

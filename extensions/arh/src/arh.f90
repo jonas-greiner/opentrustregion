@@ -1324,30 +1324,12 @@ contains
         ! this subroutine defines the positive-definite preconditioner based on the
         ! exact eigendecomposition of the static part of the Hessian
         !
-        use otr_common, only: positive_definite_divisors
-
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
-
-        ! refresh the eigendecomposition if the static Hessian part has changed
-        call arh_object%orbitals%refresh_hess_eigen(arh_object%settings, error)
-        if (error /= 0) return
-
-        ! rotate residual into the eigenbasis of the static Hessian part
-        rotated_residual = arh_object%orbitals%rotate_to_hess_eigenbasis(residual)
-
-        ! get eigenvalue pairs of the static Hessian part
-        eigval_pairs = arh_object%orbitals%get_hess_eigval_pairs()
-
-        ! apply positive-definite diagonal scaling in the eigenbasis
-        rotated_residual = rotated_residual / positive_definite_divisors(eigval_pairs)
-
-        ! rotate back to the original basis
-        precond_residual = &
-            arh_object%orbitals%rotate_from_hess_eigenbasis(rotated_residual)
+        call arh_object%orbitals%precond_pd(residual, precond_residual, &
+                                            arh_object%settings, error)
 
     end subroutine precond_pd_arh_callback
 
@@ -1699,39 +1681,13 @@ contains
         ! is built from the occupied-occupied and virtual-virtual blocks of the Fock
         ! matrix) to a trial vector
         !
+        use otr_mo, only: hess_x_static_mo
+
         class(arh_mo_type), intent(in) :: self
         real(rp), intent(in) :: x(:)
         real(rp), allocatable :: hess_x(:)
 
-        integer(ip) :: n_occ, n_virt, i, rows(2, self%orbitals%n_particle)
-        real(rp) :: shell_scale
-        real(rp), allocatable :: x_block(:, :), hess_x_block(:, :)
-        external :: dgemm
-
-        ! set scaling factor for closed- and open-shell systems
-        shell_scale = merge(4.0_rp, 2.0_rp, self%orbitals%n_particle == 1)
-
-        ! rows of every particle channel in the parameter vector
-        rows = self%packed_channel_rows()
-
-        ! apply the static part X F_vv - F_oo X to the occupied-virtual block of every
-        ! particle channel
-        allocate(hess_x(size(x)))
-        do i = 1, self%orbitals%n_particle
-            n_occ = self%mo_channels(i)%n_occ
-            n_virt = self%mo_channels(i)%n_virt
-            if (n_occ == 0 .or. n_virt == 0) cycle
-            x_block = reshape(x(rows(1, i):rows(2, i)), [n_occ, n_virt])
-            allocate(hess_x_block(n_occ, n_virt))
-            call dgemm("N", "N", n_occ, n_virt, n_virt, 1.0_rp, x_block, n_occ, &
-                       self%mo_channels(i)%fock_vv, n_virt, 0.0_rp, hess_x_block, n_occ)
-            call dgemm("N", "N", n_occ, n_virt, n_occ, -1.0_rp, &
-                       self%mo_channels(i)%fock_oo, n_occ, x_block, n_occ, 1.0_rp, &
-                       hess_x_block, n_occ)
-            hess_x(rows(1, i):rows(2, i)) = shell_scale * &
-                                            reshape(hess_x_block, [n_occ * n_virt])
-            deallocate(x_block, hess_x_block)
-        end do
+        hess_x = hess_x_static_mo(x, self%mo_channels)
 
     end function hess_x_static_arh_mo
 
@@ -1741,15 +1697,14 @@ contains
         ! is built from the occupied-occupied and virtual-virtual blocks of the Fock
         ! matrix) to a trial vector
         !
-        use otr_oao, only: unpack_asymm, project_asymm, pack_asymm
+        use otr_oao, only: unpack_asymm, hess_x_static_oao, project_asymm, pack_asymm
 
         class(arh_oao_type), intent(in) :: self
         real(rp), intent(in) :: x(:)
         real(rp), allocatable :: hess_x(:)
 
-        integer(ip) :: n_ao, n_particle, i
+        integer(ip) :: n_ao, n_particle
         real(rp), allocatable :: x_full(:, :, :), hess_x_full(:, :, :)
-        external :: dgemm
 
         ! number of AOs and number of particles
         n_ao = self%orbitals%n_ao
@@ -1759,14 +1714,7 @@ contains
         x_full = unpack_asymm(x, n_particle, n_ao)
 
         ! get static part
-        allocate(hess_x_full(n_ao, n_ao, n_particle))
-        do i = 1, n_particle
-            call dgemm("N", "N", n_ao, n_ao, n_ao, 1.0_rp, &
-                       self%fock_vv(:, :, i) - self%fock_oo(:, :, i), n_ao, &
-                       x_full(:, :, i), n_ao, 0.0_rp, hess_x_full(:, :, i), n_ao)
-            hess_x_full(:, :, i) = hess_x_full(:, :, i) - &
-                                   transpose(hess_x_full(:, :, i))
-        end do
+        hess_x_full = hess_x_static_oao(x_full, self%fock_oo, self%fock_vv)
 
         ! project, scale and pack the static part; the static part is already confined
         ! to the occupied-virtual and virtual-occupied subspace in exact arithmetic,

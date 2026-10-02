@@ -8,23 +8,11 @@
 #define OPENTRUSTREGION_OAO_H
 
 #include "opentrustregion.h"
+#include "opentrustregion_common.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* ------------------------------------------------------------------
- * Declarations for OAO functions and function pointer types
- * ------------------------------------------------------------------ */
-
-/* Response callback */
-typedef c_int get_response_fn(const c_real *dm_ao_c, c_real *response_c);
-typedef get_response_fn *get_response_fp;
-
-/* Density matrix evaluating callback */
-typedef c_int evaluate_dm_fn(const c_real *dm_ao_c, c_real *energy_c, c_real *fock_c,
-                             get_response_fp *get_response_ptr);
-typedef evaluate_dm_fn *evaluate_dm_fp;
 
 /* ------------------------------------------------------------------
  * Struct corresponding to Fortran type(oao_settings_type_c)

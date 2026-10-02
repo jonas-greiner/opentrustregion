@@ -14,10 +14,14 @@ fortran_tests = {
     "common_tests": [
         "channel_rows",
         "compute_sqrt_and_inv_sqrt",
+        "fill_extra_trial_vectors_orbital_basis",
         "init_orbital_settings",
         "level_shifted_divisors",
         "matrix_exponential",
         "positive_definite_divisors",
+        "precond_orbital_basis",
+        "precond_pd_orbital_basis",
+        "refresh_response_orbital_basis",
     ],
 }
 

@@ -388,36 +388,6 @@ contains
 
     end function potential_factors
 
-    function ref_hess_x_static_mo(x, channels) result(hess_x)
-        !
-        ! this function independently reproduces the static part of the Hessian in the
-        ! MO basis, X F_vv - F_oo X for the occupied-virtual block X of every particle
-        ! channel, scaled by 4 for closed-shell and 2 for open-shell systems
-        !
-        use otr_mo, only: mo_channel_type
-
-        real(rp), intent(in) :: x(:)
-        type(mo_channel_type), intent(in) :: channels(:)
-        real(rp) :: hess_x(size(x))
-
-        integer(ip) :: offset, n_occ, n_virt, k
-        real(rp) :: shell_scale
-        real(rp), allocatable :: ov_block(:, :)
-
-        shell_scale = merge(4.0_rp, 2.0_rp, size(channels) == 1)
-        offset = 0
-        do k = 1, size(channels, kind=ip)
-            n_occ = channels(k)%n_occ
-            n_virt = channels(k)%n_virt
-            ov_block = reshape(x(offset + 1:offset + n_occ * n_virt), [n_occ, n_virt])
-            hess_x(offset + 1:offset + n_occ * n_virt) = shell_scale * reshape( &
-                matmul(ov_block, channels(k)%fock_vv) - &
-                matmul(channels(k)%fock_oo, ov_block), [n_occ * n_virt])
-            offset = offset + n_occ * n_virt
-        end do
-
-    end function ref_hess_x_static_mo
-
     function ref_build_a_part(dm_cols, v_cols) result(a)
         !
         ! this function independently reproduces the raw product A = S^T Y of the
@@ -2145,7 +2115,8 @@ contains
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
-                                     generate_random_mo_coeff, setup_random_mo_channels
+                                     generate_random_mo_coeff, &
+                                     setup_random_mo_channels, ref_hess_x_static_mo
 
         integer(ip), parameter :: n_dirs = 2
 
@@ -2224,7 +2195,8 @@ contains
         !
         use otr_common_test_reference, only: n_particle_ref => n_particle
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
-                                     generate_random_mo_coeff, setup_random_mo_channels
+                                     generate_random_mo_coeff, &
+                                     setup_random_mo_channels, ref_hess_x_static_mo
 
         integer(ip) :: i_basis, n_particle
 
@@ -2308,7 +2280,7 @@ contains
             use otr_mo_test_reference, only: n_mo
             use otr_common_test_reference, only: n_ao, n_occ
             use otr_common_unit_tests, only: identity_matrix, shell_names
-            use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x
+            use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
 
             logical, intent(in) :: mo_basis
             logical :: passed
@@ -2381,7 +2353,7 @@ contains
                 if (mo_basis) then
                     static_hess(:, i) = ref_hess_x_static_mo(e_i, mo_object%mo_channels)
                 else
-                    static_hess(:, i) = ref_hess_x( &
+                    static_hess(:, i) = ref_hess_x_oao( &
                         ref_unpack_asymm(e_i, n_particle, n_ao), zero_response, &
                         dm_oao, fock_oo, fock_vv, n_param)
                 end if
@@ -2437,146 +2409,102 @@ contains
 
     logical(c_bool) function test_precond_arh_callback() bind(C)
         !
-        ! this function tests the preconditioner entry point, the level-shifted inverse
-        ! of the approximate Hessian, which without a history is the level-shifted
-        ! inverse of the static part of the Hessian in its eigenbasis
+        ! this function tests the subroutine which defines the level-shifted
+        ! preconditioner of the ARH approximate Hessian, which applies the
+        ! level-shifted inverse of the approximate Hessian
         !
         use otr_arh, only: precond_arh_callback, arh_object
-        use otr_oao, only: oao_object
-        use otr_common_test_reference, only: n_ao, n_occ
-        use otr_oao_unit_tests, only: ref_diagonalize_static_part, &
-                                      ref_hess_eigval_pairs_oao, &
-                                      ref_precond_eigenbasis_oao
-        use opentrustregion, only: precond_floor
+        use otr_mo, only: mo_object
+        use otr_mo_test_reference, only: n_mo
+        use otr_common_test_reference, only: n_ao, n_occ, n_particle
+        use otr_mo_unit_tests, only: generate_random_ao_overlap, &
+                                     generate_random_mo_coeff, &
+                                     setup_identity_mo_eigenbasis
 
-        integer(ip), parameter :: n_param = n_ao * (n_ao - 1) / 2
-        real(rp), parameter :: mu = 0.1_rp
+        real(rp), parameter :: mu = 0.3_rp
 
-        real(rp) :: dm_oao(n_ao, n_ao, 1), fock_oo(n_ao, n_ao, 1), &
-                    fock_vv(n_ao, n_ao, 1), eigvecs(n_ao, n_ao, 1), eigvals(n_ao, 1), &
-                    residual(n_param), preconditioned(n_param), divisors(n_param)
+        real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
+        real(rp) :: ao_overlap(n_ao, n_ao)
+        real(rp), allocatable :: residual(:), precond_residual(:)
         integer(ip) :: error
 
-        ! assume test passes
+        ! assume tests pass
         test_precond_arh_callback = .true.
 
-        ! generate a random density matrix and the oo- and vv-blocks of the Fock matrix
-        call generate_random_fock_partition(n_ao, n_occ(:1), dm_oao, fock_oo, fock_vv)
-
-        ! set up the ARH and OAO objects without a history and with a wrong cached
-        ! eigendecomposition, which has to be refreshed since the static part is marked
-        ! as changed
-        call setup_arh_and_oao_objects("arh", dm_oao, fock_oo, fock_vv, n_ao, 1_ip, &
-                                       n_param)
-        allocate(oao_object%hess_eigvecs(n_ao, n_ao, 1), &
-                 oao_object%hess_eigvals(n_ao, 1))
-        oao_object%hess_eigvecs = 0.0_rp
-        oao_object%hess_eigvals = 1.0_rp
-
-        ! independently construct the level-shifted inverse of the static part of the
-        ! Hessian in its eigenbasis
+        ! set up the ARH object in the MO basis without a low-rank part and with an
+        ! eigendecomposition whose eigenvalue pairs, the open-shell differences 2 (e_v
+        ! - e_o), shifted by the level shift are all 2, so that the level-shifted
+        ! inverse of the approximate Hessian halves the residual
+        ao_overlap = generate_random_ao_overlap(n_ao)
+        mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
+        call setup_arh_and_mo_objects(mo_coeff, ao_overlap, n_occ)
+        call setup_identity_mo_eigenbasis(0.0_rp, (2.0_rp + mu) / 2.0_rp)
+        allocate(residual(mo_object%n_param), precond_residual(mo_object%n_param))
         call random_number(residual)
-        call ref_diagonalize_static_part(fock_oo, fock_vv, eigvecs, eigvals)
-        divisors = ref_hess_eigval_pairs_oao(eigvals, 1_ip, n_ao, n_param) - mu
-        where (abs(divisors) < precond_floor) divisors = precond_floor
 
-        ! call routine and determine if the preconditioned residual matches
-        call precond_arh_callback(residual, mu, preconditioned, error)
+        ! call routine and determine if the residual is halved
+        call precond_arh_callback(residual, mu, precond_residual, error)
         if (error /= 0) then
             write(stderr, *) "test_precond_arh_callback failed: Produced error."
             test_precond_arh_callback = .false.
         end if
-        if (norm2(preconditioned - ref_precond_eigenbasis_oao( &
-            residual, eigvecs, divisors, 1_ip, n_ao)) > tol) then
+        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
             write(stderr, *) "test_precond_arh_callback failed: Incorrect "// &
                 "preconditioned residual."
             test_precond_arh_callback = .false.
         end if
 
-        ! deallocate ARH and OAO objects
-        deallocate(arh_object, oao_object)
+        ! deallocate ARH and MO objects
+        deallocate(arh_object, mo_object)
 
     end function test_precond_arh_callback
 
     logical(c_bool) function test_precond_pd_arh_callback() bind(C)
         !
         ! this function tests the subroutine which defines the positive-definite
-        ! preconditioner based on the eigendecomposition of the static part of the
-        ! Hessian for the MO basis
+        ! preconditioner of the ARH approximate Hessian, which applies the one of the
+        ! orbital basis to the orbital object
         !
         use otr_arh, only: precond_pd_arh_callback, arh_object
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use otr_mo_unit_tests, only: &
-            generate_random_ao_overlap, generate_random_mo_coeff, &
-            setup_random_mo_channels, ref_rotate_eigenbasis_mo, ref_hess_eigval_pairs_mo
+        use otr_mo_unit_tests, only: generate_random_ao_overlap, &
+                                     generate_random_mo_coeff, &
+                                     setup_identity_mo_eigenbasis
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
-        real(rp), allocatable :: residual(:), precond_residual(:), expected(:)
+        real(rp), allocatable :: residual(:), precond_residual(:)
         integer(ip) :: error
 
         ! assume tests pass
         test_precond_pd_arh_callback = .true.
 
-        ! set up the ARH object with random Fock matrix blocks and an occupied orbital
-        ! energy above every virtual one, so that negative eigenvalue pairs are present
+        ! set up the ARH object in the MO basis with an eigendecomposition whose
+        ! eigenvalue pairs, the open-shell differences 2 (e_v - e_o), are all 2, so
+        ! that the preconditioner of the orbital basis halves the residual
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         call setup_arh_and_mo_objects(mo_coeff, ao_overlap, n_occ)
-        call setup_random_mo_channels(n_occ, n_mo)
-        associate (channel => mo_object%mo_channels(1))
-            channel%occ_eigvals(1) = 2.0_rp
-            channel%fock_oo = matmul(channel%occ_eigvecs * spread( &
-                channel%occ_eigvals, 1, channel%n_occ), transpose(channel%occ_eigvecs))
-        end associate
-
-        ! call routine for an eigendecomposition marked stale and determine if it is
-        ! refreshed and the residual is rotated into the eigenbasis, divided by the
-        ! floored magnitudes of the eigenvalue differences and rotated back
+        call setup_identity_mo_eigenbasis(0.0_rp, 1.0_rp)
         allocate(residual(mo_object%n_param), precond_residual(mo_object%n_param))
         call random_number(residual)
-        expected = ref_rotate_eigenbasis_mo( &
-            ref_rotate_eigenbasis_mo(residual, mo_object%mo_channels, n_mo, .true.) / &
-            ref_positive_definite_divisors( &
-                ref_hess_eigval_pairs_mo(mo_object%mo_channels)), &
-            mo_object%mo_channels, n_mo, .false.)
-        mo_object%hess_eigen_stale = .true.
+
+        ! call routine and determine if the residual is halved
         call precond_pd_arh_callback(residual, precond_residual, error)
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_arh_callback failed: Produced error."
             test_precond_pd_arh_callback = .false.
         end if
-        if (norm2(precond_residual - expected) > tol) then
+        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
             write(stderr, *) "test_precond_pd_arh_callback failed: Incorrect "// &
                 "preconditioned residual."
             test_precond_pd_arh_callback = .false.
         end if
-        if (mo_object%hess_eigen_stale) then
-            write(stderr, *) "test_precond_pd_arh_callback failed: "// &
-                "Eigendecomposition not refreshed."
-            test_precond_pd_arh_callback = .false.
-        end if
+
+        ! deallocate ARH and MO objects
         deallocate(arh_object, mo_object)
-
-    contains
-
-        function ref_positive_definite_divisors(pairs) result(divisors)
-            !
-            ! this function independently constructs the divisors of the
-            ! positive-definite preconditioner, the magnitudes of the eigenvalue pairs
-            ! floored relative to the largest of them
-            !
-            use opentrustregion, only: precond_floor, precond_rel_floor_factor
-
-            real(rp), intent(in) :: pairs(:)
-            real(rp) :: divisors(size(pairs))
-
-            divisors = max(abs(pairs), max(precond_rel_floor_factor * &
-                                           maxval(abs(pairs)), precond_floor))
-
-        end function ref_positive_definite_divisors
 
     end function test_precond_pd_arh_callback
 
@@ -2589,40 +2517,45 @@ contains
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use otr_mo_unit_tests, only: &
-            generate_random_ao_overlap, generate_random_mo_coeff, &
-            setup_random_mo_channels, ref_extra_trial_vectors_mo
+        use otr_mo_unit_tests, only: generate_random_ao_overlap, &
+                                     generate_random_mo_coeff, &
+                                     setup_identity_mo_eigenbasis
 
-        integer(ip), parameter :: n_extra = 3
+        integer(ip), parameter :: n_extra = 2
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
-        real(rp), allocatable :: trial_vectors(:, :)
+        real(rp), allocatable :: trial_vectors(:, :), expected(:, :)
         integer(ip) :: error
 
         ! assume tests pass
         test_get_extra_trial_vectors_arh_callback = .true.
 
-        ! set up the ARH object in the MO basis with orbital energies with negative
-        ! pairs
+        ! set up the ARH object in the MO basis with an eigendecomposition in the MO
+        ! basis itself whose only negative eigenvalue pair belongs to the first
+        ! occupied and the first virtual orbital of the first particle channel, at
+        ! packed index 1, so that the first extra trial vector is the unit vector along
+        ! it and the second vanishes
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         call setup_arh_and_mo_objects(mo_coeff, ao_overlap, n_occ)
-        call setup_random_mo_channels(n_occ, n_mo)
-        mo_object%mo_channels(1)%occ_eigvals = [-1.0_rp, 2.0_rp]
-        mo_object%mo_channels(1)%virt_eigvals = [0.5_rp, 1.5_rp]
+        call setup_identity_mo_eigenbasis(0.0_rp, 1.0_rp)
+        mo_object%mo_channels(1)%occ_eigvals(1) = 1.5_rp
+        mo_object%mo_channels(1)%virt_eigvals(2) = 2.0_rp
+        allocate(trial_vectors(mo_object%n_param, n_extra), &
+                 expected(mo_object%n_param, n_extra))
+        expected = 0.0_rp
+        expected(1, 1) = 1.0_rp
 
         ! call routine and determine if the extra trial vectors of the orbital basis
         ! are returned
-        allocate(trial_vectors(mo_object%n_param, n_extra))
         call get_extra_trial_vectors_arh_callback(trial_vectors, error)
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_arh_callback failed: "// &
                 "Produced error."
             test_get_extra_trial_vectors_arh_callback = .false.
         end if
-        if (norm2(trial_vectors - ref_extra_trial_vectors_mo(mo_object%mo_channels, &
-                                                             n_mo, n_extra)) > tol) then
+        if (norm2(trial_vectors - expected) > tol) then
             write(stderr, *) "test_get_extra_trial_vectors_arh_callback failed: "// &
                 "Incorrect trial vectors."
             test_get_extra_trial_vectors_arh_callback = .false.
@@ -3497,35 +3430,41 @@ contains
     logical(c_bool) function test_hess_x_static_arh_mo() bind(C)
         !
         ! this function tests the function which applies the static part of the Hessian
-        ! to a trial vector for the MO basis
+        ! to a trial vector for the MO basis, which applies the one of the MO object
         !
         use otr_arh, only: arh_mo_type
         use otr_mo, only: mo_object
-        use otr_mo_test_reference, only: n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+        use otr_common_test_reference, only: n_occ
         use otr_mo_unit_tests, only: setup_minimal_mo_object
+        use otr_common_unit_tests, only: identity_matrix
 
         type(arh_mo_type) :: arh
         real(rp), allocatable :: x(:)
-        integer(ip) :: i_case
+        integer(ip) :: k
 
         ! assume tests pass
         test_hess_x_static_arh_mo = .true.
 
-        ! loop over every occupation case
-        do i_case = 1, n_cases
-            call setup_minimal_mo_object(case_n_occ(:case_n_particle(i_case), i_case))
-            arh = arh_mo_type(mo_object)
-            allocate(x(mo_object%n_param))
-            call random_number(x)
-            if (norm2(arh%hess_x_static(x) - &
-                      ref_hess_x_static_mo(x, mo_object%mo_channels)) > tol) then
-                write(stderr, *) "test_hess_x_static_arh_mo failed: Incorrect "// &
-                    "static part in the "//trim(case_names(i_case))//" case."
-                test_hess_x_static_arh_mo = .false.
-            end if
-            deallocate(x, mo_object)
+        ! set up the MO object with vanishing occupied-occupied and unit
+        ! virtual-virtual blocks of the Fock matrix, so that the static part of the
+        ! Hessian, the open-shell 2 (X F_vv - F_oo X), doubles the trial vector
+        call setup_minimal_mo_object(n_occ)
+        do k = 1, size(n_occ, kind=ip)
+            associate (channel => mo_object%mo_channels(k))
+                channel%fock_oo = 0.0_rp
+                channel%fock_vv = identity_matrix(channel%n_virt)
+            end associate
         end do
+        arh = arh_mo_type(mo_object)
+        allocate(x(mo_object%n_param))
+        call random_number(x)
+
+        ! call routine and determine if the trial vector is doubled
+        if (norm2(arh%hess_x_static(x) - 2.0_rp * x) > tol) then
+            write(stderr, *) "test_hess_x_static_arh_mo failed: Incorrect static part."
+            test_hess_x_static_arh_mo = .false.
+        end if
+        deallocate(mo_object)
 
     end function test_hess_x_static_arh_mo
 
@@ -3538,7 +3477,7 @@ contains
         use otr_oao, only: oao_object
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
-        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x
+        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
 
         type(arh_oao_type) :: arh
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), fock_oo(n_ao, n_ao, n_particle), &
@@ -3564,8 +3503,8 @@ contains
         x = generate_random_nonredundant_vector(n_param, n_particle, n_ao, dm_oao)
         response = 0.0_rp
         if (norm2(arh%hess_x_static(x) - &
-                  ref_hess_x(ref_unpack_asymm(x, n_particle, n_ao), response, dm_oao, &
-                             fock_oo, fock_vv, n_param)) > tol) then
+                  ref_hess_x_oao(ref_unpack_asymm(x, n_particle, n_ao), response, &
+                                 dm_oao, fock_oo, fock_vv, n_param)) > tol) then
             write(stderr, *) "test_hess_x_static_arh_oao failed: Incorrect static part."
             test_hess_x_static_arh_oao = .false.
         end if

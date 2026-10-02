@@ -8,6 +8,7 @@ module otr_common_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use test_reference, only: tol
+    use otr_common, only: orbital_basis_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -25,10 +26,30 @@ module otr_common_unit_tests
     ! multipliers for extension-specific potentials follow the same convention
     real(rp), parameter :: mock_fock_factor(2) = [2.0_rp, 5.0_rp]
 
+    ! multiplier of the density matrix returned by the mock response functions
+    real(rp), parameter :: mock_response_factor = 2.0_rp
+
     ! names of the closed-shell and the open-shell case, indexed by the number of
     ! particle channels, for the failure messages of tests covering both
     character(len=12), parameter :: shell_names(2) = &
         [character(len=12) :: "closed-shell", "open-shell"]
+
+    ! mock orbital basis for testing the operations every orbital basis shares, such as
+    ! the preconditioners: it rotates vectors into and out of the eigenbasis of the
+    ! static part of the Hessian with a fixed orthogonal matrix and returns cached
+    ! eigenvalue pairs, which refreshing the eigendecomposition overwrites with those
+    ! of the current static part; its orbital updating operations do nothing
+    type, extends(orbital_basis_type) :: mock_orbital_basis_type
+        real(rp), allocatable :: eigvecs(:, :), eigval_pairs(:), static_eigval_pairs(:)
+    contains
+        procedure :: rotate_orbitals => mock_rotate_orbitals
+        procedure :: calculate_grad_h_diag => mock_calculate_grad_h_diag
+        procedure :: refresh_hess_eigen => mock_refresh_hess_eigen
+        procedure :: rotate_to_hess_eigenbasis => mock_rotate_to_hess_eigenbasis
+        procedure :: rotate_from_hess_eigenbasis => mock_rotate_from_hess_eigenbasis
+        procedure :: get_hess_eigval_pairs => mock_get_hess_eigval_pairs
+        procedure :: get_extra_trial_vectors => mock_get_extra_trial_vectors
+    end type
 
 contains
 
@@ -58,6 +79,223 @@ contains
         end if
 
     end subroutine record_mock_call
+
+    subroutine mock_get_response_cs(dm, response, error)
+        !
+        ! this subroutine is a mock response function for the closed-shell case
+        !
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out), target, contiguous :: response(:, :)
+        integer(ip), intent(out) :: error
+
+        error = 0
+        response = mock_response_factor * dm
+
+    end subroutine mock_get_response_cs
+
+    subroutine mock_get_response_os(dm, response, error)
+        !
+        ! this subroutine is a mock response function for the open-shell case
+        !
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out), target :: response(:, :, :)
+        integer(ip), intent(out) :: error
+
+        error = 0
+        response = mock_response_factor * dm
+
+    end subroutine mock_get_response_os
+
+    subroutine mock_evaluate_dm_cs(dm, energy, fock, get_response_funptr, error)
+        !
+        ! this subroutine is a mock density matrix evaluating function for the
+        ! closed-shell case, which returns a multiple of the density matrix that
+        ! changes between calls so that non-vanishing differences are produced
+        !
+        use otr_common, only: get_response_cs_type
+
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target, contiguous :: fock(:, :)
+        procedure(get_response_cs_type), intent(out), optional, pointer :: &
+            get_response_funptr
+        integer(ip), intent(out) :: error
+
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
+                              merge(2_ip, 0_ip, present(get_response_funptr)))
+
+        error = 0
+        energy = sum(dm)
+        if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
+        if (present(get_response_funptr)) get_response_funptr => mock_get_response_cs
+
+    end subroutine mock_evaluate_dm_cs
+
+    subroutine mock_evaluate_dm_os(dm, energy, fock, get_response_funptr, error)
+        !
+        ! this subroutine is a mock density matrix evaluating function for the
+        ! open-shell case, which returns a multiple of the density matrix that changes
+        ! between calls so that non-vanishing differences are produced
+        !
+        use otr_common, only: get_response_os_type
+
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target :: fock(:, :, :)
+        procedure(get_response_os_type), intent(out), optional, pointer :: &
+            get_response_funptr
+        integer(ip), intent(out) :: error
+
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
+                              merge(2_ip, 0_ip, present(get_response_funptr)))
+
+        error = 0
+        energy = sum(dm)
+        if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
+        if (present(get_response_funptr)) get_response_funptr => mock_get_response_os
+
+    end subroutine mock_evaluate_dm_os
+
+    subroutine mock_evaluate_dm_failing_cs(dm, energy, fock, get_response_funptr, error)
+        !
+        ! this subroutine is a mock density matrix evaluating function for the
+        ! closed-shell case, which fails
+        !
+        use otr_common, only: get_response_cs_type
+
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target, contiguous :: fock(:, :)
+        procedure(get_response_cs_type), intent(out), optional, pointer :: &
+            get_response_funptr
+        integer(ip), intent(out) :: error
+
+        error = 1
+        energy = sum(dm)
+        if (present(fock)) fock = 0.0_rp
+        if (present(get_response_funptr)) get_response_funptr => null()
+
+    end subroutine mock_evaluate_dm_failing_cs
+
+    subroutine mock_evaluate_dm_failing_os(dm, energy, fock, get_response_funptr, error)
+        !
+        ! this subroutine is a mock density matrix evaluating function for the
+        ! open-shell case, which fails
+        !
+        use otr_common, only: get_response_os_type
+
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target :: fock(:, :, :)
+        procedure(get_response_os_type), intent(out), optional, pointer :: &
+            get_response_funptr
+        integer(ip), intent(out) :: error
+
+        error = 1
+        energy = sum(dm)
+        if (present(fock)) fock = 0.0_rp
+        if (present(get_response_funptr)) get_response_funptr => null()
+
+    end subroutine mock_evaluate_dm_failing_os
+
+    subroutine mock_rotate_orbitals(self, kappa, settings, error)
+        !
+        ! this subroutine is a mock of moving the orbitals, which does nothing
+        !
+        use opentrustregion, only: settings_type
+
+        class(mock_orbital_basis_type), intent(inout) :: self
+        real(rp), intent(in) :: kappa(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        error = 0
+
+    end subroutine mock_rotate_orbitals
+
+    subroutine mock_calculate_grad_h_diag(self, fock)
+        !
+        ! this subroutine is a mock of calculating the gradient and Hessian diagonal,
+        ! which does nothing
+        !
+        class(mock_orbital_basis_type), intent(inout) :: self
+        real(rp), intent(in) :: fock(:, :, :)
+
+    end subroutine mock_calculate_grad_h_diag
+
+    subroutine mock_refresh_hess_eigen(self, settings, error)
+        !
+        ! this subroutine is a mock of refreshing the eigendecomposition of the static
+        ! part of the Hessian, which takes over the eigenvalue pairs of the current
+        ! static part if the cached ones are stale
+        !
+        use opentrustregion, only: settings_type
+
+        class(mock_orbital_basis_type), intent(inout) :: self
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        error = 0
+        if (.not. self%hess_eigen_stale) return
+        self%eigval_pairs = self%static_eigval_pairs
+        self%hess_eigen_stale = .false.
+
+    end subroutine mock_refresh_hess_eigen
+
+    function mock_rotate_to_hess_eigenbasis(self, vector) result(rotated)
+        !
+        ! this function is a mock of rotating a vector into the eigenbasis of the
+        ! static part of the Hessian with the eigenvector matrix
+        !
+        class(mock_orbital_basis_type), intent(in) :: self
+        real(rp), intent(in) :: vector(:)
+        real(rp), allocatable :: rotated(:)
+
+        rotated = matmul(transpose(self%eigvecs), vector)
+
+    end function mock_rotate_to_hess_eigenbasis
+
+    function mock_rotate_from_hess_eigenbasis(self, vector) result(rotated)
+        !
+        ! this function is a mock of rotating a vector out of the eigenbasis of the
+        ! static part of the Hessian with the eigenvector matrix
+        !
+        class(mock_orbital_basis_type), intent(in) :: self
+        real(rp), intent(in) :: vector(:)
+        real(rp), allocatable :: rotated(:)
+
+        rotated = matmul(self%eigvecs, vector)
+
+    end function mock_rotate_from_hess_eigenbasis
+
+    function mock_get_hess_eigval_pairs(self) result(eigval_pairs)
+        !
+        ! this function is a mock of returning the cached eigenvalue pairs of the
+        ! static part of the Hessian
+        !
+        class(mock_orbital_basis_type), intent(in) :: self
+        real(rp), allocatable :: eigval_pairs(:)
+
+        eigval_pairs = self%eigval_pairs
+
+    end function mock_get_hess_eigval_pairs
+
+    subroutine mock_get_extra_trial_vectors(self, trial_vectors, settings, error)
+        !
+        ! this subroutine is a mock of returning extra trial vectors, which contributes
+        ! none
+        !
+        use opentrustregion, only: settings_type
+
+        class(mock_orbital_basis_type), intent(inout) :: self
+        real(rp), intent(out) :: trial_vectors(:, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        error = 0
+        trial_vectors = 0.0_rp
+
+    end subroutine mock_get_extra_trial_vectors
 
     function identity_matrix(n) result(matrix)
         !
@@ -146,6 +384,26 @@ contains
 
     end function generate_random_density_matrix
 
+    subroutine setup_mock_orbital_basis(basis, n_param)
+        !
+        ! this subroutine sets up a mock orbital basis with a random orthogonal
+        ! eigenvector matrix and random eigenvalue pairs of the current static part of
+        ! the Hessian, whose cached ones are those of an earlier static part and marked
+        ! stale, so that a routine using them has to refresh them first
+        !
+        type(mock_orbital_basis_type), intent(out) :: basis
+        integer(ip), intent(in) :: n_param
+
+        basis%n_param = n_param
+        basis%eigvecs = generate_random_orthogonal_matrix(n_param)
+        allocate(basis%static_eigval_pairs(n_param))
+        call random_number(basis%static_eigval_pairs)
+        basis%static_eigval_pairs = 2.0_rp * basis%static_eigval_pairs - 1.0_rp
+        allocate(basis%eigval_pairs(n_param), source=1.0_rp)
+        basis%hess_eigen_stale = .true.
+
+    end subroutine setup_mock_orbital_basis
+
     logical(c_bool) function test_init_orbital_settings() bind(C)
         !
         ! this function tests the subroutine which initializes the settings shared by
@@ -178,6 +436,245 @@ contains
         end if
 
     end function test_init_orbital_settings
+
+    logical(c_bool) function test_refresh_response_orbital_basis() bind(C)
+        !
+        ! this function tests the subroutine which rebuilds the response callbacks at
+        ! the currently stored density matrix of an orbital basis
+        !
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_common_test_reference, only: n_ao, n_particle, n_occ
+
+        type(mock_orbital_basis_type) :: basis
+        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+        integer(ip) :: i, i_shell, error
+        logical :: response_set
+        character(len=:), allocatable :: case_name
+
+        ! assume tests pass
+        test_refresh_response_orbital_basis = .true.
+
+        ! set up the mock orbital basis with a density matrix
+        call setup_settings(basis%settings)
+        basis%n_ao = n_ao
+        basis%n_particle = n_particle
+        do i = 1, n_particle
+            dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
+        end do
+        basis%dm_ao => dm_ao
+
+        ! loop over the closed-shell and the open-shell case
+        do i_shell = 1, 2
+            case_name = trim(shell_names(i_shell))
+
+            ! set the mock density matrix evaluating function and mark the response as
+            ! stale as ARH would after moving the density on its own
+            if (i_shell == 1) then
+                basis%evaluate_dm_cs => mock_evaluate_dm_cs
+            else
+                basis%evaluate_dm_cs => null()
+                basis%evaluate_dm_os => mock_evaluate_dm_os
+            end if
+            basis%response_stale = .true.
+            mock_requests = [integer(ip) :: ]
+
+            ! call routine and determine if the density matrix evaluating function was
+            ! called to rebuild only the response and if the flag was cleared
+            call basis%refresh_response(error)
+            if (error /= 0) then
+                write(stderr, *) "test_refresh_response_orbital_basis failed: "// &
+                    "Produced error for the "//case_name//" case."
+                test_refresh_response_orbital_basis = .false.
+            end if
+            if (size(mock_requests) /= 1) then
+                write(stderr, *) "test_refresh_response_orbital_basis failed: "// &
+                    "Density matrix evaluating function was not called for the "// &
+                    case_name//" case."
+                test_refresh_response_orbital_basis = .false.
+            end if
+            if (any(mock_requests /= 2)) then
+                write(stderr, *) "test_refresh_response_orbital_basis failed: "// &
+                    "Incorrect outputs requested from density matrix evaluating "// &
+                    "function for the "//case_name//" case."
+                test_refresh_response_orbital_basis = .false.
+            end if
+            if (i_shell == 1) then
+                response_set = associated(basis%get_response_cs, mock_get_response_cs)
+            else
+                response_set = associated(basis%get_response_os, mock_get_response_os)
+            end if
+            if (.not. response_set) then
+                write(stderr, *) "test_refresh_response_orbital_basis failed: "// &
+                    "Response function not updated for the "//case_name//" case."
+                test_refresh_response_orbital_basis = .false.
+            end if
+            if (basis%response_stale) then
+                write(stderr, *) "test_refresh_response_orbital_basis failed: "// &
+                    "Response still marked stale after being refreshed for the "// &
+                    case_name//" case."
+                test_refresh_response_orbital_basis = .false.
+            end if
+        end do
+
+        ! call routine with a failing density matrix evaluating function and determine
+        ! if the error is passed on and the response stays marked stale
+        basis%evaluate_dm_os => mock_evaluate_dm_failing_os
+        basis%response_stale = .true.
+        call basis%refresh_response(error)
+        if (error == 0) then
+            write(stderr, *) "test_refresh_response_orbital_basis failed: Error of "// &
+                "the density matrix evaluating function not passed on."
+            test_refresh_response_orbital_basis = .false.
+        end if
+        if (.not. basis%response_stale) then
+            write(stderr, *) "test_refresh_response_orbital_basis failed: Response "// &
+                "not marked stale after a failed refresh."
+            test_refresh_response_orbital_basis = .false.
+        end if
+
+    end function test_refresh_response_orbital_basis
+
+    logical(c_bool) function test_precond_orbital_basis() bind(C)
+        !
+        ! this function tests the subroutine which applies a level-shifted
+        ! preconditioner based on the eigendecomposition of the static part of the
+        ! Hessian of an orbital basis
+        !
+        use otr_common, only: orbital_settings_type
+        use opentrustregion, only: precond_floor
+        use opentrustregion_unit_tests, only: setup_settings
+        use test_reference, only: n_param
+
+        type(mock_orbital_basis_type) :: basis
+        type(orbital_settings_type) :: settings
+        real(rp) :: residual(n_param), precond_residual(n_param), divisors(n_param), &
+                    expected(n_param), mu
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_precond_orbital_basis = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! set up the mock orbital basis with a stale eigendecomposition and a random
+        ! residual and level shift
+        call setup_mock_orbital_basis(basis, n_param)
+        call random_number(residual)
+        mu = 0.3_rp
+
+        ! construct the expected preconditioned residual from the eigenvalue pairs of
+        ! the current static part
+        divisors = basis%static_eigval_pairs - mu
+        where (abs(divisors) < precond_floor) divisors = precond_floor
+        expected = matmul(basis%eigvecs, &
+                          matmul(transpose(basis%eigvecs), residual) / divisors)
+
+        ! call routine and determine if values of the preconditioned residual match,
+        ! which requires the eigendecomposition to be refreshed
+        call basis%precond(residual, mu, precond_residual, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_precond_orbital_basis failed: Produced error."
+            test_precond_orbital_basis = .false.
+        end if
+        if (norm2(precond_residual - expected) > tol) then
+            write(stderr, *) "test_precond_orbital_basis failed: Incorrect "// &
+                "preconditioned residual."
+            test_precond_orbital_basis = .false.
+        end if
+
+    end function test_precond_orbital_basis
+
+    logical(c_bool) function test_precond_pd_orbital_basis() bind(C)
+        !
+        ! this function tests the subroutine which applies the positive-definite
+        ! preconditioner based on the eigendecomposition of the static part of the
+        ! Hessian of an orbital basis
+        !
+        use otr_common, only: orbital_settings_type
+        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+        use opentrustregion_unit_tests, only: setup_settings
+        use test_reference, only: n_param
+
+        type(mock_orbital_basis_type) :: basis
+        type(orbital_settings_type) :: settings
+        real(rp) :: residual(n_param), precond_residual(n_param), divisors(n_param), &
+                    expected(n_param), floor_val
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_precond_pd_orbital_basis = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! set up the mock orbital basis with a stale eigendecomposition and a random
+        ! residual
+        call setup_mock_orbital_basis(basis, n_param)
+        call random_number(residual)
+
+        ! construct the expected preconditioned residual from the eigenvalue pairs of
+        ! the current static part
+        divisors = abs(basis%static_eigval_pairs)
+        floor_val = max(precond_rel_floor_factor * maxval(divisors), precond_floor)
+        where (divisors < floor_val) divisors = floor_val
+        expected = matmul(basis%eigvecs, &
+                          matmul(transpose(basis%eigvecs), residual) / divisors)
+
+        ! call routine and determine if values of the preconditioned residual match,
+        ! which requires the eigendecomposition to be refreshed
+        call basis%precond_pd(residual, precond_residual, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_precond_pd_orbital_basis failed: Produced error."
+            test_precond_pd_orbital_basis = .false.
+        end if
+        if (norm2(precond_residual - expected) > tol) then
+            write(stderr, *) "test_precond_pd_orbital_basis failed: Incorrect "// &
+                "preconditioned residual."
+            test_precond_pd_orbital_basis = .false.
+        end if
+
+    end function test_precond_pd_orbital_basis
+
+    logical(c_bool) function test_fill_extra_trial_vectors_orbital_basis() bind(C)
+        !
+        ! this function tests the subroutine which fills the extra trial vectors with
+        ! the rotations belonging to the most negative eigenvalue pairs of the static
+        ! part of the Hessian of an orbital basis
+        !
+        use test_reference, only: n_param
+
+        real(rp), parameter :: eigval_pairs(n_param) = [-0.2_rp, 0.4_rp, -0.7_rp]
+        integer(ip), parameter :: n_extra = 3
+
+        type(mock_orbital_basis_type) :: basis
+        real(rp) :: trial_vectors(n_param, n_extra)
+
+        ! assume tests pass
+        test_fill_extra_trial_vectors_orbital_basis = .true.
+
+        ! set up the mock orbital basis with a random eigenvector matrix
+        call setup_mock_orbital_basis(basis, n_param)
+
+        ! call routine for one positive and two negative eigenvalue pairs, and
+        ! determine if the first two vectors are the rotations out of the eigenbasis of
+        ! the unit vectors along the negative pairs, the eigenvectors at their indices,
+        ! in increasing order of the pairs, and if the slot of the positive pair
+        ! vanishes
+        call basis%fill_extra_trial_vectors(eigval_pairs, trial_vectors)
+        if (norm2(trial_vectors(:, 1) - basis%eigvecs(:, 3)) > tol .or. &
+            norm2(trial_vectors(:, 2) - basis%eigvecs(:, 1)) > tol) then
+            write(stderr, *) "test_fill_extra_trial_vectors_orbital_basis failed: "// &
+                "Incorrect extra trial vectors."
+            test_fill_extra_trial_vectors_orbital_basis = .false.
+        end if
+        if (norm2(trial_vectors(:, 3)) > tol) then
+            write(stderr, *) "test_fill_extra_trial_vectors_orbital_basis failed: "// &
+                "Slot without a negative eigenvalue pair does not vanish."
+            test_fill_extra_trial_vectors_orbital_basis = .false.
+        end if
+
+    end function test_fill_extra_trial_vectors_orbital_basis
 
     logical(c_bool) function test_matrix_exponential() bind(C)
         !

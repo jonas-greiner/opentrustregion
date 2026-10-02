@@ -20,17 +20,74 @@ module otr_common
     type(orbital_settings_type), parameter :: default_orbital_settings = &
         orbital_settings_type(logger=null(), initialized=.true., verbose=0)
 
+    ! density matrix evaluating functions and the response functions they return, with
+    ! which the orbital bases evaluate the exact Hessian
+    abstract interface
+        subroutine get_response_cs_type(dm, response, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target, contiguous :: dm(:, :)
+            real(rp), intent(out), target, contiguous :: response(:, :)
+            integer(ip), intent(out) :: error
+        end subroutine get_response_cs_type
+    end interface
+
+    abstract interface
+        subroutine get_response_os_type(dm, response, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: dm(:, :, :)
+            real(rp), intent(out), target :: response(:, :, :)
+            integer(ip), intent(out) :: error
+        end subroutine get_response_os_type
+    end interface
+
+    abstract interface
+        subroutine evaluate_dm_cs_type(dm, energy, fock, get_response_funptr, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target, contiguous :: dm(:, :)
+            real(rp), intent(out) :: energy
+            real(rp), intent(out), optional, target, contiguous :: fock(:, :)
+            procedure(get_response_cs_type), intent(out), optional, pointer :: &
+                get_response_funptr
+            integer(ip), intent(out) :: error
+        end subroutine evaluate_dm_cs_type
+    end interface
+
+    abstract interface
+        subroutine evaluate_dm_os_type(dm, energy, fock, get_response_funptr, error)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: dm(:, :, :)
+            real(rp), intent(out) :: energy
+            real(rp), intent(out), optional, target :: fock(:, :, :)
+            procedure(get_response_os_type), intent(out), optional, pointer :: &
+                get_response_funptr
+            integer(ip), intent(out) :: error
+        end subroutine evaluate_dm_os_type
+    end interface
+
     ! orbital basis in which the orbital rotations are parameterized, holding the
-    ! quantities every basis has, whose type-bound procedures perform the operations
-    ! every basis provides: moving the current orbitals, the gradient and Hessian
-    ! diagonal at the current density, and the eigendecomposition of the static part of
-    ! the Hessian with the preconditioners and extra trial vectors built from it
+    ! quantities every basis has together with the density matrix evaluating functions
+    ! and the response functions they return, with which the basis evaluates the exact
+    ! Hessian, whose type-bound procedures perform the operations every basis provides:
+    ! moving the current orbitals, the gradient and Hessian diagonal at the current
+    ! density, the response at the current density, and the eigendecomposition of the
+    ! static part of the Hessian with the preconditioners and extra trial vectors built
+    ! from it
     type, abstract :: orbital_basis_type
+        type(orbital_settings_type) :: settings
         integer(ip) :: n_ao, n_param, n_particle
         real(rp) :: energy
         real(rp), pointer, contiguous :: dm_ao(:, :, :) => null()
         real(rp), allocatable :: grad(:), h_diag(:)
-        logical :: hess_eigen_stale = .true.
+        logical :: evaluation_stale = .true., response_stale = .true., &
+                   hess_eigen_stale = .true.
+        procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
+        procedure(get_response_cs_type), pointer, nopass :: get_response_cs => null()
+        procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
+        procedure(get_response_os_type), pointer, nopass :: get_response_os => null()
     contains
         procedure(rotate_orbitals_basis_type), deferred :: rotate_orbitals
         procedure(calculate_grad_h_diag_basis_type), deferred :: calculate_grad_h_diag
@@ -42,6 +99,10 @@ module otr_common
         procedure(get_hess_eigval_pairs_basis_type), deferred :: get_hess_eigval_pairs
         procedure(get_extra_trial_vectors_basis_type), deferred :: &
             get_extra_trial_vectors
+        procedure :: refresh_response => refresh_response_orbital_basis
+        procedure :: precond => precond_orbital_basis
+        procedure :: precond_pd => precond_pd_orbital_basis
+        procedure :: fill_extra_trial_vectors => fill_extra_trial_vectors_orbital_basis
     end type
 
     abstract interface
@@ -123,6 +184,140 @@ contains
         end select
 
     end subroutine init_orbital_settings
+
+    subroutine refresh_response_orbital_basis(self, error)
+        !
+        ! this subroutine rebuilds the response callbacks at the currently stored
+        ! density matrix of the orbital basis
+        !
+        class(orbital_basis_type), intent(inout) :: self
+        integer(ip), intent(out) :: error
+
+        real(rp) :: energy
+
+        ! initialize error flag
+        error = 0
+
+        ! rebuild response, the energy is discarded since the caller already holds it
+        ! for the current density
+        if (associated(self%evaluate_dm_os)) then
+            call self%evaluate_dm_os(self%dm_ao, energy, &
+                                     get_response_funptr=self%get_response_os, &
+                                     error=error)
+        else
+            call self%evaluate_dm_cs(self%dm_ao(:, :, 1), energy, &
+                                     get_response_funptr=self%get_response_cs, &
+                                     error=error)
+        end if
+        if (error /= 0) return
+
+        ! the response callbacks were just rebuilt at the current density
+        self%response_stale = .false.
+
+    end subroutine refresh_response_orbital_basis
+
+    subroutine precond_orbital_basis(self, residual, mu, precond_residual, settings, &
+                                     error)
+        !
+        ! this subroutine applies a level-shifted preconditioner based on the exact
+        ! eigendecomposition of the static part of the Hessian of the orbital basis
+        !
+        class(orbital_basis_type), intent(inout) :: self
+        real(rp), intent(in) :: residual(:), mu
+        real(rp), intent(out) :: precond_residual(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
+
+        ! initialize error flag
+        error = 0
+
+        ! refresh the eigendecomposition if the static Hessian part has changed
+        call self%refresh_hess_eigen(settings, error)
+        if (error /= 0) return
+
+        ! rotate residual into the eigenbasis of the static Hessian part
+        rotated_residual = self%rotate_to_hess_eigenbasis(residual)
+
+        ! get eigenvalue pairs of the static Hessian part
+        eigval_pairs = self%get_hess_eigval_pairs()
+
+        ! apply level-shifted diagonal scaling in the eigenbasis
+        rotated_residual = rotated_residual / level_shifted_divisors(eigval_pairs, mu)
+
+        ! rotate back to the original basis
+        precond_residual = self%rotate_from_hess_eigenbasis(rotated_residual)
+
+    end subroutine precond_orbital_basis
+
+    subroutine precond_pd_orbital_basis(self, residual, precond_residual, settings, &
+                                        error)
+        !
+        ! this subroutine applies the positive-definite preconditioner based on the
+        ! exact eigendecomposition of the static part of the Hessian of the orbital
+        ! basis
+        !
+        class(orbital_basis_type), intent(inout) :: self
+        real(rp), intent(in) :: residual(:)
+        real(rp), intent(out) :: precond_residual(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
+
+        ! initialize error flag
+        error = 0
+
+        ! refresh the eigendecomposition if the static Hessian part has changed
+        call self%refresh_hess_eigen(settings, error)
+        if (error /= 0) return
+
+        ! rotate residual into the eigenbasis of the static Hessian part
+        rotated_residual = self%rotate_to_hess_eigenbasis(residual)
+
+        ! get eigenvalue pairs of the static Hessian part
+        eigval_pairs = self%get_hess_eigval_pairs()
+
+        ! apply positive-definite diagonal scaling in the eigenbasis
+        rotated_residual = rotated_residual / positive_definite_divisors(eigval_pairs)
+
+        ! rotate back to the original basis
+        precond_residual = self%rotate_from_hess_eigenbasis(rotated_residual)
+
+    end subroutine precond_pd_orbital_basis
+
+    subroutine fill_extra_trial_vectors_orbital_basis(self, eigval_pairs, trial_vectors)
+        !
+        ! this subroutine fills the extra trial vectors with the rotations belonging to
+        ! the most negative of the given eigenvalue pairs of the static part of the
+        ! Hessian, in increasing order, rotated out of its eigenbasis
+        !
+        class(orbital_basis_type), intent(in) :: self
+        real(rp), intent(in) :: eigval_pairs(:)
+        real(rp), intent(out) :: trial_vectors(:, :)
+
+        integer(ip) :: ivec, min_idx
+        real(rp), allocatable :: remaining_pairs(:), unit_vector(:)
+
+        ! a vanishing vector tells the solver that no direction is contributed for that
+        ! slot, which is what is returned for every slot left unfilled below
+        trial_vectors = 0.0_rp
+
+        ! fill the requested slots with the rotations belonging to the most negative
+        ! remaining eigenvalue pairs, stopping as soon as none is negative any more
+        remaining_pairs = eigval_pairs
+        allocate(unit_vector(size(eigval_pairs)))
+        do ivec = 1, size(trial_vectors, 2, kind=ip)
+            min_idx = minloc(remaining_pairs, dim=1)
+            if (remaining_pairs(min_idx) >= 0.0_rp) exit
+            unit_vector = 0.0_rp
+            unit_vector(min_idx) = 1.0_rp
+            trial_vectors(:, ivec) = self%rotate_from_hess_eigenbasis(unit_vector)
+            remaining_pairs(min_idx) = huge(1.0_rp)
+        end do
+
+    end subroutine fill_extra_trial_vectors_orbital_basis
 
     subroutine compute_sqrt_and_inv_sqrt(A, sqrtA, inv_sqrtA, settings, error)
         !
