@@ -323,6 +323,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/mo/tests/mo_unit_tests.f90
             extensions/mo/tests/mo_c_interface_unit_tests.f90
             extensions/mo/tests/mo_mock.f90
+            extensions/mo/tests/mo_c_interface_mock.f90
             extensions/mo/tests/mo_c_system_tests.c
         )
     endif()

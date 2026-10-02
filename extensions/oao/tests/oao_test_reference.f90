@@ -117,8 +117,6 @@ contains
         ! this subroutine overloads the assignment operator to convert reference values
         ! to their C counterpart
         !
-        use c_interface, only: character_to_c
-
         type(ref_oao_settings_type_c), intent(out) :: lhs
         type(ref_oao_settings_type), intent(in) :: rhs
 

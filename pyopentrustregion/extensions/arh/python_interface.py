@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import operator
 import numpy as np
 from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure, byref
 from dataclasses import dataclass
@@ -31,6 +30,11 @@ from pyopentrustregion.extensions.common.python_interface import (
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
     attach_wired_callbacks,
+)
+from pyopentrustregion.extensions.mo.python_interface import (
+    check_mo_coeff,
+    ObjFuncMOPyInterface,
+    UpdateOrbsMOPyInterface,
 )
 from pyopentrustregion.extensions.oao.python_interface import check_dm_ao
 
@@ -213,41 +217,6 @@ class EvaluateDMOSInterface:
         return 0
 
 
-@dataclass
-class ObjFuncMOPyInterface(ObjFuncPyInterface):
-    """
-    this class provides the Python interface to the objective function for orbitals
-    parameterized in the MO basis, mo_coeff_buffer is stored to ensure that the MO
-    coefficients the library works on are not garbage collected
-    """
-
-    mo_coeff_buffer: Optional[np.ndarray] = None
-
-
-@dataclass
-class UpdateOrbsMOPyInterface(UpdateOrbsPyInterface):
-    """
-    this class provides the Python interface to the orbital updating function for
-    orbitals parameterized in the MO basis, which additionally copies the rotated MO
-    coefficients back into the array of the caller whenever the library could not
-    rotate that array in place
-    """
-
-    mo_coeff: Optional[np.ndarray] = None
-    mo_coeff_buffer: Optional[np.ndarray] = None
-
-    def __call__(
-        self, kappa: np.ndarray, grad: np.ndarray, h_diag: np.ndarray
-    ) -> Tuple[float, Callable[[np.ndarray, np.ndarray], None]]:
-        try:
-            return super().__call__(kappa, grad, h_diag)
-        finally:
-            # copy rotated MO coefficients back, also on failure since the buffer may
-            # have been rotated by then
-            if self.mo_coeff is not None and self.mo_coeff_buffer is not None:
-                np.copyto(self.mo_coeff, self.mo_coeff_buffer.swapaxes(-1, -2))
-
-
 def arh_factory_mo(
     mo_coeff: np.ndarray,
     ao_overlap: np.ndarray,
@@ -265,41 +234,12 @@ def arh_factory_mo(
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
 ]:
-    # check the MO coefficients against the dimensions and determine if closed-shell or
-    # open-shell formalism is used
-    n_particle, n_ao, n_mo = (operator.index(n) for n in (n_particle, n_ao, n_mo))
-    shape = (n_ao, n_mo) if n_particle == 1 else (n_particle, n_ao, n_mo)
-    if mo_coeff.shape != shape:
-        raise ValueError(
-            f"The MO coefficients have to be of shape {shape} for {n_particle} "
-            f"particle(s), {n_ao} AOs and {n_mo} MOs, got shape {mo_coeff.shape}."
-        )
-    if not np.issubdtype(mo_coeff.dtype, np.floating) or not mo_coeff.flags.writeable:
-        raise ValueError(
-            "The MO coefficients have to be a real floating-point and writeable array, "
-            "since they are rotated in place."
-        )
+    # check the MO coefficients and overlap matrix against the dimensions and determine
+    # if closed-shell or open-shell formalism is used
+    mo_coeff_buffer, in_place, n_occ_c, ao_overlap = check_mo_coeff(
+        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo
+    )
     closed_shell = n_particle == 1
-    n_occ_list = [operator.index(occ) for occ in np.atleast_1d(n_occ)]
-    if len(n_occ_list) != n_particle:
-        raise ValueError(
-            "The number of occupied orbitals has to be given for every particle "
-            f"channel ({n_particle}), got {len(n_occ_list)}."
-        )
-    n_occ_c = (c_int * n_particle)(*n_occ_list)
-
-    # pass the MO coefficients column-major, rotating the caller's array in place if
-    # it is stored like that and a buffer copied back after every update otherwise
-    mo_coeff_buffer = np.ascontiguousarray(mo_coeff.swapaxes(-1, -2), dtype=np.float64)
-    in_place = np.shares_memory(mo_coeff_buffer, mo_coeff)
-
-    # the AO overlap matrix is symmetric, so it needs no transposition
-    ao_overlap = np.ascontiguousarray(ao_overlap, dtype=np.float64)
-    if ao_overlap.shape != (n_ao, n_ao):
-        raise ValueError(
-            f"The AO overlap matrix has to be of shape ({n_ao}, {n_ao}), got shape "
-            f"{ao_overlap.shape}."
-        )
 
     # get pointers to arrays
     mo_coeff_ptr = mo_coeff_buffer.ctypes.data_as(POINTER(c_real))
