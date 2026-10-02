@@ -45,8 +45,8 @@ contains
         ! with a pattern encoding their indices
         !
         use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
-        use otr_arh_c_interface, only: mo_coeff_3d_c
-        use otr_arh_test_reference, only: mo_coeff_pattern
+        use otr_mo_c_interface, only: mo_coeff_3d_c
+        use otr_mo_test_reference, only: mo_coeff_pattern
 
         real(c_rp), intent(in), target :: kappa(*)
         real(c_rp), intent(out) :: func
@@ -73,12 +73,14 @@ contains
         !
         use opentrustregion, only: default_solver_settings
         use otr_arh, only: arh_n_micro
-        use otr_arh_c_interface, only: arh_settings_type_c, mo_coeff_3d_c
+        use otr_arh_c_interface, only: arh_settings_type_c
+        use otr_mo_c_interface, only: mo_coeff_3d_c
         use c_interface, only: logger_c_type, solver_settings_type_c, assignment(=)
         use test_reference, only: tol_c
         use otr_arh_test_reference, only: &
             test_evaluate_dm_os_c_funptr, test_evaluate_dm_cs_c_funptr, &
-            n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, mo_coeff_pattern, operator(/=)
+            n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, operator(/=)
+        use otr_mo_test_reference, only: mo_coeff_pattern
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
                                           mock_precond_pd, mock_get_extra_trial_vectors
@@ -209,7 +211,8 @@ contains
                                           mock_get_extra_trial_vectors
         use otr_oao_c_interface_mock, only: mock_update_orbs_oao
 
-        real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
+        real(c_rp), intent(inout), target :: dm_ao_c(*)
+        real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr

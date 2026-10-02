@@ -28,10 +28,6 @@ module otr_arh_c_interface
     procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
 
-    ! MO coefficients passed from C, which are updated from their Fortran copy after
-    ! every orbital update if the real kinds differ
-    real(c_rp), pointer :: mo_coeff_3d_c(:, :, :) => null()
-
     ! C-interoperable interfaces for the callback functions
     abstract interface
         function evaluate_dm_os_c_type(dm_ao_c, energy_c, fock_c, v_same_spin_c, &
@@ -105,9 +101,9 @@ contains
         use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
         use otr_arh, only: arh_settings_type
-        use otr_oao, only: obj_func_type
-        use otr_oao_c_interface, only: obj_func_oao_before_wrapping, &
-                                       obj_func_oao_c_wrapper, oao_set_solver_settings_c
+        use otr_mo, only: obj_func_type
+        use otr_mo_c_interface, only: mo_coeff_3d_c, obj_func_mo_before_wrapping, &
+                                      obj_func_mo_c_wrapper, mo_set_solver_settings_c
         use otr_common_c_interface, only: n_param
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
@@ -196,16 +192,16 @@ contains
         end if
 
         ! associate the global procedure pointers to the Fortran function pointers
-        obj_func_oao_before_wrapping => obj_func_arh_funptr
+        obj_func_mo_before_wrapping => obj_func_arh_funptr
         update_orbs_arh_before_wrapping => update_orbs_arh_funptr
 
         ! get a C function pointer to the C wrapper functions
-        obj_func_arh_c_funptr = c_funloc(obj_func_oao_c_wrapper)
+        obj_func_arh_c_funptr = c_funloc(obj_func_mo_c_wrapper)
         update_orbs_arh_c_funptr = c_funloc(update_orbs_arh_c_wrapper)
 
         ! copy the solver settings
         if (error == 0) then
-            call oao_set_solver_settings_c(solver_settings, solver_settings_c)
+            call mo_set_solver_settings_c(solver_settings, solver_settings_c)
             solver_settings_c%refresh_hess = &
                 logical(solver_settings%refresh_hess, kind=c_bool)
             solver_settings_c%n_micro = int(solver_settings%n_micro, kind=c_ip)
@@ -234,7 +230,8 @@ contains
                                        obj_func_oao_c_wrapper, oao_set_solver_settings_c
         use otr_common_c_interface, only: n_param
 
-        real(c_rp), intent(in), target :: dm_ao_c(*), ao_overlap_c(*)
+        real(c_rp), intent(inout), target :: dm_ao_c(*)
+        real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
@@ -458,6 +455,7 @@ contains
         !
         use otr_common_c_interface, only: update_orbs_c_wrapper_impl
         use otr_oao_c_interface, only: dm_ao_3d_c
+        use otr_mo_c_interface, only: mo_coeff_3d_c
         use otr_arh, only: arh_object, arh_mo_type
 
         real(c_rp), intent(in), target :: kappa_c(*)

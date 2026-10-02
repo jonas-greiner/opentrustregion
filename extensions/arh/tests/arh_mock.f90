@@ -7,6 +7,7 @@
 module otr_arh_mock
 
     use opentrustregion, only: rp, ip, stderr
+    use c_interface, only: c_ip, c_rp
     use otr_arh, only: arh_factory_mo_cs, arh_factory_mo_os, arh_factory_oao_cs, &
                        arh_factory_oao_os, arh_deconstructor
     use test_reference, only: tol
@@ -42,8 +43,8 @@ contains
         !
         use opentrustregion, only: solver_settings_type, project_type
         use otr_arh, only: arh_n_micro
-        use otr_oao_mock, only: mock_precond_oao, mock_precond_pd_oao, &
-                                mock_get_extra_trial_vectors_oao
+        use otr_common_mock, only: mock_precond, mock_precond_pd, &
+                                   mock_get_extra_trial_vectors
 
         type(solver_settings_type), intent(inout) :: solver_settings
         procedure(project_type), optional :: project
@@ -51,12 +52,12 @@ contains
         integer(ip) :: error
 
         if (.not. solver_settings%initialized) call solver_settings%init(error)
-        solver_settings%precond => mock_precond_oao
-        solver_settings%precond_pd => mock_precond_pd_oao
-        solver_settings%get_extra_trial_vectors => mock_get_extra_trial_vectors_oao
-        solver_settings%stability_settings%precond => mock_precond_oao
+        solver_settings%precond => mock_precond
+        solver_settings%precond_pd => mock_precond_pd
+        solver_settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+        solver_settings%stability_settings%precond => mock_precond
         solver_settings%stability_settings%get_extra_trial_vectors => &
-            mock_get_extra_trial_vectors_oao
+            mock_get_extra_trial_vectors
         if (present(project)) then
             solver_settings%project => project
             solver_settings%stability_settings%project => project
@@ -94,10 +95,9 @@ contains
         ! wrapper, which is the same for both spin cases apart from the occupations
         !
         use otr_arh, only: arh_settings_type
-        use otr_arh_test_reference, only: mo_coeff_pattern, operator(/=)
-        use otr_mo_test_reference, only: n_mo_ref => n_mo
+        use otr_arh_test_reference, only: operator(/=)
+        use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern
         use otr_common_test_reference, only: n_ao_ref => n_ao, n_occ_ref => n_occ
-        use c_interface, only: c_ip, c_rp
 
         real(rp), intent(in) :: mo_coeff(:, :, :), ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
@@ -171,7 +171,7 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_settings_type, evaluate_dm_cs_type
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr
-        use otr_oao_mock, only: mock_obj_func_oao
+        use otr_common_mock, only: mock_obj_func
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -198,7 +198,7 @@ contains
 
         ! set output quantities
         error = 0
-        obj_func_arh_funptr => mock_obj_func_oao
+        obj_func_arh_funptr => mock_obj_func
         update_orbs_arh_funptr => mock_update_orbs_mo
         call mock_arh_set_solver_settings(solver_settings)
         mo_coeff_3d(1:n_ao, 1:n_mo, 1:1) => mo_coeff
@@ -216,7 +216,7 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_settings_type, evaluate_dm_os_type
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr
-        use otr_oao_mock, only: mock_obj_func_oao
+        use otr_common_mock, only: mock_obj_func
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -243,7 +243,7 @@ contains
 
         ! set output quantities
         error = 0
-        obj_func_arh_funptr => mock_obj_func_oao
+        obj_func_arh_funptr => mock_obj_func
         update_orbs_arh_funptr => mock_update_orbs_mo
         call mock_arh_set_solver_settings(solver_settings)
         mo_coeff_3d => mo_coeff
@@ -260,8 +260,8 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_settings_type, evaluate_dm_cs_type
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr, operator(/=)
-        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
-                                dm_ao_3d
+        use otr_common_mock, only: mock_obj_func
+        use otr_oao_mock, only: mock_update_orbs, mock_project_oao, dm_ao_3d
         use otr_common_test_reference, only: n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
@@ -326,7 +326,7 @@ contains
 
         ! set output quantities
         error = 0
-        obj_func_arh_funptr => mock_obj_func_oao
+        obj_func_arh_funptr => mock_obj_func
         update_orbs_arh_funptr => mock_update_orbs
         call mock_arh_set_solver_settings(solver_settings, mock_project_oao)
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
@@ -343,8 +343,8 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: evaluate_dm_os_type, arh_settings_type
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr, operator(/=)
-        use otr_oao_mock, only: mock_obj_func_oao, mock_update_orbs, mock_project_oao, &
-                                dm_ao_3d
+        use otr_common_mock, only: mock_obj_func
+        use otr_oao_mock, only: mock_update_orbs, mock_project_oao, dm_ao_3d
         use otr_common_test_reference, only: n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
@@ -410,7 +410,7 @@ contains
 
         ! set output quantities
         error = 0
-        obj_func_arh_funptr => mock_obj_func_oao
+        obj_func_arh_funptr => mock_obj_func
         update_orbs_arh_funptr => mock_update_orbs
         call mock_arh_set_solver_settings(solver_settings, mock_project_oao)
         dm_ao_3d => dm_ao

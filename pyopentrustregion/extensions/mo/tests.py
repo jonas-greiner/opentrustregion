@@ -11,6 +11,7 @@ from pyopentrustregion.tests import lib, add_tests, print_separator
 
 # define all tests in alphabetical order
 fortran_tests = {
+    "mo_c_system_tests": ["mo_settings_init"],
     "mo_tests": [
         "calculate_grad_h_diag_mo",
         "finalize_mo",
@@ -37,6 +38,21 @@ fortran_tests = {
         "rotate_to_hess_eigenbasis_mo",
         "update_orbs_mo_callback",
     ],
+    "mo_c_interface_tests": [
+        "assign_mo_c_f",
+        "assign_mo_f_c",
+        "evaluate_dm_mo_f_wrapper",
+        "get_extra_trial_vectors_mo_c_wrapper",
+        "get_response_mo_f_wrapper",
+        "hess_x_mo_c_wrapper",
+        "init_mo_settings_c",
+        "mo_deconstructor_c_wrapper",
+        "mo_factory_c_wrapper",
+        "obj_func_mo_c_wrapper",
+        "precond_mo_c_wrapper",
+        "precond_pd_mo_c_wrapper",
+        "update_orbs_mo_c_wrapper",
+    ],
 }
 
 # the MO routines are only built together with the MO extension, so raise an
@@ -47,7 +63,7 @@ getattr(lib, "test_" + fortran_tests["mo_tests"][0])
 @add_tests
 class MOTests(unittest.TestCase):
     """
-    this class contains unit tests for the MO extension
+    this class contains unit tests for MO
     """
 
     tests = fortran_tests["mo_tests"]
@@ -55,4 +71,32 @@ class MOTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         print_separator("Running unit tests for MO...")
+        return super().setUpClass()
+
+
+@add_tests
+class MOCInterfaceTests(unittest.TestCase):
+    """
+    this class contains unit tests for the MO C interface
+    """
+
+    tests = fortran_tests["mo_c_interface_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running unit tests for MO C interface...")
+        return super().setUpClass()
+
+
+@add_tests
+class MOCSystemTests(unittest.TestCase):
+    """
+    this class contains system tests for the MO C interface
+    """
+
+    tests = fortran_tests["mo_c_system_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running system tests for MO C interface...")
         return super().setUpClass()

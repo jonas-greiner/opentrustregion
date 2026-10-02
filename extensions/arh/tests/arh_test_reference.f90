@@ -73,28 +73,6 @@ module otr_arh_test_reference
 
 contains
 
-    function mo_coeff_pattern(n_rows, n_cols, n_channels, offset) result(pattern)
-        !
-        ! this function returns MO coefficients with the given numbers of AOs (rows),
-        ! MOs (columns) and particle channels whose values encode their particle
-        ! channel, AO and MO index (all counted from one) together with an offset
-        !
-        integer(c_ip), intent(in) :: n_rows, n_cols, n_channels
-        real(c_rp), intent(in) :: offset
-        real(c_rp) :: pattern(n_rows, n_cols, n_channels)
-
-        integer(c_ip) :: i, j, k
-
-        do k = 1, n_channels
-            do j = 1, n_cols
-                do i = 1, n_rows
-                    pattern(i, j, k) = offset + real(100 * k + 10 * i + j, kind=c_rp)
-                end do
-            end do
-        end do
-
-    end function mo_coeff_pattern
-
     function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message) &
         result(test_passed)
         !

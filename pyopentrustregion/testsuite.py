@@ -23,17 +23,21 @@ except AttributeError:
     pass
 
 try:
+    from pyopentrustregion.extensions.mo.tests import (
+        MOTests,
+        MOCInterfaceTests,
+        MOCSystemTests,
+    )
+except AttributeError:
+    pass
+
+try:
     from pyopentrustregion.extensions.oao.tests import (
         OAOTests,
         OAOCInterfaceTests,
         OAOPyInterfaceTests,
         OAOCSystemTests,
     )
-except AttributeError:
-    pass
-
-try:
-    from pyopentrustregion.extensions.mo.tests import MOTests
 except AttributeError:
     pass
 
