@@ -549,9 +549,12 @@ contains
                             dm_ao_new(n_ao, n_ao, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao), overlap_diag(n_ao), s_sqrt(n_ao, n_ao), &
                     s_inv_sqrt(n_ao, n_ao)
-        integer(ip) :: n_particle, n_ao_old, i, error
+        integer(ip) :: n_particle, leftover, n_ao_old, n_particle_old, i, error
         type(orbital_settings_type) :: settings
-        character(len=:), allocatable :: shell
+        character(len=:), allocatable :: shell, leftover_case
+        character(len=39), parameter :: leftover_names(2) = &
+            [character(len=39) :: "a different number of AOs", &
+             "a different number of particle channels"]
 
         ! assume tests pass
         test_oao_factory_common = .true.
@@ -582,35 +585,40 @@ contains
                 dm_ao_new(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
             end do
 
-            ! leave an OAO object from a calculation with a different number of AOs
-            ! (closed shell) or with a different number of particle channels for the
-            ! same number of AOs (open shell) behind and determine if it is set up anew
-            n_ao_old = merge(n_ao + 1, n_ao, n_particle == 1)
-            allocate(oao_object)
-            oao_object%n_ao = n_ao_old
-            oao_object%n_particle = 3 - n_particle
-            allocate(oao_object%s_sqrt(n_ao_old, n_ao_old), &
-                     oao_object%s_inv_sqrt(n_ao_old, n_ao_old), &
-                     oao_object%fock_oo(n_ao_old, n_ao_old, 3 - n_particle), &
-                     oao_object%grad(1), oao_object%h_diag(1))
-            oao_object%s_sqrt = 0.0_rp
-            oao_object%s_inv_sqrt = 0.0_rp
-            call oao_factory_common(dm_ao(:, :, :n_particle), ao_overlap, n_particle, &
-                                    n_ao, error, settings)
-            if (error /= 0) then
-                write(stderr, *) "test_oao_factory_common failed: Produced error "// &
-                    "for the "//shell//" object left from another calculation."
-                test_oao_factory_common = .false.
-            end if
-            if (.not. check_oao_object(dm_ao(:, :, :n_particle), s_sqrt, shell// &
-                                       " object left from another calculation")) &
-                test_oao_factory_common = .false.
-            if (norm2(oao_object%s_inv_sqrt - s_inv_sqrt) > tol) then
-                write(stderr, *) "test_oao_factory_common failed: Inverse square "// &
-                    "root of the overlap matrix not computed for the "//shell// &
-                    " object left from another calculation."
-                test_oao_factory_common = .false.
-            end if
+            ! leave OAO objects from calculations which differ only in the number of
+            ! AOs or of particle channels behind and determine if each is set up anew
+            do leftover = 1, size(leftover_names, kind=ip)
+                n_ao_old = merge(n_ao + 1, n_ao, leftover == 1)
+                n_particle_old = merge(3 - n_particle, n_particle, leftover == 2)
+                leftover_case = shell//" object left from a calculation with "// &
+                                trim(leftover_names(leftover))
+                if (allocated(oao_object)) deallocate(oao_object)
+                allocate(oao_object)
+                oao_object%n_ao = n_ao_old
+                oao_object%n_particle = n_particle_old
+                allocate(oao_object%s_sqrt(n_ao_old, n_ao_old), &
+                         oao_object%s_inv_sqrt(n_ao_old, n_ao_old), &
+                         oao_object%fock_oo(n_ao_old, n_ao_old, n_particle_old), &
+                         oao_object%grad(1), oao_object%h_diag(1))
+                oao_object%s_sqrt = 0.0_rp
+                oao_object%s_inv_sqrt = 0.0_rp
+                call oao_factory_common(dm_ao(:, :, :n_particle), ao_overlap, &
+                                        n_particle, n_ao, error, settings)
+                if (error /= 0) then
+                    write(stderr, *) "test_oao_factory_common failed: Produced "// &
+                        "error for the "//leftover_case//"."
+                    test_oao_factory_common = .false.
+                end if
+                if (.not. check_oao_object(dm_ao(:, :, :n_particle), s_sqrt, &
+                                           leftover_case)) &
+                    test_oao_factory_common = .false.
+                if (norm2(oao_object%s_inv_sqrt - s_inv_sqrt) > tol) then
+                    write(stderr, *) "test_oao_factory_common failed: Inverse "// &
+                        "square root of the overlap matrix not computed for the "// &
+                        leftover_case//"."
+                    test_oao_factory_common = .false.
+                end if
+            end do
 
             ! leave evaluated quantities with their response functions, the density
             ! matrix evaluating function, marked square roots of the overlap matrix and
@@ -1579,9 +1587,10 @@ contains
         test_precond_pd_oao_callback = .true.
 
         ! set up the OAO object with an eigendecomposition whose eigenvalue pairs, the
-        ! open-shell sums 2 (e_i + e_j), are all 2, so that the preconditioner of the
-        ! orbital basis halves the residual
-        call setup_identity_oao_eigenbasis(0.5_rp)
+        ! open-shell sums 2 (e_i + e_j), are all -2, so that the positive-definite
+        ! preconditioner of the orbital basis, which divides by their magnitudes,
+        ! halves the residual, unlike the level-shifted one
+        call setup_identity_oao_eigenbasis(-0.5_rp)
         allocate(residual(oao_object%n_param), precond_residual(oao_object%n_param))
         call random_number(residual)
 

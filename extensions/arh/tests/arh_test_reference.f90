@@ -483,11 +483,14 @@ contains
         ! reference values
         !
         use otr_arh, only: arh_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(arh_settings_type), intent(in) :: lhs
         type(ref_arh_settings_type), intent(in) :: rhs
 
-        equal_arh_to_ref = lhs%verbose == rhs%verbose .and. lhs%arh_type == rhs%arh_type
+        equal_arh_to_ref = &
+            lhs%orbital_settings_type == rhs%ref_orbital_settings_type .and. &
+            lhs%arh_type == rhs%arh_type
 
     end function equal_arh_to_ref
 
@@ -543,10 +546,12 @@ contains
         ! different ARH settings
         !
         use otr_arh, only: arh_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(arh_settings_type), intent(in) :: lhs, rhs
 
-        equal_arh = lhs%verbose == rhs%verbose .and. lhs%arh_type == rhs%arh_type
+        equal_arh = lhs%orbital_settings_type == rhs%orbital_settings_type .and. &
+                    lhs%arh_type == rhs%arh_type
 
     end function equal_arh
 

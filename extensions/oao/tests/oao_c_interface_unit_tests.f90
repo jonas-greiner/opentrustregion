@@ -20,10 +20,14 @@ contains
         ! this function tests the C wrapper for the OAO factory for the closed- and the
         ! open-shell case
         !
-        use otr_oao_c_interface, only: oao_settings_type_c, oao_factory_cs, &
-                                       oao_factory_os, oao_factory_c_wrapper
+        use otr_oao_c_interface, only: &
+            oao_settings_type_c, oao_factory_cs, oao_factory_os, &
+            oao_factory_c_wrapper, obj_func_oao_before_wrapping, &
+            update_orbs_oao_before_wrapping, precond_oao_before_wrapping, &
+            precond_pd_oao_before_wrapping, &
+            get_extra_trial_vectors_oao_before_wrapping, project_oao_before_wrapping
         use otr_oao_mock, only: mock_oao_factory_cs, mock_oao_factory_os, test_passed, &
-                                dm_ao_3d
+                                dm_ao_3d, mock_update_orbs, mock_project_oao
         use otr_oao_test_reference, only: assignment(=), ref_oao_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_ao_c
         use otr_common_unit_tests, only: shell_names
@@ -33,6 +37,8 @@ contains
                                   test_project_c_funptr, &
                                   test_get_extra_trial_vectors_c_funptr, ref_settings, &
                                   assignment(=), operator(/=), n_param_ref => n_param
+        use otr_common_mock, only: mock_obj_func, mock_precond, mock_precond_pd, &
+                                   mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
         use otr_common_c_interface_unit_tests, only: mock_evaluate_dm_cs, &
@@ -86,6 +92,12 @@ contains
                 solver_settings_c = ref_settings
             end if
 
+            ! clear the callback slots, which only the factory call may set
+            nullify(obj_func_oao_before_wrapping, update_orbs_oao_before_wrapping, &
+                    precond_oao_before_wrapping, precond_pd_oao_before_wrapping, &
+                    get_extra_trial_vectors_oao_before_wrapping, &
+                    project_oao_before_wrapping)
+
             ! call OAO factory C wrapper
             error_c = oao_factory_c_wrapper( &
                 dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
@@ -109,6 +121,23 @@ contains
                 test_oao_factory_c_wrapper = .false.
                 write(stderr, *) "test_oao_factory_c_wrapper failed: Returned "// &
                     "error code wrong for the "//case_name//" case."
+            end if
+
+            ! check if the callback slots point to the returned and wired functions,
+            ! without which calling these below would crash
+            if (.not. ( &
+                associated(obj_func_oao_before_wrapping, mock_obj_func) .and. &
+                associated(update_orbs_oao_before_wrapping, mock_update_orbs) .and. &
+                associated(precond_oao_before_wrapping, mock_precond) .and. &
+                associated(precond_pd_oao_before_wrapping, mock_precond_pd) .and. &
+                associated(get_extra_trial_vectors_oao_before_wrapping, &
+                           mock_get_extra_trial_vectors) .and. &
+                associated(project_oao_before_wrapping, mock_project_oao))) then
+                test_oao_factory_c_wrapper = .false.
+                write(stderr, *) "test_oao_factory_c_wrapper failed: Callback "// &
+                    "slots not set for the "//case_name//" case."
+                nullify(dm_ao_3d)
+                return
             end if
 
             ! determine if the number of parameters of the OAO basis was set

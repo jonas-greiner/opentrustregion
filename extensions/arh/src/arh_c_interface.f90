@@ -323,9 +323,9 @@ contains
             call oao_set_solver_settings_c(solver_settings, solver_settings_c)
             solver_settings_c%refresh_hess = &
                 logical(solver_settings%refresh_hess, kind=c_bool)
+            solver_settings_c%n_micro = int(solver_settings%n_micro, kind=c_ip)
             solver_settings_c%hess_symm = &
                 logical(solver_settings%hess_symm, kind=c_bool)
-            solver_settings_c%n_micro = int(solver_settings%n_micro, kind=c_ip)
         end if
 
         ! convert return arguments to C kind

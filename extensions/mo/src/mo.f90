@@ -277,8 +277,8 @@ contains
             return
         end if
 
-        ! check that there is one particle channel for the closed-shell and two for
-        ! the open-shell case
+        ! check that there is one particle channel for the closed-shell and two for the
+        ! open-shell case
         if (n_particle < 1 .or. n_particle > 2) then
             call settings%log("Number of particles should be 1 or 2.", &
                               verbosity_error, .true.)
@@ -387,8 +387,6 @@ contains
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation in the MO basis
         !
-        use opentrustregion, only: hess_x_type
-
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -498,12 +496,11 @@ contains
             n_virt = mo_object%mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
             x_block = reshape(x(rows(1, i):rows(2, i)), [n_occ, n_virt])
-            allocate(temp(n_ao, n_virt))
-            call dgemm("N", "N", n_ao, n_virt, n_occ, 1.0_rp, &
-                       mo_object%mo_coeff(:, :n_occ, i), n_ao, x_block, n_occ, 0.0_rp, &
-                       temp, n_ao)
-            call dgemm("N", "T", n_ao, n_ao, n_virt, 1.0_rp, temp, n_ao, &
-                       mo_object%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, &
+            allocate(temp(n_occ, n_ao))
+            call dgemm("N", "T", n_occ, n_ao, n_virt, 1.0_rp, x_block, n_occ, &
+                       mo_object%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, temp, n_occ)
+            call dgemm("N", "N", n_ao, n_ao, n_occ, 1.0_rp, &
+                       mo_object%mo_coeff(:, :n_occ, i), n_ao, temp, n_occ, 0.0_rp, &
                        dm_response(:, :, i), n_ao)
             dm_response(:, :, i) = dm_response(:, :, i) + &
                                    transpose(dm_response(:, :, i))
@@ -526,12 +523,12 @@ contains
             n_occ = mo_object%mo_channels(i)%n_occ
             n_virt = mo_object%mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
-            allocate(temp(n_ao, n_virt), hess_x_block(n_occ, n_virt))
-            call dgemm("N", "N", n_ao, n_virt, n_ao, 1.0_rp, fock_response(:, :, i), &
-                       n_ao, mo_object%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, temp, &
-                       n_ao)
-            call dgemm("T", "N", n_occ, n_virt, n_ao, 1.0_rp, &
-                       mo_object%mo_coeff(:, :n_occ, i), n_ao, temp, n_ao, 0.0_rp, &
+            allocate(temp(n_occ, n_ao), hess_x_block(n_occ, n_virt))
+            call dgemm("T", "N", n_occ, n_ao, n_ao, 1.0_rp, &
+                       mo_object%mo_coeff(:, :n_occ, i), n_ao, fock_response(:, :, i), &
+                       n_ao, 0.0_rp, temp, n_occ)
+            call dgemm("N", "N", n_occ, n_virt, n_ao, 1.0_rp, temp, n_occ, &
+                       mo_object%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, &
                        hess_x_block, n_occ)
             hess_x(rows(1, i):rows(2, i)) = &
                 hess_x(rows(1, i):rows(2, i)) + &

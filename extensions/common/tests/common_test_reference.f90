@@ -40,6 +40,7 @@ module otr_common_test_reference
         [character(len=17) :: "Fock matrix", "response function"]
 
     interface operator(==)
+        module procedure equal_orbital_to_ref
         module procedure equal_orbital
     end interface
 
@@ -658,6 +659,21 @@ contains
             capital(1:1) = achar(iachar(text(1:1)) - iachar("a") + iachar("A"))
 
     end function capitalized
+
+    logical function equal_orbital_to_ref(lhs, rhs)
+        !
+        ! this function overloads the comparison operator to compare the settings
+        ! shared by the extensions parameterizing the orbitals in an orbital basis to
+        ! reference values
+        !
+        use otr_common, only: orbital_settings_type
+
+        type(orbital_settings_type), intent(in) :: lhs
+        type(ref_orbital_settings_type), intent(in) :: rhs
+
+        equal_orbital_to_ref = lhs%verbose == rhs%verbose
+
+    end function equal_orbital_to_ref
 
     logical function equal_orbital(lhs, rhs)
         !

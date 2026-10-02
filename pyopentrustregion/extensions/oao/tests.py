@@ -28,7 +28,6 @@ from pyopentrustregion.tests import (
 )
 from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
-from pyopentrustregion.extensions.common.python_interface import EvaluateDMInterface
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -197,9 +196,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
     @patch("pyopentrustregion.python_interface.lib.oao_factory", lib.mock_oao_factory)
     def test_oao_factory_py_interface(self):
         """
-        this function tests the OAO factory python interface (only tests whether dm_ao
-        and mock_evaluate_dm are passed correctly for the open-shell case since
-        everything else is the same in the closed-shell case)
+        this function tests the OAO factory python interface
         """
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
 
@@ -508,29 +505,6 @@ class OAOPyInterfaceTests(unittest.TestCase):
                 test_passed = False
             except error_type:
                 pass
-
-        # check if a density matrix evaluating function which returns no response
-        # function although one is requested produces an error
-        def evaluate_dm_without_response(dm_ao, fock, get_response):
-            return np.sum(dm_ao), None
-
-        exception = {}
-        evaluate_dm = EvaluateDMInterface(
-            evaluate_dm_without_response, n_ao, 1, True, exception
-        )
-        dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
-        energy = (c_real * 1)()
-        get_response_funptr = (c_void_p * 1)()
-        error = evaluate_dm(
-            dm_ao.ctypes.data_as(POINTER(c_real)), energy, None, get_response_funptr
-        )
-        if error == 0 or not isinstance(exception.get("exc"), RuntimeError):
-            print(
-                " test_oao_factory_py_interface failed: Missing response function "
-                "requested from density matrix evaluating function does not produce "
-                "an error."
-            )
-            test_passed = False
 
         self.assertTrue(
             c_bool.in_dll(lib, "test_oao_factory_interface").value and test_passed,

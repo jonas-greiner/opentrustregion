@@ -8,6 +8,7 @@
 #define OPENTRUSTREGION_ARH_H
 
 #include "opentrustregion.h"
+#include "opentrustregion_mo.h"
 #include "opentrustregion_oao.h"
 
 #ifdef __cplusplus

@@ -17,10 +17,6 @@ module otr_arh_mock
 
     logical :: test_passed
 
-    ! MO coefficients passed to the mock MO factories, which the mock orbital updating
-    ! function for the MO basis overwrites to test that they are rotated in place
-    real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :) => null()
-
     ! create function pointers to ensure that routines comply with interface
     procedure(arh_factory_mo_cs), pointer :: mock_arh_factory_mo_cs_ptr => &
         mock_arh_factory_mo_cs
@@ -37,8 +33,8 @@ contains
 
     subroutine mock_arh_set_solver_settings(solver_settings, project)
         !
-        ! this subroutine wires the OAO mock routines and, if given, a projection into
-        ! the solver settings and asks for the Hessian refresh and the raised micro
+        ! this subroutine wires the mock routines and, if given, a projection into the
+        ! solver settings and asks for the Hessian refresh and the raised micro
         ! iteration limit, as the ARH factories do
         !
         use opentrustregion, only: solver_settings_type, project_type
@@ -67,26 +63,6 @@ contains
         solver_settings%n_micro = arh_n_micro
 
     end subroutine mock_arh_set_solver_settings
-
-    subroutine mock_update_orbs_mo(kappa, func, grad, h_diag, hess_x_funptr, error)
-        !
-        ! this subroutine is a test subroutine for the orbital update function for
-        ! orbitals parameterized in the MO basis
-        !
-        use opentrustregion, only: hess_x_type
-        use otr_common_mock, only: orig_mock_update_orbs => mock_update_orbs
-
-        real(rp), intent(in), target :: kappa(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-
-        call orig_mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
-
-        mo_coeff_3d = 2.0_rp
-
-    end subroutine mock_update_orbs_mo
 
     subroutine check_factory_mo_input(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
                                       n_mo, settings)
@@ -172,6 +148,7 @@ contains
         use otr_arh, only: arh_settings_type, evaluate_dm_cs_type
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr
         use otr_common_mock, only: mock_obj_func
+        use otr_mo_mock, only: mock_update_orbs, mo_coeff_3d
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -199,7 +176,7 @@ contains
         ! set output quantities
         error = 0
         obj_func_arh_funptr => mock_obj_func
-        update_orbs_arh_funptr => mock_update_orbs_mo
+        update_orbs_arh_funptr => mock_update_orbs
         call mock_arh_set_solver_settings(solver_settings)
         mo_coeff_3d(1:n_ao, 1:n_mo, 1:1) => mo_coeff
 
@@ -217,6 +194,7 @@ contains
         use otr_arh, only: arh_settings_type, evaluate_dm_os_type
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr
         use otr_common_mock, only: mock_obj_func
+        use otr_mo_mock, only: mock_update_orbs, mo_coeff_3d
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -244,7 +222,7 @@ contains
         ! set output quantities
         error = 0
         obj_func_arh_funptr => mock_obj_func
-        update_orbs_arh_funptr => mock_update_orbs_mo
+        update_orbs_arh_funptr => mock_update_orbs
         call mock_arh_set_solver_settings(solver_settings)
         mo_coeff_3d => mo_coeff
 

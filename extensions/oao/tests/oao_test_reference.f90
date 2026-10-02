@@ -130,11 +130,12 @@ contains
         ! reference values
         !
         use otr_oao, only: oao_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(oao_settings_type), intent(in) :: lhs
         type(ref_oao_settings_type), intent(in) :: rhs
 
-        equal_oao_to_ref = lhs%verbose == rhs%verbose
+        equal_oao_to_ref = lhs%orbital_settings_type == rhs%ref_orbital_settings_type
 
     end function equal_oao_to_ref
 
@@ -190,10 +191,11 @@ contains
         ! different OAO settings
         !
         use otr_oao, only: oao_settings_type
+        use otr_common_test_reference, only: operator(==)
 
         type(oao_settings_type), intent(in) :: lhs, rhs
 
-        equal_oao = lhs%verbose == rhs%verbose
+        equal_oao = lhs%orbital_settings_type == rhs%orbital_settings_type
 
     end function equal_oao
 

@@ -419,38 +419,6 @@ contains
 
     end function ref_hess_eigval_pairs_mo
 
-    function ref_extra_trial_vectors_mo(channels, n_mo, n_extra) result(trial_vectors)
-        !
-        ! this function independently constructs the extra trial vectors in the MO
-        ! basis, the rotations between the pseudo-canonical orbitals ordered by
-        ! increasing negative orbital energy difference, rotated out of the eigenbasis,
-        ! with vanishing slots once no difference is negative any more
-        !
-        use otr_mo, only: mo_channel_type
-
-        type(mo_channel_type), intent(in) :: channels(:)
-        integer(ip), intent(in) :: n_mo, n_extra
-        real(rp), allocatable :: trial_vectors(:, :)
-
-        real(rp), allocatable :: pairs(:), unit_vector(:)
-        integer(ip) :: n_param, ivec, min_idx
-
-        pairs = ref_hess_eigval_pairs_mo(channels)
-        n_param = size(pairs, kind=ip)
-        allocate(trial_vectors(n_param, n_extra), unit_vector(n_param))
-        trial_vectors = 0.0_rp
-        do ivec = 1, n_extra
-            min_idx = minloc(pairs, dim=1)
-            if (pairs(min_idx) >= 0.0_rp) exit
-            unit_vector = 0.0_rp
-            unit_vector(min_idx) = 1.0_rp
-            trial_vectors(:, ivec) = &
-                ref_rotate_eigenbasis_mo(unit_vector, channels, n_mo, .false.)
-            pairs(min_idx) = huge(1.0_rp)
-        end do
-
-    end function ref_extra_trial_vectors_mo
-
     function ref_rotate_mo_coeff(kappa, mo_coeff, n_occ) result(rot_mo_coeff)
         !
         ! this function independently reproduces the rotation of orthonormal MO
@@ -532,7 +500,7 @@ contains
             end if
             if (norm2(rotated - ref_rotate_eigenbasis_mo( &
                 x, mo_object%mo_channels, n_mo, to_eigenbasis)) > tol) then
-                write(stderr, *) test_name//" failed: Incorrect rotation in the "// &
+                write(stderr, *) test_name//" failed: Incorrect rotation for the "// &
                     trim(case_names(i_case))//" case."
                 passed = .false.
             end if
@@ -766,9 +734,14 @@ contains
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref), &
                             mo_coeff_new(n_ao, n_mo, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao)
-        integer(ip) :: n_particle, n_ao_old, error
+        integer(ip) :: n_particle, leftover, n_ao_old, n_mo_old, error
+        integer(ip), allocatable :: n_occ_old(:)
         type(orbital_settings_type) :: settings
-        character(len=:), allocatable :: shell
+        character(len=:), allocatable :: shell, leftover_case
+        character(len=39), parameter :: leftover_names(4) = &
+            [character(len=39) :: "a different number of AOs", &
+             "a different number of MOs", "a different number of particle channels", &
+             "different occupations"]
 
         ! assume tests pass
         test_mo_factory_common = .true.
@@ -784,28 +757,42 @@ contains
             mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
             mo_coeff_new = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
 
-            ! leave an MO object from a calculation with a different number of AOs
-            ! (closed shell) or with swapped occupations of the same dimensions (open
-            ! shell) behind and determine if it is set up anew
-            n_ao_old = merge(n_ao + 1, n_ao, n_particle == 1)
-            allocate(mo_object)
-            mo_object%n_ao = n_ao_old
-            mo_object%n_mo = n_mo
-            allocate(mo_object%mo_channels(n_particle), mo_object%grad(1), &
-                     mo_object%h_diag(1), &
-                     mo_object%dm_ao(n_ao_old, n_ao_old, n_particle))
-            mo_object%mo_channels%n_occ = n_occ(n_particle:1:-1)
-            call mo_factory_common(mo_coeff(:, :, :n_particle), ao_overlap, &
-                                   n_occ(:n_particle), n_particle, n_ao, n_mo, error, &
-                                   settings)
-            if (error /= 0) then
-                write(stderr, *) "test_mo_factory_common failed: Produced error "// &
-                    "for the "//shell//" object left from another calculation."
-                test_mo_factory_common = .false.
-            end if
-            if (.not. check_mo_object(mo_coeff(:, :, :n_particle), &
-                                      shell//" object left from another calculation")) &
-                test_mo_factory_common = .false.
+            ! leave MO objects from calculations which differ only in the number of
+            ! AOs, of MOs or of particle channels or in the occupations, which are
+            ! lowered for the closed and swapped for the open shell, behind and
+            ! determine if each is set up anew
+            do leftover = 1, size(leftover_names, kind=ip)
+                n_ao_old = merge(n_ao + 1, n_ao, leftover == 1)
+                n_mo_old = merge(n_mo - 1, n_mo, leftover == 2)
+                if (leftover == 3) then
+                    n_occ_old = n_occ(:3 - n_particle)
+                else if (leftover == 4) then
+                    n_occ_old = merge(n_occ(:n_particle) - 1, n_occ(n_particle:1:-1), &
+                                      n_particle == 1)
+                else
+                    n_occ_old = n_occ(:n_particle)
+                end if
+                leftover_case = shell//" object left from a calculation with "// &
+                                trim(leftover_names(leftover))
+                if (allocated(mo_object)) deallocate(mo_object)
+                allocate(mo_object)
+                mo_object%n_ao = n_ao_old
+                mo_object%n_mo = n_mo_old
+                allocate(mo_object%mo_channels(size(n_occ_old)), mo_object%grad(1), &
+                         mo_object%h_diag(1), &
+                         mo_object%dm_ao(n_ao_old, n_ao_old, size(n_occ_old)))
+                mo_object%mo_channels%n_occ = n_occ_old
+                call mo_factory_common(mo_coeff(:, :, :n_particle), ao_overlap, &
+                                       n_occ(:n_particle), n_particle, n_ao, n_mo, &
+                                       error, settings)
+                if (error /= 0) then
+                    write(stderr, *) "test_mo_factory_common failed: Produced "// &
+                        "error for the "//leftover_case//"."
+                    test_mo_factory_common = .false.
+                end if
+                if (.not. check_mo_object(mo_coeff(:, :, :n_particle), leftover_case)) &
+                    test_mo_factory_common = .false.
+            end do
 
             ! leave evaluated quantities with their response functions, the density
             ! matrix evaluating function and only the gradient allocated behind and
@@ -1205,7 +1192,7 @@ contains
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao), &
                     mo_coeff_start(n_ao, n_mo, n_particle_ref), energy, expected_energy
-        real(rp), allocatable :: kappa(:), rot_mo_coeff(:, :, :)
+        real(rp), allocatable :: kappa(:), rot_mo_coeff(:, :, :), dm_ao_start(:, :, :)
         integer(ip) :: n_particle, i, error
         character(len=:), allocatable :: case_name
 
@@ -1261,9 +1248,9 @@ contains
                 test_obj_func_mo_callback = .false.
             end if
 
-            ! call routine with an orbital rotation and determine if the energy of the
-            ! density matrix of the rotated orbitals is returned while the current
-            ! orbitals are left untouched
+            ! call routine with an orbital rotation and determine if only the energy of
+            ! the density matrix of the rotated orbitals is requested and returned
+            ! while the current orbitals and density matrix are left untouched
             call random_number(kappa)
             kappa = 0.2_rp * (kappa - 0.5_rp)
             rot_mo_coeff = ref_rotate_mo_coeff( &
@@ -1274,6 +1261,8 @@ contains
                                   sum(matmul(rot_mo_coeff(:, :n_occ(i), i), &
                                              transpose(rot_mo_coeff(:, :n_occ(i), i))))
             end do
+            dm_ao_start = mo_object%dm_ao
+            mock_requests = [integer(ip) :: ]
             energy = obj_func_mo_callback(kappa, error)
             if (error /= 0) then
                 write(stderr, *) "test_obj_func_mo_callback failed: Produced error "// &
@@ -1285,10 +1274,22 @@ contains
                     "energy for an orbital rotation for the "//case_name//" case."
                 test_obj_func_mo_callback = .false.
             end if
+            if (size(mock_requests) /= 1 .or. any(mock_requests /= 0)) then
+                write(stderr, *) "test_obj_func_mo_callback failed: Incorrect "// &
+                    "outputs requested from density matrix evaluating function for "// &
+                    "an orbital rotation for the "//case_name//" case."
+                test_obj_func_mo_callback = .false.
+            end if
             if (norm2(mo_coeff - mo_coeff_start) > tol) then
                 write(stderr, *) "test_obj_func_mo_callback failed: Current "// &
                     "orbitals changed by an orbital rotation for the "//case_name// &
                     " case."
+                test_obj_func_mo_callback = .false.
+            end if
+            if (norm2(mo_object%dm_ao - dm_ao_start) > tol) then
+                write(stderr, *) "test_obj_func_mo_callback failed: Current "// &
+                    "density matrix changed by an orbital rotation for the "// &
+                    case_name//" case."
                 test_obj_func_mo_callback = .false.
             end if
 
@@ -1494,15 +1495,17 @@ contains
             end if
 
             ! call routine with an orbital rotation, keeping the MO coefficients it
-            ! starts from, and determine if the orbitals are moved, consistently with
+            ! starts from, and determine if the orbitals are rotated, consistently with
             ! the density matrix, and evaluated, and if every evaluation requested the
             ! Fock matrix and the response function
             mo_coeff_start = mo_object%mo_coeff
             if (.not. check_update_orbs_mo_stage(4_ip, "an orbital rotation")) &
                 test_update_orbs_mo_callback = .false.
-            if (norm2(mo_object%mo_coeff - mo_coeff_start) < tol) then
+            if (norm2(mo_object%mo_coeff - ref_rotate_mo_coeff( &
+                kappa, mo_coeff_start, n_occ(:n_particle))) > tol) then
                 write(stderr, *) "test_update_orbs_mo_callback failed: Orbitals "// &
-                    "not moved by an orbital rotation for the "//case_name//" case."
+                    "not rotated correctly by an orbital rotation for the "// &
+                    case_name//" case."
                 test_update_orbs_mo_callback = .false.
             end if
             do i = 1, n_particle
@@ -1863,11 +1866,12 @@ contains
         test_precond_pd_mo_callback = .true.
 
         ! set up the MO object with an eigendecomposition whose eigenvalue pairs, the
-        ! open-shell differences 2 (e_v - e_o), are all 2, so that the preconditioner
-        ! of the orbital basis halves the residual
+        ! open-shell differences 2 (e_v - e_o), are all -2, so that the
+        ! positive-definite preconditioner of the orbital basis, which divides by their
+        ! magnitudes, halves the residual, unlike the level-shifted one
         call setup_minimal_mo_object(n_occ)
         call setup_settings(mo_object%settings)
-        call setup_identity_mo_eigenbasis(0.0_rp, 1.0_rp)
+        call setup_identity_mo_eigenbasis(1.0_rp, 0.0_rp)
         allocate(residual(mo_object%n_param), precond_residual(mo_object%n_param))
         call random_number(residual)
 
@@ -2048,7 +2052,7 @@ contains
                 "rotated in place."
             test_rotate_orbitals_mo = .false.
         end if
-        do k = 1, 2
+        do k = 1, n_particle
             if (norm2(mo_object%dm_ao(:, :, k) - matmul( &
                 expected(:, :n_occ(k), k), transpose(expected(:, :n_occ(k), k)))) > &
                 tol) then
@@ -2085,7 +2089,7 @@ contains
                     fd_grad(n_param_cs)
         real(rp), allocatable :: expected_h_diag(:)
         integer(ip), allocatable :: n_occ(:)
-        integer(ip) :: n_particle, n_occ_k, i, j, k, i_case, i_sign, error
+        integer(ip) :: n_particle, n_occ_k, i, j, k, i_case, i_sign
         character(len=:), allocatable :: case_name
 
         ! assume tests pass
@@ -2155,15 +2159,15 @@ contains
             deallocate(mo_object)
         end do
 
-        ! call routine for the closed-shell Fock matrix of an energy which is
-        ! consistent with it and determine if the gradient is the finite-difference
-        ! derivative of the energy along the reference orbital rotation, which pins the
-        ! rotation convention and parameter order against the gradient
+        ! call routine for a random symmetric closed-shell Fock matrix H, which, unlike
+        ! that of the mock, is consistent with an energy, the linear energy 2 tr(H D),
+        ! and determine if the gradient is the finite-difference derivative of the
+        ! energy along the reference orbital rotation, which pins the rotation
+        ! convention and parameter order against the gradient
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
         call setup_mo_object(mo_coeff(:, :, :1), ao_overlap, n_occ_ref(:1))
-        call linear_evaluate_dm_cs(mo_object%dm_ao(:, :, 1), energy, fock_ao(:, :, 1), &
-                                   error_out=error)
+        fock_ao(:, :, 1) = generate_random_symm_matrix(n_ao)
         call mo_object%calculate_grad_h_diag(fock_ao(:, :, :1))
         do k = 1, n_param_cs
             fd_grad(k) = 0.0_rp
@@ -2172,10 +2176,9 @@ contains
                 kappa(k) = i_sign * fd_step
                 rot_mo_coeff = ref_rotate_mo_coeff(kappa, mo_coeff(:, :, :1), &
                                                    n_occ_ref(:1))
-                call linear_evaluate_dm_cs( &
-                    matmul(rot_mo_coeff(:, :n_occ_ref(1), 1), &
-                           transpose(rot_mo_coeff(:, :n_occ_ref(1), 1))), energy, &
-                    error_out=error)
+                energy = 2.0_rp * sum(fock_ao(:, :, 1) * matmul( &
+                    rot_mo_coeff(:, :n_occ_ref(1), 1), &
+                    transpose(rot_mo_coeff(:, :n_occ_ref(1), 1))))
                 fd_grad(k) = fd_grad(k) + i_sign * energy / (2.0_rp * fd_step)
             end do
         end do
@@ -2185,47 +2188,6 @@ contains
             test_calculate_grad_h_diag_mo = .false.
         end if
         deallocate(mo_object)
-
-    contains
-
-        subroutine linear_evaluate_dm_cs(dm, energy_out, fock_out, v_nonlinear_out, &
-                                         error_out)
-            !
-            ! this subroutine is a density matrix evaluating function for the
-            ! closed-shell case with the linear energy 2 tr(H D), whose Fock matrix H
-            ! is, unlike that of the mock, consistent with the energy
-            !
-            real(rp), intent(in), target, contiguous :: dm(:, :)
-            real(rp), intent(out) :: energy_out
-            real(rp), intent(out), optional, target, contiguous :: fock_out(:, :), &
-                                                                   v_nonlinear_out(:, :)
-            integer(ip), intent(out) :: error_out
-
-            error_out = 0
-            energy_out = 2.0_rp * sum(linear_core(size(dm, 1, kind=ip)) * dm)
-            if (present(fock_out)) fock_out = linear_core(size(dm, 1, kind=ip))
-            if (present(v_nonlinear_out)) v_nonlinear_out = 0.0_rp
-
-        end subroutine linear_evaluate_dm_cs
-
-        function linear_core(n) result(core)
-            !
-            ! this function returns the fixed symmetric matrix defining the energy of
-            ! linear_evaluate_dm_cs
-            !
-            integer(ip), intent(in) :: n
-            real(rp) :: core(n, n)
-
-            integer(ip) :: row, col
-
-            do col = 1, n
-                do row = 1, n
-                    core(row, col) = 1.0_rp / real(row + col - 1, kind=rp) + &
-                                     merge(real(row, kind=rp), 0.0_rp, row == col)
-                end do
-            end do
-
-        end function linear_core
 
     end function test_calculate_grad_h_diag_mo
 
@@ -2244,7 +2206,7 @@ contains
         use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
 
         real(rp), allocatable :: eigvals_before(:)
-        integer(ip) :: error, k, n_occ, n_virt, i_case, n_part
+        integer(ip) :: error, k, n_occ, n_virt, i_case, n_particle
         character(len=:), allocatable :: case_name
         type(orbital_settings_type) :: settings
 
@@ -2258,10 +2220,10 @@ contains
         ! which are replaced so that they no longer match the cached
         ! eigendecomposition, are diagonalized
         do i_case = 1, n_cases
-            n_part = case_n_particle(i_case)
+            n_particle = case_n_particle(i_case)
             case_name = trim(case_names(i_case))
-            call setup_minimal_mo_object(case_n_occ(:n_part, i_case))
-            do k = 1, n_part
+            call setup_minimal_mo_object(case_n_occ(:n_particle, i_case))
+            do k = 1, n_particle
                 associate (channel => mo_object%mo_channels(k))
                     channel%fock_oo = generate_random_symm_matrix(channel%n_occ)
                     channel%fock_vv = generate_random_symm_matrix(channel%n_virt)
@@ -2271,15 +2233,15 @@ contains
             call mo_object%refresh_hess_eigen(settings, error)
             if (error /= 0) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: Produced "// &
-                    "error in the "//case_name//" case."
+                    "error for the "//case_name//" case."
                 test_refresh_hess_eigen_mo = .false.
             end if
             if (mo_object%hess_eigen_stale) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
-                    "Eigendecomposition still stale in the "//case_name//" case."
+                    "Eigendecomposition still stale for the "//case_name//" case."
                 test_refresh_hess_eigen_mo = .false.
             end if
-            do k = 1, n_part
+            do k = 1, n_particle
                 associate (channel => mo_object%mo_channels(k))
                     n_occ = channel%n_occ
                     n_virt = channel%n_virt
@@ -2287,7 +2249,7 @@ contains
                                      matmul(channel%fock_oo, channel%occ_eigvecs)) - &
                               diagonal_matrix(channel%occ_eigvals)) > tol) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
-                            "Occupied-occupied block not diagonalized in the "// &
+                            "Occupied-occupied block not diagonalized for the "// &
                             case_name//" case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
@@ -2295,7 +2257,7 @@ contains
                                      channel%occ_eigvecs) - identity_matrix(n_occ)) > &
                         tol) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
-                            "Occupied eigenvectors not orthonormal in the "// &
+                            "Occupied eigenvectors not orthonormal for the "// &
                             case_name//" case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
@@ -2303,7 +2265,7 @@ contains
                                      matmul(channel%fock_vv, channel%virt_eigvecs)) - &
                               diagonal_matrix(channel%virt_eigvals)) > tol) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
-                            "Virtual-virtual block not diagonalized in the "// &
+                            "Virtual-virtual block not diagonalized for the "// &
                             case_name//" case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
@@ -2311,7 +2273,7 @@ contains
                                      channel%virt_eigvecs) - &
                               identity_matrix(n_virt)) > tol) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
-                            "Virtual eigenvectors not orthonormal in the "// &
+                            "Virtual eigenvectors not orthonormal for the "// &
                             case_name//" case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
@@ -2326,13 +2288,13 @@ contains
             call mo_object%refresh_hess_eigen(settings, error)
             if (error /= 0) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: Produced "// &
-                    "error without stale eigendecomposition in the "//case_name// &
+                    "error without stale eigendecomposition for the "//case_name// &
                     " case."
                 test_refresh_hess_eigen_mo = .false.
             end if
             if (norm2(mo_object%mo_channels(1)%occ_eigvals - eigvals_before) > tol) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
-                    "Eigendecomposition recomputed although not stale in the "// &
+                    "Eigendecomposition recomputed although not stale for the "// &
                     case_name//" case."
                 test_refresh_hess_eigen_mo = .false.
             end if
@@ -2404,7 +2366,8 @@ contains
         integer(ip), parameter :: n_extra = 3
 
         type(orbital_settings_type) :: settings
-        real(rp), allocatable :: trial_vectors(:, :), expected(:, :), pairs(:)
+        real(rp), allocatable :: trial_vectors(:, :), expected(:, :), pairs(:), &
+                                 unit_vector(:)
         integer(ip) :: error, i, j, k, ivec, min_idx
 
         ! assume tests pass
@@ -2420,7 +2383,22 @@ contains
         mo_object%mo_channels(1)%virt_eigvals = [0.5_rp, 1.5_rp]
         mo_object%mo_channels(2)%occ_eigvals = [-3.0_rp]
         mo_object%mo_channels(2)%virt_eigvals = [0.5_rp, 1.0_rp, 2.0_rp]
-        expected = ref_extra_trial_vectors_mo(mo_object%mo_channels, n_mo, n_extra)
+
+        ! construct the expected trial vectors, the rotations along the eigenvalue
+        ! pairs in increasing order of the negative ones, rotated out of the
+        ! eigenbasis, with vanishing slots once no pair is negative any more
+        pairs = ref_hess_eigval_pairs_mo(mo_object%mo_channels)
+        allocate(expected(size(pairs), n_extra), unit_vector(size(pairs)))
+        expected = 0.0_rp
+        do ivec = 1, n_extra
+            min_idx = minloc(pairs, dim=1)
+            if (pairs(min_idx) >= 0.0_rp) exit
+            unit_vector = 0.0_rp
+            unit_vector(min_idx) = 1.0_rp
+            expected(:, ivec) = ref_rotate_eigenbasis_mo( &
+                unit_vector, mo_object%mo_channels, n_mo, .false.)
+            pairs(min_idx) = huge(1.0_rp)
+        end do
         if (norm2(expected(:, n_extra)) > tol .or. norm2(expected(:, 2)) < tol) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Test fixture "// &
                 "does not have exactly two negative eigenvalue pairs."
@@ -2668,7 +2646,7 @@ contains
             if (norm2(hess_x_static_mo(x, mo_object%mo_channels) - &
                       ref_hess_x_static_mo(x, mo_object%mo_channels)) > tol) then
                 write(stderr, *) "test_hess_x_static_mo failed: Incorrect static "// &
-                    "part in the "//trim(case_names(i_case))//" case."
+                    "part for the "//trim(case_names(i_case))//" case."
                 test_hess_x_static_mo = .false.
             end if
             deallocate(x, mo_object)
