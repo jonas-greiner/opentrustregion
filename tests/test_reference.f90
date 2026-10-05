@@ -794,114 +794,6 @@ contains
 
     end function test_project_c_funptr
 
-    function test_modify_step_funptr(modify_step_funptr, test_name, message) &
-        result(test_passed)
-        !
-        ! this function tests a provided step modification function pointer
-        !
-        use opentrustregion, only: modify_step_type
-
-        procedure(modify_step_type), intent(in), pointer :: modify_step_funptr
-        character(len=*), intent(in) :: test_name, message
-        logical :: test_passed
-
-        real(rp), allocatable :: kappa(:)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. associated(modify_step_funptr)) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Step modification "// &
-                "function provided"//message//" not associated with value."
-            return
-        end if
-
-        ! allocate arrays
-        allocate(kappa(n_param))
-
-        ! initialize kappa
-        kappa = 1.0_rp
-
-        ! call step modification subroutine
-        call modify_step_funptr(kappa, error)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
-            test_passed = .false.
-        end if
-
-        ! check modified kappa
-        if (any(abs(kappa - 2.0_rp) > tol)) then
-            write(stderr, *) "test_"//test_name//" failed: Modified kappa returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! deallocate arrays
-        deallocate(kappa)
-
-    end function test_modify_step_funptr
-
-    function test_modify_step_c_funptr(modify_step_c_funptr, test_name, message) &
-        result(test_passed)
-        !
-        ! this function tests a provided step modification C function pointer
-        !
-        use c_interface, only: modify_step_c_type
-
-        type(c_funptr), intent(in) :: modify_step_c_funptr
-        character(len=*), intent(in) :: test_name, message
-        logical :: test_passed
-
-        procedure(modify_step_c_type), pointer :: modify_step_funptr
-        real(c_rp), allocatable :: kappa(:)
-        integer(c_ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. c_associated(modify_step_c_funptr)) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Step modification "// &
-                "function provided"//message//" not associated with value."
-            return
-        end if
-
-        ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=modify_step_c_funptr, fptr=modify_step_funptr)
-
-        ! allocate arrays
-        allocate(kappa(n_param))
-
-        ! initialize kappa
-        kappa = 1.0_c_rp
-
-        ! call step modification function
-        error = modify_step_funptr(kappa)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
-            test_passed = .false.
-        end if
-
-        ! check modified kappa
-        if (any(abs(kappa - 2.0_c_rp) > tol_c)) then
-            write(stderr, *) "test_"//test_name//" failed: Modified kappa returned"// &
-                message//" wrong."
-            test_passed = .false.
-        end if
-
-        ! deallocate arrays
-        deallocate(kappa)
-
-    end function test_modify_step_c_funptr
-
     function test_get_extra_trial_vectors_funptr(get_extra_trial_vectors_funptr, &
                                                  test_name, message) result(test_passed)
         !
@@ -1236,11 +1128,6 @@ contains
             settings%precond_pd, test_name, &
             " by"//message//" positive-definite preconditioner subroutine")
 
-        ! test passed step modification subroutine
-        test_passed = test_passed .and. test_modify_step_funptr( &
-            settings%modify_step, test_name, &
-            " by"//message//" step modification subroutine")
-
         ! test passed extra trial vector subroutine
         test_passed = test_passed .and. test_get_extra_trial_vectors_funptr( &
             settings%get_extra_trial_vectors, test_name, &
@@ -1298,11 +1185,6 @@ contains
         test_passed = test_passed .and. test_precond_pd_c_funptr( &
             settings_c%precond_pd, test_name, &
             " by"//message//" positive-definite preconditioner function")
-
-        ! test passed step modification function
-        test_passed = test_passed .and. test_modify_step_c_funptr( &
-            settings_c%modify_step, test_name, &
-            " by"//message//" step modification function")
 
         ! test passed extra trial vector function
         test_passed = test_passed .and. test_get_extra_trial_vectors_c_funptr( &
@@ -1462,11 +1344,6 @@ contains
             write(stderr, *) test_name// &
                 " failed: Positive-definite preconditioner function associated."
         end if
-        if (associated(settings%modify_step)) then
-            test_passed = .false.
-            write(stderr, *) test_name// &
-                " failed: Step modification function associated."
-        end if
         if (associated(settings%get_extra_trial_vectors)) then
             test_passed = .false.
             write(stderr, *) test_name// &
@@ -1520,11 +1397,6 @@ contains
             test_passed = .false.
             write(stderr, *) test_name// &
                 " failed: Positive-definite preconditioner function associated."
-        end if
-        if (c_associated(settings_c%modify_step)) then
-            test_passed = .false.
-            write(stderr, *) test_name// &
-                " failed: Step modification function associated."
         end if
         if (c_associated(settings_c%get_extra_trial_vectors)) then
             test_passed = .false.
@@ -1693,7 +1565,6 @@ contains
         lhs%precond => null()
         lhs%precond_pd => null()
         lhs%project => null()
-        lhs%modify_step => null()
         lhs%get_extra_trial_vectors => null()
         lhs%conv_check => null()
         lhs%stability_hess_x => null()

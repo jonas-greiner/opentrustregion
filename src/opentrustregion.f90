@@ -36,8 +36,8 @@ module opentrustregion
         error_stability_check_max_iter = error_stability_check + 2, &
         error_gram_schmidt_lin_dep = 51, error_obj_func = 1100, &
         error_update_orbs = 1200, error_hess_x = 1300, error_precond = 1400, &
-        error_conv_check = 1500, error_project = 1600, error_modify_step = 1700, &
-        error_get_extra_trial_vectors = 1800, error_precond_pd = 1900
+        error_conv_check = 1500, error_project = 1600, &
+        error_get_extra_trial_vectors = 1700, error_precond_pd = 1800
 
     ! define useful parameters
     real(rp), parameter :: &
@@ -136,15 +136,6 @@ module opentrustregion
     end interface
 
     abstract interface
-        subroutine modify_step_type(kappa, error)
-            import :: rp, ip
-
-            real(rp), intent(inout), target :: kappa(:)
-            integer(ip), intent(out) :: error
-        end subroutine modify_step_type
-    end interface
-
-    abstract interface
         function conv_check_type(error) result(converged)
             import :: ip
 
@@ -226,7 +217,6 @@ module opentrustregion
         character(len=kw_len) :: subsystem_solver, trust_region_shape
         type(stability_settings_type) :: stability_settings
         procedure(precond_pd_type), pointer, nopass :: precond_pd => null()
-        procedure(modify_step_type), pointer, nopass :: modify_step => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
         procedure(hess_x_type), pointer, nopass :: stability_hess_x => null()
     contains
@@ -244,14 +234,14 @@ module opentrustregion
                                 verbose=0, diag_solver="davidson")
     type(solver_settings_type), parameter :: default_solver_settings = &
         solver_settings_type( &
-            precond=null(), precond_pd=null(), project=null(), modify_step=null(), &
-            conv_check=null(), get_extra_trial_vectors=null(), &
-            stability_hess_x=null(), logger=null(), stability=.false., &
-            line_search=.false., refresh_hess=.false., hess_symm=.true., &
-            initialized=.true., conv_tol=1e-5_rp, start_trust_radius=-1.0_rp, &
-            global_red_factor=1e-3_rp, local_red_factor=1e-4_rp, grad_noise=1e-4_rp, &
-            n_random_trial_vectors=0, n_extra_trial_vectors=1, n_macro=150, &
-            n_micro=50, jacobi_davidson_start=30, seed=42, verbose=0, &
+            precond=null(), precond_pd=null(), project=null(), conv_check=null(), &
+            get_extra_trial_vectors=null(), stability_hess_x=null(), logger=null(), &
+            stability=.false., line_search=.false., refresh_hess=.false., &
+            hess_symm=.true., initialized=.true., conv_tol=1e-5_rp, &
+            start_trust_radius=-1.0_rp, global_red_factor=1e-3_rp, &
+            local_red_factor=1e-4_rp, grad_noise=1e-4_rp, n_random_trial_vectors=0, &
+            n_extra_trial_vectors=1, n_macro=150, n_micro=50, &
+            jacobi_davidson_start=30, seed=42, verbose=0, &
             subsystem_solver="davidson_ls", trust_region_shape="none", &
             stability_settings=default_stability_settings)
     integer(ip), parameter :: standalone_n_random_trial_vectors = 20
@@ -341,13 +331,6 @@ contains
 
         do imacro = 1, settings%n_macro
             if (.not. max_precision_reached) then
-                ! modify step if callback is provided
-                if (associated(settings%modify_step)) then
-                    call settings%modify_step(kappa, error)
-                    call add_error_origin(error, error_modify_step, settings)
-                    if (error /= 0) return
-                end if
-
                 ! calculate cost function, gradient and Hessian diagonal
                 call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
                 call add_error_origin(error, error_update_orbs, settings)

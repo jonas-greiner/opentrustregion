@@ -164,7 +164,6 @@ fortran_tests = {
         "init_solver_settings_c",
         "init_stability_settings_c",
         "logger_f_wrapper",
-        "modify_step_f_wrapper",
         "obj_func_f_wrapper",
         "precond_f_wrapper",
         "precond_pd_f_wrapper",
@@ -401,12 +400,6 @@ class PyInterfaceTests(unittest.TestCase):
         this function is a mock function for the projection function
         """
         vector[:] = 2 * vector
-
-    def mock_modify_step(self, kappa):
-        """
-        this function is a mock function for the step modification function
-        """
-        kappa[:] = 2 * kappa
 
     def mock_conv_check(self):
         """

@@ -10,9 +10,8 @@ module c_interface
         rp, ip, kw_len, standard_solver => solver, &
         standard_stability_check => stability_check, default_solver_settings, &
         default_stability_settings, update_orbs_type, hess_x_type, obj_func_type, &
-        precond_type, precond_pd_type, project_type, modify_step_type, &
-        conv_check_type, get_extra_trial_vectors_type, conv_check_stability_type, &
-        logger_type
+        precond_type, precond_pd_type, project_type, conv_check_type, &
+        get_extra_trial_vectors_type, conv_check_stability_type, logger_type
     use, intrinsic :: iso_c_binding, only: &
         c_double, c_int64_t, c_int32_t, c_bool, c_ptr, c_funptr, c_f_pointer, &
         c_f_procpointer, c_associated, c_char, c_null_char, c_null_funptr
@@ -38,7 +37,6 @@ module c_interface
     procedure(precond_c_type), pointer :: precond_before_wrapping => null()
     procedure(precond_pd_c_type), pointer :: precond_pd_before_wrapping => null()
     procedure(project_c_type), pointer :: project_before_wrapping => null()
-    procedure(modify_step_c_type), pointer :: modify_step_before_wrapping => null()
     procedure(conv_check_c_type), pointer :: conv_check_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: stability_hess_x_before_wrapping => null()
     procedure(hess_x_c_type), pointer :: approx_hess_x_before_wrapping => null()
@@ -114,15 +112,6 @@ module c_interface
     end interface
 
     abstract interface
-        function modify_step_c_type(kappa_c) result(error) bind(C)
-            import :: c_rp, c_ip
-
-            real(c_rp), intent(inout), target :: kappa_c(*)
-            integer(c_ip) :: error
-        end function modify_step_c_type
-    end interface
-
-    abstract interface
         function conv_check_c_type(converged) result(error) bind(C)
             import :: c_bool, c_ip
 
@@ -175,8 +164,8 @@ module c_interface
 
     ! derived type for solver settings
     type, bind(C) :: solver_settings_type_c
-        type(c_funptr) :: precond, precond_pd, project, modify_step, &
-                          get_extra_trial_vectors, conv_check, stability_hess_x, logger
+        type(c_funptr) :: precond, precond_pd, project, get_extra_trial_vectors, &
+                          conv_check, stability_hess_x, logger
         logical(c_bool) :: stability, line_search, refresh_hess, hess_symm, initialized
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, &
                       local_red_factor, grad_noise
@@ -200,8 +189,6 @@ module c_interface
     procedure(precond_pd_type), pointer :: precond_pd_f_wrapper_ptr => &
         precond_pd_f_wrapper
     procedure(project_type), pointer :: project_f_wrapper_ptr => project_f_wrapper
-    procedure(modify_step_type), pointer :: modify_step_f_wrapper_ptr => &
-        modify_step_f_wrapper
     procedure(conv_check_type), pointer :: conv_check_f_wrapper_ptr => &
         conv_check_f_wrapper
     procedure(hess_x_type), pointer :: stability_hess_x_f_wrapper_ptr => &
@@ -593,36 +580,6 @@ contains
 
     end subroutine project_f_wrapper
 
-    subroutine modify_step_f_wrapper(kappa, error)
-        !
-        ! this subroutine exposes a C-implemented step modification function to Fortran
-        !
-        real(rp), intent(inout), target :: kappa(:)
-        integer(ip), intent(out) :: error
-
-        real(c_rp), pointer :: kappa_c(:)
-        integer(c_ip) :: error_c
-
-        ! convert arguments to C kind
-        if (rp == c_rp) then
-            kappa_c => kappa
-        else
-            allocate(kappa_c(size(kappa)))
-            kappa_c = real(kappa, kind=c_rp)
-        end if
-
-        ! call modify_step C function
-        error_c = modify_step_before_wrapping(kappa_c)
-
-        ! convert arguments to Fortran kind
-        error = int(error_c, kind=ip)
-        if (rp /= c_rp) then
-            kappa = real(kappa_c, kind=rp)
-            deallocate(kappa_c)
-        end if
-
-    end subroutine modify_step_f_wrapper
-
     function conv_check_f_wrapper(error) result(converged)
         !
         ! this function exposes a C-implemented convergence check function to Fortran
@@ -810,13 +767,6 @@ contains
             else
                 settings%project => null()
             end if
-            if (c_associated(settings_c%modify_step)) then
-                call c_f_procpointer(cptr=settings_c%modify_step, &
-                                     fptr=modify_step_before_wrapping)
-                settings%modify_step => modify_step_f_wrapper
-            else
-                settings%modify_step => null()
-            end if
             if (c_associated(settings_c%get_extra_trial_vectors)) then
                 call c_f_procpointer(cptr=settings_c%get_extra_trial_vectors, &
                                      fptr=get_extra_trial_vectors_before_wrapping)
@@ -980,7 +930,6 @@ contains
             settings_c%precond = c_null_funptr
             settings_c%precond_pd = c_null_funptr
             settings_c%project = c_null_funptr
-            settings_c%modify_step = c_null_funptr
             settings_c%get_extra_trial_vectors = c_null_funptr
             settings_c%conv_check = c_null_funptr
             settings_c%stability_hess_x = c_null_funptr

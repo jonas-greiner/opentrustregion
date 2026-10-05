@@ -34,16 +34,14 @@ _Static_assert(offsetof(solver_settings_type, precond_pd) == 1 * sizeof(void *),
                "solver_settings_type: precond_pd must follow precond");
 _Static_assert(offsetof(solver_settings_type, project) == 2 * sizeof(void *),
                "solver_settings_type: project must follow precond_pd");
-_Static_assert(offsetof(solver_settings_type, modify_step) == 3 * sizeof(void *),
-               "solver_settings_type: modify_step must follow project");
 _Static_assert(offsetof(solver_settings_type, get_extra_trial_vectors) ==
-                   4 * sizeof(void *),
-               "solver_settings_type: get_extra_trial_vectors must follow modify_step");
-_Static_assert(offsetof(solver_settings_type, conv_check) == 5 * sizeof(void *),
+                   3 * sizeof(void *),
+               "solver_settings_type: get_extra_trial_vectors must follow project");
+_Static_assert(offsetof(solver_settings_type, conv_check) == 4 * sizeof(void *),
                "solver_settings_type: conv_check must follow get_extra_trial_vectors");
-_Static_assert(offsetof(solver_settings_type, stability_hess_x) == 6 * sizeof(void *),
+_Static_assert(offsetof(solver_settings_type, stability_hess_x) == 5 * sizeof(void *),
                "solver_settings_type: stability_hess_x must follow conv_check");
-_Static_assert(offsetof(solver_settings_type, logger) == 7 * sizeof(void *),
+_Static_assert(offsetof(solver_settings_type, logger) == 6 * sizeof(void *),
                "solver_settings_type: logger must follow stability_hess_x");
 
 _Static_assert(offsetof(stability_settings_type, precond) == 0,
@@ -299,8 +297,8 @@ bool test_solver_settings_init(void) {
                     "wrong.\n");
     ok = false;
   }
-  if (s.precond || s.precond_pd || s.project || s.modify_step ||
-      s.get_extra_trial_vectors || s.conv_check || s.stability_hess_x || s.logger) {
+  if (s.precond || s.precond_pd || s.project || s.get_extra_trial_vectors ||
+      s.conv_check || s.stability_hess_x || s.logger) {
     fprintf(stderr, "test_solver_settings_init failed: Callback pointers should be "
                     "NULL.\n");
     ok = false;

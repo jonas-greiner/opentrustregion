@@ -60,10 +60,6 @@ typedef precond_pd_fn *precond_pd_fp;
 typedef c_int project_fn(c_real *vector);
 typedef project_fn *project_fp;
 
-/* Step modification callback*/
-typedef c_int modify_step_fn(c_real *kappa);
-typedef modify_step_fn *modify_step_fp;
-
 /* Convergence check callback */
 typedef c_int conv_check_fn(c_bool *converged);
 typedef conv_check_fn *conv_check_fp;
@@ -119,7 +115,6 @@ typedef struct {
   precond_fp precond;
   precond_pd_fp precond_pd;
   project_fp project;
-  modify_step_fp modify_step;
   get_extra_trial_vectors_fp get_extra_trial_vectors;
   conv_check_fp conv_check;
   hess_x_fp stability_hess_x;

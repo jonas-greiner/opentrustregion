@@ -186,7 +186,6 @@ The optimization process can be fine-tuned using the following settings:
 - **`precond`** (subroutine): Applies a preconditioner to a residual vector, given a level shift `mu`. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Used by the Davidson-family subsystem solvers to approximate `(H - mu * I)^-1`; `mu` legitimately ranges over any real value, including exactly `0.0`, so `precond` is not guaranteed to be positive definite (e.g. near a saddle point).
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for optimization using non-redundant parameters. When this is used, all other passed routines (`update_orbs`, `hess_x`, `precond`, and `precond_pd`) must be self-projecting.
 - **`precond_pd`** (subroutine): Applies a positive-definite preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Used by the `"tcg"` and `"gltr"` subsystem solvers to define the ellipsoidal trust-region metric (see `trust_region_shape` below); unlike `precond`, this callback takes no level shift and must always return a positive-definite result.
-- **`modify_step`** (subroutine): Modifies a proposed step in-place and returns an integer error code (0 for success, positive integers < 100 for errors). Can for example be used to apply gauge transformations which improve convergence.
 - **`get_extra_trial_vectors`** (subroutine): Returns extra trial vectors that seed the leading part of the initial trial space, written in-place to the provided matrix, whose column count is `n_extra_trial_vectors` and is passed to the callback itself by the C and Python interfaces, since those only receive a flat pointer. The vectors do not need to be orthonormalized or projected, and a vanishing column is dropped, which is how the callback signals that it has no vector to contribute for that slot. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions.
 - **`stability_hess_x`** (subroutine): Applies a different Hessian linear transformation to a trial vector for the stability check than the one `update_orbs` returns for the optimization, and returns an integer error code (0 for success, positive integers < 100 for errors). Intended for optimization with an approximate Hessian, where the stability of a converged solution has to be decided with the exact Hessian.
@@ -380,9 +379,8 @@ The library uses structured integer return codes to indicate whether a function 
 | `14`               | `precond`                  |
 | `15`               | `conv_check`               |
 | `16`               | `project`                  |
-| `17`               | `modify_step`              |
-| `18`               | `get_extra_trial_vectors`  |
-| `19`               | `precond_pd`               |
+| `17`               | `get_extra_trial_vectors`  |
+| `18`               | `precond_pd`               |
 
 ### Error Codes (`EE`)
 

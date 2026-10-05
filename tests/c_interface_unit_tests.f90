@@ -9,8 +9,7 @@ module c_interface_unit_tests
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
                            obj_func_c_type, precond_c_type, precond_pd_c_type, &
-                           project_c_type, modify_step_c_type, conv_check_c_type, &
-                           logger_c_type
+                           project_c_type, conv_check_c_type, logger_c_type
     use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
                                            c_char, c_null_ptr, c_null_char
@@ -27,7 +26,6 @@ module c_interface_unit_tests
     procedure(precond_c_type), pointer :: mock_precond_ptr => mock_precond
     procedure(precond_pd_c_type), pointer :: mock_precond_pd_ptr => mock_precond_pd
     procedure(project_c_type), pointer :: mock_project_ptr => mock_project
-    procedure(modify_step_c_type), pointer :: mock_modify_step_ptr => mock_modify_step
     procedure(conv_check_c_type), pointer :: mock_conv_check_ptr => mock_conv_check
     procedure(logger_c_type), pointer :: mock_logger_ptr => mock_logger
 
@@ -128,19 +126,6 @@ contains
 
     end function mock_project
 
-    function mock_modify_step(kappa) result(error) bind(C)
-        !
-        ! this function is a test function for the C step modification function
-        !
-        real(c_rp), intent(inout), target :: kappa(*)
-        integer(c_ip) :: error
-
-        kappa(:n_param) = 2 * kappa(:n_param)
-
-        error = 0
-
-    end function mock_modify_step
-
     function mock_conv_check(converged) result(error) bind(C)
         !
         ! this function is a test function for the convergence check function
@@ -211,7 +196,6 @@ contains
         settings%precond = c_funloc(mock_precond)
         settings%precond_pd = c_funloc(mock_precond_pd)
         settings%project = c_funloc(mock_project)
-        settings%modify_step = c_funloc(mock_modify_step)
         settings%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
         settings%conv_check = c_funloc(mock_conv_check)
         settings%stability_hess_x = c_funloc(mock_hess_x)
@@ -547,28 +531,6 @@ contains
             test_project_funptr(project_funptr, "project_f_wrapper", "")
 
     end function test_project_f_wrapper
-
-    logical(c_bool) function test_modify_step_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the step modification function
-        !
-        use opentrustregion, only: modify_step_type
-        use c_interface, only: modify_step_before_wrapping, modify_step_f_wrapper
-        use test_reference, only: test_modify_step_funptr
-
-        procedure(modify_step_type), pointer :: modify_step_funptr
-
-        ! inject mock function
-        modify_step_before_wrapping => mock_modify_step
-
-        ! get pointer to subroutine
-        modify_step_funptr => modify_step_f_wrapper
-
-        ! test step modification wrapper
-        test_modify_step_f_wrapper = &
-            test_modify_step_funptr(modify_step_funptr, "modify_step_f_wrapper", "")
-
-    end function test_modify_step_f_wrapper
 
     logical(c_bool) function test_conv_check_f_wrapper() bind(C)
         !

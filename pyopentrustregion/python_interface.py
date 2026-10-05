@@ -125,7 +125,6 @@ precond_interface_type = CFUNCTYPE(
 )
 precond_pd_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
 project_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
-modify_step_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
 get_extra_trial_vectors_interface_type = CFUNCTYPE(c_int, POINTER(c_real), c_int)
 conv_check_interface_type = CFUNCTYPE(c_int, POINTER(c_bool))
 conv_check_stability_interface_type = CFUNCTYPE(
@@ -316,30 +315,6 @@ class ProjectInterface:
 
 
 @dataclass
-class ModifyStepInterface:
-    """
-    this class provides the interface to the step modification function
-    """
-
-    modify_step: Callable[[np.ndarray], None]
-    n_param: int
-    exception: Dict[str, Exception]
-
-    def __call__(self, kappa_ptr) -> int:
-        # convert matrix pointers to numpy arrays
-        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
-
-        # call step modification function
-        try:
-            self.modify_step(kappa)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
-
-        return 0
-
-
-@dataclass
 class ConvCheckInterface:
     """
     this class provides the interface to the convergence check function
@@ -451,7 +426,6 @@ class SolverSettingsC(Structure):
         ("precond", c_void_p),
         ("precond_pd", c_void_p),
         ("project", c_void_p),
-        ("modify_step", c_void_p),
         ("get_extra_trial_vectors", c_void_p),
         ("conv_check", c_void_p),
         ("stability_hess_x", c_void_p),
@@ -536,7 +510,6 @@ class SolverSettings(Settings):
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     precond_pd: Optional[Callable[[np.ndarray, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
-    modify_step: Optional[Callable[[np.ndarray], None]]
     get_extra_trial_vectors: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]
     stability_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
@@ -544,7 +517,6 @@ class SolverSettings(Settings):
     precond_interface: Any
     precond_pd_interface: Any
     project_interface: Any
-    modify_step_interface: Any
     get_extra_trial_vectors_interface: Any
     conv_check_interface: Any
     stability_hess_x_interface: Any
@@ -585,14 +557,6 @@ class SolverSettings(Settings):
             self.project,
             ProjectInterface,
             project_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "modify_step",
-            self.modify_step,
-            ModifyStepInterface,
-            modify_step_interface_type,
             n_param,
             exception,
         )
