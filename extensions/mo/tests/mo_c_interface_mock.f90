@@ -19,6 +19,11 @@ module otr_mo_c_interface_mock
     logical(c_bool), bind(C) :: test_mo_factory_interface = .true._c_bool, &
                                 test_mo_deconstructor_interface = .false._c_bool
 
+    ! whether the last call of a mock factory for orbitals parameterized in the MO
+    ! basis was passed irreps of the MOs
+    logical(c_bool), bind(C, name="test_orbsym_passed") :: orbsym_passed = &
+        .false._c_bool
+
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_c_type), pointer :: mock_update_orbs_mo_ptr => &
         mock_update_orbs_mo
@@ -59,7 +64,8 @@ contains
     function mock_mo_factory_c_wrapper( &
         mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
         evaluate_dm_c_funptr, obj_func_mo_c_funptr, update_orbs_mo_c_funptr, &
-        solver_settings_c, settings_c) result(error_c) bind(C, name="mock_mo_factory")
+        solver_settings_c, settings_c, orbsym_c) result(error_c) &
+        bind(C, name="mock_mo_factory")
         !
         ! this subroutine is a mock routine for the MO orbital updating factory C
         ! wrapper subroutine
@@ -69,7 +75,8 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c, assignment(=)
         use test_reference, only: tol_c
         use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
-                                         mo_coeff_pattern, operator(/=)
+                                         orbsym_c_ref => orbsym_c, mo_coeff_pattern, &
+                                         operator(/=)
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c, &
                                              test_evaluate_dm_cs_c_funptr, &
                                              test_evaluate_dm_os_c_funptr
@@ -84,6 +91,7 @@ contains
         type(c_funptr), intent(out) :: obj_func_mo_c_funptr, update_orbs_mo_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(mo_settings_type_c), intent(inout) :: settings_c
+        integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr
@@ -151,6 +159,18 @@ contains
             write(stderr, *) "test_mo_factory_py_interface failed: Passed settings "// &
                 "associated with wrong values."
             test_mo_factory_interface = .false.
+        end if
+
+        ! record whether irreps of the MOs are passed and check them against the
+        ! reference values of the passed particle channels
+        orbsym_passed = present(orbsym_c)
+        if (present(orbsym_c)) then
+            if (any(orbsym_c(:n_mo_c * n_particle_c) /= reshape( &
+                orbsym_c_ref(:, :n_particle_c), [n_mo_c * n_particle_c]))) then
+                write(stderr, *) "test_mo_factory_py_interface failed: Passed "// &
+                    "irreps of the MOs wrong."
+                test_mo_factory_interface = .false.
+            end if
         end if
 
         ! set function pointers to mock to MO mock functions, and set solver settings

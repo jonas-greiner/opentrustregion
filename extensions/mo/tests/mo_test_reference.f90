@@ -25,16 +25,32 @@ module otr_mo_test_reference
         int(n_occ, kind=c_ip)
 
     ! occupation cases for routines acting on every particle channel: closed-shell,
-    ! open-shell, and open-shell with an empty occupied or virtual block
-    integer(ip), parameter :: n_cases = 4_ip
+    ! open-shell, open-shell with an empty occupied or virtual block, and closed- and
+    ! open-shell with MOs of different irreps, chosen so that wrongly sliced irreps,
+    ! packing in the wrong order or swapped channels give different parameters, whose
+    ! number differs between the open-shell channels
+    integer(ip), parameter :: n_cases = 6_ip
     integer(ip), parameter :: case_n_particle(n_cases) = &
-        [1_ip, n_particle, n_particle, n_particle]
+        [1_ip, n_particle, n_particle, n_particle, 1_ip, n_particle]
     integer(ip), parameter :: case_n_occ(n_particle, n_cases) = &
-        reshape([n_occ(1), 0_ip, n_occ(1), n_occ(2), n_occ(1), 0_ip, n_mo, n_occ(2)], &
-                [n_particle, n_cases])
+        reshape([n_occ(1), 0_ip, n_occ(1), n_occ(2), n_occ(1), 0_ip, n_mo, n_occ(2), &
+                 n_occ(1), 0_ip, n_occ(1), n_occ(2)], [n_particle, n_cases])
+    integer(ip), parameter :: case_irreps(n_mo, n_particle, n_cases) = reshape( &
+        [0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, &
+         0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, &
+         0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 0_ip, 1_ip, 1_ip, 1_ip, 0_ip, 0_ip, 0_ip, &
+         0_ip, 1_ip, 0_ip, 0_ip, 1_ip, 0_ip, 0_ip, 1_ip, 1_ip], &
+        [n_mo, n_particle, n_cases])
     character(len=33), parameter :: case_names(n_cases) = &
         [character(len=33) :: "closed-shell", "open-shell", &
-         "open-shell empty occupied channel", "open-shell empty virtual channel"]
+         "open-shell empty occupied channel", "open-shell empty virtual channel", &
+         "closed-shell with symmetry", "open-shell with symmetry"]
+
+    ! irreps of the MOs passed through the Python interface, those of the last
+    ! occupation case, open-shell with symmetry, whose first channel serves the
+    ! closed-shell case
+    integer(c_ip), protected, bind(C, name="test_orbsym") :: &
+        orbsym_c(n_mo, n_particle) = int(case_irreps(:, :, n_cases), kind=c_ip)
 
     ! derived types for MO settings
     type, extends(ref_orbital_settings_type) :: ref_mo_settings_type

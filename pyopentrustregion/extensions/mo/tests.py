@@ -34,6 +34,7 @@ from pyopentrustregion.python_interface import (
     update_orbs_interface_type,
     SolverSettings,
 )
+from pyopentrustregion.extensions.common.tests import n_ao
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory, mo_deconstructor
 from pyopentrustregion.extensions.mo.python_interface import UpdateOrbsMOPyInterface
 
@@ -46,6 +47,8 @@ fortran_tests = {
     "mo_c_system_tests": ["mo_settings_init"],
     "mo_tests": [
         "calculate_grad_h_diag_mo",
+        "count_mo_params",
+        "diagonalize_per_irrep",
         "finalize_mo",
         "get_extra_trial_vectors_mo",
         "get_extra_trial_vectors_mo_callback",
@@ -57,10 +60,12 @@ fortran_tests = {
         "mo_factory_common",
         "mo_factory_cs",
         "mo_factory_os",
+        "mo_param_rows",
         "mo_sanity_check",
         "mo_set_solver_settings",
         "mo_transform",
         "obj_func_mo_callback",
+        "pack_ov",
         "precond_mo_callback",
         "precond_pd_mo_callback",
         "refresh_hess_eigen_mo",
@@ -68,6 +73,7 @@ fortran_tests = {
         "rotate_mo_coeff",
         "rotate_orbitals_mo",
         "rotate_to_hess_eigenbasis_mo",
+        "unpack_ov",
         "update_orbs_mo_callback",
     ],
     "mo_c_interface_tests": [
@@ -87,12 +93,13 @@ fortran_tests = {
     ],
 }
 
-# number of AOs
-n_ao = c_int.in_dll(lib, "test_n_ao").value
-
 # number of MOs and of occupied orbitals of every particle channel
 n_mo = c_int.in_dll(lib, "test_n_mo").value
 n_occ = list((c_int * 2).in_dll(lib, "test_n_occ"))
+
+# irreps of the MOs of every particle channel, those of the first channel serving the
+# closed-shell case
+orbsym = [list(irreps) for irreps in ((c_int * n_mo) * 2).in_dll(lib, "test_orbsym")]
 
 # multiples of the density matrix the mock density matrix evaluating function returns
 # for the Fock matrix and the response
@@ -235,16 +242,20 @@ class MOPyInterfaceTests(unittest.TestCase):
             return mo_coeff
 
         # MO coefficients stored row-major are copied back, those stored column-major
-        # are rotated in place and those of a different precision are converted
+        # are rotated in place and those of a different precision are converted, with
+        # the irreps of their MOs passed on only if they are given
         cases = (
-            ("closed-shell row-major", 1, False, np.float64),
-            ("closed-shell column-major", 1, True, np.float64),
-            ("closed-shell single-precision", 1, True, np.float32),
-            ("open-shell row-major", 2, False, np.float64),
-            ("open-shell column-major", 2, True, np.float64),
+            ("closed-shell row-major", 1, False, np.float64, False),
+            ("closed-shell column-major", 1, True, np.float64, False),
+            ("closed-shell single-precision", 1, True, np.float32, False),
+            ("open-shell row-major", 2, False, np.float64, False),
+            ("open-shell column-major", 2, True, np.float64, False),
+            ("closed-shell with symmetry", 1, False, np.float64, True),
+            ("open-shell with symmetry", 2, True, np.float64, True),
         )
         mock_passed = c_bool.in_dll(lib, "test_mo_factory_interface")
-        for case, n_particle, column_major, dtype in cases:
+        orbsym_passed = c_bool.in_dll(lib, "test_orbsym_passed")
+        for case, n_particle, column_major, dtype, with_irreps in cases:
             # initialize MO coefficients
             mo_coeff = initial_mo_coeff(n_particle, column_major, dtype)
 
@@ -272,7 +283,18 @@ class MOPyInterfaceTests(unittest.TestCase):
                 self.mock_evaluate_dm,
                 solver_settings,
                 settings,
+                orbsym=(
+                    (orbsym[0] if n_particle == 1 else orbsym) if with_irreps else None
+                ),
             )
+
+            # determine if the irreps of the MOs were passed on only if they are given
+            if orbsym_passed.value != with_irreps:
+                print(
+                    " test_mo_factory_py_interface failed: Irreps of the MOs passed "
+                    f"on wrongly for the {case} case."
+                )
+                test_passed = False
 
             # determine if the MO routines are wired into the solver settings without a
             # projection
@@ -652,6 +674,34 @@ class MOPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
             except error_type:
+                pass
+
+        # invalid irreps of the MOs have to raise an error before the library is called
+        invalid_orbsym_cases = (
+            ("irreps of two particle channels for one", 1, orbsym),
+            ("non-integer irreps", 1, np.array(orbsym[0], dtype=np.float64)),
+            ("transposed open-shell irreps", 2, np.transpose(orbsym)),
+        )
+        for case, n_particle, invalid_orbsym in invalid_orbsym_cases:
+            try:
+                mo_factory(
+                    cs_mo_coeff if n_particle == 1 else mo_coeff_pattern(2, 0.0),
+                    ao_overlap,
+                    n_occ[0] if n_particle == 1 else n_occ,
+                    n_particle,
+                    n_ao,
+                    n_mo,
+                    self.mock_evaluate_dm,
+                    SolverSettings(),
+                    settings,
+                    invalid_orbsym,
+                )
+                print(
+                    f" test_mo_factory_py_interface failed: {case} did not raise an "
+                    "error."
+                )
+                test_passed = False
+            except ValueError:
                 pass
 
         self.assertTrue(test_passed, "test_mo_factory_py_interface failed")

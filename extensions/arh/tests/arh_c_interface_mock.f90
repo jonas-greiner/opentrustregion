@@ -37,7 +37,7 @@ contains
     function mock_arh_factory_mo_c_wrapper( &
         mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
         evaluate_dm_c_funptr, obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
-        solver_settings_c, settings_c) result(error_c) &
+        solver_settings_c, settings_c, orbsym_c) result(error_c) &
         bind(C, name="mock_arh_factory_mo")
         !
         ! this subroutine is a mock routine for the C wrapper of the ARH factory for
@@ -52,8 +52,8 @@ contains
         use otr_arh_test_reference, only: test_evaluate_dm_os_c_funptr, &
                                           test_evaluate_dm_cs_c_funptr, operator(/=)
         use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
-                                         mo_coeff_pattern
-        use otr_mo_c_interface_mock, only: mock_update_orbs_mo
+                                         orbsym_c_ref => orbsym_c, mo_coeff_pattern
+        use otr_mo_c_interface_mock, only: mock_update_orbs_mo, orbsym_passed
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
                                           mock_precond_pd, mock_get_extra_trial_vectors
@@ -66,6 +66,7 @@ contains
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(arh_settings_type_c), intent(inout) :: settings_c
+        integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr
@@ -135,6 +136,18 @@ contains
             write(stderr, *) "test_arh_factory_mo_py_interface failed: Passed "// &
                 "settings associated with wrong values."
             test_arh_factory_mo_interface = .false.
+        end if
+
+        ! record whether irreps of the MOs are passed and check them against the
+        ! reference values of the passed particle channels
+        orbsym_passed = present(orbsym_c)
+        if (present(orbsym_c)) then
+            if (any(orbsym_c(:n_mo_c * n_particle_c) /= reshape( &
+                orbsym_c_ref(:, :n_particle_c), [n_mo_c * n_particle_c]))) then
+                write(stderr, *) "test_arh_factory_mo_py_interface failed: Passed "// &
+                    "irreps of the MOs wrong."
+                test_arh_factory_mo_interface = .false.
+            end if
         end if
 
         ! set function pointers to mock to ARH mock functions, and set solver settings

@@ -20,6 +20,10 @@ module otr_mo_mock
     ! function overwrites to test that they are rotated in place
     real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :) => null()
 
+    ! whether the last call of a mock factory for orbitals parameterized in the MO
+    ! basis was passed irreps of the MOs
+    logical :: orbsym_passed = .false.
+
     ! create function pointers to ensure that routines comply with interface
     procedure(mo_factory_cs), pointer :: mock_mo_factory_cs_ptr => mock_mo_factory_cs
     procedure(mo_factory_os), pointer :: mock_mo_factory_os_ptr => mock_mo_factory_os
@@ -69,9 +73,10 @@ contains
 
     end subroutine mock_mo_set_solver_settings
 
-    subroutine mock_mo_factory_cs( &
-        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm_funptr, &
-        obj_func_mo_funptr, update_orbs_mo_funptr, solver_settings, error, settings)
+    subroutine mock_mo_factory_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                                  evaluate_dm_funptr, obj_func_mo_funptr, &
+                                  update_orbs_mo_funptr, solver_settings, error, &
+                                  settings, orbsym)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case
@@ -82,7 +87,8 @@ contains
         use otr_common, only: evaluate_dm_cs_type
         use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
                                              n_ao_ref => n_ao, n_occ_ref => n_occ
-        use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern
+        use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern, &
+                                         case_irreps, case_names
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -93,8 +99,10 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(mo_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:)
 
         real(rp), allocatable :: pattern(:, :, :)
+        integer(ip) :: i_sym
 
         ! initialize logical
         test_passed = .true.
@@ -168,6 +176,22 @@ contains
                 "settings associated with wrong values."
         end if
 
+        ! record whether irreps of the MOs are passed and check them against those of
+        ! the closed-shell occupation case with symmetry
+        orbsym_passed = present(orbsym)
+        if (present(orbsym)) then
+            i_sym = findloc(case_names, "closed-shell with symmetry", dim=1, kind=ip)
+            if (any(shape(orbsym) /= [n_mo_ref])) then
+                test_passed = .false.
+                write(stderr, *) "test_mo_factory_c_wrapper failed: Passed irreps "// &
+                    "of the MOs wrongly shaped."
+            else if (any(orbsym /= case_irreps(:, 1, i_sym))) then
+                test_passed = .false.
+                write(stderr, *) "test_mo_factory_c_wrapper failed: Passed irreps "// &
+                    "of the MOs wrong."
+            end if
+        end if
+
         ! set output quantities
         error = 0
         obj_func_mo_funptr => mock_obj_func
@@ -177,9 +201,10 @@ contains
 
     end subroutine mock_mo_factory_cs
 
-    subroutine mock_mo_factory_os( &
-        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm_funptr, &
-        obj_func_mo_funptr, update_orbs_mo_funptr, solver_settings, error, settings)
+    subroutine mock_mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                                  evaluate_dm_funptr, obj_func_mo_funptr, &
+                                  update_orbs_mo_funptr, solver_settings, error, &
+                                  settings, orbsym)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case
@@ -190,7 +215,8 @@ contains
         use otr_common, only: evaluate_dm_os_type
         use otr_common_test_reference, only: test_evaluate_dm_os_funptr, &
                                              n_ao_ref => n_ao, n_occ_ref => n_occ
-        use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern
+        use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern, &
+                                         case_irreps, case_names
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -201,8 +227,10 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(mo_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         real(rp), allocatable :: pattern(:, :, :)
+        integer(ip) :: i_sym
 
         ! initialize logical
         test_passed = .true.
@@ -274,6 +302,22 @@ contains
             test_passed = .false.
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed optional "// &
                 "settings associated with wrong values."
+        end if
+
+        ! record whether irreps of the MOs are passed and check them against those of
+        ! the open-shell occupation case with symmetry
+        orbsym_passed = present(orbsym)
+        if (present(orbsym)) then
+            i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
+            if (any(shape(orbsym) /= [n_mo_ref, 2_ip])) then
+                test_passed = .false.
+                write(stderr, *) "test_mo_factory_c_wrapper failed: Passed irreps "// &
+                    "of the MOs wrongly shaped."
+            else if (any(orbsym /= case_irreps(:, :, i_sym))) then
+                test_passed = .false.
+                write(stderr, *) "test_mo_factory_c_wrapper failed: Passed irreps "// &
+                    "of the MOs wrong."
+            end if
         end if
 
         ! set output quantities

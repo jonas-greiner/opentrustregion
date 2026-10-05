@@ -82,17 +82,18 @@ module otr_mo_c_interface
 
 contains
 
-    function mo_factory_c_wrapper( &
-        mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
-        evaluate_dm_c_funptr, obj_func_mo_c_funptr, update_orbs_mo_c_funptr, &
-        solver_settings_c, settings_c) result(error_c) bind(C, name="mo_factory")
+    function mo_factory_c_wrapper(mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, &
+                                  n_ao_c, n_mo_c, evaluate_dm_c_funptr, &
+                                  obj_func_mo_c_funptr, update_orbs_mo_c_funptr, &
+                                  solver_settings_c, settings_c, orbsym_c) &
+        result(error_c) bind(C, name="mo_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C
         ! variables to Fortran variables
         !
         use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
-        use otr_mo, only: mo_settings_type
+        use otr_mo, only: mo_settings_type, count_mo_params
         use otr_common_c_interface, only: n_param
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
@@ -103,6 +104,7 @@ contains
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(mo_settings_type_c), intent(inout) :: settings_c
         type(c_funptr), intent(out) :: obj_func_mo_c_funptr, update_orbs_mo_c_funptr
+        integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
 
         real(rp), pointer, contiguous :: mo_coeff_2d(:, :)
@@ -115,15 +117,23 @@ contains
         type(solver_settings_type) :: solver_settings
         type(mo_settings_type) :: settings
         integer(ip) :: n_particle, n_ao, n_mo, error
-        integer(ip), allocatable :: n_occ(:)
+        integer(ip), allocatable :: n_occ(:), orbsym(:, :), orbsym_1d(:)
 
-        ! convert dimensions to Fortran kind, calculate number of parameters and store
-        ! it globally to access assumed size arrays passed from C to Fortran
+        ! convert dimensions to Fortran kind
         n_particle = int(n_particle_c, kind=ip)
         n_ao = int(n_ao_c, kind=ip)
         n_mo = int(n_mo_c, kind=ip)
         n_occ = int(n_occ_c(:n_particle), kind=ip)
-        n_param = sum(n_occ * (n_mo - n_occ))
+
+        ! convert the irreps of the MOs of every particle channel if they are given and
+        ! the dimensions are valid, since the conversion would otherwise read out of
+        ! bounds; the sanity check rejects invalid dimensions
+        if (present(orbsym_c) .and. n_particle >= 1 .and. n_particle <= 2 .and. &
+            n_mo >= 1) then
+            orbsym = reshape(int(orbsym_c(:n_mo * n_particle), kind=ip), &
+                             [n_mo, n_particle])
+            if (n_particle == 1) orbsym_1d = orbsym(:, 1)
+        end if
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -166,12 +176,18 @@ contains
         if (n_particle == 1) then
             call mo_factory_cs(mo_coeff_2d, ao_overlap, n_occ(1), n_particle, n_ao, &
                                n_mo, evaluate_dm_cs_funptr, obj_func_mo_funptr, &
-                               update_orbs_mo_funptr, solver_settings, error, settings)
+                               update_orbs_mo_funptr, solver_settings, error, &
+                               settings, orbsym_1d)
         else
             call mo_factory_os(mo_coeff_3d, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
                                evaluate_dm_os_funptr, obj_func_mo_funptr, &
-                               update_orbs_mo_funptr, solver_settings, error, settings)
+                               update_orbs_mo_funptr, solver_settings, error, &
+                               settings, orbsym)
         end if
+
+        ! calculate the number of parameters of a successful setup and store it
+        ! globally to access assumed size arrays passed from C to Fortran
+        if (error == 0) n_param = count_mo_params(n_occ, n_mo, orbsym)
 
         ! associate the global procedure pointers to the Fortran function pointers
         obj_func_mo_before_wrapping => obj_func_mo_funptr

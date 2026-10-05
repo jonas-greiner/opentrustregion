@@ -1168,7 +1168,7 @@ contains
             end do
         end do
         do k = 1, n_hist
-            step_mo = ref_unpack_ov(steps(:, k), n_occ(:n_particle), n_mo)
+            step_mo = ref_unpack_ov(steps(:, k), mo_object%mo_channels)
             do j = 1, n_particle
                 dm_list(:, :, j, k) = matmul(ao_overlap, matmul( &
                     mo_object%dm_ao(:, :, j) + matmul(mo_coeff(:, :, j), matmul( &
@@ -1208,7 +1208,7 @@ contains
                                                current(:, :, j, :n_pot - 1), dim=3))
                 end do
                 if (norm2(response - merge(4.0_rp, 2.0_rp, n_particle == 1) * &
-                          ref_pack_ov(v_diff_mo, n_occ(:n_particle))) > &
+                          ref_pack_ov(v_diff_mo, mo_object%mo_channels)) > &
                     tol * (1.0_rp + norm2(response))) then
                     write(stderr, *) test_name// &
                         " failed: History not reproduced exactly for the MO basis."
@@ -1478,7 +1478,7 @@ contains
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
                            evaluate_dm_cs_type
         use otr_mo, only: mo_object
-        use otr_mo_test_reference, only: n_mo
+        use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
@@ -1486,7 +1486,7 @@ contains
 
         real(rp), target :: mo_coeff(n_ao, n_mo)
         real(rp) :: ao_overlap(n_ao, n_ao), mo_coeff_3d(n_ao, n_mo, 1)
-        integer(ip) :: error
+        integer(ip) :: i_sym, error
         type(arh_settings_type) :: settings
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
@@ -1545,6 +1545,25 @@ contains
                                         error, settings, solver_settings, &
                                         obj_func_arh_funptr, update_orbs_arh_funptr)) &
                 test_arh_factory_mo_cs = .false.
+
+            ! call routine again with a known ARH type and the irreps of the MOs of the
+            ! symmetric closed-shell occupation case and determine if they reach the
+            ! single particle channel of the MO object
+            settings%arh_type = "ms_psb"
+            i_sym = findloc(case_names, "closed-shell with symmetry", dim=1, kind=ip)
+            call arh_factory(mo_coeff, ao_overlap, n_occ(1), 1_ip, n_ao, n_mo, &
+                             evaluate_dm_funptr, obj_func_arh_funptr, &
+                             update_orbs_arh_funptr, solver_settings, error, settings, &
+                             case_irreps(:, 1, i_sym))
+            if (error /= 0) then
+                write(stderr, *) "test_arh_factory_mo_cs failed: Produced error "// &
+                    "with irreps."
+                test_arh_factory_mo_cs = .false.
+            else if (any(mo_object%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym))) &
+                then
+                write(stderr, *) "test_arh_factory_mo_cs failed: Irreps not passed on."
+                test_arh_factory_mo_cs = .false.
+            end if
         end if
 
         ! deallocate ARH and MO objects
@@ -1563,7 +1582,7 @@ contains
         use otr_arh, only: arh_factory, arh_object, arh_settings_type, &
                            evaluate_dm_os_type
         use otr_mo, only: mo_object
-        use otr_mo_test_reference, only: n_mo
+        use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
@@ -1571,7 +1590,7 @@ contains
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
-        integer(ip) :: error
+        integer(ip) :: i_sym, error
         type(arh_settings_type) :: settings
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
@@ -1619,6 +1638,26 @@ contains
                                         n_particle, error, settings, solver_settings, &
                                         obj_func_arh_funptr, update_orbs_arh_funptr)) &
                 test_arh_factory_mo_os = .false.
+
+            ! call routine again with a known ARH type and the irreps of the MOs of the
+            ! symmetric open-shell occupation case and determine if they reach every
+            ! particle channel of the MO object
+            settings%arh_type = "ms_psb"
+            i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
+            call arh_factory(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                             evaluate_dm_funptr, obj_func_arh_funptr, &
+                             update_orbs_arh_funptr, solver_settings, error, settings, &
+                             case_irreps(:, :, i_sym))
+            if (error /= 0) then
+                write(stderr, *) "test_arh_factory_mo_os failed: Produced error "// &
+                    "with irreps."
+                test_arh_factory_mo_os = .false.
+            else if ( &
+                any(mo_object%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym)) .or. &
+                any(mo_object%mo_channels(2)%irreps /= case_irreps(:, 2, i_sym))) then
+                write(stderr, *) "test_arh_factory_mo_os failed: Irreps not passed on."
+                test_arh_factory_mo_os = .false.
+            end if
         end if
 
         ! deallocate ARH and MO objects
@@ -2789,7 +2828,7 @@ contains
         ! from both sides, while the current orbitals are left untouched
         call random_number(kappa)
         kappa = 0.2_rp * (kappa - 0.5_rp)
-        expected = ref_rotate_mo_coeff(kappa, mo_coeff, n_occ)
+        expected = ref_rotate_mo_coeff(kappa, mo_coeff, mo_object%mo_channels)
         call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
         if (error /= 0) then
             write(stderr, *) "test_rotate_trial_arh_mo failed: Produced error."
@@ -3093,7 +3132,7 @@ contains
         use otr_arh, only: arh_mo_type
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+                                         case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle
         use otr_common_unit_tests, only: generate_random_symm_matrix
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
@@ -3116,15 +3155,16 @@ contains
         test_history_columns_arh_mo = .true.
 
         ! loop over every occupation case: the history columns are the full difference
-        ! matrices in the current MO basis and the packed columns their
-        ! occupied-virtual blocks
+        ! matrices in the current MO basis and the packed columns the entries of their
+        ! occupied-virtual blocks between orbitals of the same irrep
         do i_case = 1, n_cases
             case_name = trim(case_names(i_case))
             n_part = case_n_particle(i_case)
             n_occ = case_n_occ(:n_part, i_case)
             ao_overlap = generate_random_ao_overlap(n_ao)
             mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-            call setup_mo_object(mo_coeff(:, :, :n_part), ao_overlap, n_occ)
+            call setup_mo_object(mo_coeff(:, :, :n_part), ao_overlap, n_occ, &
+                                 case_irreps(:, :n_part, i_case))
             arh = arh_mo_type(mo_object)
             allocate(diff(n_ao, n_ao, n_part, n_list), diff_mo(n_mo, n_mo, n_part), &
                      expected_cols(n_part * n_mo**2, n_list), &
@@ -3143,7 +3183,7 @@ contains
                     expected_cols((j - 1) * n_mo**2 + 1:j * n_mo**2, k) = &
                         reshape(diff_mo(:, :, j), [n_mo**2])
                 end do
-                expected_packed(:, k) = ref_pack_ov(diff_mo, n_occ)
+                expected_packed(:, k) = ref_pack_ov(diff_mo, mo_object%mo_channels)
             end do
 
             ! call routine and determine if both sets of columns are correct
@@ -3349,26 +3389,29 @@ contains
         !
         use otr_arh, only: arh_mo_type
         use otr_mo, only: mo_object
-        use otr_mo_test_reference, only: n_mo
+        use otr_mo_test_reference, only: case_irreps, case_names
         use otr_common_test_reference, only: n_occ
         use otr_mo_unit_tests, only: setup_minimal_mo_object
 
         type(arh_mo_type) :: arh
         integer(ip), allocatable :: rows(:, :)
-        integer(ip) :: n1, n2
+        integer(ip) :: n1, n2, i_sym
 
         ! assume tests pass
         test_packed_channel_rows_arh_mo = .true.
 
-        ! set up the MO object with the differently occupied spin channels, whose
-        ! occupations are all the routine reads
-        call setup_minimal_mo_object(n_occ)
+        ! set up the MO object with the differently occupied spin channels of the
+        ! open-shell occupation case with symmetry, whose parameters are all the
+        ! routine reads
+        i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
+        call setup_minimal_mo_object(n_occ, case_irreps(:, :, i_sym))
         arh = arh_mo_type(mo_object)
 
         ! call routine and determine if every channel holds its occupied-virtual
-        ! rotations, whose number differs between the spin channels
-        n1 = n_occ(1) * (n_mo - n_occ(1))
-        n2 = n_occ(2) * (n_mo - n_occ(2))
+        ! rotations between orbitals of the same irrep, whose number differs between
+        ! the spin channels
+        n1 = count(mo_object%mo_channels(1)%param_mask, kind=ip)
+        n2 = count(mo_object%mo_channels(2)%param_mask, kind=ip)
         rows = arh%packed_channel_rows()
         if (any(shape(rows) /= [2, 2])) then
             write(stderr, *) "test_packed_channel_rows_arh_mo failed: Incorrect "// &

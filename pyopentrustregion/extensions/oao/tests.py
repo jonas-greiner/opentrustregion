@@ -27,6 +27,7 @@ from pyopentrustregion.tests import (
     PyInterfaceTests,
 )
 from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
+from pyopentrustregion.extensions.common.tests import n_ao
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
 
 if NUMPY_AVAILABLE:
@@ -84,9 +85,6 @@ fortran_tests = {
         "update_orbs_oao_c_wrapper",
     ],
 }
-
-# number of AOs
-n_ao = c_int.in_dll(lib, "test_n_ao").value
 
 # multiples of the density matrix the mock density matrix evaluating function returns
 # for the Fock matrix and the response

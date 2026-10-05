@@ -410,7 +410,7 @@ OpenTrustRegion (OTR) supports additional optional modules that can be enabled d
 
 ### Molecular Orbitals (MO)
 
-This extension provides orbital optimization in the molecular orbital (MO) basis for RHF and UHF, whose parameters are only the occupied-virtual rotations of every particle channel. It is the foundation of ARH's MO basis, and can also be used on its own when the exact Hessian-vector product (rather than ARH's history-based approximation) is preferred.
+This extension provides orbital optimization in the molecular orbital (MO) basis for RHF and UHF, whose parameters are only the occupied-virtual rotations of every particle channel, and only those between orbitals of the same irreducible representation (irrep) if the irreps of the MOs are given. It is the foundation of ARH's MO basis, and can also be used on its own when the exact Hessian-vector product (rather than ARH's history-based approximation) is preferred.
 
 #### Installation
 
@@ -430,7 +430,7 @@ This exposes an `mo_factory` function that prepares MO-specific callbacks for en
 
 #### Usage
 
-The routine `mo_factory` constructs and returns MO versions of the energy and orbital updating functions, and wires MO versions of the preconditioning and extra trial vector functions into the solver settings. Since the parameters are non-redundant, the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels and no projection is wired into the solver settings, so that the projection is left to the caller, such as a symmetry projection. This routine requires the following input arguments:
+The routine `mo_factory` constructs and returns MO versions of the energy and orbital updating functions, and wires MO versions of the preconditioning and extra trial vector functions into the solver settings. Since the parameters are non-redundant, the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels, or the number of occupied-virtual pairs of the same irrep if `orbsym` is given, and no projection is wired into the solver settings, so that the projection is left to the caller. This routine requires the following input arguments:
 
 #### Required Arguments
 
@@ -449,6 +449,7 @@ The routine `mo_factory` constructs and returns MO versions of the energy and or
   - **`get_extra_trial_vectors`**: MO extra trial vectors, the rotations between the pseudo-canonical occupied and virtual orbitals with the most negative orbital energy differences, also for the stability check.
 - **`error`** (integer): An integer code indicating the success or failure of the factory. The error code structure is explained below.
 - **`mo_settings`** (mo_settings_type): Settings object which controls optional arguments as described below.
+- **`orbsym`** (integer array, optional): Specifies the irreps of the MOs as the last argument, with dimension (`n_mo`) for closed-shell and (`n_mo`, 2) for open-shell calculations, which is (`n_mo`) and (2, `n_mo`) in Python, and is omitted in Fortran, `NULL` in C and `None` in Python if all MOs belong to the same irrep. Only the occupied-virtual rotations between orbitals of the same irrep are then parameters, so that symmetry-adapted starting orbitals stay symmetry-adapted. Any integers can label the irreps; only their equality matters.
 
 ---
 
@@ -532,7 +533,8 @@ c_int error = mo_factory(mo_coeff,
                          &obj_func_mo_funptr,
                          &update_orbs_mo_funptr,
                          &settings,
-                         &mo_settings);
+                         &mo_settings,
+                         NULL);
 
 // set number of parameters
 n_param = n_occ[0] * (n_mo - n_occ[0]);
@@ -974,7 +976,7 @@ The ARH factories construct and return ARH versions of the energy and orbital up
 
 ##### Orbitals in the MO basis
 
-In the MO basis, the parameters are only the occupied-virtual rotations of every particle channel, so that the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels. These parameters are non-redundant, so the factory wires no projection into the solver settings and leaves the projection to the caller, such as a symmetry projection. `precond_pd` and `get_extra_trial_vectors` are those of the MO extension. For `n_mo` equal to `n_ao`, the approximate Hessian equals that of the OAO basis in MO coordinates. Besides the common arguments, `arh_factory_mo` takes, in the order `mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, ...`:
+In the MO basis, the parameters are only the occupied-virtual rotations of every particle channel, and only those between orbitals of the same irrep if the irreps of the MOs are given as the optional last argument `orbsym`, described for the MO extension, so that the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels, or the number of occupied-virtual pairs of the same irrep. These parameters are non-redundant, so the factory wires no projection into the solver settings and leaves the projection to the caller. `precond_pd` and `get_extra_trial_vectors` are those of the MO extension. Without `orbsym` and for `n_mo` equal to `n_ao`, the approximate Hessian equals that of the OAO basis in MO coordinates. Besides the common arguments, `arh_factory_mo` takes, in the order `mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, ...`:
 
 - **`mo_coeff`** (real array): Represents the starting MO coefficients, orthonormal with respect to the AO overlap matrix and with the occupied orbitals of every particle channel first, which are rotated in place throughout the calculation, with dimension (`n_ao`, `n_mo`) for closed-shell and (`n_ao`, `n_mo`, 2) for open-shell calculations, which is (`n_ao`, `n_mo`) and (2, `n_ao`, `n_mo`) in Python. The C interface expects the matrix of every particle channel in column-major order; the Python interface accepts any memory layout and precision of a writeable floating-point array and copies the rotated MO coefficients back after every orbital update if they cannot be rotated in place.
 - **`n_occ`** (integer or integer array): Specifies the number of occupied orbitals, a single integer for closed-shell and one per particle channel for open-shell calculations, which may differ between the channels.
@@ -1061,7 +1063,8 @@ c_int error = arh_factory_mo(mo_coeff,
                              &obj_func_arh_funptr,
                              &update_orbs_arh_funptr,
                              &settings,
-                             &arh_settings);
+                             &arh_settings,
+                             NULL);
 
 // set number of parameters
 n_param = n_occ[0] * (n_mo - n_occ[0]);

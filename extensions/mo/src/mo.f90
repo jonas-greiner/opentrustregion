@@ -23,11 +23,14 @@ module otr_mo
     type(mo_settings_type), parameter :: default_mo_settings = &
         mo_settings_type(orbital_settings_type=default_orbital_settings)
 
-    ! occupations of a particle channel in the MO basis together with the
+    ! occupations and orbital irreps of a particle channel in the MO basis, the mask of
+    ! its occupied-virtual pairs of the same irrep, which are its parameters, and the
     ! occupied-occupied and virtual-virtual blocks of its Fock matrix, from which the
-    ! static part of the Hessian is built, and their eigendecompositions
+    ! static part of the Hessian is built, together with their eigendecompositions
     type :: mo_channel_type
         integer(ip) :: n_occ = 0, n_virt = 0
+        integer(ip), allocatable :: irreps(:)
+        logical, allocatable :: param_mask(:, :)
         real(rp), allocatable :: fock_oo(:, :), fock_vv(:, :), occ_eigvecs(:, :), &
                                  occ_eigvals(:), virt_eigvecs(:, :), virt_eigvals(:)
     end type
@@ -74,12 +77,14 @@ contains
 
     subroutine mo_factory_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
                              evaluate_dm_cs, obj_func_mo_funptr, &
-                             update_orbs_mo_funptr, solver_settings, error, settings)
+                             update_orbs_mo_funptr, solver_settings, error, settings, &
+                             orbsym)
         !
         ! this function returns a modified MO orbital updating function for the
         ! closed-shell case and wires the MO preconditioners and extra trial vectors
         ! into the solver settings; the MO coefficients are rotated in place, so they
-        ! have to outlive the calculation
+        ! have to outlive the calculation; if the irreps of the MOs are given, only the
+        ! occupied-virtual rotations between orbitals of the same irrep are parameters
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -90,16 +95,19 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(mo_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:)
 
         real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
+        integer(ip), allocatable :: orbsym_2d(:, :)
 
         ! initialize error flag
         error = 0
 
-        ! call common setup
+        ! call common setup, passing the irreps of the MOs only if they are given
         mo_coeff_3d(1:size(mo_coeff, 1), 1:size(mo_coeff, 2), 1:1) => mo_coeff
+        if (present(orbsym)) orbsym_2d = reshape(orbsym, [size(orbsym, kind=ip), 1_ip])
         call mo_factory_common(mo_coeff_3d, ao_overlap, [n_occ], n_particle, n_ao, &
-                               n_mo, error, settings)
+                               n_mo, error, settings, orbsym_2d)
         if (error /= 0) return
         nullify(mo_coeff_3d)
 
@@ -118,12 +126,15 @@ contains
 
     subroutine mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
                              evaluate_dm_os, obj_func_mo_funptr, &
-                             update_orbs_mo_funptr, solver_settings, error, settings)
+                             update_orbs_mo_funptr, solver_settings, error, settings, &
+                             orbsym)
         !
         ! this function returns a modified MO orbital updating function for the
         ! open-shell case and wires the MO preconditioners and extra trial vectors into
         ! the solver settings; the MO coefficients are rotated in place, so they have
-        ! to outlive the calculation
+        ! to outlive the calculation; if the irreps of the MOs of every particle
+        ! channel are given, only the occupied-virtual rotations between orbitals of
+        ! the same irrep are parameters
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -134,13 +145,14 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(mo_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         ! initialize error flag
         error = 0
 
         ! call common setup
         call mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                               error, settings)
+                               error, settings, orbsym)
         if (error /= 0) return
 
         ! set pointers to functions
@@ -157,7 +169,7 @@ contains
     end subroutine mo_factory_os
 
     subroutine mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                                 error, settings)
+                                 error, settings, orbsym)
         !
         ! this subroutine performs common MO initialization operations
         !
@@ -166,15 +178,24 @@ contains
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         integer(ip), intent(out) :: error
         class(orbital_settings_type), intent(in) :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         logical :: reuse
-        integer(ip) :: i
+        integer(ip) :: i, j
+        integer(ip), allocatable :: irreps(:, :)
         external :: dgemm
 
         ! perform sanity check
         call mo_sanity_check(settings, shape(mo_coeff, kind=ip), shape( &
-            ao_overlap, kind=ip), n_occ, n_particle, n_ao, n_mo, error)
+            ao_overlap, kind=ip), n_occ, n_particle, n_ao, n_mo, error, orbsym)
         if (error /= 0) return
+
+        ! irreps of the MOs of every particle channel
+        if (present(orbsym)) then
+            irreps = orbsym
+        else
+            allocate(irreps(n_mo, n_particle), source=0_ip)
+        end if
 
         ! allocate object
         if (.not. allocated(mo_object)) allocate(mo_object)
@@ -182,13 +203,17 @@ contains
         ! set (potentially new) settings
         mo_object%settings = settings
 
-        ! determine whether the object was already set up for the same dimensions and
-        ! occupations, which the particle channels indicate, reading them only once it
-        ! was set up at all
+        ! determine whether the object was already set up for the same dimensions,
+        ! occupations and irreps, which the particle channels indicate, reading them
+        ! only once it was set up at all
         reuse = allocated(mo_object%mo_channels)
         if (reuse) reuse = mo_object%n_ao == n_ao .and. mo_object%n_mo == n_mo .and. &
                            size(mo_object%mo_channels, kind=ip) == n_particle
         if (reuse) reuse = all(mo_object%mo_channels%n_occ == n_occ)
+        do i = 1, n_particle
+            if (reuse) reuse = allocated(mo_object%mo_channels(i)%irreps)
+            if (reuse) reuse = all(mo_object%mo_channels(i)%irreps == irreps(:, i))
+        end do
 
         ! set up the object anew otherwise
         if (.not. reuse) then
@@ -203,14 +228,24 @@ contains
             mo_object%n_mo = n_mo
             mo_object%n_particle = n_particle
 
-            ! number of parameters is the number of occupied-virtual pairs of every
-            ! particle channel
-            mo_object%n_param = sum(n_occ * (n_mo - n_occ))
-
-            ! set occupations of every particle channel
+            ! set occupations and irreps of every particle channel, whose parameters
+            ! are the occupied-virtual pairs of the same irrep
             allocate(mo_object%mo_channels(n_particle))
             mo_object%mo_channels%n_occ = n_occ
             mo_object%mo_channels%n_virt = n_mo - n_occ
+            do i = 1, n_particle
+                associate (channel => mo_object%mo_channels(i))
+                    channel%irreps = irreps(:, i)
+                    allocate(channel%param_mask(n_occ(i), n_mo - n_occ(i)))
+                    do j = 1, n_mo - n_occ(i)
+                        channel%param_mask(:, j) = &
+                            irreps(:n_occ(i), i) == irreps(n_occ(i) + j, i)
+                    end do
+                end associate
+            end do
+
+            ! number of parameters is the number of these pairs of every channel
+            mo_object%n_param = count_mo_params(n_occ, n_mo, orbsym)
 
             ! allocate density matrix
             allocate(mo_object%dm_ao(n_ao, n_ao, n_particle))
@@ -244,12 +279,13 @@ contains
     end subroutine mo_factory_common
 
     subroutine mo_sanity_check(settings, mo_coeff_shape, ao_overlap_shape, n_occ, &
-                               n_particle, n_ao, n_mo, error)
+                               n_particle, n_ao, n_mo, error, orbsym)
         !
         ! this subroutine performs a sanity check for the dimensions of orbitals
         ! parameterized in the MO basis, given the shapes of the MO coefficients (with
-        ! the particle channels along the last dimension) and of the AO overlap matrix
-        ! and the number of particle channels of the factory
+        ! the particle channels along the last dimension) and of the AO overlap matrix,
+        ! the number of particle channels of the factory and, if given, the irreps of
+        ! the MOs of every particle channel
         !
         use opentrustregion, only: verbosity_error
 
@@ -257,6 +293,7 @@ contains
         integer(ip), intent(in) :: mo_coeff_shape(3), ao_overlap_shape(2), n_occ(:), &
                                    n_particle, n_ao, n_mo
         integer(ip), intent(out) :: error
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         ! initialize error flag
         error = 0
@@ -304,6 +341,17 @@ contains
             return
         end if
 
+        ! check that the irreps are given for every MO of every particle channel
+        if (present(orbsym)) then
+            if (any(shape(orbsym, kind=ip) /= [n_mo, n_particle])) then
+                call settings%log("Shape of the MO irreps should match the number "// &
+                                  "of MOs and particle channels.", verbosity_error, &
+                                  .true.)
+                error = 1
+                return
+            end if
+        end if
+
         ! check that the occupations fit into the MOs
         if (any(n_occ < 0) .or. any(n_occ > n_mo)) then
             call settings%log("Number of occupied orbitals should not be negative "// &
@@ -313,10 +361,17 @@ contains
             return
         end if
 
-        ! check that there is at least one occupied-virtual rotation
-        if (sum(n_occ * (n_mo - n_occ)) < 1) then
-            call settings%log("There should be at least one occupied-virtual "// &
-                              "rotation.", verbosity_error, .true.)
+        ! check that there is at least one occupied-virtual rotation, between orbitals
+        ! of the same irrep if the irreps are given
+        if (count_mo_params(n_occ, n_mo, orbsym) < 1) then
+            if (present(orbsym)) then
+                call settings%log("There should be at least one occupied-virtual "// &
+                                  "rotation between orbitals of the same irrep.", &
+                                  verbosity_error, .true.)
+            else
+                call settings%log("There should be at least one occupied-virtual "// &
+                                  "rotation.", verbosity_error, .true.)
+            end if
             error = 1
             return
         end if
@@ -475,7 +530,7 @@ contains
         shell_scale = merge(4.0_rp, 2.0_rp, mo_object%n_particle == 1)
 
         ! rows of every particle channel in the parameter vector
-        rows = channel_rows(mo_object%mo_channels%n_occ * mo_object%mo_channels%n_virt)
+        rows = mo_param_rows(mo_object%mo_channels)
 
         ! rebuild the response if the orbitals were moved without it being updated,
         ! since the static and response parts would otherwise refer to different points
@@ -495,7 +550,7 @@ contains
             n_occ = mo_object%mo_channels(i)%n_occ
             n_virt = mo_object%mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
-            x_block = reshape(x(rows(1, i):rows(2, i)), [n_occ, n_virt])
+            x_block = unpack_ov(x(rows(1, i):rows(2, i)), mo_object%mo_channels(i))
             allocate(temp(n_occ, n_ao))
             call dgemm("N", "T", n_occ, n_ao, n_virt, 1.0_rp, x_block, n_occ, &
                        mo_object%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, temp, n_occ)
@@ -532,7 +587,7 @@ contains
                        hess_x_block, n_occ)
             hess_x(rows(1, i):rows(2, i)) = &
                 hess_x(rows(1, i):rows(2, i)) + &
-                shell_scale * reshape(hess_x_block, [n_occ * n_virt])
+                shell_scale * pack_ov(hess_x_block, mo_object%mo_channels(i))
             deallocate(temp, hess_x_block)
         end do
         deallocate(fock_response)
@@ -650,14 +705,16 @@ contains
         class(mo_type), intent(inout) :: self
         real(rp), intent(in) :: fock(:, :, :)
 
-        integer(ip) :: n_occ, n_virt, offset, i, j, k
+        integer(ip) :: n_occ, n_virt, i, j, k, rows(2, self%n_particle)
         real(rp) :: shell_scale
-        real(rp), allocatable :: fock_mo(:, :)
+        real(rp), allocatable :: fock_mo(:, :), diag_diff(:, :)
 
         ! set scaling factor for closed- and open-shell systems
         shell_scale = merge(4.0_rp, 2.0_rp, self%n_particle == 1)
 
-        offset = 0
+        ! rows of every particle channel in the parameter vector
+        rows = mo_param_rows(self%mo_channels)
+
         do k = 1, self%n_particle
             n_occ = self%mo_channels(k)%n_occ
             n_virt = self%mo_channels(k)%n_virt
@@ -670,17 +727,20 @@ contains
             self%mo_channels(k)%fock_vv = fock_mo(n_occ + 1:, n_occ + 1:)
 
             ! construct gradient from the occupied-virtual block
-            self%grad(offset + 1:offset + n_occ * n_virt) = &
-                shell_scale * reshape(fock_mo(:n_occ, n_occ + 1:), [n_occ * n_virt])
+            self%grad(rows(1, k):rows(2, k)) = &
+                shell_scale * pack_ov(fock_mo(:n_occ, n_occ + 1:), self%mo_channels(k))
 
-            ! construct Hessian diagonal
+            ! construct Hessian diagonal from the differences of the diagonal elements
+            ! of the virtual-virtual and occupied-occupied blocks
+            allocate(diag_diff(n_occ, n_virt))
             do j = 1, n_virt
                 do i = 1, n_occ
-                    self%h_diag(offset + (j - 1) * n_occ + i) = &
-                        shell_scale * (fock_mo(n_occ + j, n_occ + j) - fock_mo(i, i))
+                    diag_diff(i, j) = fock_mo(n_occ + j, n_occ + j) - fock_mo(i, i)
                 end do
             end do
-            offset = offset + n_occ * n_virt
+            self%h_diag(rows(1, k):rows(2, k)) = shell_scale * &
+                                                 pack_ov(diag_diff, self%mo_channels(k))
+            deallocate(diag_diff)
         end do
 
         ! the static Hessian part was just rebuilt, so any cached eigendecomposition of
@@ -693,12 +753,10 @@ contains
         !
         ! this subroutine refreshes the eigendecomposition of the static part of the
         ! Hessian in the MO basis, if the static part has changed since it was last
-        ! computed, by diagonalizing the occupied-occupied and virtual-virtual blocks
-        ! of the Fock matrix of every particle channel, whose eigenvectors diagonalize
-        ! the static part
+        ! computed, by diagonalizing, per irrep, the occupied-occupied and
+        ! virtual-virtual blocks of the Fock matrix of every particle channel, whose
+        ! eigenvectors diagonalize the static part
         !
-        use opentrustregion, only: symm_mat_diag
-
         class(mo_type), intent(inout) :: self
         class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
@@ -725,16 +783,14 @@ contains
                     channel%virt_eigvecs(n_virt, n_virt), channel%virt_eigvals(n_virt))
 
                 ! diagonalize occupied-occupied and virtual-virtual blocks
-                if (n_occ > 0) then
-                    call symm_mat_diag(channel%fock_oo, channel%occ_eigvals, &
-                                       channel%occ_eigvecs, settings, error)
-                    if (error /= 0) return
-                end if
-                if (n_virt > 0) then
-                    call symm_mat_diag(channel%fock_vv, channel%virt_eigvals, &
-                                       channel%virt_eigvecs, settings, error)
-                    if (error /= 0) return
-                end if
+                call diagonalize_per_irrep(channel%fock_oo, channel%irreps(:n_occ), &
+                                           channel%occ_eigvals, channel%occ_eigvecs, &
+                                           settings, error)
+                if (error /= 0) return
+                call diagonalize_per_irrep( &
+                    channel%fock_vv, channel%irreps(n_occ + 1:), channel%virt_eigvals, &
+                    channel%virt_eigvecs, settings, error)
+                if (error /= 0) return
             end associate
         end do
 
@@ -758,7 +814,7 @@ contains
         external :: dgemm
 
         ! rows of every particle channel in the parameter vector
-        rows = channel_rows(self%mo_channels%n_occ * self%mo_channels%n_virt)
+        rows = mo_param_rows(self%mo_channels)
 
         ! rotate each particle channel by the cached eigenvectors
         allocate(rotated(self%n_param))
@@ -766,7 +822,7 @@ contains
             n_occ = self%mo_channels(i)%n_occ
             n_virt = self%mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
-            ov_block = reshape(vector(rows(1, i):rows(2, i)), [n_occ, n_virt])
+            ov_block = unpack_ov(vector(rows(1, i):rows(2, i)), self%mo_channels(i))
             allocate(temp(n_occ, n_virt))
             call dgemm("T", "N", n_occ, n_virt, n_occ, 1.0_rp, &
                        self%mo_channels(i)%occ_eigvecs, n_occ, ov_block, n_occ, &
@@ -774,7 +830,7 @@ contains
             call dgemm("N", "N", n_occ, n_virt, n_virt, 1.0_rp, temp, n_occ, &
                        self%mo_channels(i)%virt_eigvecs, n_virt, 0.0_rp, ov_block, &
                        n_occ)
-            rotated(rows(1, i):rows(2, i)) = reshape(ov_block, [n_occ * n_virt])
+            rotated(rows(1, i):rows(2, i)) = pack_ov(ov_block, self%mo_channels(i))
             deallocate(ov_block, temp)
         end do
 
@@ -795,7 +851,7 @@ contains
         external :: dgemm
 
         ! rows of every particle channel in the parameter vector
-        rows = channel_rows(self%mo_channels%n_occ * self%mo_channels%n_virt)
+        rows = mo_param_rows(self%mo_channels)
 
         ! rotate each particle channel by the cached eigenvectors
         allocate(rotated(self%n_param))
@@ -803,7 +859,7 @@ contains
             n_occ = self%mo_channels(i)%n_occ
             n_virt = self%mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
-            ov_block = reshape(vector(rows(1, i):rows(2, i)), [n_occ, n_virt])
+            ov_block = unpack_ov(vector(rows(1, i):rows(2, i)), self%mo_channels(i))
             allocate(temp(n_occ, n_virt))
             call dgemm("N", "N", n_occ, n_virt, n_occ, 1.0_rp, &
                        self%mo_channels(i)%occ_eigvecs, n_occ, ov_block, n_occ, &
@@ -811,7 +867,7 @@ contains
             call dgemm("N", "T", n_occ, n_virt, n_virt, 1.0_rp, temp, n_occ, &
                        self%mo_channels(i)%virt_eigvecs, n_virt, 0.0_rp, ov_block, &
                        n_occ)
-            rotated(rows(1, i):rows(2, i)) = reshape(ov_block, [n_occ * n_virt])
+            rotated(rows(1, i):rows(2, i)) = pack_ov(ov_block, self%mo_channels(i))
             deallocate(ov_block, temp)
         end do
 
@@ -821,30 +877,36 @@ contains
         !
         ! this function returns the eigenvalues of the cached static Hessian part in
         ! the MO basis, the scaled differences of virtual and occupied Fock matrix
-        ! block eigenvalues, packed in the same order as h_diag
+        ! block eigenvalues of the same irrep, packed in the same order as h_diag
         !
         class(mo_type), intent(in) :: self
         real(rp), allocatable :: eigval_pairs(:)
 
-        integer(ip) :: offset, i, j, k
+        integer(ip) :: i, j, k, rows(2, self%n_particle)
         real(rp) :: shell_scale
+        real(rp), allocatable :: eigval_diff(:, :)
 
         ! set scaling factor for closed- and open-shell systems
         shell_scale = merge(4.0_rp, 2.0_rp, self%n_particle == 1)
 
-        ! construct differences of eigenvalues
+        ! rows of every particle channel in the parameter vector
+        rows = mo_param_rows(self%mo_channels)
+
+        ! construct differences of eigenvalues, each stored at the orbitals of the
+        ! irrep of its eigenvector, so that packing keeps the pairs of the same irrep
         allocate(eigval_pairs(self%n_param))
-        offset = 0
         do k = 1, self%n_particle
             associate (channel => self%mo_channels(k))
+                allocate(eigval_diff(channel%n_occ, channel%n_virt))
                 do j = 1, channel%n_virt
                     do i = 1, channel%n_occ
-                        eigval_pairs(offset + (j - 1) * channel%n_occ + i) = &
-                            shell_scale * &
-                            (channel%virt_eigvals(j) - channel%occ_eigvals(i))
+                        eigval_diff(i, j) = channel%virt_eigvals(j) - &
+                                            channel%occ_eigvals(i)
                     end do
                 end do
-                offset = offset + channel%n_occ * channel%n_virt
+                eigval_pairs(rows(1, k):rows(2, k)) = shell_scale * &
+                                                      pack_ov(eigval_diff, channel)
+                deallocate(eigval_diff)
             end associate
         end do
 
@@ -917,7 +979,7 @@ contains
         n_mo = size(mo_coeff, 2, kind=ip)
 
         ! rows of every particle channel in the parameter vector
-        rows = channel_rows(mo_channels%n_occ * mo_channels%n_virt)
+        rows = mo_param_rows(mo_channels)
 
         allocate(kappa_full(n_mo, n_mo), rotated(n_ao, n_mo), &
                  overlap_rotated(n_ao, n_mo), metric(n_mo, n_mo))
@@ -928,8 +990,8 @@ contains
             ! construct the antisymmetric rotation generator from its occupied-virtual
             ! block
             kappa_full = 0.0_rp
-            kappa_full(:n_occ, n_occ + 1:) = reshape(kappa(rows(1, i):rows(2, i)), &
-                                                     [n_occ, n_virt])
+            kappa_full(:n_occ, n_occ + 1:) = unpack_ov(kappa(rows(1, i):rows(2, i)), &
+                                                       mo_channels(i))
             kappa_full(n_occ + 1:, :n_occ) = -transpose(kappa_full(:n_occ, n_occ + 1:))
 
             ! get rotation matrix
@@ -980,7 +1042,7 @@ contains
         shell_scale = merge(4.0_rp, 2.0_rp, size(mo_channels) == 1)
 
         ! rows of every particle channel in the parameter vector
-        rows = channel_rows(mo_channels%n_occ * mo_channels%n_virt)
+        rows = mo_param_rows(mo_channels)
 
         ! apply the static part X F_vv - F_oo X to the occupied-virtual block of every
         ! particle channel
@@ -989,7 +1051,7 @@ contains
             n_occ = mo_channels(i)%n_occ
             n_virt = mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
-            x_block = reshape(x(rows(1, i):rows(2, i)), [n_occ, n_virt])
+            x_block = unpack_ov(x(rows(1, i):rows(2, i)), mo_channels(i))
             allocate(hess_x_block(n_occ, n_virt))
             call dgemm("N", "N", n_occ, n_virt, n_virt, 1.0_rp, x_block, n_occ, &
                        mo_channels(i)%fock_vv, n_virt, 0.0_rp, hess_x_block, n_occ)
@@ -997,7 +1059,7 @@ contains
                        mo_channels(i)%fock_oo, n_occ, x_block, n_occ, 1.0_rp, &
                        hess_x_block, n_occ)
             hess_x(rows(1, i):rows(2, i)) = shell_scale * &
-                                            reshape(hess_x_block, [n_occ * n_virt])
+                                            pack_ov(hess_x_block, mo_channels(i))
             deallocate(x_block, hess_x_block)
         end do
 
@@ -1028,5 +1090,119 @@ contains
         deallocate(temp)
 
     end function mo_transform
+
+    function count_mo_params(n_occ, n_mo, orbsym) result(n_param)
+        !
+        ! this function returns the number of parameters of orbitals parameterized in
+        ! the MO basis, the occupied-virtual pairs of every particle channel, only
+        ! those between orbitals of the same irrep if the irreps of the MOs are given
+        !
+        integer(ip), intent(in) :: n_occ(:), n_mo
+        integer(ip), intent(in), optional :: orbsym(:, :)
+        integer(ip) :: n_param
+
+        integer(ip) :: i, j
+
+        if (present(orbsym)) then
+            n_param = 0
+            do i = 1, size(n_occ, kind=ip)
+                do j = n_occ(i) + 1, n_mo
+                    n_param = n_param + &
+                              count(orbsym(:n_occ(i), i) == orbsym(j, i), kind=ip)
+                end do
+            end do
+        else
+            n_param = sum(n_occ * (n_mo - n_occ))
+        end if
+
+    end function count_mo_params
+
+    function mo_param_rows(mo_channels) result(rows)
+        !
+        ! this function returns the first and last row of every particle channel in the
+        ! parameter vector, which holds the parameters of every channel, its
+        ! occupied-virtual pairs of the same irrep, one after another
+        !
+        type(mo_channel_type), intent(in) :: mo_channels(:)
+        integer(ip) :: rows(2, size(mo_channels))
+
+        integer(ip) :: i
+
+        rows = channel_rows([(count(mo_channels(i)%param_mask, kind=ip), i=1, &
+                              size(mo_channels, kind=ip))])
+
+    end function mo_param_rows
+
+    function pack_ov(ov_block, mo_channel) result(packed)
+        !
+        ! this function packs the parameters of a particle channel from its
+        ! occupied-virtual block, the entries between orbitals of the same irrep, with
+        ! the occupied index running fastest
+        !
+        real(rp), intent(in) :: ov_block(:, :)
+        type(mo_channel_type), intent(in) :: mo_channel
+        real(rp), allocatable :: packed(:)
+
+        packed = pack(ov_block, mo_channel%param_mask)
+
+    end function pack_ov
+
+    function unpack_ov(packed, mo_channel) result(ov_block)
+        !
+        ! this function unpacks the parameters of a particle channel into its
+        ! occupied-virtual block, which vanishes between orbitals of different irreps
+        !
+        real(rp), intent(in) :: packed(:)
+        type(mo_channel_type), intent(in) :: mo_channel
+        real(rp), allocatable :: ov_block(:, :)
+
+        ov_block = unpack(packed, mo_channel%param_mask, 0.0_rp)
+
+    end function unpack_ov
+
+    subroutine diagonalize_per_irrep(matrix, irreps, eigvals, eigvecs, settings, error)
+        !
+        ! this subroutine diagonalizes a symmetric matrix between orbitals of the given
+        ! irreps separately within every irrep, ignoring any coupling between different
+        ! irreps, which the static part of the Hessian never sees, and stores the
+        ! eigenvectors of every irrep at the orbitals of that irrep, so that they never
+        ! mix irreps, even where eigenvalues of different irreps are degenerate
+        !
+        use opentrustregion, only: symm_mat_diag
+
+        real(rp), intent(in) :: matrix(:, :)
+        integer(ip), intent(in) :: irreps(:)
+        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n, i, j
+        integer(ip), allocatable :: idx(:)
+        logical, allocatable :: done(:)
+        real(rp), allocatable :: irrep_eigvals(:), irrep_eigvecs(:, :)
+
+        ! initialize error flag
+        error = 0
+
+        ! dimension of the matrix
+        n = size(irreps, kind=ip)
+
+        ! diagonalize the block of every irrep
+        eigvecs = 0.0_rp
+        allocate(done(n), source=.false.)
+        do i = 1, n
+            if (done(i)) cycle
+            idx = pack([(j, j=1, n)], irreps == irreps(i))
+            allocate(irrep_eigvals(size(idx)), irrep_eigvecs(size(idx), size(idx)))
+            call symm_mat_diag(matrix(idx, idx), irrep_eigvals, irrep_eigvecs, &
+                               settings, error)
+            if (error /= 0) return
+            eigvals(idx) = irrep_eigvals
+            eigvecs(idx, idx) = irrep_eigvecs
+            done(idx) = .true.
+            deallocate(irrep_eigvals, irrep_eigvecs)
+        end do
+
+    end subroutine diagonalize_per_irrep
 
 end module otr_mo

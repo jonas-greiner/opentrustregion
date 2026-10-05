@@ -30,6 +30,40 @@ contains
 
     end function diagonal_matrix
 
+    function masked_mo_channels(n_occ, n_mo, irreps) result(mo_channels)
+        !
+        ! this function returns the particle channels of the given occupations with the
+        ! irreps of their MOs, all of the same irrep if none are given, and the mask of
+        ! their occupied-virtual pairs of the same irrep, the way the MO factory sets
+        ! them up
+        !
+        use otr_mo, only: mo_channel_type
+
+        integer(ip), intent(in) :: n_occ(:), n_mo
+        integer(ip), intent(in), optional :: irreps(:, :)
+        type(mo_channel_type) :: mo_channels(size(n_occ))
+
+        integer(ip) :: j, k
+
+        mo_channels%n_occ = n_occ
+        mo_channels%n_virt = n_mo - n_occ
+        do k = 1, size(n_occ, kind=ip)
+            associate (channel => mo_channels(k))
+                if (present(irreps)) then
+                    channel%irreps = irreps(:, k)
+                else
+                    allocate(channel%irreps(n_mo), source=0_ip)
+                end if
+                allocate(channel%param_mask(n_occ(k), n_mo - n_occ(k)))
+                do j = 1, n_mo - n_occ(k)
+                    channel%param_mask(:, j) = &
+                        channel%irreps(:n_occ(k)) == channel%irreps(n_occ(k) + j)
+                end do
+            end associate
+        end do
+
+    end function masked_mo_channels
+
     function generate_random_ao_overlap(n) result(ao_overlap)
         !
         ! this function generates a random symmetric positive definite AO overlap
@@ -91,7 +125,7 @@ contains
 
     end function generate_random_mo_coeff
 
-    subroutine setup_mo_object(mo_coeff, ao_overlap, n_occ)
+    subroutine setup_mo_object(mo_coeff, ao_overlap, n_occ, irreps)
         !
         ! this subroutine sets up the module-global MO object the way the MO factory
         ! would, pointing to the test-local MO coefficients
@@ -101,6 +135,7 @@ contains
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:)
+        integer(ip), intent(in), optional :: irreps(:, :)
 
         integer(ip) :: n_ao, n_mo, n_particle, i
 
@@ -114,12 +149,11 @@ contains
         mo_object%n_ao = n_ao
         mo_object%n_mo = n_mo
         mo_object%n_particle = n_particle
-        mo_object%n_param = sum(n_occ * (n_mo - n_occ))
         mo_object%mo_coeff => mo_coeff
         mo_object%ao_overlap = ao_overlap
-        allocate(mo_object%mo_channels(n_particle))
-        mo_object%mo_channels%n_occ = n_occ
-        mo_object%mo_channels%n_virt = n_mo - n_occ
+        mo_object%mo_channels = masked_mo_channels(n_occ, n_mo, irreps)
+        mo_object%n_param = sum( &
+            [(count(mo_object%mo_channels(i)%param_mask, kind=ip), i=1, n_particle)])
         allocate(mo_object%dm_ao(n_ao, n_ao, n_particle), &
                  mo_object%grad(mo_object%n_param), mo_object%h_diag(mo_object%n_param))
         do i = 1, n_particle
@@ -132,8 +166,9 @@ contains
     subroutine setup_random_mo_channels(n_occ, n_mo)
         !
         ! this subroutine fills the occupied-occupied and virtual-virtual Fock matrix
-        ! blocks of the MO channels of the MO object with random symmetric matrices
-        ! together with their eigendecompositions
+        ! blocks of the MO channels of the MO object with random symmetric matrices,
+        ! which couple only orbitals of the same irrep, together with their
+        ! eigendecompositions, whose eigenvectors sit at the orbitals of their irrep
         !
         use otr_mo, only: mo_object
         use otr_common_unit_tests, only: generate_random_orthogonal_matrix
@@ -144,9 +179,11 @@ contains
 
         do k = 1, size(n_occ, kind=ip)
             associate (channel => mo_object%mo_channels(k))
-                call generate_random_symm_eigen(n_occ(k), channel%occ_eigvals, &
+                call generate_random_symm_eigen(channel%irreps(:n_occ(k)), &
+                                                channel%occ_eigvals, &
                                                 channel%occ_eigvecs, channel%fock_oo)
-                call generate_random_symm_eigen(n_mo - n_occ(k), channel%virt_eigvals, &
+                call generate_random_symm_eigen(channel%irreps(n_occ(k) + 1:n_mo), &
+                                                channel%virt_eigvals, &
                                                 channel%virt_eigvecs, channel%fock_vv)
             end associate
         end do
@@ -154,14 +191,22 @@ contains
 
     contains
 
-        subroutine generate_random_symm_eigen(n, eigvals, eigvecs, matrix)
+        subroutine generate_random_symm_eigen(block_irreps, eigvals, eigvecs, matrix)
             !
-            ! this subroutine returns a random symmetric matrix of dimension n together
+            ! this subroutine returns a random symmetric matrix between orbitals of the
+            ! given irreps, which couples only orbitals of the same irrep, together
             ! with its eigendecomposition
             !
-            integer(ip), intent(in) :: n
+            integer(ip), intent(in) :: block_irreps(:)
             real(rp), allocatable, intent(out) :: eigvals(:), eigvecs(:, :), &
                                                   matrix(:, :)
+
+            integer(ip) :: n, i, j
+            integer(ip), allocatable :: idx(:)
+            logical, allocatable :: done(:)
+
+            ! dimension of the matrix
+            n = size(block_irreps, kind=ip)
 
             ! an empty block has an empty eigendecomposition
             if (n == 0) then
@@ -173,35 +218,46 @@ contains
             call random_number(eigvals)
             eigvals = 2.0_rp * eigvals - 1.0_rp
 
-            ! non-symmetric eigenvectors, unlike those LAPACK returns for small
-            ! matrices, so that a transposed rotation cannot go unnoticed
-            eigvecs = matmul(generate_random_orthogonal_matrix(n), &
-                             generate_random_orthogonal_matrix(n))
+            ! non-symmetric eigenvectors within every irrep, unlike those LAPACK
+            ! returns for small matrices, so that a transposed rotation cannot go
+            ! unnoticed
+            allocate(eigvecs(n, n), source=0.0_rp)
+            allocate(done(n), source=.false.)
+            do i = 1, n
+                if (done(i)) cycle
+                idx = pack([(j, j=1, n)], block_irreps == block_irreps(i))
+                eigvecs(idx, idx) = matmul( &
+                    generate_random_orthogonal_matrix(size(idx, kind=ip)), &
+                    generate_random_orthogonal_matrix(size(idx, kind=ip)))
+                done(idx) = .true.
+            end do
             matrix = matmul(eigvecs * spread(eigvals, 1, n), transpose(eigvecs))
 
         end subroutine generate_random_symm_eigen
 
     end subroutine setup_random_mo_channels
 
-    subroutine setup_minimal_mo_object(n_occ)
+    subroutine setup_minimal_mo_object(n_occ, irreps)
         !
         ! this subroutine sets up the module-global MO object with only the dimensions
-        ! and the particle channels of the given occupations, whose Fock matrix blocks
-        ! and eigendecompositions are random, which is all that the routines acting on
-        ! the static part of the Hessian read
+        ! and the particle channels of the given occupations and, if given, irreps of
+        ! their MOs, whose Fock matrix blocks and eigendecompositions are random, which
+        ! is all that the routines acting on the static part of the Hessian read
         !
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
 
         integer(ip), intent(in) :: n_occ(:)
+        integer(ip), intent(in), optional :: irreps(:, :)
+
+        integer(ip) :: i
 
         allocate(mo_object)
         mo_object%n_mo = n_mo
         mo_object%n_particle = size(n_occ, kind=ip)
-        mo_object%n_param = sum(n_occ * (n_mo - n_occ))
-        allocate(mo_object%mo_channels(size(n_occ)))
-        mo_object%mo_channels%n_occ = n_occ
-        mo_object%mo_channels%n_virt = n_mo - n_occ
+        mo_object%mo_channels = masked_mo_channels(n_occ, n_mo, irreps)
+        mo_object%n_param = sum([(count(mo_object%mo_channels(i)%param_mask, kind=ip), &
+                                  i=1, mo_object%n_particle)])
         call setup_random_mo_channels(n_occ, n_mo)
 
     end subroutine setup_minimal_mo_object
@@ -245,47 +301,76 @@ contains
 
     end function ref_mo_transform
 
-    function ref_pack_ov(matrices, n_occ) result(packed)
+    function ref_count_mo_params(n_occ, irreps) result(n_param)
+        !
+        ! this function independently counts the parameters in the MO basis, the
+        ! occupied-virtual pairs between orbitals of the same irrep of every particle
+        ! channel
+        !
+        integer(ip), intent(in) :: n_occ(:), irreps(:, :)
+        integer(ip) :: n_param
+
+        integer(ip) :: i, j, k
+
+        n_param = 0
+        do k = 1, size(n_occ, kind=ip)
+            do j = n_occ(k) + 1, size(irreps, 1, kind=ip)
+                do i = 1, n_occ(k)
+                    if (irreps(i, k) == irreps(j, k)) n_param = n_param + 1
+                end do
+            end do
+        end do
+
+    end function ref_count_mo_params
+
+    function ref_pack_ov(matrices, channels) result(packed)
         !
         ! this function independently packs the occupied-virtual blocks of a set of
-        ! matrices in the MO basis, one per particle channel, with the occupied index
-        ! running fastest
+        ! matrices in the MO basis, one per particle channel, keeping only the entries
+        ! between orbitals of the same irrep, with the occupied index running fastest
         !
+        use otr_mo, only: mo_channel_type
+
         real(rp), intent(in) :: matrices(:, :, :)
-        integer(ip), intent(in) :: n_occ(:)
+        type(mo_channel_type), intent(in) :: channels(:)
         real(rp), allocatable :: packed(:)
 
         integer(ip) :: n_mo, i, j, k
 
         n_mo = size(matrices, 1, kind=ip)
         allocate(packed(0))
-        do k = 1, size(n_occ, kind=ip)
-            do j = n_occ(k) + 1, n_mo
-                do i = 1, n_occ(k)
-                    packed = [packed, matrices(i, j, k)]
+        do k = 1, size(channels, kind=ip)
+            do j = channels(k)%n_occ + 1, n_mo
+                do i = 1, channels(k)%n_occ
+                    if (channels(k)%irreps(i) == channels(k)%irreps(j)) &
+                        packed = [packed, matrices(i, j, k)]
                 end do
             end do
         end do
 
     end function ref_pack_ov
 
-    function ref_unpack_ov(packed, n_occ, n_mo) result(matrices)
+    function ref_unpack_ov(packed, channels) result(matrices)
         !
         ! this function independently unpacks a parameter vector in the MO basis into
-        ! the occupied-virtual blocks of a set of otherwise vanishing matrices, one per
-        ! particle channel
+        ! the entries between orbitals of the same irrep of the occupied-virtual blocks
+        ! of a set of otherwise vanishing matrices, one per particle channel
         !
+        use otr_mo, only: mo_channel_type
+
         real(rp), intent(in) :: packed(:)
-        integer(ip), intent(in) :: n_occ(:), n_mo
-        real(rp) :: matrices(n_mo, n_mo, size(n_occ))
+        type(mo_channel_type), intent(in) :: channels(:)
+        real(rp) :: &
+            matrices(size(channels(1)%irreps), size(channels(1)%irreps), size(channels))
 
         integer(ip) :: idx, i, j, k
 
         matrices = 0.0_rp
         idx = 0
-        do k = 1, size(n_occ, kind=ip)
-            do j = n_occ(k) + 1, n_mo
-                do i = 1, n_occ(k)
+        do k = 1, size(channels, kind=ip)
+            do j = channels(k)%n_occ + 1, size(channels(k)%irreps, kind=ip)
+                do i = 1, channels(k)%n_occ
+                    if (channels(k)%irreps(i) /= channels(k)%irreps(j)) cycle
                     idx = idx + 1
                     matrices(i, j, k) = packed(idx)
                 end do
@@ -306,21 +391,22 @@ contains
         type(mo_channel_type), intent(in) :: channels(:)
         real(rp) :: hess_x(size(x))
 
-        integer(ip) :: offset, n_occ, n_virt, k
-        real(rp) :: shell_scale
-        real(rp), allocatable :: ov_block(:, :)
+        real(rp) :: x_full(size(channels(1)%irreps), size(channels(1)%irreps), &
+                           size(channels)), &
+                    static_part(size(channels(1)%irreps), size(channels(1)%irreps), &
+                                size(channels)), shell_scale
+        integer(ip) :: n_occ, k
 
         shell_scale = merge(4.0_rp, 2.0_rp, size(channels) == 1)
-        offset = 0
+        x_full = ref_unpack_ov(x, channels)
+        static_part = 0.0_rp
         do k = 1, size(channels, kind=ip)
             n_occ = channels(k)%n_occ
-            n_virt = channels(k)%n_virt
-            ov_block = reshape(x(offset + 1:offset + n_occ * n_virt), [n_occ, n_virt])
-            hess_x(offset + 1:offset + n_occ * n_virt) = shell_scale * reshape( &
-                matmul(ov_block, channels(k)%fock_vv) - &
-                matmul(channels(k)%fock_oo, ov_block), [n_occ * n_virt])
-            offset = offset + n_occ * n_virt
+            static_part(:n_occ, n_occ + 1:, k) = &
+                matmul(x_full(:n_occ, n_occ + 1:, k), channels(k)%fock_vv) - &
+                matmul(channels(k)%fock_oo, x_full(:n_occ, n_occ + 1:, k))
         end do
+        hess_x = shell_scale * ref_pack_ov(static_part, channels)
 
     end function ref_hess_x_static_mo
 
@@ -346,7 +432,7 @@ contains
         integer(ip) :: k
 
         shell_scale = merge(4.0_rp, 2.0_rp, size(channels) == 1)
-        x_full = ref_unpack_ov(x, channels%n_occ, size(mo_coeff, 2, kind=ip))
+        x_full = ref_unpack_ov(x, channels)
         do k = 1, size(channels, kind=ip)
             response_mo(:, :, k) = ref_mo_transform( &
                 mo_coeff(:, :, k), response_factor * matmul(mo_coeff(:, :, k), matmul( &
@@ -354,7 +440,7 @@ contains
                     transpose(mo_coeff(:, :, k)))))
         end do
         hess_x = ref_hess_x_static_mo(x, channels) + &
-                 shell_scale * ref_pack_ov(response_mo, channels%n_occ)
+                 shell_scale * ref_pack_ov(response_mo, channels)
 
     end function ref_hess_x_mo
 
@@ -378,7 +464,7 @@ contains
                     rotated_full(n_mo, n_mo, size(channels))
         integer(ip) :: n_occ, k
 
-        x_full = ref_unpack_ov(x, channels%n_occ, n_mo)
+        x_full = ref_unpack_ov(x, channels)
         rotated_full = 0.0_rp
         do k = 1, size(channels, kind=ip)
             n_occ = channels(k)%n_occ
@@ -393,7 +479,7 @@ contains
                            transpose(channels(k)%virt_eigvecs)))
             end if
         end do
-        rotated = ref_pack_ov(rotated_full, channels%n_occ)
+        rotated = ref_pack_ov(rotated_full, channels)
 
     end function ref_rotate_eigenbasis_mo
 
@@ -401,7 +487,8 @@ contains
         !
         ! this function independently constructs the eigenvalues of the static part of
         ! the Hessian in the MO basis, the scaled differences of the cached virtual and
-        ! occupied Fock matrix block eigenvalues of every particle channel
+        ! occupied Fock matrix block eigenvalues of every particle channel, for the
+        ! pairs of eigenvectors at orbitals of the same irrep
         !
         use otr_mo, only: mo_channel_type
 
@@ -409,32 +496,42 @@ contains
         real(rp), allocatable :: eigval_pairs(:)
 
         real(rp) :: shell_scale
-        integer(ip) :: i, j, k
+        integer(ip) :: n_occ, i, j, k
 
         shell_scale = merge(4.0_rp, 2.0_rp, size(channels) == 1)
-        eigval_pairs = [(( &
-            (shell_scale * (channels(k)%virt_eigvals(j) - channels(k)%occ_eigvals(i)), &
-             i=1, channels(k)%n_occ), j=1, channels(k)%n_virt), k=1, &
-            size(channels, kind=ip))]
+        allocate(eigval_pairs(0))
+        do k = 1, size(channels, kind=ip)
+            n_occ = channels(k)%n_occ
+            do j = 1, channels(k)%n_virt
+                do i = 1, n_occ
+                    if (channels(k)%irreps(i) /= channels(k)%irreps(n_occ + j)) cycle
+                    eigval_pairs = [eigval_pairs, &
+                                    shell_scale * (channels(k)%virt_eigvals(j) - &
+                                                   channels(k)%occ_eigvals(i))]
+                end do
+            end do
+        end do
 
     end function ref_hess_eigval_pairs_mo
 
-    function ref_rotate_mo_coeff(kappa, mo_coeff, n_occ) result(rot_mo_coeff)
+    function ref_rotate_mo_coeff(kappa, mo_coeff, channels) result(rot_mo_coeff)
         !
         ! this function independently reproduces the rotation of orthonormal MO
         ! coefficients of every particle channel as C exp(K)^T with K the antisymmetric
         ! matrix whose occupied-virtual block is given by kappa
         !
+        use otr_mo, only: mo_channel_type
+
         real(rp), intent(in) :: kappa(:), mo_coeff(:, :, :)
-        integer(ip), intent(in) :: n_occ(:)
+        type(mo_channel_type), intent(in) :: channels(:)
         real(rp) :: &
             rot_mo_coeff(size(mo_coeff, 1), size(mo_coeff, 2), size(mo_coeff, 3))
 
-        real(rp) :: kappa_full(size(mo_coeff, 2), size(mo_coeff, 2), size(n_occ))
+        real(rp) :: kappa_full(size(mo_coeff, 2), size(mo_coeff, 2), size(channels))
         integer(ip) :: k
 
-        kappa_full = ref_unpack_ov(kappa, n_occ, size(mo_coeff, 2, kind=ip))
-        do k = 1, size(n_occ, kind=ip)
+        kappa_full = ref_unpack_ov(kappa, channels)
+        do k = 1, size(channels, kind=ip)
             rot_mo_coeff(:, :, k) = matmul(mo_coeff(:, :, k), transpose( &
                 ref_expm(kappa_full(:, :, k) - transpose(kappa_full(:, :, k)))))
         end do
@@ -474,7 +571,7 @@ contains
         !
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+                                         case_irreps, case_names
 
         logical, intent(in) :: to_eigenbasis
         logical :: passed
@@ -490,7 +587,9 @@ contains
 
         ! call routine for every occupation case and determine if the rotation matches
         do i_case = 1, n_cases
-            call setup_minimal_mo_object(case_n_occ(:case_n_particle(i_case), i_case))
+            call setup_minimal_mo_object( &
+                case_n_occ(:case_n_particle(i_case), i_case), &
+                case_irreps(:, :case_n_particle(i_case), i_case))
             allocate(x(mo_object%n_param))
             call random_number(x)
             if (to_eigenbasis) then
@@ -520,7 +619,7 @@ contains
         use otr_common, only: evaluate_dm_cs_type
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_mo_test_reference, only: n_mo
+        use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ
         use otr_common_unit_tests, only: mock_evaluate_dm_cs, mock_evaluate_dm_os
 
@@ -528,7 +627,7 @@ contains
 
         real(rp), target :: mo_coeff(n_ao, n_mo)
         real(rp) :: ao_overlap(n_ao, n_ao), mo_coeff_3d(n_ao, n_mo, n_particle)
-        integer(ip) :: error
+        integer(ip) :: i_sym, error
         type(mo_settings_type) :: settings
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_mo_funptr
@@ -617,6 +716,21 @@ contains
                 "into solver settings."
             test_mo_factory_cs = .false.
         end if
+
+        ! call routine again with the irreps of the MOs of the symmetric closed-shell
+        ! occupation case and determine if they reach the single particle channel
+        i_sym = findloc(case_names, "closed-shell with symmetry", dim=1, kind=ip)
+        call mo_factory_cs(mo_coeff, ao_overlap, n_occ(1), n_particle, n_ao, n_mo, &
+                           evaluate_dm_funptr, obj_func_mo_funptr, &
+                           update_orbs_mo_funptr, solver_settings, error, settings, &
+                           case_irreps(:, 1, i_sym))
+        if (error /= 0) then
+            write(stderr, *) "test_mo_factory_cs failed: Produced error with irreps."
+            test_mo_factory_cs = .false.
+        else if (any(mo_object%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym))) then
+            write(stderr, *) "test_mo_factory_cs failed: Irreps not passed on."
+            test_mo_factory_cs = .false.
+        end if
         deallocate(mo_object)
 
     end function test_mo_factory_cs
@@ -632,13 +746,13 @@ contains
         use otr_common, only: evaluate_dm_os_type
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_mo_test_reference, only: n_mo
+        use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
         use otr_common_unit_tests, only: mock_evaluate_dm_cs, mock_evaluate_dm_os
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
-        integer(ip) :: error
+        integer(ip) :: i_sym, error
         type(mo_settings_type) :: settings
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_funptr
         procedure(obj_func_type), pointer :: obj_func_mo_funptr
@@ -710,6 +824,22 @@ contains
                 "into solver settings."
             test_mo_factory_os = .false.
         end if
+
+        ! call routine again with the irreps of the MOs of the symmetric open-shell
+        ! occupation case and determine if they reach every particle channel
+        i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
+        call mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                           evaluate_dm_funptr, obj_func_mo_funptr, &
+                           update_orbs_mo_funptr, solver_settings, error, settings, &
+                           case_irreps(:, :, i_sym))
+        if (error /= 0) then
+            write(stderr, *) "test_mo_factory_os failed: Produced error with irreps."
+            test_mo_factory_os = .false.
+        else if (any(mo_object%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym)) .or. &
+                 any(mo_object%mo_channels(2)%irreps /= case_irreps(:, 2, i_sym))) then
+            write(stderr, *) "test_mo_factory_os failed: Irreps not passed on."
+            test_mo_factory_os = .false.
+        end if
         deallocate(mo_object)
 
     end function test_mo_factory_os
@@ -718,12 +848,12 @@ contains
         !
         ! this function tests the subroutine which performs the common MO
         ! initialization operations, which sets the MO object up anew unless it was
-        ! already set up for the same dimensions and occupations, for the closed- and
-        ! the open-shell case
+        ! already set up for the same dimensions, occupations and irreps, for the
+        ! closed- and the open-shell case
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_factory_common, mo_object
-        use otr_mo_test_reference, only: n_mo, n_param_cs, n_param_os
+        use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, operator(==)
         use opentrustregion_unit_tests, only: setup_settings
@@ -734,7 +864,8 @@ contains
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref), &
                             mo_coeff_new(n_ao, n_mo, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao)
-        integer(ip) :: n_particle, leftover, n_ao_old, n_mo_old, error
+        integer(ip) :: n_particle, leftover, n_ao_old, n_mo_old, i_sym, error, &
+                       single_irrep(n_mo, n_particle_ref)
         integer(ip), allocatable :: n_occ_old(:)
         type(orbital_settings_type) :: settings
         character(len=:), allocatable :: shell, leftover_case
@@ -748,6 +879,9 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
+
+        ! irreps of MOs which all belong to the same irrep
+        single_irrep = 0
 
         do n_particle = 1, n_particle_ref
             shell = trim(shell_names(n_particle))
@@ -790,7 +924,8 @@ contains
                         "error for the "//leftover_case//"."
                     test_mo_factory_common = .false.
                 end if
-                if (.not. check_mo_object(mo_coeff(:, :, :n_particle), leftover_case)) &
+                if (.not. check_mo_object(mo_coeff(:, :, :n_particle), leftover_case, &
+                                          single_irrep(:, :n_particle))) &
                     test_mo_factory_common = .false.
             end do
 
@@ -822,9 +957,9 @@ contains
                     "for the reused "//shell//" object."
                 test_mo_factory_common = .false.
             end if
-            if (.not. check_mo_object(mo_coeff_new(:, :, :n_particle), &
-                                      "reused "//shell//" object")) &
-                test_mo_factory_common = .false.
+            if (.not. check_mo_object( &
+                mo_coeff_new(:, :, :n_particle), "reused "//shell//" object", &
+                single_irrep(:, :n_particle))) test_mo_factory_common = .false.
             if (.not. allocated(mo_object%mo_channels(1)%fock_oo)) then
                 write(stderr, *) "test_mo_factory_common failed: MO object not "// &
                     "kept for the same dimensions and occupations for the "//shell// &
@@ -851,7 +986,8 @@ contains
                 test_mo_factory_common = .false.
             end if
             if (.not. check_mo_object(mo_coeff(:, :, :n_particle), &
-                                      shell//" object whose previous setup failed")) &
+                                      shell//" object whose previous setup failed", &
+                                      single_irrep(:, :n_particle))) &
                 test_mo_factory_common = .false.
 
             ! call routine for dimensions which do not match the MO coefficients and
@@ -871,31 +1007,113 @@ contains
                 test_mo_factory_common = .false.
             end if
 
+            ! call routine with the irreps of the symmetric occupation case of the
+            ! current shell for an object which differs only in the irreps and
+            ! determine if it is set up anew with only the occupied-virtual pairs of
+            ! the same irrep as parameters
+            i_sym = findloc(case_names, shell//" with symmetry", dim=1, kind=ip)
+            call mo_factory_common(mo_coeff(:, :, :n_particle), ao_overlap, &
+                                   n_occ(:n_particle), n_particle, n_ao, n_mo, error, &
+                                   settings, case_irreps(:, :n_particle, i_sym))
+            if (error /= 0) then
+                write(stderr, *) "test_mo_factory_common failed: Produced error "// &
+                    "for the "//shell//" object with symmetry."
+                test_mo_factory_common = .false.
+            end if
+            if (.not. check_mo_object( &
+                mo_coeff(:, :, :n_particle), shell//" object with symmetry", &
+                case_irreps(:, :n_particle, i_sym))) test_mo_factory_common = .false.
+
+            ! leave a quantity only a kept object retains behind, call routine again
+            ! with the same irreps, as an ARH factory following the MO factory does,
+            ! and determine if the object is kept
+            mo_object%mo_channels(1)%fock_oo = reshape([7.0_rp], [1, 1])
+            call mo_factory_common(mo_coeff(:, :, :n_particle), ao_overlap, &
+                                   n_occ(:n_particle), n_particle, n_ao, n_mo, error, &
+                                   settings, case_irreps(:, :n_particle, i_sym))
+            if (error /= 0) then
+                write(stderr, *) "test_mo_factory_common failed: Produced error "// &
+                    "for the reused "//shell//" object with symmetry."
+                test_mo_factory_common = .false.
+            end if
+            if (.not. allocated(mo_object%mo_channels(1)%fock_oo)) then
+                write(stderr, *) "test_mo_factory_common failed: MO object not "// &
+                    "kept for the same irreps for the "//shell//" object."
+                test_mo_factory_common = .false.
+            end if
+
+            ! call routine again with the same irreps under different labels and
+            ! determine if the object is set up anew with these irreps, since only
+            ! identical irreps keep it
+            call mo_factory_common(mo_coeff(:, :, :n_particle), ao_overlap, &
+                                   n_occ(:n_particle), n_particle, n_ao, n_mo, error, &
+                                   settings, case_irreps(:, :n_particle, i_sym) + 1)
+            if (error /= 0) then
+                write(stderr, *) "test_mo_factory_common failed: Produced error "// &
+                    "for the "//shell//" object with relabeled irreps."
+                test_mo_factory_common = .false.
+            end if
+            if (allocated(mo_object%mo_channels(1)%fock_oo)) then
+                write(stderr, *) "test_mo_factory_common failed: MO object kept "// &
+                    "for relabeled irreps for the "//shell//" object."
+                test_mo_factory_common = .false.
+            end if
+            if (.not. check_mo_object(mo_coeff(:, :, :n_particle), &
+                                      shell//" object with relabeled irreps", &
+                                      case_irreps(:, :n_particle, i_sym) + 1)) &
+                test_mo_factory_common = .false.
+
+            ! leave a quantity only a kept object retains behind, call routine again
+            ! without irreps and determine if the object is set up anew with all MOs of
+            ! the same irrep
+            mo_object%mo_channels(1)%fock_oo = reshape([7.0_rp], [1, 1])
+            call mo_factory_common(mo_coeff(:, :, :n_particle), ao_overlap, &
+                                   n_occ(:n_particle), n_particle, n_ao, n_mo, error, &
+                                   settings)
+            if (error /= 0) then
+                write(stderr, *) "test_mo_factory_common failed: Produced error "// &
+                    "for the "//shell//" object without irreps after irreps."
+                test_mo_factory_common = .false.
+            end if
+            if (allocated(mo_object%mo_channels(1)%fock_oo)) then
+                write(stderr, *) "test_mo_factory_common failed: MO object kept "// &
+                    "without irreps after irreps for the "//shell//" object."
+                test_mo_factory_common = .false.
+            end if
+            if (.not. check_mo_object(mo_coeff(:, :, :n_particle), &
+                                      shell//" object without irreps after irreps", &
+                                      single_irrep(:, :n_particle))) &
+                test_mo_factory_common = .false.
+
             ! deallocate MO object
             deallocate(mo_object)
         end do
 
     contains
 
-        function check_mo_object(caller_mo_coeff, case_name) result(passed)
+        function check_mo_object(caller_mo_coeff, case_name, irreps) result(passed)
             !
             ! this function checks if the MO object is set up for the given MO
-            ! coefficients of the caller and the AO overlap matrix and occupations of
-            ! the current shell, with the density matrix constructed from the occupied
-            ! orbitals, the evaluated state with its response functions discarded and
-            ! the settings stored
+            ! coefficients of the caller, the irreps of their MOs and the AO overlap
+            ! matrix and occupations of the current shell, with the occupied-virtual
+            ! pairs of the same irrep as parameters, the density matrix constructed
+            ! from the occupied orbitals, the evaluated state with its response
+            ! functions discarded and the settings stored
             !
             real(rp), intent(in), target :: caller_mo_coeff(:, :, :)
             character(len=*), intent(in) :: case_name
+            integer(ip), intent(in) :: irreps(:, :)
             logical :: passed
 
             integer(ip) :: n_param, k
+            logical, allocatable :: same_irrep(:, :)
 
             ! assume test passes
             passed = .true.
 
-            ! the checks below compare arrays of these dimensions
-            n_param = merge(n_param_cs, n_param_os, n_particle == 1)
+            ! the checks below compare arrays of these dimensions, the number of
+            ! parameters counting the occupied-virtual pairs of the same irrep
+            n_param = ref_count_mo_params(n_occ(:n_particle), irreps)
             if (any([mo_object%n_ao, mo_object%n_mo, mo_object%n_particle, &
                      mo_object%n_param, size(mo_object%mo_channels, kind=ip)] /= &
                     [n_ao, n_mo, n_particle, n_param, n_particle])) then
@@ -914,6 +1132,20 @@ contains
                     "occupations for the "//case_name//"."
                 passed = .false.
             end if
+            do k = 1, n_particle
+                same_irrep = spread(irreps(:n_occ(k), k), 2, n_mo - n_occ(k)) == &
+                             spread(irreps(n_occ(k) + 1:, k), 1, n_occ(k))
+                if (any(mo_object%mo_channels(k)%irreps /= irreps(:, k))) then
+                    write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
+                        "irreps for the "//case_name//"."
+                    passed = .false.
+                else if (any(mo_object%mo_channels(k)%param_mask .neqv. same_irrep)) &
+                    then
+                    write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
+                        "parameters for the "//case_name//"."
+                    passed = .false.
+                end if
+            end do
             if (norm2(mo_object%ao_overlap - ao_overlap) > tol) then
                 write(stderr, *) "test_mo_factory_common failed: AO overlap matrix "// &
                     "not stored for the "//case_name//"."
@@ -971,7 +1203,8 @@ contains
     logical(c_bool) function test_mo_sanity_check() bind(C)
         !
         ! this function tests the subroutine which performs a sanity check for the
-        ! dimensions of orbitals parameterized in the MO basis
+        ! dimensions of orbitals parameterized in the MO basis and of the irreps of
+        ! their MOs
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_sanity_check
@@ -1041,7 +1274,8 @@ contains
                 "more occupied orbitals than MOs", ""), &
             mo_sanity_case_type( &
                 [3, 3, 2], [3, 3], [3, 0], 2, 2, 3, 3, .false., &
-                "missing occupied-virtual rotations", "")]
+                "missing occupied-virtual rotations", &
+                "There should be at least one occupied-virtual rotation.")]
 
         type(mo_sanity_case_type) :: c
         type(orbital_settings_type) :: settings
@@ -1072,6 +1306,78 @@ contains
                 test_mo_sanity_check = .false.
             end if
         end do
+
+        ! call routine for valid dimensions with irreps of the MOs and determine if
+        ! irreps with an occupied-virtual pair of the same irrep in any channel are
+        ! accepted, and wrongly shaped ones, ones without such a pair and ones given
+        ! for occupations which do not fit into the MOs rejected
+        if (.not. check_irreps_case([1_ip], reshape([0_ip, 1_ip, 0_ip], [3, 1]), &
+                                    .true., "valid closed-shell irreps", "")) &
+            test_mo_sanity_check = .false.
+        if (.not. check_irreps_case( &
+            [1_ip, 1_ip], reshape([0_ip, 1_ip, 0_ip, &
+                                   0_ip, 1_ip, 1_ip], [3, 2]), .true., &
+            "valid open-shell irreps with a pair in only one channel", "")) &
+            test_mo_sanity_check = .false.
+        if (.not. check_irreps_case( &
+            [1_ip], reshape([0_ip, 1_ip, 0_ip, 0_ip], [4, 1]), .false., &
+            "irreps of four MOs", "Shape of the MO irreps should match the number "// &
+            "of MOs and particle channels.")) test_mo_sanity_check = .false.
+        if (.not. check_irreps_case( &
+            [1_ip], reshape([0_ip, 1_ip, 0_ip, &
+                             0_ip, 1_ip, 0_ip], [3, 2]), .false., "irreps of two "// &
+            "particle channels", "Shape of the MO irreps should match the number "// &
+            "of MOs and particle channels.")) test_mo_sanity_check = .false.
+        if (.not. check_irreps_case( &
+            [1_ip], reshape([0_ip, 1_ip, 1_ip], [3, 1]), .false., &
+            "closed-shell irreps without occupied-virtual pairs of the same irrep", &
+            "There should be at least one occupied-virtual rotation between "// &
+            "orbitals of the same irrep.")) test_mo_sanity_check = .false.
+        if (.not. check_irreps_case( &
+            [1_ip, 1_ip], reshape([0_ip, 1_ip, 1_ip, &
+                                   1_ip, 0_ip, 0_ip], [3, 2]), .false., &
+            "open-shell irreps without occupied-virtual pairs of the same irrep", &
+            "There should be at least one occupied-virtual rotation between "// &
+            "orbitals of the same irrep.")) test_mo_sanity_check = .false.
+        if (.not. check_irreps_case( &
+            [4_ip], reshape([0_ip, 1_ip, 0_ip], [3, 1]), .false., &
+            "irreps for more occupied orbitals than MOs", "Number of occupied "// &
+            "orbitals should not be negative and not larger than the number of MOs.")) &
+            test_mo_sanity_check = .false.
+
+    contains
+
+        function check_irreps_case(n_occ, orbsym, valid, name, message) result(passed)
+            !
+            ! this function calls the sanity check for valid dimensions with three MOs
+            ! and AOs, the given occupations and the given irreps and determines if
+            ! they are accepted or rejected as expected with the expected message
+            !
+            integer(ip), intent(in) :: n_occ(:), orbsym(:, :)
+            logical, intent(in) :: valid
+            character(len=*), intent(in) :: name, message
+            logical :: passed
+
+            ! assume the case passes
+            passed = .true.
+
+            ! call routine and determine if the result and the message are correct
+            log_message = ""
+            call mo_sanity_check(settings, [3_ip, 3_ip, size(n_occ, kind=ip)], &
+                                 [3_ip, 3_ip], n_occ, size(n_occ, kind=ip), 3_ip, &
+                                 3_ip, error, orbsym)
+            if ((error == 0) .neqv. valid) then
+                write(stderr, *) "test_mo_sanity_check failed: Incorrect result "// &
+                    "for "//name//"."
+                passed = .false.
+            end if
+            if (len(message) > 0 .and. adjustl(log_message) /= message) then
+                write(stderr, *) "test_mo_sanity_check failed: Incorrect log "// &
+                    "message for "//name//"."
+                passed = .false.
+            end if
+
+        end function check_irreps_case
 
     end function test_mo_sanity_check
 
@@ -1254,7 +1560,7 @@ contains
             call random_number(kappa)
             kappa = 0.2_rp * (kappa - 0.5_rp)
             rot_mo_coeff = ref_rotate_mo_coeff( &
-                kappa, mo_coeff_start(:, :, :n_particle), n_occ(:n_particle))
+                kappa, mo_coeff_start(:, :, :n_particle), mo_object%mo_channels)
             expected_energy = 0.0_rp
             do i = 1, n_particle
                 expected_energy = expected_energy + &
@@ -1502,7 +1808,7 @@ contains
             if (.not. check_update_orbs_mo_stage(4_ip, "an orbital rotation")) &
                 test_update_orbs_mo_callback = .false.
             if (norm2(mo_object%mo_coeff - ref_rotate_mo_coeff( &
-                kappa, mo_coeff_start, n_occ(:n_particle))) > tol) then
+                kappa, mo_coeff_start, mo_object%mo_channels)) > tol) then
                 write(stderr, *) "test_update_orbs_mo_callback failed: Orbitals "// &
                     "not rotated correctly by an orbital rotation for the "// &
                     case_name//" case."
@@ -1573,7 +1879,7 @@ contains
         use otr_mo, only: hess_x_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+                                         case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
         use otr_common_unit_tests, only: &
             generate_random_symm_matrix, mock_requests, mock_response_factor, &
@@ -1608,7 +1914,8 @@ contains
             ! set up the MO object with random Fock matrix blocks and the mock response
             ! function
             call setup_mo_object(mo_coeff(:, :, :n_particle), ao_overlap, &
-                                 case_n_occ(:n_particle, i_case))
+                                 case_n_occ(:n_particle, i_case), &
+                                 case_irreps(:, :n_particle, i_case))
             call setup_settings(mo_object%settings)
             call setup_random_mo_channels(case_n_occ(:n_particle, i_case), n_mo)
             if (n_particle == 1) then
@@ -1750,7 +2057,7 @@ contains
             integer(ip) :: k
 
             rot_mo_coeff = ref_rotate_mo_coeff(kappa, mo_coeff(:, :, :n_particle), &
-                                               n_occ(:n_particle))
+                                               mo_object%mo_channels)
             energy = 0.0_rp
             do k = 1, n_particle
                 dm = matmul(rot_mo_coeff(:, :n_occ(k), k), &
@@ -2035,7 +2342,7 @@ contains
         ! stale
         call random_number(kappa)
         kappa = 0.2_rp * (kappa - 0.5_rp)
-        expected = ref_rotate_mo_coeff(kappa, mo_coeff, n_occ)
+        expected = ref_rotate_mo_coeff(kappa, mo_coeff, mo_object%mo_channels)
         mo_object%response_stale = .false.
         call mo_object%rotate_orbitals(kappa, settings, error)
         if (error /= 0) then
@@ -2075,7 +2382,7 @@ contains
         !
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo, n_param_cs, n_cases, case_n_particle, &
-                                         case_n_occ, case_names
+                                         case_n_occ, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ_ref => n_occ, &
                                              n_particle_ref => n_particle
         use otr_common_unit_tests, only: generate_random_symm_matrix
@@ -2084,7 +2391,8 @@ contains
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao), fock_ao(n_ao, n_ao, n_particle_ref), &
-                    fock_mo(n_mo, n_mo, n_particle_ref), shell_scale, &
+                    fock_mo(n_mo, n_mo, n_particle_ref), &
+                    diag_diff(n_mo, n_mo, n_particle_ref), shell_scale, &
                     kappa(n_param_cs), rot_mo_coeff(n_ao, n_mo, 1), energy, &
                     fd_grad(n_param_cs)
         real(rp), allocatable :: expected_h_diag(:)
@@ -2106,7 +2414,8 @@ contains
             ! independently transform random Fock matrices to the MO basis
             ao_overlap = generate_random_ao_overlap(n_ao)
             mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
-            call setup_mo_object(mo_coeff(:, :, :n_particle), ao_overlap, n_occ)
+            call setup_mo_object(mo_coeff(:, :, :n_particle), ao_overlap, n_occ, &
+                                 case_irreps(:, :n_particle, i_case))
             do k = 1, n_particle
                 fock_ao(:, :, k) = generate_random_symm_matrix(n_ao)
                 fock_mo(:, :, k) = ref_mo_transform(mo_coeff(:, :, k), fock_ao(:, :, k))
@@ -2114,15 +2423,24 @@ contains
             mo_object%hess_eigen_stale = .false.
 
             ! expected Hessian diagonal from the diagonal Fock matrix elements
-            expected_h_diag = [(((shell_scale * (fock_mo(j, j, k) - fock_mo( &
-                i, i, k)), i=1, n_occ(k)), j=n_occ(k) + 1, n_mo), k=1, n_particle)]
+            diag_diff = 0.0_rp
+            do k = 1, n_particle
+                do j = n_occ(k) + 1, n_mo
+                    do i = 1, n_occ(k)
+                        diag_diff(i, j, k) = shell_scale * &
+                                             (fock_mo(j, j, k) - fock_mo(i, i, k))
+                    end do
+                end do
+            end do
+            expected_h_diag = ref_pack_ov(diag_diff(:, :, :n_particle), &
+                                          mo_object%mo_channels)
 
             ! call routine and determine if the gradient, Hessian diagonal and Fock
             ! matrix blocks are obtained in the MO basis and the eigendecomposition is
             ! marked stale
             call mo_object%calculate_grad_h_diag(fock_ao(:, :, :n_particle))
-            if (norm2(mo_object%grad - shell_scale * &
-                      ref_pack_ov(fock_mo(:, :, :n_particle), n_occ)) > tol) then
+            if (norm2(mo_object%grad - shell_scale * ref_pack_ov( &
+                fock_mo(:, :, :n_particle), mo_object%mo_channels)) > tol) then
                 write(stderr, *) "test_calculate_grad_h_diag_mo failed: Incorrect "// &
                     "gradient for the "//case_name//" case."
                 test_calculate_grad_h_diag_mo = .false.
@@ -2175,7 +2493,7 @@ contains
                 kappa = 0.0_rp
                 kappa(k) = i_sign * fd_step
                 rot_mo_coeff = ref_rotate_mo_coeff(kappa, mo_coeff(:, :, :1), &
-                                                   n_occ_ref(:1))
+                                                   mo_object%mo_channels)
                 energy = 2.0_rp * sum(fock_ao(:, :, 1) * matmul( &
                     rot_mo_coeff(:, :n_occ_ref(1), 1), &
                     transpose(rot_mo_coeff(:, :n_occ_ref(1), 1))))
@@ -2195,14 +2513,14 @@ contains
         !
         ! this function tests the subroutine which refreshes the eigendecomposition of
         ! the static part of the Hessian in the MO basis, which diagonalizes the
-        ! occupied-occupied and virtual-virtual blocks of the Fock matrix, if it is
-        ! stale
+        ! occupied-occupied and virtual-virtual blocks of the Fock matrix per irrep, if
+        ! it is stale
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+                                         case_irreps, case_names
         use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
 
         real(rp), allocatable :: eigvals_before(:)
@@ -2216,13 +2534,16 @@ contains
         ! setup settings object
         call setup_settings(settings)
 
-        ! loop over every occupation case: both Fock matrix blocks of every channel,
-        ! which are replaced so that they no longer match the cached
-        ! eigendecomposition, are diagonalized
+        ! loop over every occupation case, replace both Fock matrix blocks of every
+        ! channel by random ones which also couple orbitals of different irreps, mark
+        ! the cached eigendecomposition stale and determine if the part of the blocks
+        ! between orbitals of the same irrep is diagonalized by orthonormal
+        ! eigenvectors which do not mix irreps, ignoring the coupling between irreps
         do i_case = 1, n_cases
             n_particle = case_n_particle(i_case)
             case_name = trim(case_names(i_case))
-            call setup_minimal_mo_object(case_n_occ(:n_particle, i_case))
+            call setup_minimal_mo_object(case_n_occ(:n_particle, i_case), &
+                                         case_irreps(:, :n_particle, i_case))
             do k = 1, n_particle
                 associate (channel => mo_object%mo_channels(k))
                     channel%fock_oo = generate_random_symm_matrix(channel%n_occ)
@@ -2245,8 +2566,9 @@ contains
                 associate (channel => mo_object%mo_channels(k))
                     n_occ = channel%n_occ
                     n_virt = channel%n_virt
-                    if (norm2(matmul(transpose(channel%occ_eigvecs), &
-                                     matmul(channel%fock_oo, channel%occ_eigvecs)) - &
+                    if (norm2(matmul(transpose(channel%occ_eigvecs), matmul( &
+                        same_irrep_part(channel%fock_oo, channel%irreps(:n_occ)), &
+                        channel%occ_eigvecs)) - &
                               diagonal_matrix(channel%occ_eigvals)) > tol) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                             "Occupied-occupied block not diagonalized for the "// &
@@ -2261,8 +2583,15 @@ contains
                             case_name//" case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
-                    if (norm2(matmul(transpose(channel%virt_eigvecs), &
-                                     matmul(channel%fock_vv, channel%virt_eigvecs)) - &
+                    if (mixes_irreps(channel%occ_eigvecs, channel%irreps(:n_occ))) then
+                        write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
+                            "Occupied eigenvectors mix irreps for the "//case_name// &
+                            " case."
+                        test_refresh_hess_eigen_mo = .false.
+                    end if
+                    if (norm2(matmul(transpose(channel%virt_eigvecs), matmul( &
+                        same_irrep_part(channel%fock_vv, channel%irreps(n_occ + 1:)), &
+                        channel%virt_eigvecs)) - &
                               diagonal_matrix(channel%virt_eigvals)) > tol) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                             "Virtual-virtual block not diagonalized for the "// &
@@ -2275,6 +2604,13 @@ contains
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                             "Virtual eigenvectors not orthonormal for the "// &
                             case_name//" case."
+                        test_refresh_hess_eigen_mo = .false.
+                    end if
+                    if (mixes_irreps(channel%virt_eigvecs, &
+                                     channel%irreps(n_occ + 1:))) then
+                        write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
+                            "Virtual eigenvectors mix irreps for the "//case_name// &
+                            " case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
                 end associate
@@ -2300,6 +2636,35 @@ contains
             end if
             deallocate(mo_object)
         end do
+
+    contains
+
+        function same_irrep_part(matrix, block_irreps) result(coupled)
+            !
+            ! this function returns the part of a matrix between orbitals of the given
+            ! irreps which couples only orbitals of the same irrep
+            !
+            real(rp), intent(in) :: matrix(:, :)
+            integer(ip), intent(in) :: block_irreps(:)
+            real(rp) :: coupled(size(matrix, 1), size(matrix, 2))
+
+            coupled = merge(matrix, 0.0_rp, spread(block_irreps, 1, size( &
+                matrix, 1)) == spread(block_irreps, 2, size(matrix, 1)))
+
+        end function same_irrep_part
+
+        logical function mixes_irreps(eigvecs, block_irreps)
+            !
+            ! this function determines if any eigenvector has a component at an orbital
+            ! of another irrep than the orbital it sits at
+            !
+            real(rp), intent(in) :: eigvecs(:, :)
+            integer(ip), intent(in) :: block_irreps(:)
+
+            mixes_irreps = any(abs(eigvecs) > tol .and. spread(block_irreps, 1, size( &
+                eigvecs, 1)) /= spread(block_irreps, 2, size(eigvecs, 1)))
+
+        end function mixes_irreps
 
     end function test_refresh_hess_eigen_mo
 
@@ -2328,7 +2693,7 @@ contains
         !
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+                                         case_irreps, case_names
 
         integer(ip) :: i_case
 
@@ -2338,7 +2703,9 @@ contains
         ! loop over every occupation case: differences of virtual and occupied
         ! eigenvalues
         do i_case = 1, n_cases
-            call setup_minimal_mo_object(case_n_occ(:case_n_particle(i_case), i_case))
+            call setup_minimal_mo_object( &
+                case_n_occ(:case_n_particle(i_case), i_case), &
+                case_irreps(:, :case_n_particle(i_case), i_case))
             if (norm2(mo_object%get_hess_eigval_pairs() - &
                       ref_hess_eigval_pairs_mo(mo_object%mo_channels)) > tol) then
                 write(stderr, *) "test_get_hess_eigval_pairs_mo failed: Incorrect "// &
@@ -2495,7 +2862,7 @@ contains
         use otr_mo, only: rotate_mo_coeff, mo_channel_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+                                         case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ_ref => n_occ, &
                                              n_particle_ref => n_particle
 
@@ -2522,21 +2889,22 @@ contains
             n_particle = case_n_particle(i_case)
             n_occ = case_n_occ(:n_particle, i_case)
 
-            ! generate random orthonormal MO coefficients and the occupations of their
-            ! particle channels
+            ! generate random orthonormal MO coefficients and the occupations and
+            ! irreps of their particle channels, whose parameters are the
+            ! occupied-virtual pairs of the same irrep
             ao_overlap = generate_random_ao_overlap(n_ao)
             mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
-            allocate(mo_channels(n_particle))
-            mo_channels%n_occ = n_occ
-            mo_channels%n_virt = n_mo - n_occ
+            mo_channels = masked_mo_channels(n_occ, n_mo, &
+                                             case_irreps(:, :n_particle, i_case))
 
             ! call routine for a random orbital rotation and determine if the rotated
             ! orbitals and density matrix are correct
-            allocate(kappa(sum(n_occ * (n_mo - n_occ))))
+            allocate(kappa( &
+                sum([(count(mo_channels(k)%param_mask, kind=ip), k=1, n_particle)])))
             call random_number(kappa)
             kappa = 0.2_rp * (kappa - 0.5_rp)
             expected(:, :, :n_particle) = &
-                ref_rotate_mo_coeff(kappa, mo_coeff(:, :, :n_particle), n_occ)
+                ref_rotate_mo_coeff(kappa, mo_coeff(:, :, :n_particle), mo_channels)
             call rotate_mo_coeff(kappa, mo_coeff(:, :, :n_particle), ao_overlap, &
                                  mo_channels, rot_mo_coeff(:, :, :n_particle), &
                                  rot_dm_ao(:, :, :n_particle), settings, error)
@@ -2569,9 +2937,7 @@ contains
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
         call random_number(rot_mo_coeff)
         mo_coeff = mo_coeff + 1e-2_rp * rot_mo_coeff
-        allocate(mo_channels(1))
-        mo_channels%n_occ = n_occ_ref(1)
-        mo_channels%n_virt = n_mo - n_occ_ref(1)
+        mo_channels = masked_mo_channels(n_occ_ref(:1), n_mo)
         allocate(kappa(n_occ_ref(1) * (n_mo - n_occ_ref(1))))
         kappa = 0.0_rp
         call rotate_mo_coeff(kappa, mo_coeff(:, :, :1), ao_overlap, mo_channels, &
@@ -2630,7 +2996,7 @@ contains
         !
         use otr_mo, only: hess_x_static_mo, mo_object
         use otr_mo_test_reference, only: n_cases, case_n_particle, case_n_occ, &
-                                         case_names
+                                         case_irreps, case_names
 
         real(rp), allocatable :: x(:)
         integer(ip) :: i_case
@@ -2640,7 +3006,9 @@ contains
 
         ! loop over every occupation case
         do i_case = 1, n_cases
-            call setup_minimal_mo_object(case_n_occ(:case_n_particle(i_case), i_case))
+            call setup_minimal_mo_object( &
+                case_n_occ(:case_n_particle(i_case), i_case), &
+                case_irreps(:, :case_n_particle(i_case), i_case))
             allocate(x(mo_object%n_param))
             call random_number(x)
             if (norm2(hess_x_static_mo(x, mo_object%mo_channels) - &
@@ -2685,5 +3053,241 @@ contains
         end if
 
     end function test_mo_transform
+
+    logical(c_bool) function test_count_mo_params() bind(C)
+        !
+        ! this function tests the function which returns the number of parameters of
+        ! orbitals parameterized in the MO basis, with and without irreps of the MOs
+        !
+        use otr_mo, only: count_mo_params
+        use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
+                                         case_irreps, case_names
+
+        integer(ip) :: n_particle, i_case
+
+        ! assume tests pass
+        test_count_mo_params = .true.
+
+        ! loop over every occupation case and determine if all occupied-virtual pairs
+        ! are counted without irreps and only those of the same irrep with irreps
+        do i_case = 1, n_cases
+            n_particle = case_n_particle(i_case)
+            associate (n_occ => case_n_occ(:n_particle, i_case), &
+                       irreps => case_irreps(:, :n_particle, i_case))
+                if (count_mo_params(n_occ, n_mo) /= sum(n_occ * (n_mo - n_occ))) then
+                    write(stderr, *) "test_count_mo_params failed: Incorrect "// &
+                        "number of parameters without irreps for the "// &
+                        trim(case_names(i_case))//" case."
+                    test_count_mo_params = .false.
+                end if
+                if (count_mo_params(n_occ, n_mo, irreps) /= &
+                    ref_count_mo_params(n_occ, irreps)) then
+                    write(stderr, *) "test_count_mo_params failed: Incorrect "// &
+                        "number of parameters with irreps for the "// &
+                        trim(case_names(i_case))//" case."
+                    test_count_mo_params = .false.
+                end if
+            end associate
+        end do
+
+    end function test_count_mo_params
+
+    logical(c_bool) function test_mo_param_rows() bind(C)
+        !
+        ! this function tests the function which returns the rows every particle
+        ! channel occupies in the parameter vector of the MO basis
+        !
+        use otr_mo, only: mo_param_rows, mo_channel_type
+        use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
+                                         case_irreps, case_names
+
+        integer(ip) :: n_particle, n_rows, i_case, k
+        integer(ip), allocatable :: rows(:, :), expected(:, :)
+        type(mo_channel_type), allocatable :: mo_channels(:)
+
+        ! assume tests pass
+        test_mo_param_rows = .true.
+
+        ! loop over every occupation case and determine if the channels occupy the rows
+        ! of their occupied-virtual pairs of the same irrep one after another
+        do i_case = 1, n_cases
+            n_particle = case_n_particle(i_case)
+            mo_channels = masked_mo_channels(case_n_occ(:n_particle, i_case), n_mo, &
+                                             case_irreps(:, :n_particle, i_case))
+            allocate(expected(2, n_particle))
+            n_rows = 0
+            do k = 1, n_particle
+                expected(1, k) = n_rows + 1
+                n_rows = n_rows + ref_count_mo_params(case_n_occ(k:k, i_case), &
+                                                      case_irreps(:, k:k, i_case))
+                expected(2, k) = n_rows
+            end do
+            rows = mo_param_rows(mo_channels)
+            if (any(rows /= expected)) then
+                write(stderr, *) "test_mo_param_rows failed: Incorrect rows for "// &
+                    "the "//trim(case_names(i_case))//" case."
+                test_mo_param_rows = .false.
+            end if
+            deallocate(expected)
+        end do
+
+    end function test_mo_param_rows
+
+    logical(c_bool) function test_pack_ov() bind(C)
+        !
+        ! this function tests the function which packs the parameters of a particle
+        ! channel from its occupied-virtual block
+        !
+        use otr_mo, only: pack_ov, mo_channel_type
+        use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
+                                         case_irreps, case_names
+
+        real(rp) :: matrix(n_mo, n_mo, 1)
+        integer(ip) :: n_particle, n_occ, i_case, k
+        type(mo_channel_type), allocatable :: mo_channels(:)
+
+        ! assume tests pass
+        test_pack_ov = .true.
+
+        ! loop over every occupation case and particle channel and determine if a
+        ! random occupied-virtual block is packed
+        do i_case = 1, n_cases
+            n_particle = case_n_particle(i_case)
+            mo_channels = masked_mo_channels(case_n_occ(:n_particle, i_case), n_mo, &
+                                             case_irreps(:, :n_particle, i_case))
+            do k = 1, n_particle
+                n_occ = case_n_occ(k, i_case)
+                call random_number(matrix)
+                if (norm2(pack_ov(matrix(:n_occ, n_occ + 1:, 1), mo_channels(k)) - &
+                          ref_pack_ov(matrix, mo_channels(k:k))) > tol) then
+                    write(stderr, *) "test_pack_ov failed: Incorrect parameters "// &
+                        "for the "//trim(case_names(i_case))//" case."
+                    test_pack_ov = .false.
+                end if
+            end do
+        end do
+
+    end function test_pack_ov
+
+    logical(c_bool) function test_unpack_ov() bind(C)
+        !
+        ! this function tests the function which unpacks the parameters of a particle
+        ! channel into its occupied-virtual block
+        !
+        use otr_mo, only: unpack_ov, mo_channel_type
+        use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
+                                         case_irreps, case_names
+
+        real(rp) :: expected(n_mo, n_mo, 1)
+        real(rp), allocatable :: packed(:)
+        integer(ip) :: n_particle, n_occ, i_case, k
+        type(mo_channel_type), allocatable :: mo_channels(:)
+
+        ! assume tests pass
+        test_unpack_ov = .true.
+
+        ! loop over every occupation case and particle channel and determine if random
+        ! parameters are unpacked into the occupied-virtual block, which vanishes
+        ! between orbitals of different irreps
+        do i_case = 1, n_cases
+            n_particle = case_n_particle(i_case)
+            mo_channels = masked_mo_channels(case_n_occ(:n_particle, i_case), n_mo, &
+                                             case_irreps(:, :n_particle, i_case))
+            do k = 1, n_particle
+                n_occ = case_n_occ(k, i_case)
+                allocate(packed(count(mo_channels(k)%param_mask)))
+                call random_number(packed)
+                expected = ref_unpack_ov(packed, mo_channels(k:k))
+                if (norm2(unpack_ov(packed, mo_channels(k)) - &
+                          expected(:n_occ, n_occ + 1:, 1)) > tol) then
+                    write(stderr, *) "test_unpack_ov failed: Incorrect "// &
+                        "occupied-virtual block for the "//trim(case_names(i_case))// &
+                        " case."
+                    test_unpack_ov = .false.
+                end if
+                deallocate(packed)
+            end do
+        end do
+
+    end function test_unpack_ov
+
+    logical(c_bool) function test_diagonalize_per_irrep() bind(C)
+        !
+        ! this function tests the subroutine which diagonalizes a symmetric matrix
+        ! between orbitals of given irreps separately for every irrep
+        !
+        use otr_common, only: orbital_settings_type
+        use otr_mo, only: diagonalize_per_irrep
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
+
+        integer(ip), parameter :: n = 4, n_matrices = 3
+        integer(ip), parameter :: matrix_irreps(n, n_matrices) = &
+            reshape([0_ip, 0_ip, 0_ip, 0_ip, &
+                     0_ip, 1_ip, 0_ip, 1_ip, &
+                     0_ip, 1_ip, 0_ip, 1_ip], [n, n_matrices])
+        character(len=33), parameter :: matrix_names(n_matrices) = &
+            [character(len=33) :: "a single irrep", &
+             "two irreps with degenerate blocks", "two irreps coupled to each other"]
+
+        real(rp) :: matrix(n, n), same_irrep_part(n, n), eigvals(n), eigvecs(n, n), &
+                    block(2, 2)
+        integer(ip) :: error, i_matrix
+        logical :: same_irrep(n, n)
+        character(len=:), allocatable :: name
+        type(orbital_settings_type) :: settings
+
+        ! assume tests pass
+        test_diagonalize_per_irrep = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! loop over a random matrix of a single irrep, one of two irreps whose blocks
+        ! are the same so that every eigenvalue is degenerate between the irreps, and a
+        ! random matrix coupling two irreps, and determine if the part of the matrix
+        ! between orbitals of the same irrep is diagonalized by orthonormal
+        ! eigenvectors at the orbitals of their irrep, ignoring any coupling between
+        ! the irreps
+        do i_matrix = 1, n_matrices
+            name = trim(matrix_names(i_matrix))
+            if (i_matrix == 2) then
+                block = generate_random_symm_matrix(2_ip)
+                matrix = 0.0_rp
+                matrix([1, 3], [1, 3]) = block
+                matrix([2, 4], [2, 4]) = block
+            else
+                matrix = generate_random_symm_matrix(n)
+            end if
+            same_irrep = spread(matrix_irreps(:, i_matrix), 1, n) == &
+                         spread(matrix_irreps(:, i_matrix), 2, n)
+            same_irrep_part = merge(matrix, 0.0_rp, same_irrep)
+            call diagonalize_per_irrep(matrix, matrix_irreps(:, i_matrix), eigvals, &
+                                       eigvecs, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_diagonalize_per_irrep failed: Produced "// &
+                    "error for "//name//"."
+                test_diagonalize_per_irrep = .false.
+            end if
+            if (norm2(matmul(transpose(eigvecs), matmul(same_irrep_part, eigvecs)) - &
+                      diagonal_matrix(eigvals)) > tol) then
+                write(stderr, *) "test_diagonalize_per_irrep failed: Matrix not "// &
+                    "diagonalized for "//name//"."
+                test_diagonalize_per_irrep = .false.
+            end if
+            if (norm2(matmul(transpose(eigvecs), eigvecs) - identity_matrix(n)) > tol) &
+                then
+                write(stderr, *) "test_diagonalize_per_irrep failed: Eigenvectors "// &
+                    "not orthonormal for "//name//"."
+                test_diagonalize_per_irrep = .false.
+            end if
+            if (any(abs(eigvecs) > tol .and. .not. same_irrep)) then
+                write(stderr, *) "test_diagonalize_per_irrep failed: Eigenvectors "// &
+                    "mix irreps for "//name//"."
+                test_diagonalize_per_irrep = .false.
+            end if
+        end do
+
+    end function test_diagonalize_per_irrep
 
 end module otr_mo_unit_tests

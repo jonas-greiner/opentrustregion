@@ -33,6 +33,7 @@ from pyopentrustregion.extensions.common.python_interface import (
 )
 from pyopentrustregion.extensions.mo.python_interface import (
     check_mo_coeff,
+    check_orbsym,
     ObjFuncMOPyInterface,
     UpdateOrbsMOPyInterface,
 )
@@ -227,6 +228,7 @@ def arh_factory_mo(
     evaluate_dm: Union[EvaluateDMCSType, EvaluateDMOSType],
     solver_settings: SolverSettings,
     settings: ARHSettings,
+    orbsym: Optional[Union[Sequence[int], np.ndarray]] = None,
 ) -> Tuple[
     Callable[[np.ndarray], float],
     Callable[
@@ -234,8 +236,9 @@ def arh_factory_mo(
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
 ]:
-    # check the MO coefficients and overlap matrix against the dimensions and determine
-    # if closed-shell or open-shell formalism is used
+    # check the MO irreps, MO coefficients and overlap matrix against the dimensions
+    # and determine if closed-shell or open-shell formalism is used
+    orbsym_c = check_orbsym(orbsym, n_particle, n_mo)
     mo_coeff_buffer, in_place, n_occ_c, ao_overlap = check_mo_coeff(
         mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo
     )
@@ -302,6 +305,7 @@ def arh_factory_mo(
         POINTER(update_orbs_interface_type),
         POINTER(SolverSettingsC),
         POINTER(ARHSettingsC),
+        POINTER(c_int),
     ]
 
     # call Fortran function
@@ -319,6 +323,7 @@ def arh_factory_mo(
         byref(update_orbs_arh_funptr),
         byref(solver_settings.settings_c),
         byref(settings.settings_c),
+        orbsym_c,
     )
 
     if error:

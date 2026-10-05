@@ -38,9 +38,14 @@ from pyopentrustregion.extensions.arh import (
     arh_factory_oao,
     arh_deconstructor,
 )
+from pyopentrustregion.extensions.common.tests import n_ao
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory
-from pyopentrustregion.extensions.mo.tests import MOPyInterfaceTests
-from pyopentrustregion.extensions.oao.tests import n_ao
+from pyopentrustregion.extensions.mo.tests import (
+    MOPyInterfaceTests,
+    n_mo,
+    n_occ,
+    orbsym,
+)
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -129,10 +134,6 @@ fortran_tests = {
 # for each optional output, in the order of their argument lists
 evaluate_dm_cs_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_cs_factors"))
 evaluate_dm_os_factors = list((c_real * 4).in_dll(lib, "test_evaluate_dm_os_factors"))
-
-# number of MOs and occupied orbitals
-n_mo = c_int.in_dll(lib, "test_n_mo").value
-n_occ = list((c_int * 2).in_dll(lib, "test_n_occ"))
 
 
 @add_tests
@@ -279,28 +280,31 @@ class ARHPyInterfaceTests(unittest.TestCase):
             return (offset + 100 * k + 10 * i + j).astype(np.float64)
 
         # MO coefficients stored row-major are copied back, those stored column-major
-        # are rotated in place and those of a different precision are converted
+        # are rotated in place and those of a different precision are converted, with
+        # the irreps of their MOs passed on only if they are given
+        evaluate_dm_cs, evaluate_dm_os = (
+            self.mock_evaluate_dm_cs,
+            self.mock_evaluate_dm_os,
+        )
         cases = (
-            ("closed-shell row-major", 1, False, np.float64, self.mock_evaluate_dm_cs),
-            (
-                "closed-shell column-major",
-                1,
-                True,
-                np.float64,
-                self.mock_evaluate_dm_cs,
-            ),
+            ("closed-shell row-major", 1, False, np.float64, evaluate_dm_cs, False),
+            ("closed-shell column-major", 1, True, np.float64, evaluate_dm_cs, False),
             (
                 "closed-shell single-precision",
                 1,
                 True,
                 np.float32,
-                self.mock_evaluate_dm_cs,
+                evaluate_dm_cs,
+                False,
             ),
-            ("open-shell row-major", 2, False, np.float64, self.mock_evaluate_dm_os),
-            ("open-shell column-major", 2, True, np.float64, self.mock_evaluate_dm_os),
+            ("open-shell row-major", 2, False, np.float64, evaluate_dm_os, False),
+            ("open-shell column-major", 2, True, np.float64, evaluate_dm_os, False),
+            ("closed-shell with symmetry", 1, False, np.float64, evaluate_dm_cs, True),
+            ("open-shell with symmetry", 2, True, np.float64, evaluate_dm_os, True),
         )
         mock_passed = c_bool.in_dll(lib, "test_arh_factory_mo_interface")
-        for case, n_particle, column_major, dtype, evaluate_dm in cases:
+        orbsym_passed = c_bool.in_dll(lib, "test_orbsym_passed")
+        for case, n_particle, column_major, dtype, evaluate_dm, with_irreps in cases:
             # initialize MO coefficients
             mo_coeff = mo_coeff_pattern(n_particle, 0.0).astype(dtype)
             if n_particle == 1:
@@ -334,7 +338,18 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 evaluate_dm,
                 solver_settings,
                 settings,
+                orbsym=(
+                    (orbsym[0] if n_particle == 1 else orbsym) if with_irreps else None
+                ),
             )
+
+            # determine if the irreps of the MOs were passed on only if they are given
+            if orbsym_passed.value != with_irreps:
+                print(
+                    " test_arh_factory_mo_py_interface failed: Irreps of the MOs "
+                    f"passed on wrongly for the {case} case."
+                )
+                test_passed = False
 
             # determine if the ARH routines are wired into the solver settings without
             # a projection
@@ -676,6 +691,34 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
             except error_type:
+                pass
+
+        # invalid irreps of the MOs have to raise an error before the library is called
+        invalid_orbsym_cases = (
+            ("irreps of two particle channels for one", 1, orbsym),
+            ("non-integer irreps", 1, np.array(orbsym[0], dtype=np.float64)),
+            ("transposed open-shell irreps", 2, np.transpose(orbsym)),
+        )
+        for case, n_particle, invalid_orbsym in invalid_orbsym_cases:
+            try:
+                arh_factory_mo(
+                    cs_mo_coeff if n_particle == 1 else mo_coeff_pattern(2, 0.0),
+                    ao_overlap,
+                    n_occ[0] if n_particle == 1 else n_occ,
+                    n_particle,
+                    n_ao,
+                    n_mo,
+                    cs_evaluate_dm if n_particle == 1 else self.mock_evaluate_dm_os,
+                    SolverSettings(),
+                    settings,
+                    invalid_orbsym,
+                )
+                print(
+                    f" test_arh_factory_mo_py_interface failed: {case} did not raise "
+                    "an error."
+                )
+                test_passed = False
+            except ValueError:
                 pass
 
         self.assertTrue(test_passed, "test_arh_factory_mo_py_interface failed")
@@ -1070,6 +1113,18 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 {"solver_settings": solver_settings, "settings": settings},
                 "arh_factory_mo",
             ),
+            (
+                "MO arguments with irreps",
+                mo_args + (np.zeros(n_mo, dtype=np.int64),),
+                {},
+                "arh_factory_mo",
+            ),
+            (
+                "MO arguments with keyword irreps",
+                mo_args,
+                {"orbsym": np.zeros(n_mo, dtype=np.int64)},
+                "arh_factory_mo",
+            ),
         )
         for case, args, kwargs, selected in valid_cases:
             with patch(f"{module}.arh_factory_mo", return_value="mo") as mock_mo, patch(
@@ -1110,7 +1165,8 @@ class ARHPyInterfaceTests(unittest.TestCase):
         invalid_cases = (
             ("too few arguments", oao_args[:-1], {}),
             ("an argument count between the two factories", mo_args[:-1], {}),
-            ("too many arguments", mo_args + (None,), {}),
+            ("too many arguments", mo_args + (None, None), {}),
+            ("OAO arguments with keyword irreps", oao_args, {"orbsym": None}),
             (
                 "keyword arguments of both factories",
                 (),

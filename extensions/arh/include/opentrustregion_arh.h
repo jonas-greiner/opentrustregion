@@ -76,6 +76,9 @@ void init_arh_settings(arh_settings_type *settings);
  * @param update_orbs_arh_c_funptr   Output: wrapped update_orbs function pointer
  * @param solver_settings_c          Input/output: solver settings
  * @param settings_c                 ARH settings
+ * @param orbsym_c                   Irreps of the MOs of every particle channel (size
+ *                                   n_mo * n_particle), or NULL if all MOs belong to
+ *                                   the same irrep
  *
  * @return                           Integer error code from Fortran
  */
@@ -85,7 +88,7 @@ c_int arh_factory_mo(c_real *mo_coeff_c, const c_real *ao_overlap_c,
                      obj_func_fp *obj_func_arh_c_funptr,
                      update_orbs_fp *update_orbs_arh_c_funptr,
                      solver_settings_type *solver_settings_c,
-                     arh_settings_type *settings_c);
+                     arh_settings_type *settings_c, const c_int *orbsym_c);
 
 /**
  * Fortran-callable ARH factory interface for orbitals parameterized in the OAO basis.

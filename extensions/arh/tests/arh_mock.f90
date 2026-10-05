@@ -65,21 +65,26 @@ contains
     end subroutine mock_arh_set_solver_settings
 
     subroutine check_factory_mo_input(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                      n_mo, settings)
+                                      n_mo, settings, orbsym)
         !
         ! this subroutine checks the input the mock MO factories are passed by the C
-        ! wrapper, which is the same for both spin cases apart from the occupations
+        ! wrapper, which is the same for both spin cases apart from the occupations,
+        ! and the irreps of the MOs of every particle channel if they are passed
         !
         use otr_arh, only: arh_settings_type
         use otr_arh_test_reference, only: operator(/=)
-        use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern
+        use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern, &
+                                         case_irreps, case_names
         use otr_common_test_reference, only: n_ao_ref => n_ao, n_occ_ref => n_occ
+        use otr_mo_mock, only: orbsym_passed
 
         real(rp), intent(in) :: mo_coeff(:, :, :), ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         type(arh_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         real(rp), allocatable :: pattern(:, :, :)
+        integer(ip) :: i_sym
 
         ! expected MO coefficients, whose values encode their indices
         pattern = real(mo_coeff_pattern(int(n_ao_ref, kind=c_ip), int( &
@@ -134,11 +139,33 @@ contains
                 "optional settings associated with wrong values."
         end if
 
+        ! record whether irreps of the MOs are passed and check them against those of
+        ! the occupation case with symmetry of the shell
+        orbsym_passed = present(orbsym)
+        if (present(orbsym)) then
+            if (n_particle == 1) then
+                i_sym = &
+                    findloc(case_names, "closed-shell with symmetry", dim=1, kind=ip)
+            else
+                i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
+            end if
+            if (any(shape(orbsym) /= [n_mo_ref, n_particle])) then
+                test_passed = .false.
+                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Passed "// &
+                    "irreps of the MOs wrongly shaped."
+            else if (any(orbsym /= case_irreps(:, :n_particle, i_sym))) then
+                test_passed = .false.
+                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Passed "// &
+                    "irreps of the MOs wrong."
+            end if
+        end if
+
     end subroutine check_factory_mo_input
 
-    subroutine mock_arh_factory_mo_cs( &
-        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm_funptr, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, error, settings)
+    subroutine mock_arh_factory_mo_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
+                                      n_mo, evaluate_dm_funptr, obj_func_arh_funptr, &
+                                      update_orbs_arh_funptr, solver_settings, error, &
+                                      settings, orbsym)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the closed-shell case with the orbitals
@@ -159,14 +186,19 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:)
+
+        integer(ip), allocatable :: orbsym_2d(:, :)
 
         ! initialize logical
         test_passed = .true.
 
-        ! check passed input
+        ! check passed input, with the irreps of the MOs reshaped to a single particle
+        ! channel
+        if (present(orbsym)) orbsym_2d = reshape(orbsym, [size(orbsym, kind=ip), 1_ip])
         call check_factory_mo_input(reshape( &
             mo_coeff, [size(mo_coeff, 1, kind=ip), size(mo_coeff, 2, kind=ip), 1_ip]), &
-            ao_overlap, [n_occ], n_particle, n_ao, n_mo, settings)
+            ao_overlap, [n_occ], n_particle, n_ao, n_mo, settings, orbsym_2d)
 
         ! test passed density matrix evaluating function
         test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
@@ -182,9 +214,10 @@ contains
 
     end subroutine mock_arh_factory_mo_cs
 
-    subroutine mock_arh_factory_mo_os( &
-        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm_funptr, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, error, settings)
+    subroutine mock_arh_factory_mo_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
+                                      n_mo, evaluate_dm_funptr, obj_func_arh_funptr, &
+                                      update_orbs_arh_funptr, solver_settings, error, &
+                                      settings, orbsym)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function for the open-shell case with the orbitals
@@ -205,13 +238,14 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         ! initialize logical
         test_passed = .true.
 
         ! check passed input
         call check_factory_mo_input(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                    n_mo, settings)
+                                    n_mo, settings, orbsym)
 
         ! test passed density matrix evaluating function
         test_passed = test_passed .and. test_evaluate_dm_os_funptr( &

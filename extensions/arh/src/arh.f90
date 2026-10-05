@@ -214,9 +214,10 @@ module otr_arh
 
 contains
 
-    subroutine arh_factory_mo_cs( &
-        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm_cs, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, error, settings)
+    subroutine arh_factory_mo_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                                 evaluate_dm_cs, obj_func_arh_funptr, &
+                                 update_orbs_arh_funptr, solver_settings, error, &
+                                 settings, orbsym)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! closed-shell case, with the orbitals parameterized in the MO basis, and wires
@@ -224,7 +225,8 @@ contains
         ! which it also asks to rebuild the Hessian information of the subsystem solver
         ! after rejected steps and tells whether the approximate Hessian is symmetric;
         ! the MO coefficients are rotated in place, so they have to outlive the
-        ! calculation
+        ! calculation; if the irreps of the MOs are given, only the occupied-virtual
+        ! rotations between orbitals of the same irrep are parameters
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -235,16 +237,19 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:)
 
         real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
+        integer(ip), allocatable :: orbsym_2d(:, :)
 
         ! initialize error flag
         error = 0
 
-        ! call common setup
+        ! call common setup, passing the irreps of the MOs only if they are given
         mo_coeff_3d(1:size(mo_coeff, 1), 1:size(mo_coeff, 2), 1:1) => mo_coeff
+        if (present(orbsym)) orbsym_2d = reshape(orbsym, [size(orbsym, kind=ip), 1_ip])
         call arh_factory_mo_common(mo_coeff_3d, ao_overlap, [n_occ], n_particle, n_ao, &
-                                   n_mo, error, settings)
+                                   n_mo, error, settings, orbsym_2d)
         if (error /= 0) return
         nullify(mo_coeff_3d)
 
@@ -260,9 +265,10 @@ contains
 
     end subroutine arh_factory_mo_cs
 
-    subroutine arh_factory_mo_os( &
-        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm_os, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, error, settings)
+    subroutine arh_factory_mo_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                                 evaluate_dm_os, obj_func_arh_funptr, &
+                                 update_orbs_arh_funptr, solver_settings, error, &
+                                 settings, orbsym)
         !
         ! this function returns a modified ARH orbital updating function for the
         ! open-shell case, with the orbitals parameterized in the MO basis, and wires
@@ -270,7 +276,9 @@ contains
         ! which it also asks to rebuild the Hessian information of the subsystem solver
         ! after rejected steps and tells whether the approximate Hessian is symmetric;
         ! the MO coefficients are rotated in place, so they have to outlive the
-        ! calculation
+        ! calculation; if the irreps of the MOs of every particle channel are given,
+        ! only the occupied-virtual rotations between orbitals of the same irrep are
+        ! parameters
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -281,13 +289,14 @@ contains
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         ! initialize error flag
         error = 0
 
         ! call common setup
         call arh_factory_mo_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                   n_mo, error, settings)
+                                   n_mo, error, settings, orbsym)
         if (error /= 0) return
 
         ! set pointers to functions
@@ -303,7 +312,7 @@ contains
     end subroutine arh_factory_mo_os
 
     subroutine arh_factory_mo_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                     n_mo, error, settings)
+                                     n_mo, error, settings, orbsym)
         !
         ! this subroutine performs common ARH initialization operations for orbitals
         ! parameterized in the MO basis
@@ -315,6 +324,7 @@ contains
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(inout) :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
 
         ! perform ARH sanity check
         call arh_sanity_check(settings, error)
@@ -322,7 +332,7 @@ contains
 
         ! call common MO setup, which performs the sanity check of the MO basis
         call mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                               error, settings)
+                               error, settings, orbsym)
         if (error /= 0) return
 
         ! discard any state (in particular history and derived quantities) from a
@@ -1539,9 +1549,10 @@ contains
         ! this subroutine expresses a history of difference matrices in the AO basis,
         ! with density matrices stored as S D S, as history columns (the full
         ! difference matrices in the current MO basis whose inner products define the
-        ! approximate Hessian) and as packed columns (their occupied-virtual blocks)
+        ! approximate Hessian) and as packed columns (the parameters of their
+        ! occupied-virtual blocks)
         !
-        use otr_mo, only: mo_transform
+        use otr_mo, only: mo_transform, pack_ov
 
         class(arh_mo_type), intent(in) :: self
         real(rp), intent(in) :: diff(:, :, :, :)
@@ -1560,7 +1571,8 @@ contains
         packed_rows = self%packed_channel_rows()
 
         ! transform every difference matrix to the current MO basis, keep it in full as
-        ! history column and retain its occupied-virtual block as packed column
+        ! history column and retain the parameters of its occupied-virtual block as
+        ! packed column
         allocate(cols(history_rows(2, self%orbitals%n_particle), n_list), &
                  packed(self%orbitals%n_param, n_list))
         do i = 1, self%orbitals%n_particle
@@ -1569,8 +1581,8 @@ contains
                 diff_mo = mo_transform(self%mo_coeff(:, :, i), diff(:, :, i, k))
                 cols(history_rows(1, i):history_rows(2, i), k) = reshape(diff_mo, &
                                                                          [n_mo * n_mo])
-                packed(packed_rows(1, i):packed_rows(2, i), k) = reshape( &
-                    diff_mo(:n_occ, n_occ + 1:), [n_occ * self%mo_channels(i)%n_virt])
+                packed(packed_rows(1, i):packed_rows(2, i), k) = &
+                    pack_ov(diff_mo(:n_occ, n_occ + 1:), self%mo_channels(i))
             end do
         end do
 
@@ -1649,12 +1661,14 @@ contains
         !
         ! this function returns the rows every particle channel occupies in a packed
         ! column, which holds the occupied-virtual rotations of every channel in the MO
-        ! basis
+        ! basis between orbitals of the same irrep
         !
+        use otr_mo, only: mo_param_rows
+
         class(arh_mo_type), intent(in) :: self
         integer(ip), allocatable :: rows(:, :)
 
-        rows = channel_rows(self%mo_channels%n_occ * self%mo_channels%n_virt)
+        rows = mo_param_rows(self%mo_channels)
 
     end function packed_channel_rows_arh_mo
 
@@ -1808,8 +1822,10 @@ contains
         ! two projections (on antisymmetric and on symmetric input, respectively) are
         ! adjoint with respect to the Frobenius inner product
         ! - in the MO basis, the density response has x as both of its off-diagonal
-        ! blocks and the packed column is the occupied-virtual block of the symmetric
-        ! history matrix, so both off-diagonal blocks contribute the same dot product
+        ! blocks, which vanish between orbitals of different irreps, and the packed
+        ! column holds the occupied-virtual block of the symmetric history matrix
+        ! between orbitals of the same irrep, so both off-diagonal blocks contribute
+        ! the same dot product
         ! packing and projecting are linear, so the output expansion of the response
         ! collapses the same way
         !

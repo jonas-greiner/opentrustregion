@@ -147,6 +147,32 @@ def check_mo_coeff(
     return mo_coeff_buffer, in_place, n_occ_c, ao_overlap
 
 
+def check_orbsym(
+    orbsym: Optional[Union[Sequence[int], np.ndarray]], n_particle: int, n_mo: int
+) -> Any:
+    """
+    this function checks that the irreps of the MOs, if given, have the given
+    dimensions, as an (n_mo,) array for the closed-shell case and as an
+    (n_particle, n_mo) array for the open-shell case, and returns them as a C array
+    holding the irreps of every particle channel one after another, or None if they
+    are not given
+    """
+    if orbsym is None:
+        return None
+    n_particle, n_mo = operator.index(n_particle), operator.index(n_mo)
+    orbsym = np.asarray(orbsym)
+    shape = (n_mo,) if n_particle == 1 else (n_particle, n_mo)
+    if orbsym.shape != shape:
+        raise ValueError(
+            f"The MO irreps have to be of shape {shape} for {n_particle} particle(s) "
+            f"and {n_mo} MOs, got shape {orbsym.shape}."
+        )
+    if not np.issubdtype(orbsym.dtype, np.integer):
+        raise ValueError("The MO irreps have to be integers.")
+
+    return (c_int * orbsym.size)(*(int(irrep) for irrep in orbsym.ravel()))
+
+
 # define interface factories
 @dataclass
 class ObjFuncMOPyInterface(ObjFuncPyInterface):
@@ -193,6 +219,7 @@ def mo_factory(
     evaluate_dm: EvaluateDMType,
     solver_settings: SolverSettings,
     settings: MOSettings,
+    orbsym: Optional[Union[Sequence[int], np.ndarray]] = None,
 ) -> Tuple[
     Callable[[np.ndarray], float],
     Callable[
@@ -200,8 +227,9 @@ def mo_factory(
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
 ]:
-    # check the MO coefficients and overlap matrix against the dimensions and determine
-    # if closed-shell or open-shell formalism is used
+    # check the MO irreps, MO coefficients and overlap matrix against the dimensions
+    # and determine if closed-shell or open-shell formalism is used
+    orbsym_c = check_orbsym(orbsym, n_particle, n_mo)
     mo_coeff_buffer, in_place, n_occ_c, ao_overlap = check_mo_coeff(
         mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo
     )
@@ -248,6 +276,7 @@ def mo_factory(
         POINTER(update_orbs_interface_type),
         POINTER(SolverSettingsC),
         POINTER(MOSettingsC),
+        POINTER(c_int),
     ]
 
     # call Fortran function
@@ -265,6 +294,7 @@ def mo_factory(
         byref(update_orbs_mo_funptr),
         byref(solver_settings.settings_c),
         byref(settings.settings_c),
+        orbsym_c,
     )
 
     if error:

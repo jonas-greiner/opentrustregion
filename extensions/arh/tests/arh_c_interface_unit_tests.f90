@@ -93,17 +93,18 @@ contains
     logical(c_bool) function test_arh_factory_mo_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the ARH factory for orbitals
-        ! parameterized in the MO basis for the closed- and the open-shell case
+        ! parameterized in the MO basis for the closed- and the open-shell case,
+        ! without and with irreps of the MOs
         !
         use otr_arh_c_interface, only: arh_settings_type_c, arh_factory_mo_cs, &
                                        arh_factory_mo_os, arh_factory_mo_c_wrapper, &
                                        update_orbs_arh_before_wrapping
         use otr_arh_mock, only: mock_arh_factory_mo_cs, mock_arh_factory_mo_os, &
                                 test_passed
-        use otr_mo_mock, only: mo_coeff_3d, mock_update_orbs
+        use otr_mo_mock, only: mo_coeff_3d, mock_update_orbs, orbsym_passed
         use otr_arh, only: arh_n_micro
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
-        use otr_mo_test_reference, only: mo_coeff_pattern, n_mo
+        use otr_mo_test_reference, only: mo_coeff_pattern, n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c
         use otr_common_unit_tests, only: shell_names
         use c_interface_unit_tests, only: mock_logger, test_logger, mock_project
@@ -117,6 +118,7 @@ contains
         use otr_common_mock, only: mock_obj_func, mock_precond, mock_precond_pd, &
                                    mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
+        use otr_mo_unit_tests, only: ref_count_mo_params
         use c_interface, only: solver_settings_type_c
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), mo_coeff_c(:, :, :)
@@ -124,6 +126,9 @@ contains
         type(arh_settings_type_c) :: settings_c
         type(solver_settings_type_c) :: solver_settings_c
         integer(c_ip) :: n_particle_c, error_c, n_mo_c, n_occ_c(n_particle)
+        integer(c_ip), allocatable :: orbsym_c(:)
+        integer(ip) :: irreps(n_mo, n_particle), n_param_expected, i_call, i_sym
+        logical :: with_irreps
         character(len=:), allocatable :: case_name
 
         ! assume tests pass
@@ -146,9 +151,13 @@ contains
         settings_c = ref_arh_settings
         settings_c%logger = c_funloc(mock_logger)
 
-        ! both spin cases pass through the same C wrapper
-        do n_particle_c = 1, n_particle
+        ! both spin cases pass through the same C wrapper, first without and then with
+        ! the irreps of the MOs of the symmetric occupation case of the shell
+        do i_call = 1, 2 * n_particle
+            n_particle_c = int(1 + mod(i_call - 1, n_particle), kind=c_ip)
+            with_irreps = i_call > n_particle
             case_name = trim(shell_names(n_particle_c))
+            if (with_irreps) case_name = case_name//" with symmetry"
 
             ! initialize MO coefficients with values encoding their indices
             mo_coeff_c = mo_coeff_pattern(n_ao_c, n_mo_c, n_particle_c, 0.0_c_rp)
@@ -174,6 +183,21 @@ contains
                 solver_settings_c%stability_settings%project = c_funloc(mock_project)
             end if
 
+            ! set the irreps of the MOs passed to the wrapper, which an unallocated
+            ! array passes as absent, and the expected number of parameters, the
+            ! occupied-virtual pairs of the same irrep, with all MOs in one irrep if no
+            ! irreps are passed
+            irreps = 0
+            if (allocated(orbsym_c)) deallocate(orbsym_c)
+            if (with_irreps) then
+                i_sym = findloc(case_names, case_name, dim=1, kind=ip)
+                irreps(:, :n_particle_c) = case_irreps(:, :n_particle_c, i_sym)
+                orbsym_c = int( &
+                    reshape(irreps(:, :n_particle_c), [n_mo * n_particle_c]), kind=c_ip)
+            end if
+            n_param_expected = ref_count_mo_params(n_occ(:n_particle_c), &
+                                                   irreps(:, :n_particle_c))
+
             ! clear the callback slots, which only the factory call may set
             nullify(obj_func_mo_before_wrapping, update_orbs_arh_before_wrapping, &
                     precond_mo_before_wrapping, precond_pd_mo_before_wrapping, &
@@ -183,7 +207,7 @@ contains
             error_c = arh_factory_mo_c_wrapper( &
                 mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
                 evaluate_dm_c_funptr, obj_func_c_funptr, update_orbs_c_funptr, &
-                solver_settings_c, settings_c)
+                solver_settings_c, settings_c, orbsym_c)
 
             ! check if the mock factory received the correct input and called the
             ! logging function
@@ -196,6 +220,11 @@ contains
                 test_arh_factory_mo_c_wrapper = .false.
                 write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Called "// &
                     "logging subroutine wrong for the "//case_name//" case."
+            end if
+            if (orbsym_passed .neqv. with_irreps) then
+                test_arh_factory_mo_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Irreps of "// &
+                    "the MOs passed on wrongly for the "//case_name//" case."
             end if
 
             ! check if output variables are as expected
@@ -222,9 +251,8 @@ contains
             end if
 
             ! determine if the number of parameters of the MO basis, the number of
-            ! occupied-virtual pairs of all particle channels, was set
-            if (n_param_global /= &
-                sum(n_occ_c(:n_particle_c) * (n_mo_c - n_occ_c(:n_particle_c)))) then
+            ! occupied-virtual pairs of the same irrep of all particle channels, was set
+            if (n_param_global /= n_param_expected) then
                 test_arh_factory_mo_c_wrapper = .false.
                 write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Number of "// &
                     "parameters not set for the "//case_name//" case."
