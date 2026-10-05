@@ -1205,7 +1205,7 @@ contains
         ! part D plus the low-rank correction which is inverted using the
         ! Sherman-Morrison-Woodbury identity written as
         !
-        ! (D + E C P^T)^-1 = D^-1 - D^-1 E (I + C P^T D^-1 E)^-1 C P^T D^-1
+        !     (D + E C P^T)^-1 = D^-1 - D^-1 E (I + C P^T D^-1 E)^-1 C P^T D^-1
         !
         ! with E the expansion directions, P the projection directions and C the
         ! coupling matrix
@@ -1807,7 +1807,7 @@ contains
         ! this subroutine assembles the low-rank part of the approximate Hessian in the
         ! packed parameter space, as
         !
-        ! G_low_rank = expansion_dirs * coupling_matrix * transpose(projection_dirs)
+        !     G_low_rank = expansion_dirs * coupling_matrix * transpose(projection_dirs)
         !
         ! by constructing expansion_dirs, coupling_matrix, and projection_dirs
         !
@@ -1818,14 +1818,14 @@ contains
         ! twice the plain dot product <dirs(:, k), x> of the packed history column with
         ! x:
         ! - in the OAO basis, the density response is project_symm of the unpacked x
-        ! and the packed column packs project_asymm of the history matrix, and the
-        ! two projections (on antisymmetric and on symmetric input, respectively) are
-        ! adjoint with respect to the Frobenius inner product
+        !   and the packed column packs project_asymm of the history matrix, and the
+        !   two projections (on antisymmetric and on symmetric input, respectively) are
+        !   adjoint with respect to the Frobenius inner product
         ! - in the MO basis, the density response has x as both of its off-diagonal
-        ! blocks, which vanish between orbitals of different irreps, and the packed
-        ! column holds the occupied-virtual block of the symmetric history matrix
-        ! between orbitals of the same irrep, so both off-diagonal blocks contribute
-        ! the same dot product
+        !   blocks, which vanish between orbitals of different irreps, and the packed
+        !   column holds the occupied-virtual block of the symmetric history matrix
+        !   between orbitals of the same irrep, so both off-diagonal blocks contribute
+        !   the same dot product
         ! packing and projecting are linear, so the output expansion of the response
         ! collapses the same way
         !

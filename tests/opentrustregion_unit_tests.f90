@@ -16,15 +16,20 @@ module opentrustregion_unit_tests
     ! parameters for 6D Hartmann function
     integer(ip), parameter :: n_param = 6, n_terms = 4
     real(rp), parameter :: alpha(n_terms) = [1.0_rp, 1.2_rp, 3.0_rp, 3.2_rp]
-    real(rp), parameter :: A(n_terms, n_param) = reshape( &
-        [10.0_rp, 0.05_rp, 3.0_rp, 17.0_rp, 3.0_rp, 10.0_rp, 3.5_rp, 8.0_rp, 17.0_rp, &
-         17.0_rp, 1.7_rp, 0.05_rp, 3.5_rp, 0.1_rp, 10.0_rp, 10.0_rp, 1.7_rp, 8.0_rp, &
-         17.0_rp, 0.1_rp, 8.0_rp, 14.0_rp, 8.0_rp, 14.0_rp], [n_terms, n_param])
-    real(rp), parameter :: P(n_terms, n_param) = reshape( &
-        [0.1312_rp, 0.2329_rp, 0.2348_rp, 0.4047_rp, 0.1696_rp, 0.4135_rp, 0.1451_rp, &
-         0.8828_rp, 0.5569_rp, 0.8307_rp, 0.3522_rp, 0.8732_rp, 0.0124_rp, 0.3736_rp, &
-         0.2883_rp, 0.5743_rp, 0.8283_rp, 0.1004_rp, 0.3047_rp, 0.1091_rp, 0.5886_rp, &
-         0.9991_rp, 0.6650_rp, 0.0381_rp], [n_terms, n_param])
+    real(rp), parameter :: A(n_terms, n_param) = &
+        reshape([10.0_rp, 0.05_rp, 3.0_rp, 17.0_rp, &
+                 3.0_rp, 10.0_rp, 3.5_rp, 8.0_rp, &
+                 17.0_rp, 17.0_rp, 1.7_rp, 0.05_rp, &
+                 3.5_rp, 0.1_rp, 10.0_rp, 10.0_rp, &
+                 1.7_rp, 8.0_rp, 17.0_rp, 0.1_rp, &
+                 8.0_rp, 14.0_rp, 8.0_rp, 14.0_rp], [n_terms, n_param])
+    real(rp), parameter :: P(n_terms, n_param) = &
+        reshape([0.1312_rp, 0.2329_rp, 0.2348_rp, 0.4047_rp, &
+                 0.1696_rp, 0.4135_rp, 0.1451_rp, 0.8828_rp, &
+                 0.5569_rp, 0.8307_rp, 0.3522_rp, 0.8732_rp, &
+                 0.0124_rp, 0.3736_rp, 0.2883_rp, 0.5743_rp, &
+                 0.8283_rp, 0.1004_rp, 0.3047_rp, 0.1091_rp, &
+                 0.5886_rp, 0.9991_rp, 0.6650_rp, 0.0381_rp], [n_terms, n_param])
     integer(c_ip), bind(C, name="hartmann6d_n_param") :: n_param_c = n_param
     integer(c_ip), bind(C, name="hartmann6d_n_terms") :: n_terms_c = n_terms
     real(c_rp), bind(C, name="hartmann6d_alpha") :: alpha_c(n_terms) = alpha
@@ -1573,8 +1578,8 @@ contains
 
         ! defined a reduced space basis
         red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
+        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
 
         ! orthonormalize reduced space basis
         do i = 2, 3
@@ -1691,8 +1696,8 @@ contains
 
         ! defined a reduced space basis
         red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
+        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
 
         ! orthonormalize reduced space basis
         do i = 2, n_trial
@@ -1946,8 +1951,8 @@ contains
 
         ! defined a reduced space basis
         red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
+        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
 
         ! orthonormalize reduced space basis
         do i = 2, n_trial
@@ -2052,8 +2057,8 @@ contains
 
         ! defined a reduced space basis
         red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        red_space_basis(:, 3) = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
+        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
 
         ! orthonormalize reduced space basis
         do i = 2, n_trial
@@ -3146,10 +3151,11 @@ contains
         space(:, 2) = [0.0_rp, 0.0_rp, 1.0_rp, 0.0_rp]
 
         ! define symmetric linear transformation and corresponding vector and space
-        symm_matrix = reshape( &
-            [1.0_rp, -5.0_rp, 8.0_rp, 0.0_rp, -5.0_rp, 2.0_rp, -6.0_rp, 9.0_rp, &
-             8.0_rp, -6.0_rp, 3.0_rp, -7.0_rp, 0.0_rp, 9.0_rp, -7.0_rp, 4.0_rp], &
-            shape(symm_matrix), order=[2, 1])
+        symm_matrix = reshape([1.0_rp, -5.0_rp, 8.0_rp, 0.0_rp, &
+                               -5.0_rp, 2.0_rp, -6.0_rp, 9.0_rp, &
+                               8.0_rp, -6.0_rp, 3.0_rp, -7.0_rp, &
+                               0.0_rp, 9.0_rp, -7.0_rp, 4.0_rp], shape(symm_matrix), &
+                              order=[2, 1])
         lin_trans_vector = matmul(symm_matrix, vector)
         lin_trans_space = matmul(symm_matrix, space)
 

@@ -1767,8 +1767,8 @@ contains
 
         ! initialize expected density matrices, where the rotation matrix is the
         ! exponential of the antisymmetric matrix the rotation is unpacked into
-        rotation = reshape([cos(angle), -sin(angle), sin(angle), cos(angle)], &
-                           [n_ao, n_ao])
+        rotation = reshape([cos(angle), -sin(angle), &
+                            sin(angle), cos(angle)], [n_ao, n_ao])
         expected_dm_oao(:, :, 1) = matmul(transpose(rotation), &
                                           matmul(dm_oao(:, :, 1), rotation))
         expected_dm_ao(:, :, 1) = matmul(s_inv_sqrt, &
@@ -2215,8 +2215,8 @@ contains
         ! exponential of the antisymmetric matrix the rotation is unpacked into and the
         ! rotated density matrix stays idempotent so that purification leaves it
         ! unchanged
-        rotation = reshape([cos(angle), -sin(angle), sin(angle), cos(angle)], &
-                           [n_ao, n_ao])
+        rotation = reshape([cos(angle), -sin(angle), &
+                            sin(angle), cos(angle)], [n_ao, n_ao])
         expected_dm_oao(:, :, 1) = matmul(transpose(rotation), &
                                           matmul(dm_oao(:, :, 1), rotation))
         expected_dm_ao(:, :, 1) = matmul(s_inv_sqrt, &
@@ -2318,21 +2318,23 @@ contains
 
         ! initialize matrices and density matrices, each occupying a single, distinct
         ! orbital only
-        matrix(:, :, 1) = reshape( &
-            [1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp, 5.0_rp, 6.0_rp, 7.0_rp, 8.0_rp, 9.0_rp], &
-            [n_ao, n_ao])
-        matrix(:, :, 2) = reshape( &
-            [9.0_rp, 8.0_rp, 7.0_rp, 6.0_rp, 5.0_rp, 4.0_rp, 3.0_rp, 2.0_rp, 1.0_rp], &
-            [n_ao, n_ao])
+        matrix(:, :, 1) = reshape([1.0_rp, 2.0_rp, 3.0_rp, &
+                                   4.0_rp, 5.0_rp, 6.0_rp, &
+                                   7.0_rp, 8.0_rp, 9.0_rp], [n_ao, n_ao])
+        matrix(:, :, 2) = reshape([9.0_rp, 8.0_rp, 7.0_rp, &
+                                   6.0_rp, 5.0_rp, 4.0_rp, &
+                                   3.0_rp, 2.0_rp, 1.0_rp], [n_ao, n_ao])
         dm_oao = 0.0_rp
         dm_oao(1, 1, 1) = 1.0_rp
         dm_oao(2, 2, 2) = 1.0_rp
 
         ! initialize expected matrices, where only the antisymmetrized occupied-virtual
         ! elements survive
-        expected(:, :, 1) = reshape([0.0_rp, -4.0_rp, -7.0_rp, 4.0_rp, 0.0_rp, 0.0_rp, &
+        expected(:, :, 1) = reshape([0.0_rp, -4.0_rp, -7.0_rp, &
+                                     4.0_rp, 0.0_rp, 0.0_rp, &
                                      7.0_rp, 0.0_rp, 0.0_rp], [n_ao, n_ao])
-        expected(:, :, 2) = reshape([0.0_rp, 8.0_rp, 0.0_rp, -8.0_rp, 0.0_rp, -2.0_rp, &
+        expected(:, :, 2) = reshape([0.0_rp, 8.0_rp, 0.0_rp, &
+                                     -8.0_rp, 0.0_rp, -2.0_rp, &
                                      0.0_rp, 2.0_rp, 0.0_rp], [n_ao, n_ao])
 
         ! call routine and determine if dimensions and values of resulting matrix match
@@ -2369,9 +2371,11 @@ contains
 
         ! initialize antisymmetric trial vectors and density matrices, each occupying a
         ! single, distinct orbital only
-        x_full(:, :, 1) = reshape([0.0_rp, -1.0_rp, -2.0_rp, 1.0_rp, 0.0_rp, -3.0_rp, &
+        x_full(:, :, 1) = reshape([0.0_rp, -1.0_rp, -2.0_rp, &
+                                   1.0_rp, 0.0_rp, -3.0_rp, &
                                    2.0_rp, 3.0_rp, 0.0_rp], [n_ao, n_ao])
-        x_full(:, :, 2) = reshape([0.0_rp, -4.0_rp, -5.0_rp, 4.0_rp, 0.0_rp, -6.0_rp, &
+        x_full(:, :, 2) = reshape([0.0_rp, -4.0_rp, -5.0_rp, &
+                                   4.0_rp, 0.0_rp, -6.0_rp, &
                                    5.0_rp, 6.0_rp, 0.0_rp], [n_ao, n_ao])
         dm_oao = 0.0_rp
         dm_oao(1, 1, 1) = 1.0_rp
@@ -2379,10 +2383,11 @@ contains
 
         ! initialize expected matrices, where only the symmetrized occupied-virtual
         ! elements survive
-        expected(:, :, 1) = reshape( &
-            [0.0_rp, 1.0_rp, 2.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 2.0_rp, 0.0_rp, 0.0_rp], &
-            [n_ao, n_ao])
-        expected(:, :, 2) = reshape([0.0_rp, -4.0_rp, 0.0_rp, -4.0_rp, 0.0_rp, 6.0_rp, &
+        expected(:, :, 1) = reshape([0.0_rp, 1.0_rp, 2.0_rp, &
+                                     1.0_rp, 0.0_rp, 0.0_rp, &
+                                     2.0_rp, 0.0_rp, 0.0_rp], [n_ao, n_ao])
+        expected(:, :, 2) = reshape([0.0_rp, -4.0_rp, 0.0_rp, &
+                                     -4.0_rp, 0.0_rp, 6.0_rp, &
                                      0.0_rp, 6.0_rp, 0.0_rp], [n_ao, n_ao])
 
         ! call routine and determine if dimensions and values of resulting matrix match
@@ -2419,19 +2424,21 @@ contains
         test_purify = .true.
 
         ! initialize density matrices with fractional occupations
-        dm(:, :, 1) = reshape( &
-            [0.6_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.2_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.3_rp], &
-            [n_ao, n_ao])
-        dm(:, :, 2) = reshape( &
-            [0.7_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.4_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.5_rp], &
-            [n_ao, n_ao])
+        dm(:, :, 1) = reshape([0.6_rp, 0.0_rp, 0.0_rp, &
+                               0.0_rp, 0.2_rp, 0.0_rp, &
+                               0.0_rp, 0.0_rp, 0.3_rp], [n_ao, n_ao])
+        dm(:, :, 2) = reshape([0.7_rp, 0.0_rp, 0.0_rp, &
+                               0.0_rp, 0.4_rp, 0.0_rp, &
+                               0.0_rp, 0.0_rp, 0.5_rp], [n_ao, n_ao])
 
         ! initialize expected density matrices, where the occupations are driven
         ! towards zero and one
-        expected(:, :, 1) = reshape([0.648_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.104_rp, &
-                                     0.0_rp, 0.0_rp, 0.0_rp, 0.216_rp], [n_ao, n_ao])
-        expected(:, :, 2) = reshape([0.784_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.352_rp, &
-                                     0.0_rp, 0.0_rp, 0.0_rp, 0.5_rp], [n_ao, n_ao])
+        expected(:, :, 1) = reshape([0.648_rp, 0.0_rp, 0.0_rp, &
+                                     0.0_rp, 0.104_rp, 0.0_rp, &
+                                     0.0_rp, 0.0_rp, 0.216_rp], [n_ao, n_ao])
+        expected(:, :, 2) = reshape([0.784_rp, 0.0_rp, 0.0_rp, &
+                                     0.0_rp, 0.352_rp, 0.0_rp, &
+                                     0.0_rp, 0.0_rp, 0.5_rp], [n_ao, n_ao])
 
         ! call routine and determine if values of resulting density matrices match
         call purify(dm)
@@ -2471,11 +2478,14 @@ contains
         test_symmetric_transformation = .true.
 
         ! initialize transformation matrix and matrix to be transformed
-        trans_matrix = reshape([1.0_rp, 0.0_rp, 2.0_rp, 1.0_rp], [n_ao, n_ao])
-        matrix(:, :, 1) = reshape([1.0_rp, 0.0_rp, 0.0_rp, 2.0_rp], [n_ao, n_ao])
+        trans_matrix = reshape([1.0_rp, 0.0_rp, &
+                                2.0_rp, 1.0_rp], [n_ao, n_ao])
+        matrix(:, :, 1) = reshape([1.0_rp, 0.0_rp, &
+                                   0.0_rp, 2.0_rp], [n_ao, n_ao])
 
         ! initialize expected matrix
-        expected(:, :, 1) = reshape([1.0_rp, 0.0_rp, 6.0_rp, 2.0_rp], [n_ao, n_ao])
+        expected(:, :, 1) = reshape([1.0_rp, 0.0_rp, &
+                                     6.0_rp, 2.0_rp], [n_ao, n_ao])
 
         ! call routine and determine if dimensions and values of resulting matrix match
         matrix_transformed = symmetric_transformation(trans_matrix, matrix)
@@ -2510,10 +2520,12 @@ contains
         test_unpack_asymm = .true.
 
         ! initialize expected matrices
-        expected(:, :, 1) = reshape([0.0_rp, -1.0_rp, -2.0_rp, 1.0_rp, 0.0_rp, &
-                                     -3.0_rp, 2.0_rp, 3.0_rp, 0.0_rp], [n_ao, n_ao])
-        expected(:, :, 2) = reshape([0.0_rp, -4.0_rp, -5.0_rp, 4.0_rp, 0.0_rp, &
-                                     -6.0_rp, 5.0_rp, 6.0_rp, 0.0_rp], [n_ao, n_ao])
+        expected(:, :, 1) = reshape([0.0_rp, -1.0_rp, -2.0_rp, &
+                                     1.0_rp, 0.0_rp, -3.0_rp, &
+                                     2.0_rp, 3.0_rp, 0.0_rp], [n_ao, n_ao])
+        expected(:, :, 2) = reshape([0.0_rp, -4.0_rp, -5.0_rp, &
+                                     4.0_rp, 0.0_rp, -6.0_rp, &
+                                     5.0_rp, 6.0_rp, 0.0_rp], [n_ao, n_ao])
 
         ! call routine and determine if dimensions and values of resulting matrices
         ! match
@@ -2548,9 +2560,11 @@ contains
         test_pack_asymm = .true.
 
         ! initialize antisymmetric matrices
-        matrix(:, :, 1) = reshape([0.0_rp, -1.0_rp, -2.0_rp, 1.0_rp, 0.0_rp, -3.0_rp, &
+        matrix(:, :, 1) = reshape([0.0_rp, -1.0_rp, -2.0_rp, &
+                                   1.0_rp, 0.0_rp, -3.0_rp, &
                                    2.0_rp, 3.0_rp, 0.0_rp], [n_ao, n_ao])
-        matrix(:, :, 2) = reshape([0.0_rp, -3.0_rp, -4.0_rp, 3.0_rp, 0.0_rp, -5.0_rp, &
+        matrix(:, :, 2) = reshape([0.0_rp, -3.0_rp, -4.0_rp, &
+                                   3.0_rp, 0.0_rp, -5.0_rp, &
                                    4.0_rp, 5.0_rp, 0.0_rp], [n_ao, n_ao])
 
         ! call routine and determine if dimensions and values of resulting vector

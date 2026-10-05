@@ -4286,8 +4286,9 @@ contains
         ! routine performs internally is a scaling by those lengths regardless of the
         ! order it accepts them in, while every quantity below is a median over
         ! directions and therefore independent of that order
-        basis = 0.5_rp * reshape([1.0_rp, 1.0_rp, 1.0_rp, 1.0_rp, 1.0_rp, -1.0_rp, &
-                                  1.0_rp, -1.0_rp, 1.0_rp, 1.0_rp, -1.0_rp, -1.0_rp, &
+        basis = 0.5_rp * reshape([1.0_rp, 1.0_rp, 1.0_rp, 1.0_rp, &
+                                  1.0_rp, -1.0_rp, 1.0_rp, -1.0_rp, &
+                                  1.0_rp, 1.0_rp, -1.0_rp, -1.0_rp, &
                                   1.0_rp, -1.0_rp, -1.0_rp, 1.0_rp], [flat_len, n_diff])
         do i = 1, n_diff
             steps(:, i) = lengths(i) * basis(:, i)
@@ -5041,11 +5042,13 @@ contains
 
         ! initialize an orthonormal but non-symmetric eigenvector matrix, so that a
         ! transposed reconstruction would be caught, and distinct inverted eigenvalues
-        eigvecs = reshape([0.6_rp, 0.8_rp, -0.8_rp, 0.6_rp], [n, n])
+        eigvecs = reshape([0.6_rp, 0.8_rp, &
+                           -0.8_rp, 0.6_rp], [n, n])
         inv_eigvals = [0.25_rp, 4.0_rp]
 
         ! initialize the expected matrix 0.25 * v1 v1^T + 4 * v2 v2^T
-        expected = reshape([2.65_rp, -1.8_rp, -1.8_rp, 1.6_rp], [n, n])
+        expected = reshape([2.65_rp, -1.8_rp, &
+                            -1.8_rp, 1.6_rp], [n, n])
 
         ! call routine and determine if dimensions and values of the reconstructed
         ! matrix match

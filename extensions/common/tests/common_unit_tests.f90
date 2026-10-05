@@ -714,10 +714,12 @@ contains
 
         ! initialize antisymmetric matrix, whose exponential is the corresponding
         ! rotation matrix
-        a = reshape([0.0_rp, -angle, angle, 0.0_rp], [n, n])
+        a = reshape([0.0_rp, -angle, &
+                     angle, 0.0_rp], [n, n])
 
         ! initialize expected rotation matrix
-        expected = reshape([cos(angle), -sin(angle), sin(angle), cos(angle)], [n, n])
+        expected = reshape([cos(angle), -sin(angle), &
+                            sin(angle), cos(angle)], [n, n])
 
         ! call routine and determine if dimensions and values of resulting matrix match
         exp_a = matrix_exponential(a, settings, error)

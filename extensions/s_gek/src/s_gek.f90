@@ -167,11 +167,11 @@ contains
         type is (s_gek_settings_type)
             settings = default_s_gek_settings
         class default
-            call settings%log("S-GEK settings could not be initialized "// &
-                              "becauseinitialization routine received the wrong "// &
-                              "type. The type s_gek_settings_type was likely "// &
-                              "subclassed without providing an initialization "// &
-                              "routine.", verbosity_error, .true.)
+            call settings%log("S-GEK settings could not be initialized because "// &
+                              "initialization routine received the wrong type. The "// &
+                              "type s_gek_settings_type was likely subclassed "// &
+                              "without providing an initialization routine.", &
+                              verbosity_error, .true.)
             error = 1
         end select
 
@@ -403,8 +403,8 @@ contains
             do j = 1, self%n_space
                 tmp(:, j) = self%h_diag * self%subspace(:, j)
             end do
-            call dgemm("T", "N", self%n_space, self%n_space, self%n_param, 1.0d0, tmp, &
-                       self%n_param, self%subspace, self%n_param, 0.0d0, &
+            call dgemm("T", "N", self%n_space, self%n_space, self%n_param, 1.0_rp, &
+                       tmp, self%n_param, self%subspace, self%n_param, 0.0_rp, &
                        self%actual_hess_approx, self%n_space)
             deallocate(tmp)
 

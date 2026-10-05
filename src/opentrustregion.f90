@@ -1242,7 +1242,7 @@ contains
             n_u_lim = n_b + grow_limit * (n_c - n_b)
 
             ! check if u is between n_b and n_c
-            if ((n_u - n_c) * (n_b - n_u) > 0.0) then
+            if ((n_u - n_c) * (n_b - n_u) > 0.0_rp) then
                 ! evaluate function at n_u
                 f_u = obj_func(n_u * kappa, error)
                 call add_error_origin(error, error_obj_func, settings)
@@ -3234,7 +3234,7 @@ contains
                     lanczos_diag_elem = lanczos_diag_elem + 1.0_rp / step_size
                 ! no curvature present so take an infinite step
                 else
-                    step_size = huge(1.0_rp)**0.25
+                    step_size = huge(1.0_rp)**0.25_rp
                 end if
 
                 ! check that the Lanczos tridiagonal is still positive definite
@@ -4191,7 +4191,7 @@ contains
                 lanczos_diag_elem = lanczos_diag_elem + 1.0_rp / step_size
             ! no curvature present so take an infinite step
             else
-                step_size = huge(1.0_rp)**0.25
+                step_size = huge(1.0_rp)**0.25_rp
             end if
 
             ! check that the Lanczos tridiagonal is still positive definite
@@ -4507,23 +4507,23 @@ contains
         ! this subroutine determines a vector x which approximately minimizes the
         ! quadratic function
         !
-        ! func(solution) = 1/2 <solution, tridiagonal solution> + <linear, solution>
+        !   func(solution) = 1/2 <solution, tridiagonal solution> + <linear, solution>
         !
         ! subject to the Euclidean norm constraint ||solution|| <= trust_radius.
 
         ! - computes an approximate solution and a Lagrange multiplier lambda such that
-        ! either lambda is zero and ||solution|| <= (1+rtol)*trust_radius, or lambda
-        ! is positive and | ||solution|| - trust_radius | <= rtol * trust_radius
+        !   either lambda is zero and ||solution|| <= (1+rtol)*trust_radius, or lambda
+        !   is positive and | ||solution|| - trust_radius | <= rtol * trust_radius
         ! - if solution_sol is the solution to the problem, the approximate solution
-        ! satisfies func(solution) <= func(solution_sol) * (1 - rtol) ** 2
+        !   satisfies func(solution) <= func(solution_sol) * (1 - rtol) ** 2
         ! - diagonal and off_diagonal: tridiagonal matrix
         ! - diagonal_fact and off_diagonal_fact: LDL.T factorization of the tridiagonal
-        ! matrix shifted by lambda
+        !   matrix shifted by lambda
         ! - try_warm is true: an initial estimate of lambda should be provided
         ! - use_old is true: the lowest eigenvalue of the leading n-1 by n-1 block
-        ! should be provided
+        !   should be provided
         ! - interior is true: an interior solution is possible (interior will be set to
-        ! true if an interior solution was found)
+        !   true if an interior solution was found)
         !
         integer(ip), intent(in) :: n_red_space
         real(rp), intent(in) :: diagonal(n_red_space), off_diagonal(n_red_space - 1), &
@@ -4549,7 +4549,7 @@ contains
         ! initialize variables
         hard_case = .false.
         hard_case_step_size = 0.0_rp
-        pert_l = mach_eps**0.75
+        pert_l = mach_eps**0.75_rp
 
         ! find a guess for lambda unless solution is interior
         find_lambda_guess: block
@@ -4756,7 +4756,7 @@ contains
         real(rp), intent(in) :: diagonal(n_elem), off_diagonal(n_elem - 1)
 
         real(rp), parameter :: perturb = 1e-6_rp, mach_eps = epsilon(mach_eps), &
-                               tol = mach_eps**0.66
+                               tol = mach_eps**0.66_rp
         integer(ip) :: i, n_neg_pivots
         real(rp) :: lower, upper, tol_interval, pivot, pivot_derivative, infinity, &
                     coeff_b, coeff_c, e_trial, root1, root2
