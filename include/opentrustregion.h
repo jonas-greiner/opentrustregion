@@ -123,6 +123,7 @@ typedef struct {
   c_bool stability;
   c_bool line_search;
   c_bool refresh_hess;
+  c_bool grad_noise;
   c_bool hess_symm;
   c_bool initialized;
 
@@ -130,7 +131,6 @@ typedef struct {
   c_real start_trust_radius;
   c_real global_red_factor;
   c_real local_red_factor;
-  c_real grad_noise;
 
   c_int n_random_trial_vectors;
   c_int n_extra_trial_vectors;

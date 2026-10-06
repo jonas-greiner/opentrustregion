@@ -534,7 +534,7 @@ contains
             update_orbs_type, obj_func_type, solver_settings_type, solver, &
             default_settings => default_solver_settings, error_solver_max_iter
 
-        real(rp), parameter :: var_thres = 1e-6_rp
+        real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error
         real(rp), allocatable :: final_grad(:)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
@@ -4120,23 +4120,6 @@ contains
             test_solver_sanity_check = .false.
         end if
 
-        ! check if error is correctly thrown for negative gradient noise and not for
-        ! vanishing gradient noise
-        settings%grad_noise = -1e-4_rp
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for negative gradient noise."
-            test_solver_sanity_check = .false.
-        end if
-        settings%grad_noise = 0.0_rp
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error /= 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
-                "vanishing gradient noise."
-            test_solver_sanity_check = .false.
-        end if
-
         ! check if gradient size is treated correctly
         call solver_sanity_check(settings, 3_ip, grad, error)
         if (error /= 0) then
@@ -4326,19 +4309,20 @@ contains
 
         type(solver_settings_type) :: settings
         real(rp) :: func, grad_norm, trust_radius, input_trust_radius, mu, &
-                    solution_norm, residual_tol
+                    solution_norm, residual_tol, noise
         real(rp), dimension(n_param) :: h_diag, solution, newton_solution
         integer(ip) :: i, imicro, imicro_jacobi_davidson, imicro_ref, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
-        logical :: jacobi_davidson_started, max_precision_reached
+        logical :: jacobi_davidson_started, max_precision_reached, local_region
+        character(len=6) :: region_str
 
         ! assume tests pass
         test_level_shifted_davidson = .true.
 
         ! setup settings object
         call setup_settings(settings)
-        settings%grad_noise = 0.0_rp
+        settings%grad_noise = .false.
 
         do i = 1, size(subsystem_solvers)
             if (index(subsystem_solvers(i), "davidson") == 0) cycle
@@ -4356,7 +4340,7 @@ contains
         ! carries enough floating-point noise to stay above the solver's fixed
         ! convergence floor
         call setup_settings(settings)
-        settings%grad_noise = 0.0_rp
+        settings%grad_noise = .false.
         settings%local_red_factor = 0.0_rp
         settings%global_red_factor = 0.0_rp
         overflow_hess = 0.0_rp
@@ -4375,7 +4359,7 @@ contains
         hess_x_funptr => overflow_hess_x
 
         call level_shifted_davidson(func, overflow_grad, grad_norm, h_diag, n_param, &
-                                    obj_func_funptr, hess_x_funptr, settings, &
+                                    obj_func_funptr, hess_x_funptr, settings, .false., &
                                     trust_radius, solution, solution_norm, mu, imicro, &
                                     imicro_jacobi_davidson, jacobi_davidson_started, &
                                     max_precision_reached, error)
@@ -4400,59 +4384,70 @@ contains
 
         ! run level-shifted Davidson with a perturbed gradient on a diagonal Hessian
         ! that the projection preserves and the diagonal preconditioner inverts
-        ! exactly, and check that the step deviates from the Newton step by roughly
-        ! the size of the perturbation, stays in the projected subspace and needs no
-        ! more micro iterations than without the perturbation
-        call setup_settings(settings)
-        settings%grad_noise = 0.0_rp
-        settings%project => mock_project
-        call setup_truncation_model(.false., func, h_diag)
-        grad_norm = norm2(overflow_grad)
-        newton_solution = -overflow_grad / h_diag
-        trust_radius = 10.0_rp
-        obj_func_funptr => overflow_obj_func
-        hess_x_funptr => overflow_hess_x
-        call level_shifted_davidson(func, overflow_grad, grad_norm, h_diag, n_param, &
-                                    obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, solution_norm, mu, imicro, &
-                                    imicro_jacobi_davidson, jacobi_davidson_started, &
-                                    max_precision_reached, error)
-        imicro_ref = imicro
-        settings%grad_noise = 1e-2_rp
-        trust_radius = 10.0_rp
-        call level_shifted_davidson(func, overflow_grad, grad_norm, h_diag, n_param, &
-                                    obj_func_funptr, hess_x_funptr, settings, &
-                                    trust_radius, solution, solution_norm, mu, imicro, &
-                                    imicro_jacobi_davidson, jacobi_davidson_started, &
-                                    max_precision_reached, error)
-        if (error /= 0) then
-            write(stderr, *) "test_level_shifted_davidson failed: Produced error "// &
-                "for perturbed gradient."
-            test_level_shifted_davidson = .false.
-        end if
-        if (norm2(solution - newton_solution) < &
-            0.1_rp * settings%grad_noise * grad_norm / maxval(h_diag)) then
-            write(stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not solve a perturbed system for perturbed gradient."
-            test_level_shifted_davidson = .false.
-        end if
-        if (norm2(solution - newton_solution) > &
-            10.0_rp * settings%grad_noise * grad_norm / minval(h_diag)) then
-            write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
-                "deviates from the Newton step by more than the perturbation for "// &
-                "perturbed gradient."
-            test_level_shifted_davidson = .false.
-        end if
-        if (abs(solution(1) - solution(2)) > tol) then
-            write(stderr, *) "test_level_shifted_davidson failed: Solution leaves "// &
-                "the subspace of the projection for perturbed gradient."
-            test_level_shifted_davidson = .false.
-        end if
-        if (imicro > imicro_ref) then
-            write(stderr, *) "test_level_shifted_davidson failed: Perturbed "// &
-                "gradient needs more micro iterations than the unperturbed one."
-            test_level_shifted_davidson = .false.
-        end if
+        ! exactly, after a subproblem solved in either region, and check that the
+        ! step deviates from the Newton step by roughly the size of the perturbation,
+        ! which is the reduction factor of that region, stays in the
+        ! projected subspace and needs no more micro iterations than without the
+        ! perturbation
+        do i = 1, 2
+            local_region = i == 2
+            region_str = merge("local ", "global", local_region)
+            call setup_settings(settings)
+            settings%grad_noise = .false.
+            settings%project => mock_project
+            call setup_truncation_model(.false., func, h_diag)
+            grad_norm = norm2(overflow_grad)
+            newton_solution = -overflow_grad / h_diag
+            trust_radius = 10.0_rp
+            obj_func_funptr => overflow_obj_func
+            hess_x_funptr => overflow_hess_x
+            call level_shifted_davidson( &
+                func, overflow_grad, grad_norm, h_diag, n_param, obj_func_funptr, &
+                hess_x_funptr, settings, local_region, trust_radius, solution, &
+                solution_norm, mu, imicro, imicro_jacobi_davidson, &
+                jacobi_davidson_started, max_precision_reached, error)
+            imicro_ref = imicro
+            settings%grad_noise = .true.
+            noise = merge(settings%local_red_factor, settings%global_red_factor, &
+                          local_region)
+            trust_radius = 10.0_rp
+            call level_shifted_davidson( &
+                func, overflow_grad, grad_norm, h_diag, n_param, obj_func_funptr, &
+                hess_x_funptr, settings, local_region, trust_radius, solution, &
+                solution_norm, mu, imicro, imicro_jacobi_davidson, &
+                jacobi_davidson_started, max_precision_reached, error)
+            if (error /= 0) then
+                write(stderr, *) "test_level_shifted_davidson failed: Produced "// &
+                    "error for perturbed gradient in "//trim(region_str)//" region."
+                test_level_shifted_davidson = .false.
+            end if
+            if (norm2(solution - newton_solution) < &
+                0.1_rp * noise * grad_norm / maxval(h_diag)) then
+                write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
+                    "does not solve a perturbed system for perturbed gradient in "// &
+                    trim(region_str)//" region."
+                test_level_shifted_davidson = .false.
+            end if
+            if (norm2(solution - newton_solution) > &
+                10.0_rp * noise * grad_norm / minval(h_diag)) then
+                write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
+                    "deviates from the Newton step by more than the perturbation "// &
+                    "for perturbed gradient in "//trim(region_str)//" region."
+                test_level_shifted_davidson = .false.
+            end if
+            if (abs(solution(1) - solution(2)) > tol) then
+                write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
+                    "leaves the subspace of the projection for perturbed gradient "// &
+                    "in "//trim(region_str)//" region."
+                test_level_shifted_davidson = .false.
+            end if
+            if (imicro > imicro_ref) then
+                write(stderr, *) "test_level_shifted_davidson failed: Perturbed "// &
+                    "gradient needs more micro iterations than the unperturbed one "// &
+                    "in "//trim(region_str)//" region."
+                test_level_shifted_davidson = .false.
+            end if
+        end do
 
     contains
 
@@ -4503,9 +4498,9 @@ contains
             ! run level-shifted Davidson
             call level_shifted_davidson( &
                 func, grad, grad_norm, h_diag, n_param, obj_func_funptr, &
-                hess_x_funptr, settings, trust_radius, solution, solution_norm, mu, &
-                imicro, imicro_jacobi_davidson, jacobi_davidson_started, &
-                max_precision_reached, error)
+                hess_x_funptr, settings, .false., trust_radius, solution, &
+                solution_norm, mu, imicro, imicro_jacobi_davidson, &
+                jacobi_davidson_started, max_precision_reached, error)
 
             if (error /= 0) then
                 write(stderr, *) "test_level_shifted_davidson failed: Produced "// &
@@ -4599,7 +4594,7 @@ contains
             trust_radius_expand_ratio, trust_radius_shrink_factor, &
             trust_radius_expand_factor, default_settings => default_solver_settings
 
-        real(rp) :: func, trust_radius, ratio, solution_norm
+        real(rp) :: func, trust_radius, ratio, solution_norm, noise
         real(rp), dimension(n_param) :: grad, h_diag, newton_solution, solution, &
                                         scaled_solution
         integer(ip) :: i, imicro, error
@@ -4613,7 +4608,7 @@ contains
 
         ! setup settings object
         call setup_settings(settings)
-        settings%grad_noise = 0.0_rp
+        settings%grad_noise = .false.
         settings%n_micro = 50
 
         ! initialize variables
@@ -4776,9 +4771,11 @@ contains
         ! run truncated conjugate gradient with a random perturbation of the gradient
         ! and a preconditioner which does not project, and determine if the solution
         ! stays in the subspace of the projection and deviates from the Newton step
-        ! by roughly the requested relative size of the perturbation
+        ! by roughly the relative size of the perturbation, the local reduction factor
+        ! truncated conjugate gradient always solves to
         call setup_settings(settings)
-        settings%grad_noise = 1e-2_rp
+        settings%grad_noise = .true.
+        noise = settings%local_red_factor
         settings%precond_pd => mock_precond_pd
         settings%project => mock_project
         call setup_truncation_model(.false., func, h_diag)
@@ -4801,13 +4798,13 @@ contains
             test_truncated_conjugate_gradient = .false.
         end if
         if (norm2(solution - newton_solution) < &
-            0.1_rp * settings%grad_noise * norm2(overflow_grad) / maxval(h_diag)) then
+            0.1_rp * noise * norm2(overflow_grad) / maxval(h_diag)) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not solve a perturbed system for perturbed gradient."
             test_truncated_conjugate_gradient = .false.
         end if
         if (norm2(solution - newton_solution) > &
-            10.0_rp * settings%grad_noise * norm2(overflow_grad) / minval(h_diag)) then
+            10.0_rp * noise * norm2(overflow_grad) / minval(h_diag)) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "deviates from the Newton step by more than the perturbation for "// &
                 "perturbed gradient."
@@ -4827,21 +4824,22 @@ contains
             trust_radius_expand_factor, precond_rel_floor_factor, &
             default_settings => default_solver_settings
 
-        real(rp) :: func, trust_radius, lambda, ratio, solution_norm
+        real(rp) :: func, trust_radius, lambda, ratio, solution_norm, noise
         real(rp), dimension(n_param) :: grad, h_diag, newton_solution, solution, &
                                         scaled_solution, residual, precond
         integer(ip) :: i, imicro, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
         type(solver_settings_type) :: settings
-        logical :: max_precision_reached
+        logical :: max_precision_reached, local_region
+        character(len=6) :: region_str
 
         ! assume tests pass
         test_generalized_lanczos_trust_region = .true.
 
         ! setup settings object
         call setup_settings(settings)
-        settings%grad_noise = 0.0_rp
+        settings%grad_noise = .false.
 
         ! initialize variables
         trust_radius = 0.4_rp
@@ -4860,7 +4858,7 @@ contains
         ! solution stays within trust region and describes the Newton step
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -4894,10 +4892,10 @@ contains
         ! run generalized Lanczos trust region with perturbation, check if error has
         ! occured, whether the Lagrange multiplier shift vanishes and whether the
         ! solution stays within trust region and reduces the function value
-        settings%grad_noise = 1e-2_rp
+        settings%grad_noise = .true.
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -4934,10 +4932,10 @@ contains
         ! achieve this, so this also implicitly checks that this fallback still
         ! produces a valid, converged solution
         settings%trust_region_shape = "spherical"
-        settings%grad_noise = 0.0_rp
+        settings%grad_noise = .false.
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -4960,7 +4958,7 @@ contains
         trust_radius = 0.4_rp
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -4971,7 +4969,7 @@ contains
         trust_radius = 0.4_rp
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, scaled_solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, scaled_solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -5000,7 +4998,7 @@ contains
         ! lies at the trust region boundary and describes a level-shifted Newton step
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -5040,7 +5038,7 @@ contains
         trust_radius = 0.4_rp
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -5070,10 +5068,10 @@ contains
         ! run generalized Lanczos trust region with perturbation, check if error has
         ! occured, whether the Lagrange multiplier is positive and whether the solution
         ! lies at the trust region boundary and reduces the function value
-        settings%grad_noise = 1e-2_rp
+        settings%grad_noise = .true.
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            trust_radius, solution, solution_norm, lambda, imicro, &
+            .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -5111,7 +5109,7 @@ contains
         ! refresh is requested, so that the next step is the Newton step of the true
         ! model and accepted
         call setup_settings(settings)
-        settings%grad_noise = 0.0_rp
+        settings%grad_noise = .false.
         settings%refresh_hess = .true.
         call setup_refresh_model(func, h_diag)
         trust_radius = 0.4_rp
@@ -5119,7 +5117,7 @@ contains
         hess_x_funptr => refresh_mock_hess_x
         call generalized_lanczos_trust_region( &
             func, refresh_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
-            settings, trust_radius, solution, solution_norm, lambda, imicro, &
+            settings, .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
@@ -5143,45 +5141,57 @@ contains
         end if
 
         ! run generalized Lanczos trust region with a random perturbation of the
-        ! gradient and a preconditioner which does not project, and determine if the
-        ! solution stays in the subspace of the projection and deviates from the
-        ! Newton step by roughly the requested relative size of the perturbation
-        call setup_settings(settings)
-        settings%grad_noise = 1e-2_rp
-        settings%precond_pd => mock_precond_pd
-        settings%project => mock_project
-        call setup_truncation_model(.false., func, h_diag)
-        newton_solution = -overflow_grad / h_diag
-        trust_radius = 10.0_rp
-        obj_func_funptr => overflow_obj_func
-        hess_x_funptr => overflow_hess_x
-        call generalized_lanczos_trust_region( &
-            func, overflow_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
-            settings, trust_radius, solution, solution_norm, lambda, imicro, &
-            max_precision_reached, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error for perturbed gradient."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        if (abs(solution(1) - solution(2)) > tol) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution leaves the subspace of the projection for perturbed gradient."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        if (norm2(solution - newton_solution) < &
-            0.1_rp * settings%grad_noise * norm2(overflow_grad) / maxval(h_diag)) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not solve a perturbed system for perturbed gradient."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        if (norm2(solution - newton_solution) > &
-            10.0_rp * settings%grad_noise * norm2(overflow_grad) / minval(h_diag)) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution deviates from the Newton step by more than the "// &
-                "perturbation for perturbed gradient."
-            test_generalized_lanczos_trust_region = .false.
-        end if
+        ! gradient and a preconditioner which does not project, after a subproblem
+        ! solved in either region, and determine if the solution stays in the
+        ! subspace of the projection and deviates from the Newton step by roughly the
+        ! relative size of the perturbation, which is the reduction factor of that
+        ! region
+        do i = 1, 2
+            local_region = i == 2
+            region_str = merge("local ", "global", local_region)
+            call setup_settings(settings)
+            settings%grad_noise = .true.
+            noise = merge(settings%local_red_factor, settings%global_red_factor, &
+                          local_region)
+            settings%precond_pd => mock_precond_pd
+            settings%project => mock_project
+            call setup_truncation_model(.false., func, h_diag)
+            newton_solution = -overflow_grad / h_diag
+            trust_radius = 10.0_rp
+            obj_func_funptr => overflow_obj_func
+            hess_x_funptr => overflow_hess_x
+            call generalized_lanczos_trust_region( &
+                func, overflow_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
+                settings, local_region, trust_radius, solution, solution_norm, lambda, &
+                imicro, max_precision_reached, error)
+            if (error /= 0) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Produced error for perturbed gradient in "//trim(region_str)// &
+                    " region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+            if (abs(solution(1) - solution(2)) > tol) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Solution leaves the subspace of the projection for perturbed "// &
+                    "gradient in "//trim(region_str)//" region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+            if (norm2(solution - newton_solution) < &
+                0.1_rp * noise * norm2(overflow_grad) / maxval(h_diag)) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Solution does not solve a perturbed system for perturbed "// &
+                    "gradient in "//trim(region_str)//" region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+            if (norm2(solution - newton_solution) > &
+                10.0_rp * noise * norm2(overflow_grad) / minval(h_diag)) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Solution deviates from the Newton step by more than the "// &
+                    "perturbation for perturbed gradient in "//trim(region_str)// &
+                    " region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+        end do
 
         ! run generalized Lanczos trust region without Hessian refresh on a quadratic
         ! model whose boundary step rotates one parameter by more than pi/4, so that it
@@ -5190,7 +5200,7 @@ contains
         ! determine if a new Lanczos process is started instead of evaluating an empty
         ! step
         call setup_settings(settings)
-        settings%grad_noise = 0.0_rp
+        settings%grad_noise = .false.
         settings%n_micro = 2
         settings%local_red_factor = 1e-6_rp
         settings%global_red_factor = 1e-6_rp
@@ -5202,7 +5212,7 @@ contains
         hess_x_funptr => overflow_hess_x
         call generalized_lanczos_trust_region( &
             func, overflow_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
-            settings, trust_radius, solution, solution_norm, lambda, imicro, &
+            settings, .false., trust_radius, solution, solution_norm, lambda, imicro, &
             max_precision_reached, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &

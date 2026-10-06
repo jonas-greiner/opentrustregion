@@ -166,9 +166,9 @@ module c_interface
     type, bind(C) :: solver_settings_type_c
         type(c_funptr) :: precond, precond_pd, project, get_extra_trial_vectors, &
                           conv_check, stability_hess_x, logger
-        logical(c_bool) :: stability, line_search, refresh_hess, hess_symm, initialized
-        real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, &
-                      local_red_factor, grad_noise
+        logical(c_bool) :: stability, line_search, refresh_hess, grad_noise, &
+                           hess_symm, initialized
+        real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
                          n_micro, jacobi_davidson_start, seed, verbose
         character(kind=c_char) :: subsystem_solver(kw_len + 1)
@@ -800,6 +800,7 @@ contains
             settings%stability = logical(settings_c%stability)
             settings%line_search = logical(settings_c%line_search)
             settings%refresh_hess = logical(settings_c%refresh_hess)
+            settings%grad_noise = logical(settings_c%grad_noise)
             settings%hess_symm = logical(settings_c%hess_symm)
 
             ! convert reals
@@ -807,7 +808,6 @@ contains
             settings%start_trust_radius = real(settings_c%start_trust_radius, kind=rp)
             settings%global_red_factor = real(settings_c%global_red_factor, kind=rp)
             settings%local_red_factor = real(settings_c%local_red_factor, kind=rp)
-            settings%grad_noise = real(settings_c%grad_noise, kind=rp)
 
             ! convert integers
             settings%n_random_trial_vectors = &
@@ -939,6 +939,7 @@ contains
             settings_c%stability = logical(settings%stability, kind=c_bool)
             settings_c%line_search = logical(settings%line_search, kind=c_bool)
             settings_c%refresh_hess = logical(settings%refresh_hess, kind=c_bool)
+            settings_c%grad_noise = logical(settings%grad_noise, kind=c_bool)
             settings_c%hess_symm = logical(settings%hess_symm, kind=c_bool)
 
             ! convert reals
@@ -946,7 +947,6 @@ contains
             settings_c%start_trust_radius = real(settings%start_trust_radius, kind=c_rp)
             settings_c%global_red_factor = real(settings%global_red_factor, kind=c_rp)
             settings_c%local_red_factor = real(settings%local_red_factor, kind=c_rp)
-            settings_c%grad_noise = real(settings%grad_noise, kind=c_rp)
 
             ! convert integers
             settings_c%n_random_trial_vectors = &

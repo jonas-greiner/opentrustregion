@@ -29,9 +29,9 @@ module test_reference
 
     ! derived types for solver settings
     type ref_settings_type
-        logical :: stability, line_search, refresh_hess, hess_symm, stop_on_instability
-        real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor, &
-                    grad_noise
+        logical :: stability, line_search, refresh_hess, grad_noise, hess_symm, &
+                   stop_on_instability
+        real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
                        n_micro, jacobi_davidson_start, seed, verbose, n_iter
         character(len=kw_len, kind=c_char) :: subsystem_solver, trust_region_shape, &
@@ -39,10 +39,9 @@ module test_reference
     end type
 
     type, bind(C) :: ref_settings_type_c
-        logical(c_bool) :: stability, line_search, refresh_hess, hess_symm, &
-                           stop_on_instability
-        real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, &
-                      local_red_factor, grad_noise
+        logical(c_bool) :: stability, line_search, refresh_hess, grad_noise, &
+                           hess_symm, stop_on_instability
+        real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
                          n_micro, jacobi_davidson_start, seed, verbose, n_iter
         character(kind=c_char) :: subsystem_solver(kw_len + 1), &
@@ -52,12 +51,12 @@ module test_reference
 
     ! general reference parameters
     type(ref_settings_type) :: ref_settings = ref_settings_type( &
-        stability=.true., line_search=.true., refresh_hess=.true., hess_symm=.false., &
-        stop_on_instability=.true., conv_tol=1e-3_rp, start_trust_radius=0.2_rp, &
-        global_red_factor=1e-2_rp, local_red_factor=1e-3_rp, grad_noise=1e-2_rp, &
-        n_random_trial_vectors=5, n_extra_trial_vectors=2, n_macro=300, n_micro=200, &
-        jacobi_davidson_start=10, seed=33, verbose=3, n_iter=50, &
-        subsystem_solver="tcg", diag_solver="jacobi-davidson", &
+        stability=.true., line_search=.true., refresh_hess=.true., grad_noise=.false., &
+        hess_symm=.false., stop_on_instability=.true., conv_tol=1e-3_rp, &
+        start_trust_radius=0.2_rp, global_red_factor=1e-2_rp, &
+        local_red_factor=1e-3_rp, n_random_trial_vectors=5, n_extra_trial_vectors=2, &
+        n_macro=300, n_micro=200, jacobi_davidson_start=10, seed=33, verbose=3, &
+        n_iter=50, subsystem_solver="tcg", diag_solver="jacobi-davidson", &
         trust_region_shape="spherical")
 
     interface assignment(=)
@@ -1574,12 +1573,12 @@ contains
         lhs%stability = rhs%stability
         lhs%line_search = rhs%line_search
         lhs%refresh_hess = rhs%refresh_hess
+        lhs%grad_noise = rhs%grad_noise
         lhs%hess_symm = rhs%hess_symm
         lhs%conv_tol = rhs%conv_tol
         lhs%start_trust_radius = rhs%start_trust_radius
         lhs%global_red_factor = rhs%global_red_factor
         lhs%local_red_factor = rhs%local_red_factor
-        lhs%grad_noise = rhs%grad_noise
         lhs%n_random_trial_vectors = rhs%n_random_trial_vectors
         lhs%n_extra_trial_vectors = rhs%n_extra_trial_vectors
         lhs%n_macro = rhs%n_macro
@@ -1680,13 +1679,13 @@ contains
         lhs%stability = logical(rhs%stability, kind=c_bool)
         lhs%line_search = logical(rhs%line_search, kind=c_bool)
         lhs%refresh_hess = logical(rhs%refresh_hess, kind=c_bool)
+        lhs%grad_noise = logical(rhs%grad_noise, kind=c_bool)
         lhs%hess_symm = logical(rhs%hess_symm, kind=c_bool)
         lhs%stop_on_instability = logical(rhs%stop_on_instability, kind=c_bool)
         lhs%conv_tol = real(rhs%conv_tol, kind=c_rp)
         lhs%start_trust_radius = real(rhs%start_trust_radius, kind=c_rp)
         lhs%global_red_factor = real(rhs%global_red_factor, kind=c_rp)
         lhs%local_red_factor = real(rhs%local_red_factor, kind=c_rp)
-        lhs%grad_noise = real(rhs%grad_noise, kind=c_rp)
         lhs%n_random_trial_vectors = int(rhs%n_random_trial_vectors, kind=c_ip)
         lhs%n_extra_trial_vectors = int(rhs%n_extra_trial_vectors, kind=c_ip)
         lhs%n_macro = int(rhs%n_macro, kind=c_ip)
@@ -1715,12 +1714,12 @@ contains
             (lhs%stability .eqv. rhs%stability) .and. &
             (lhs%line_search .eqv. rhs%line_search) .and. &
             (lhs%refresh_hess .eqv. rhs%refresh_hess) .and. &
+            (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
             abs(lhs%local_red_factor - rhs%local_red_factor) <= tol .and. &
-            abs(lhs%grad_noise - rhs%grad_noise) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &
@@ -1860,13 +1859,13 @@ contains
             (lhs%stability .eqv. rhs%stability) .and. &
             (lhs%line_search .eqv. rhs%line_search) .and. &
             (lhs%refresh_hess .eqv. rhs%refresh_hess) .and. &
+            (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             (lhs%initialized .eqv. rhs%initialized) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
             abs(lhs%local_red_factor - rhs%local_red_factor) <= tol .and. &
-            abs(lhs%grad_noise - rhs%grad_noise) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &

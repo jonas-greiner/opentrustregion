@@ -193,6 +193,7 @@ The optimization process can be fine-tuned using the following settings:
 - **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians.
 - **`line_search`** (boolean): Determines whether a line search is performed after every macro iteration.
 - **`refresh_hess`** (boolean): Determines whether the subsystem solver rebuilds its Hessian information after every rejected trust-region step, since the Hessian linear transformation may have changed with the objective function evaluation at the rejected point.
+- **`grad_noise`** (boolean): Determines whether the gradient is perturbed by a random vector before every subsystem solve. The perturbation keeps the solution from remaining exactly within a symmetry subspace of the starting point, which a Hessian with no negative curvature outside that subspace, or no information about it, cannot otherwise leave. Its norm is the micro-iteration reduction factor (`local_red_factor` or `global_red_factor`) of the region the previous subproblem was solved in, the first counting as global, and always `local_red_factor` for `"tcg"`, which always solves to it, times the gradient norm, so that it goes to zero together with the gradient at convergence; the micro iterations are never asked to reduce the residual below this relative size, so that they do not resolve the perturbation itself, whichever region the subproblem turns out to be solved in.
 - **`subsystem_solver`** (string): Specifies which subsystem solver to use. Options include:
   - `"davidson_ls"`: generalized Davidson method applied to linear system,
   - `"jacobi-davidson_ls"`: generalized Davidson method applied to linear system with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
@@ -202,7 +203,6 @@ The optimization process can be fine-tuned using the following settings:
   - `"gltr"`: generalized Lanczos trust region method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations of the Davidson-family subsystem solvers.
-- **`grad_noise`** (real): Relative size of the random vector the gradient is perturbed by before every subsystem solve, as a fraction of the gradient norm, projected with `project` when provided (`0` disables the perturbation). The perturbation keeps the solution from remaining exactly within a symmetry subspace of the starting point, which an approximate Hessian with no negative curvature outside that subspace cannot otherwise leave, and goes to zero together with the gradient at convergence.
 - **`n_extra_trial_vectors`** (integer): Number of non-random trial vectors added alongside the gradient direction to initialize the micro iterations, on top of the `n_random_trial_vectors` random ones. These are taken from `get_extra_trial_vectors` when that callback is provided, and are otherwise unit vectors along the lowest Hessian diagonal elements, added only where those indicate negative curvature. Vectors that vanish or are linearly dependent on the gradient direction are dropped.
 - **`start_trust_radius`** (real): Initial trust radius.
 - **`trust_region_shape`** (string): Only used by the `"tcg"` and `"gltr"` subsystem solvers (the Davidson-family solvers always use a spherical trust region). Options include:
@@ -211,8 +211,8 @@ The optimization process can be fine-tuned using the following settings:
 - **`n_macro`** (integer): Maximum number of macro iterations.
 - **`n_micro`** (integer): Maximum number of micro iterations.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
-- **`global_red_factor`** (real): Reduction factor for the residual during micro iterations in the global region.
-- **`local_red_factor`** (real): Reduction factor for the residual during micro iterations in the local region.
+- **`global_red_factor`** (real): Reduction factor for the residual during micro iterations in the global region, also the relative size of the gradient perturbation there (see `grad_noise`).
+- **`local_red_factor`** (real): Reduction factor for the residual during micro iterations in the local region, also the relative size of the gradient perturbation there (see `grad_noise`).
 - **`verbose`** (integer): Controls the verbosity of output during optimization.
 - **`seed`** (integer): Seed value for generating random trial vectors and the random gradient perturbation.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout.

@@ -211,8 +211,8 @@ module opentrustregion
     end type
 
     type, extends(optimizer_settings_type) :: solver_settings_type
-        logical :: stability, line_search, refresh_hess
-        real(rp) :: start_trust_radius, global_red_factor, local_red_factor, grad_noise
+        logical :: stability, line_search, refresh_hess, grad_noise
+        real(rp) :: start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_macro, n_micro
         character(len=kw_len) :: subsystem_solver, trust_region_shape
         type(stability_settings_type) :: stability_settings
@@ -237,9 +237,9 @@ module opentrustregion
             precond=null(), precond_pd=null(), project=null(), conv_check=null(), &
             get_extra_trial_vectors=null(), stability_hess_x=null(), logger=null(), &
             stability=.false., line_search=.false., refresh_hess=.false., &
-            hess_symm=.true., initialized=.true., conv_tol=1e-5_rp, &
+            grad_noise=.true., hess_symm=.true., initialized=.true., conv_tol=1e-5_rp, &
             start_trust_radius=-1.0_rp, global_red_factor=1e-3_rp, &
-            local_red_factor=1e-4_rp, grad_noise=1e-4_rp, n_random_trial_vectors=0, &
+            local_red_factor=1e-4_rp, n_random_trial_vectors=0, &
             n_extra_trial_vectors=1, n_macro=150, n_micro=50, &
             jacobi_davidson_start=30, seed=42, verbose=0, &
             subsystem_solver="davidson_ls", trust_region_shape="none", &
@@ -272,7 +272,7 @@ contains
                     lambda, min_eigval
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:), precond_kappa(:)
         logical :: max_precision_reached, macro_converged, stable, &
-                   jacobi_davidson_started, conv_check_passed
+                   jacobi_davidson_started, conv_check_passed, local_region
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson
         character(len=300) :: msg
         procedure(hess_x_type), pointer :: hess_x_funptr, stability_hess_x_funptr
@@ -280,6 +280,10 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! the first subproblem is perturbed as one in the global region, every later
+        ! one as one in the region the previous subproblem was solved in
+        local_region = .false.
 
         ! reset global counter variables so they do not accumulate across calls if a
         ! previous call returned early on error or non-convergence
@@ -458,8 +462,8 @@ contains
                 ! solve trust region subproblem with (Jacobi-)Davidson
                 call level_shifted_davidson( &
                     func, grad, grad_norm, h_diag, n_param, obj_func, hess_x_funptr, &
-                    settings, trust_radius, kappa, kappa_norm, mu, imicro, &
-                    imicro_jacobi_davidson, jacobi_davidson_started, &
+                    settings, local_region, trust_radius, kappa, kappa_norm, mu, &
+                    imicro, imicro_jacobi_davidson, jacobi_davidson_started, &
                     max_precision_reached, error)
             else if (settings%subsystem_solver == "tcg") then
                 ! solve trust region subproblem with truncated conjugate gradient
@@ -471,11 +475,19 @@ contains
                 ! solve trust region subproblem with generalized Lanczos
                 call generalized_lanczos_trust_region( &
                     func, grad, h_diag, n_param, obj_func, hess_x_funptr, settings, &
-                    trust_radius, kappa, kappa_norm, lambda, imicro, &
+                    local_region, trust_radius, kappa, kappa_norm, lambda, imicro, &
                     max_precision_reached, error)
             end if
             call add_error_origin(error, error_solver, settings)
             if (error /= 0) return
+
+            ! remember the region the subproblem was solved in, which sets the size of
+            ! the gradient perturbation of the next one
+            if (string_in("davidson", settings%subsystem_solver)) then
+                local_region = abs(mu) < level_shift_local_thres
+            else if (settings%subsystem_solver == "gltr") then
+                local_region = abs(lambda) < level_shift_local_thres
+            end if
 
             ! perform line search
             if (max_precision_reached) then
@@ -2732,8 +2744,8 @@ contains
 
     subroutine level_shifted_davidson( &
         func, grad, grad_norm, h_diag, n_param, obj_func, hess_x_funptr, settings, &
-        trust_radius, solution, solution_norm, mu, imicro, imicro_jacobi_davidson, &
-        jacobi_davidson_started, max_precision_reached, error)
+        local_region, trust_radius, solution, solution_norm, mu, imicro, &
+        imicro_jacobi_davidson, jacobi_davidson_started, max_precision_reached, error)
         !
         ! this subroutine performs level-shifted (Jacobi-)Davidson to solve the trust
         ! region subproblem
@@ -2743,6 +2755,7 @@ contains
         procedure(obj_func_type), pointer, intent(in) :: obj_func
         procedure(hess_x_type), pointer, intent(in) :: hess_x_funptr
         type(solver_settings_type), intent(in) :: settings
+        logical, intent(in) :: local_region
         real(rp), intent(inout) :: trust_radius
         real(rp), intent(out) :: solution(:), solution_norm, mu
         integer(ip), intent(out) :: imicro, imicro_jacobi_davidson, error
@@ -2774,13 +2787,10 @@ contains
         ! negative curvature out of that subspace
         perturbed_grad = grad
         perturbed_grad_norm = grad_norm
-        if (settings%grad_noise > 0.0_rp) then
-            call perturb_vector(perturbed_grad, settings%grad_noise)
-            if (associated(settings%project)) then
-                call settings%project(perturbed_grad, error)
-                call add_error_origin(error, error_project, settings)
-                if (error /= 0) return
-            end if
+        if (settings%grad_noise) then
+            call perturb_vector(perturbed_grad, noise_level(settings, local_region), &
+                                settings, error)
+            if (error /= 0) return
             perturbed_grad_norm = dnrm2(n_param, perturbed_grad, 1_ip)
         end if
 
@@ -2881,12 +2891,13 @@ contains
                 residual_norm = dnrm2(n_param, residual, 1_ip)
 
                 ! determine reduction factor depending on whether local region is
-                ! reached
+                ! reached, never below the gradient perturbation
                 if (abs(mu) < level_shift_local_thres) then
                     red_factor = settings%local_red_factor
                 else
                     red_factor = settings%global_red_factor
                 end if
+                red_factor = max(red_factor, noise_level(settings, local_region))
 
                 ! get normalized solution vector
                 solution_normalized = solution / dnrm2(n_param, solution, 1_ip)
@@ -3082,7 +3093,7 @@ contains
         integer(ip), intent(out) :: n_micro, error
         logical, intent(out) :: max_precision_reached
 
-        real(rp), allocatable :: residual(:), vector(:), basis_vec(:)
+        real(rp), allocatable :: residual(:), vector(:), basis_vec(:), perturbed_grad(:)
         real(rp) :: new_func, pred_func, conv_tol, step_size, trial_solution_dot, &
                     basis_vec_dot, solution_dot, solution_basis_vec_dot, residual_dot, &
                     residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
@@ -3108,6 +3119,17 @@ contains
         ! allocate space for vectors
         allocate(residual(n_param), vector(n_param), basis_vec(n_param))
 
+        ! perturb the gradient once for the whole subproblem, so that the restart
+        ! after a rejected step solves the same perturbed problem, by noise relative
+        ! to the local reduction factor, since truncated conjugate gradient always
+        ! solves to it
+        perturbed_grad = grad
+        if (settings%grad_noise) then
+            call perturb_vector(perturbed_grad, noise_level(settings, .true.), &
+                                settings, error)
+            if (error /= 0) return
+        end if
+
         ! iterate until step is accepted
         accept_step = .false.
         do while (.not. accept_step)
@@ -3115,15 +3137,7 @@ contains
             micro_converged = .false.
 
             ! reset problem
-            residual = grad
-            if (settings%grad_noise > 0.0_rp) then
-                call perturb_vector(residual, settings%grad_noise)
-                if (associated(settings%project)) then
-                    call settings%project(residual, error)
-                    call add_error_origin(error, error_project, settings)
-                    if (error /= 0) exit
-                end if
-            end if
+            residual = perturbed_grad
             solution = 0.0_rp
 
             ! initialize micro iteration convergence flag
@@ -3301,13 +3315,14 @@ contains
         end do
 
         ! deallocate vectors
-        deallocate(residual, vector, basis_vec)
+        deallocate(residual, vector, basis_vec, perturbed_grad)
 
     end subroutine truncated_conjugate_gradient
 
     subroutine generalized_lanczos_trust_region( &
-        func, grad, h_diag, n_param, obj_func, hess_x_funptr, settings, trust_radius, &
-        solution, solution_norm, lambda, n_micro, max_precision_reached, error)
+        func, grad, h_diag, n_param, obj_func, hess_x_funptr, settings, local_region, &
+        trust_radius, solution, solution_norm, lambda, n_micro, max_precision_reached, &
+        error)
         !
         ! this subroutine performs generalized lanczos trust region to solve the trust
         ! region subproblem, this implementation is based on the implementation of GLTR
@@ -3318,16 +3333,17 @@ contains
         procedure(obj_func_type), intent(in), pointer :: obj_func
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         type(solver_settings_type), intent(in) :: settings
+        logical, intent(in) :: local_region
         real(rp), intent(inout) :: trust_radius
         real(rp), intent(out) :: solution(:), solution_norm, lambda
         integer(ip), intent(out) :: n_micro, error
         logical, intent(out) :: max_precision_reached
 
-        real(rp), allocatable :: residual(:), eigenvec(:), lanczos_diag(:), &
-                                 lanczos_off_diag(:), lanczos_diag_fact(:), &
-                                 lanczos_off_diag_fact(:), red_space_rhs(:), &
-                                 red_space_solution(:), red_space_eigenvec(:), &
-                                 work(:), stepsize_list(:), residual_dot_list(:)
+        real(rp), allocatable :: &
+            residual(:), eigenvec(:), lanczos_diag(:), lanczos_off_diag(:), &
+            lanczos_diag_fact(:), lanczos_off_diag_fact(:), red_space_rhs(:), &
+            red_space_solution(:), red_space_eigenvec(:), work(:), stepsize_list(:), &
+            residual_dot_list(:), perturbed_grad(:)
         real(rp) :: new_func, func_diff, lowest_eigval, hard_case_step_size, tau, &
                     pred_func, red_factor, conv_tol
         integer(ip) :: n_first_pass, n_second_pass, n_saved, n_red_space
@@ -3365,6 +3381,16 @@ contains
         ! more efficient processing in the second pass
         allocate(stepsize_list(settings%n_micro), residual_dot_list(settings%n_micro))
 
+        ! perturb the gradient once for the whole subproblem, so that every Lanczos
+        ! process started for it, after a rejected step or when a smaller trust radius
+        ! cannot reuse the stored factorization, solves the same perturbed problem
+        perturbed_grad = grad
+        if (settings%grad_noise) then
+            call perturb_vector(perturbed_grad, noise_level(settings, local_region), &
+                                settings, error)
+            if (error /= 0) return
+        end if
+
         ! iterate until step is accepted
         accept_step = .false.
         do while (.not. accept_step)
@@ -3373,15 +3399,7 @@ contains
             new_lanczos = .false.
 
             ! reset problem
-            residual = grad
-            if (settings%grad_noise > 0.0_rp) then
-                call perturb_vector(residual, settings%grad_noise)
-                if (associated(settings%project)) then
-                    call settings%project(residual, error)
-                    call add_error_origin(error, error_project, settings)
-                    if (error /= 0) exit
-                end if
-            end if
+            residual = perturbed_grad
             solution = 0.0_rp
             eigenvec = 0.0_rp
 
@@ -3397,7 +3415,8 @@ contains
                         red_space_eigenvec, work, stepsize_list, residual_dot_list, &
                         pred_func, lambda, solution_norm, lowest_eigval, tau, &
                         micro_converged, interior, hard_case, hard_case_step_size, &
-                        n_first_pass, n_red_space, n_saved, settings, error)
+                        n_first_pass, n_red_space, n_saved, &
+                        noise_level(settings, local_region), settings, error)
                     if (error /= 0) exit gltr_minimizer
 
                     ! check if number of micro iterations has exceeded limit or if
@@ -3434,12 +3453,13 @@ contains
                     pred_func = func + func_diff
 
                     ! determine reduction factor depending on whether local region is
-                    ! reached
+                    ! reached, never below the gradient perturbation
                     if (abs(lambda) < level_shift_local_thres) then
                         red_factor = settings%local_red_factor
                     else
                         red_factor = settings%global_red_factor
                     end if
+                    red_factor = max(red_factor, noise_level(settings, local_region))
 
                     ! compute the stopping tolerance from the initial residual of the
                     ! first pass which is measured in the same preconditioner metric as
@@ -3513,7 +3533,7 @@ contains
         deallocate(residual, eigenvec, lanczos_diag, lanczos_off_diag, &
                    lanczos_diag_fact, lanczos_off_diag_fact, red_space_rhs, &
                    red_space_solution, red_space_eigenvec, work, stepsize_list, &
-                   residual_dot_list)
+                   residual_dot_list, perturbed_grad)
 
     end subroutine generalized_lanczos_trust_region
 
@@ -3636,14 +3656,6 @@ contains
             write(msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
                 settings%n_random_trial_vectors, "."
             call settings%log(msg, verbosity_warning)
-        end if
-
-        ! check that the gradient perturbation is not negative
-        if (settings%grad_noise < 0.0_rp) then
-            call settings%log("Gradient noise should not be negative.", &
-                              verbosity_error, .true.)
-            error = 1
-            return
         end if
 
         ! check whether the extra trial vector function has anything to fill
@@ -3846,12 +3858,12 @@ contains
         red_space_rhs, red_space_solution, red_space_eigenvec, work, stepsize_list, &
         residual_dot_list, pred_func, lambda, solution_norm, lowest_eigval, tau, &
         micro_converged, interior, hard_case, hard_case_step_size, imicro, &
-        n_red_space, n_saved, settings, error)
+        n_red_space, n_saved, noise, settings, error)
         !
         ! this subroutine performs the first Lanczos pass to compute the tridiagonal
         ! matrix and the right hand side of the reduced problem
         !
-        real(rp), intent(in) :: func, h_diag(:), trust_radius
+        real(rp), intent(in) :: func, h_diag(:), trust_radius, noise
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(inout) :: residual(:), solution(:), eigenvec(:)
         real(rp), intent(out) :: &
@@ -4008,12 +4020,14 @@ contains
                 red_space_rhs(1) = residual_norm
             end if
 
-            ! determine reduction factor depending on whether local region is reached
+            ! determine reduction factor depending on whether local region is reached,
+            ! never below the gradient perturbation
             if (abs(lambda) < level_shift_local_thres) then
                 red_factor = settings%local_red_factor
             else
                 red_factor = settings%global_red_factor
             end if
+            red_factor = max(red_factor, noise)
 
             ! compute the stopping tolerance from the initial residual which is
             ! measured in the same preconditioner metric as the residuals it is
@@ -4419,30 +4433,74 @@ contains
 
     end subroutine gltr_second_pass
 
-    subroutine perturb_vector(vector, noise)
+    subroutine perturb_vector(vector, noise, settings, error)
         !
         ! this subroutine perturbs the input vector by a random vector whose norm is
-        ! the given fraction of the norm of the input vector
+        ! the given fraction of the norm of the input vector; the random vector is
+        ! projected before it is scaled, so that the perturbation keeps its full size
+        ! when a projection removes redundant parameters, and the input vector is
+        ! left unperturbed in the unlikely case that the projection removes every
+        ! random vector drawn
         !
         real(rp), intent(inout) :: vector(:)
         real(rp), intent(in) :: noise
+        type(solver_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
 
-        integer(ip) :: n_param
+        integer(ip) :: n_param, i_draw
         real(rp), allocatable :: random_vector(:)
+        integer(ip), parameter :: max_draws = 10
         real(rp), external :: dnrm2
 
+        ! initialize error flag
+        error = 0
+
+        ! number of parameters
         n_param = size(vector)
+
+        ! draw a random vector until one is left after the projection
         allocate(random_vector(n_param))
-        random_vector = 0.0_rp
-        do while (dnrm2(n_param, random_vector, 1_ip) < numerical_zero)
+        do i_draw = 1, max_draws
             call random_number(random_vector)
             random_vector = 2.0_rp * random_vector - 1.0_rp
+            if (associated(settings%project)) then
+                call settings%project(random_vector, error)
+                call add_error_origin(error, error_project, settings)
+                if (error /= 0) return
+            end if
+            if (dnrm2(n_param, random_vector, 1_ip) >= numerical_zero) then
+                ! scale the random vector to the given fraction of the input norm
+                vector = vector + noise * dnrm2(n_param, vector, 1_ip) * &
+                         random_vector / dnrm2(n_param, random_vector, 1_ip)
+                exit
+            end if
         end do
-        vector = vector + noise * dnrm2(n_param, vector, 1_ip) * random_vector / &
-                 dnrm2(n_param, random_vector, 1_ip)
         deallocate(random_vector)
 
     end subroutine perturb_vector
+
+    function noise_level(settings, local_region) result(noise)
+        !
+        ! this function returns the relative size of the random perturbation of the
+        ! gradient, the micro-iteration reduction factor of the local or the global
+        ! region, or zero if the gradient is not perturbed; the subsystem solvers
+        ! never solve to a smaller relative residual than this, so that they are not
+        ! asked to resolve the perturbation they were given, whichever region the
+        ! subproblem turns out to be solved in
+        !
+        type(solver_settings_type), intent(in) :: settings
+        logical, intent(in) :: local_region
+        real(rp) :: noise
+
+        if (.not. settings%grad_noise) then
+            noise = 0.0_rp
+        else if (local_region) then
+            noise = settings%local_red_factor
+        else
+            noise = settings%global_red_factor
+        end if
+
+    end function noise_level
 
     function get_preconditioned_residual_dot(residual, precond_residual, settings, &
                                              error) result(residual_dot)
