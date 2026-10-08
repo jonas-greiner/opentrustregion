@@ -29,8 +29,8 @@ contains
                                mo_coeff_3d, mock_update_orbs, orbsym_passed
         use otr_mo_test_reference, only: assignment(=), ref_mo_settings, n_mo, &
                                          mo_coeff_pattern, case_irreps, case_names
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle, n_ao_c
-        use otr_common_unit_tests, only: shell_names
+        use otr_common_test_reference, only: n_ao, n_occ, n_particle, n_ao_c, &
+                                             shell_names
         use c_interface_unit_tests, only: mock_logger, test_logger, mock_project
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &

@@ -6,7 +6,7 @@
 
 module otr_arh_c_interface_mock
 
-    use opentrustregion, only: stderr
+    use opentrustregion, only: ip, stderr
     use c_interface, only: c_rp, c_ip
     use otr_arh_test_reference, only: ref_arh_settings
     use otr_arh_c_interface, only: arh_factory_mo_c_wrapper, &
@@ -49,8 +49,7 @@ contains
         use otr_mo_c_interface, only: mo_coeff_3d_c
         use c_interface, only: logger_c_type, solver_settings_type_c, assignment(=)
         use test_reference, only: tol_c
-        use otr_arh_test_reference, only: test_evaluate_dm_os_c_funptr, &
-                                          test_evaluate_dm_cs_c_funptr, operator(/=)
+        use otr_arh_test_reference, only: test_evaluate_dm_c_funptr, operator(/=)
         use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
                                          orbsym_c_ref => orbsym_c, mo_coeff_pattern
         use otr_mo_c_interface_mock, only: mock_update_orbs_mo, orbsym_passed
@@ -112,19 +111,12 @@ contains
         end if
 
         ! test passed density matrix evaluating function
-        if (n_particle_c == 1) then
-            test_arh_factory_mo_interface = &
-                test_arh_factory_mo_interface .and. test_evaluate_dm_cs_c_funptr( &
-                    evaluate_dm_c_funptr, "arh_factory_mo_py_interface", " by "// &
-                    "given density matrix evaluating function with non-linear "// &
-                    "potential contribution")
-        else
-            test_arh_factory_mo_interface = &
-                test_arh_factory_mo_interface .and. test_evaluate_dm_os_c_funptr( &
-                    evaluate_dm_c_funptr, "arh_factory_mo_py_interface", " by "// &
-                    "given density matrix evaluating function with separate same- "// &
-                    "and opposite-spin potential contributions")
-        end if
+        test_arh_factory_mo_interface = &
+            test_arh_factory_mo_interface .and. test_evaluate_dm_c_funptr( &
+                evaluate_dm_c_funptr, int(n_particle_c, kind=ip), &
+                "arh_factory_mo_py_interface", " by given density matrix "// &
+                "evaluating function with Coulomb, exact-exchange and non-linear "// &
+                "potential contributions")
 
         ! get Fortran pointer to passed logging function and call it
         message = "test"//c_null_char
@@ -190,8 +182,7 @@ contains
         use otr_oao_c_interface, only: dm_ao_3d_c
         use test_reference, only: tol_c
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c
-        use otr_arh_test_reference, only: test_evaluate_dm_os_c_funptr, &
-                                          test_evaluate_dm_cs_c_funptr, operator(/=)
+        use otr_arh_test_reference, only: test_evaluate_dm_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
                                           mock_precond_pd, mock_project, &
                                           mock_get_extra_trial_vectors
@@ -234,10 +225,10 @@ contains
 
             ! test passed density matrix evaluating function
             test_arh_factory_oao_interface = &
-                test_arh_factory_oao_interface .and. test_evaluate_dm_cs_c_funptr( &
-                    evaluate_dm_c_funptr, "arh_factory_oao_py_interface", " by "// &
-                    "given density matrix evaluating function with non-linear "// &
-                    "potential contribution")
+                test_arh_factory_oao_interface .and. test_evaluate_dm_c_funptr( &
+                    evaluate_dm_c_funptr, 1_ip, "arh_factory_oao_py_interface", &
+                    " by given density matrix evaluating function with Coulomb, "// &
+                    "exact-exchange and non-linear potential contributions")
 
             ! check if passed number of AOs is correct
             if (n_ao_c /= n_ao_c_ref) then
@@ -269,10 +260,10 @@ contains
 
             ! test passed density matrix evaluating function
             test_arh_factory_oao_interface = &
-                test_arh_factory_oao_interface .and. test_evaluate_dm_os_c_funptr( &
-                    evaluate_dm_c_funptr, "arh_factory_oao_py_interface", " by "// &
-                    "given density matrix evaluating function with separate same- "// &
-                    "and opposite-spin potential contributions")
+                test_arh_factory_oao_interface .and. test_evaluate_dm_c_funptr( &
+                    evaluate_dm_c_funptr, 2_ip, "arh_factory_oao_py_interface", &
+                    " by given density matrix evaluating function with Coulomb, "// &
+                    "exact-exchange and non-linear potential contributions")
 
         ! number of particles is not correct
         else

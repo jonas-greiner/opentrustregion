@@ -854,12 +854,11 @@ contains
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_factory_common, mo_object
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
-        use otr_common_test_reference, only: n_ao, n_occ, &
-                                             n_particle_ref => n_particle, operator(==)
+        use otr_common_test_reference, only: &
+            n_ao, n_occ, n_particle_ref => n_particle, operator(==), shell_names
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_unit_tests, only: shell_names, mock_get_response_cs, &
-                                         mock_get_response_os, mock_evaluate_dm_cs, &
-                                         mock_evaluate_dm_os
+        use otr_common_unit_tests, only: mock_get_response_cs, mock_get_response_os, &
+                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref), &
                             mo_coeff_new(n_ao, n_mo, n_particle_ref)
@@ -1491,9 +1490,10 @@ contains
         use otr_mo, only: obj_func_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
-        use otr_common_unit_tests, only: mock_requests, shell_names, &
-                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, shell_names
+        use otr_common_unit_tests, only: mock_requests, mock_evaluate_dm_cs, &
+                                         mock_evaluate_dm_os
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao), &
@@ -1615,9 +1615,10 @@ contains
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, shell_names
         use otr_common_unit_tests, only: &
-            mock_fock_factor, mock_requests, shell_names, mock_get_response_cs, &
+            mock_fock_factor, mock_requests, mock_get_response_cs, &
             mock_get_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os, &
             mock_evaluate_dm_failing_cs, mock_evaluate_dm_failing_os
 
@@ -1880,10 +1881,11 @@ contains
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
-        use otr_common_unit_tests, only: &
-            generate_random_symm_matrix, mock_requests, mock_response_factor, &
-            shell_names, mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_os
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, shell_names
+        use otr_common_unit_tests, only: generate_random_symm_matrix, mock_requests, &
+                                         mock_response_factor, mock_get_response_cs, &
+                                         mock_get_response_os, mock_evaluate_dm_os
 
         ! step of the finite difference and its tolerance relative to the second
         ! derivative it approximates

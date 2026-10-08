@@ -6,7 +6,7 @@
 
 module otr_mo_c_interface_mock
 
-    use opentrustregion, only: stderr
+    use opentrustregion, only: ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type
     use otr_mo_c_interface, only: mo_factory_c_wrapper, init_mo_settings_c, &
                                   mo_deconstructor_c_wrapper
@@ -78,8 +78,7 @@ contains
                                          orbsym_c_ref => orbsym_c, mo_coeff_pattern, &
                                          operator(/=)
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c, &
-                                             test_evaluate_dm_cs_c_funptr, &
-                                             test_evaluate_dm_os_c_funptr
+                                             test_evaluate_dm_c_funptr
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
                                           mock_precond_pd, mock_get_extra_trial_vectors
 
@@ -137,17 +136,11 @@ contains
         end if
 
         ! test passed density matrix evaluating function
-        if (n_particle_c == 1) then
-            test_mo_factory_interface = &
-                test_mo_factory_interface .and. test_evaluate_dm_cs_c_funptr( &
-                    evaluate_dm_c_funptr, "mo_factory_py_interface", &
-                    " by given density matrix evaluating function")
-        else
-            test_mo_factory_interface = &
-                test_mo_factory_interface .and. test_evaluate_dm_os_c_funptr( &
-                    evaluate_dm_c_funptr, "mo_factory_py_interface", &
-                    " by given density matrix evaluating function")
-        end if
+        test_mo_factory_interface = &
+            test_mo_factory_interface .and. test_evaluate_dm_c_funptr( &
+                evaluate_dm_c_funptr, int(n_particle_c, kind=ip), &
+                "mo_factory_py_interface", &
+                " by given density matrix evaluating function")
 
         ! get Fortran pointer to passed logging function and call it
         message = "test"//c_null_char

@@ -29,8 +29,7 @@ contains
         use otr_oao_mock, only: mock_oao_factory_cs, mock_oao_factory_os, test_passed, &
                                 dm_ao_3d, mock_update_orbs, mock_project_oao
         use otr_oao_test_reference, only: assignment(=), ref_oao_settings
-        use otr_common_test_reference, only: n_ao, n_particle, n_ao_c
-        use otr_common_unit_tests, only: shell_names
+        use otr_common_test_reference, only: n_ao, n_particle, n_ao_c, shell_names
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &

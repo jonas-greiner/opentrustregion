@@ -538,10 +538,10 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_oao, only: oao_factory_common, oao_object
-        use otr_common_test_reference, only: n_ao, n_occ, &
-                                             n_particle_ref => n_particle, operator(==)
+        use otr_common_test_reference, only: &
+            n_ao, n_occ, n_particle_ref => n_particle, operator(==), shell_names
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_unit_tests, only: generate_random_density_matrix, shell_names, &
+        use otr_common_unit_tests, only: generate_random_density_matrix, &
                                          mock_get_response_cs, mock_get_response_os, &
                                          mock_evaluate_dm_cs, mock_evaluate_dm_os
 
@@ -928,14 +928,14 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! OAO basis
         !
-        use otr_common_unit_tests, only: &
-            identity_matrix, generate_random_density_matrix, &
-            generate_random_symm_matrix, mock_requests, shell_names, &
-            mock_evaluate_dm_cs, mock_evaluate_dm_os
+        use otr_common_unit_tests, only: identity_matrix, &
+                                         generate_random_density_matrix, &
+                                         generate_random_symm_matrix, mock_requests, &
+                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: obj_func_oao_callback, oao_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_param
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ
+        use otr_common_test_reference, only: n_ao, n_particle, n_occ, shell_names
 
         real(rp), parameter :: angle = 0.3_rp
 
@@ -1062,14 +1062,15 @@ contains
         !
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
-            generate_random_symm_matrix, mock_fock_factor, mock_requests, shell_names, &
+            generate_random_symm_matrix, mock_fock_factor, mock_requests, &
             mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_cs, &
             mock_evaluate_dm_os, mock_evaluate_dm_failing_cs, &
             mock_evaluate_dm_failing_os
         use otr_oao, only: update_orbs_oao_callback, oao_object, hess_x_oao_callback_ptr
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, shell_names
 
         real(rp), allocatable, target :: dm_ao(:, :, :)
         real(rp), allocatable :: dm_oao(:, :, :), kappa(:), grad(:), h_diag(:)
@@ -1339,10 +1340,11 @@ contains
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_requests, mock_response_factor, &
-            shell_names, mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_os
+            mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_os
         use otr_oao, only: hess_x_oao_callback, oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, shell_names
 
         integer(ip) :: n_particle, n_param
         real(rp), target :: dm_oao(n_ao, n_ao, n_particle_ref)
@@ -1805,11 +1807,11 @@ contains
         ! diagonal and the occupied-occupied and virtual-virtual parts of the Fock
         ! matrix in the OAO basis
         !
-        use otr_common_unit_tests, only: identity_matrix, &
-                                         generate_random_density_matrix, &
-                                         generate_random_symm_matrix, shell_names
+        use otr_common_unit_tests, only: &
+            identity_matrix, generate_random_density_matrix, generate_random_symm_matrix
         use otr_oao, only: oao_type
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, shell_names
 
         type(oao_type) :: oao
         integer(ip) :: n_particle, n_param
@@ -2013,8 +2015,8 @@ contains
         ! different scaling factors
         !
         use otr_oao, only: oao_type
-        use otr_common_test_reference, only: n_ao, n_particle_ref => n_particle
-        use otr_common_unit_tests, only: shell_names
+        use otr_common_test_reference, only: n_ao, n_particle_ref => n_particle, &
+                                             shell_names
 
         type(oao_type) :: oao
         real(rp), allocatable :: eigvals(:, :), expected(:), eigval_pairs(:)
@@ -2059,8 +2061,8 @@ contains
         use otr_oao, only: oao_type, oao_settings_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_unit_tests, only: generate_random_orthogonal_matrix, &
-                                         generate_random_symm_matrix, shell_names
-        use otr_common_test_reference, only: n_particle_ref => n_particle
+                                         generate_random_symm_matrix
+        use otr_common_test_reference, only: n_particle_ref => n_particle, shell_names
 
         integer(ip), parameter :: n_ao = 3
         type(oao_type) :: oao
@@ -2262,9 +2264,10 @@ contains
         ! this function tests the function which applies the static part of the Hessian
         ! in the OAO basis to unpacked trial vectors
         !
-        use otr_common_unit_tests, only: generate_random_symm_matrix, shell_names
+        use otr_common_unit_tests, only: generate_random_symm_matrix
         use otr_oao, only: hess_x_static_oao
-        use otr_common_test_reference, only: n_ao, n_particle_ref => n_particle
+        use otr_common_test_reference, only: n_ao, n_particle_ref => n_particle, &
+                                             shell_names
 
         real(rp) :: fock_oo(n_ao, n_ao, n_particle_ref), &
                     fock_vv(n_ao, n_ao, n_particle_ref)

@@ -33,11 +33,6 @@ module otr_common_unit_tests
     ! multiplier of the density matrix returned by the mock response functions
     real(rp), parameter :: mock_response_factor = 2.0_rp
 
-    ! names of the closed-shell and the open-shell case, indexed by the number of
-    ! particle channels, for the failure messages of tests covering both
-    character(len=12), parameter :: shell_names(2) = &
-        [character(len=12) :: "closed-shell", "open-shell"]
-
     ! mock orbital basis for testing the operations every orbital basis shares, such as
     ! the preconditioners: it rotates vectors into and out of the eigenbasis of the
     ! static part of the Hessian with a fixed orthogonal matrix and returns cached
@@ -449,7 +444,7 @@ contains
         ! the currently stored density matrix of an orbital basis
         !
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ
+        use otr_common_test_reference, only: n_ao, n_particle, n_occ, shell_names
 
         type(mock_orbital_basis_type) :: basis
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)

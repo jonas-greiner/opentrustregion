@@ -32,6 +32,7 @@ from pyopentrustregion.extensions.common.python_interface import (
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
     attach_wired_callbacks,
+    check_callback_arguments,
 )
 
 if TYPE_CHECKING:
@@ -244,7 +245,9 @@ def mo_factory(
     # shares one, and handed to solver through the returned object
     exception = adopt_collector(evaluate_dm)
 
-    # define interfaces for callback functions
+    # define interfaces for callback functions, whose arguments the C interface cannot
+    # check
+    check_callback_arguments(evaluate_dm, "evaluate_dm", ("dm", "fock", "get_response"))
     evaluate_dm_interface = evaluate_dm_interface_type(
         EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
     )

@@ -6,7 +6,7 @@
 
 module otr_oao_c_interface_mock
 
-    use opentrustregion, only: stderr
+    use opentrustregion, only: ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type
     use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c, &
                                    oao_deconstructor_c_wrapper
@@ -69,8 +69,7 @@ contains
                                assignment(=)
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: operator(/=)
-        use otr_common_test_reference, only: test_evaluate_dm_cs_c_funptr, &
-                                             test_evaluate_dm_os_c_funptr
+        use otr_common_test_reference, only: test_evaluate_dm_c_funptr
         use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
                                           mock_precond_pd, mock_project, &
                                           mock_get_extra_trial_vectors
@@ -114,8 +113,8 @@ contains
 
             ! test passed density matrix evaluating function
             test_oao_factory_interface = &
-                test_oao_factory_interface .and. test_evaluate_dm_cs_c_funptr( &
-                    evaluate_dm_c_funptr, "oao_factory_py_interface", &
+                test_oao_factory_interface .and. test_evaluate_dm_c_funptr( &
+                    evaluate_dm_c_funptr, 1_ip, "oao_factory_py_interface", &
                     " by given density matrix evaluating function")
 
             ! check if passed number of AOs is correct
@@ -164,8 +163,8 @@ contains
 
             ! test passed density matrix evaluating function
             test_oao_factory_interface = &
-                test_oao_factory_interface .and. test_evaluate_dm_os_c_funptr( &
-                    evaluate_dm_c_funptr, "oao_factory_py_interface", &
+                test_oao_factory_interface .and. test_evaluate_dm_c_funptr( &
+                    evaluate_dm_c_funptr, 2_ip, "oao_factory_py_interface", &
                     " by given density matrix evaluating function")
 
         ! number of particles is not correct

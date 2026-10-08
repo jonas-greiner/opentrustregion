@@ -14,14 +14,21 @@ module otr_arh_unit_tests
 
     ! multipliers of the density matrix returned by the mock density matrix evaluating
     ! functions, which differ between the first and any subsequent call, following the
-    ! same convention as the shared multiplier for the Fock matrix
-    real(rp), parameter :: mock_v_same_spin_factor(2) = [3.0_rp, 7.0_rp], &
-                           mock_v_opposite_spin_factor(2) = [4.0_rp, 9.0_rp]
+    ! same convention as the shared multiplier for the Fock matrix; the Coulomb and
+    ! exact-exchange multipliers are positive, so that both mock kernels are positive
+    ! definite
+    real(rp), parameter :: mock_v_coulomb_factor(2) = [3.0_rp, 7.0_rp], &
+                           mock_v_exchange_factor(2) = [1.0_rp, 2.0_rp]
 
     ! the non-linear potential keeps a single multiplier across calls, unlike the
     ! potentials above, so that it stays one consistent function of the density, which
     ! is what the history screening measures and would otherwise reject as noise
     real(rp), parameter :: mock_v_nonlinear_factor = 6.0_rp
+
+    ! multipliers the mock density matrix evaluating functions apply on their first
+    ! call to the potentials the ARH object keeps, in the order of stacked_potentials
+    real(rp), parameter :: mock_potential_factors(3) = &
+        [mock_v_coulomb_factor(1), mock_v_exchange_factor(1), mock_v_nonlinear_factor]
 
     ! dispatch the mock potential by density matrix rank
     interface mock_potential
@@ -69,37 +76,43 @@ contains
 
     end function mock_potential_os
 
-    subroutine mock_evaluate_dm_cs(dm, energy, fock, v_nonlinear, error)
+    subroutine mock_evaluate_dm_cs(dm, energy, fock, v_coulomb, v_exchange, &
+                                   v_nonlinear, error)
         !
-        ! this subroutine is a mock density matrix evaluating function with a separate
-        ! non-linear potential contribution for the closed-shell case, which returns
-        ! multiples of the density matrix that change between calls so that
-        ! non-vanishing differences are produced
+        ! this subroutine is a mock density matrix evaluating function with Coulomb,
+        ! exact-exchange and non-linear potential contributions for the closed-shell
+        ! case, which returns multiples of the density matrix that change between calls
+        ! so that non-vanishing differences are produced
         !
         use otr_common_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target, contiguous :: fock(:, :), &
-                                                               v_nonlinear(:, :)
+        real(rp), intent(out), optional, target, contiguous :: &
+            fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
         integer(ip), intent(out) :: error
 
-        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
-                              merge(2_ip, 0_ip, present(v_nonlinear)))
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
+            2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
+                              merge(8_ip, 0_ip, present(v_nonlinear)))
 
         error = 0
         energy = sum(dm)
         if (present(fock)) fock = mock_potential(mock_factor(mock_fock_factor), dm)
+        if (present(v_coulomb)) &
+            v_coulomb = mock_potential(mock_factor(mock_v_coulomb_factor), dm)
+        if (present(v_exchange)) &
+            v_exchange = mock_potential(mock_factor(mock_v_exchange_factor), dm)
         if (present(v_nonlinear)) &
             v_nonlinear = mock_potential(mock_v_nonlinear_factor, dm)
 
     end subroutine mock_evaluate_dm_cs
 
-    subroutine mock_evaluate_dm_os(dm, energy, fock, v_same_spin, v_opposite_spin, &
+    subroutine mock_evaluate_dm_os(dm, energy, fock, v_coulomb, v_exchange, &
                                    v_nonlinear, error)
         !
-        ! this subroutine is a mock density matrix evaluating function with
-        ! spin-resolved and non-linear potential contributions for the open-shell case,
+        ! this subroutine is a mock density matrix evaluating function with Coulomb,
+        ! exact-exchange and non-linear potential contributions for the open-shell case,
         ! which returns multiples of the density matrix that change between calls so
         ! that non-vanishing differences are produced
         !
@@ -108,15 +121,13 @@ contains
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), optional, target :: &
-            fock(:, :, :), v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
-            v_nonlinear(:, :, :)
+            fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :)
         integer(ip), intent(out) :: error
 
         integer(ip) :: i
 
-        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
-                              merge(2_ip, 0_ip, present(v_same_spin)) + &
-                              merge(4_ip, 0_ip, present(v_opposite_spin)) + &
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
+            2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
                               merge(8_ip, 0_ip, present(v_nonlinear)))
 
         error = 0
@@ -124,10 +135,10 @@ contains
         do i = 1, size(dm, 3)
             if (present(fock)) fock(:, :, i) = &
                 mock_potential(mock_factor(mock_fock_factor), dm(:, :, i))
-            if (present(v_same_spin)) v_same_spin(:, :, i) = &
-                mock_potential(mock_factor(mock_v_same_spin_factor), dm(:, :, i))
-            if (present(v_opposite_spin)) v_opposite_spin(:, :, i) = &
-                mock_potential(mock_factor(mock_v_opposite_spin_factor), dm(:, :, i))
+            if (present(v_coulomb)) v_coulomb(:, :, i) = &
+                mock_potential(mock_factor(mock_v_coulomb_factor), dm(:, :, i))
+            if (present(v_exchange)) v_exchange(:, :, i) = &
+                mock_potential(mock_factor(mock_v_exchange_factor), dm(:, :, i))
             if (present(v_nonlinear)) v_nonlinear(:, :, i) = &
                 mock_potential(mock_v_nonlinear_factor, dm(:, :, i))
         end do
@@ -199,6 +210,22 @@ contains
         end do
 
     end function generate_random_upper_triangular
+
+    function generate_random_psd_matrix(n, rank) result(matrix)
+        !
+        ! this function generates a random symmetric positive semidefinite matrix of
+        ! the given rank as B B^T
+        !
+        integer(ip), intent(in) :: n, rank
+        real(rp) :: matrix(n, n)
+
+        real(rp) :: b(n, rank)
+
+        call random_number(b)
+        b = b - 0.5_rp
+        matrix = matmul(b, transpose(b))
+
+    end function generate_random_psd_matrix
 
     subroutine setup_arh_and_mo_objects(mo_coeff, ao_overlap, n_occ)
         !
@@ -317,76 +344,46 @@ contains
 
         n_ao = arh_object%orbitals%n_ao
         allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%v_coulomb_list(n_ao, n_ao, n_particle, 0), &
+                 arh_object%v_exchange_list(n_ao, n_ao, n_particle, 0), &
                  arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
-        allocate(arh_object%v_nonlinear(n_ao, n_ao, n_particle))
+        allocate(arh_object%v_coulomb(n_ao, n_ao, n_particle), &
+                 arh_object%v_exchange(n_ao, n_ao, n_particle), &
+                 arh_object%v_nonlinear(n_ao, n_ao, n_particle))
+        arh_object%v_coulomb = 0.0_rp
+        arh_object%v_exchange = 0.0_rp
         arh_object%v_nonlinear = 0.0_rp
         if (n_particle == 1) then
             arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
-            allocate(arh_object%fock_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%fock(n_ao, n_ao, n_particle))
-            arh_object%fock = 0.0_rp
         else
             arh_object%evaluate_dm_os => mock_evaluate_dm_os
-            allocate(arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0), &
-                     arh_object%v_same_spin(n_ao, n_ao, n_particle), &
-                     arh_object%v_opposite_spin(n_ao, n_ao, n_particle))
-            arh_object%v_same_spin = 0.0_rp
-            arh_object%v_opposite_spin = 0.0_rp
         end if
 
     end subroutine setup_empty_history
 
-    function stacked_potentials(n_particle, k) result(potentials)
+    function stacked_potentials(k) result(potentials)
         !
-        ! this function stacks the potentials the ARH object keeps for the closed- or
-        ! open-shell case along the last dimension, the current ones for k = 0 and
-        ! those of the k-th history entry otherwise
+        ! this function stacks the potentials the ARH object keeps along the last
+        ! dimension, the current ones for k = 0 and those of the k-th history entry
+        ! otherwise
         !
         use otr_arh, only: arh_object
 
-        integer(ip), intent(in) :: n_particle, k
+        integer(ip), intent(in) :: k
         real(rp), allocatable :: potentials(:, :, :, :)
 
-        if (n_particle == 1 .and. k == 0) then
-            potentials = reshape([arh_object%fock, arh_object%v_nonlinear], &
-                                 [shape(arh_object%v_nonlinear), 2])
-        else if (n_particle == 1) then
-            potentials = reshape([arh_object%fock_list(:, :, :, k), &
-                                  arh_object%v_nonlinear_list(:, :, :, k)], &
-                                 [shape(arh_object%v_nonlinear_list(:, :, :, k)), 2])
-        else if (k == 0) then
-            potentials = reshape([arh_object%v_same_spin, arh_object%v_opposite_spin, &
-                                  arh_object%v_nonlinear], &
-                                 [shape(arh_object%v_nonlinear), 3])
+        if (k == 0) then
+            potentials = reshape( &
+                [arh_object%v_coulomb, arh_object%v_exchange, arh_object%v_nonlinear], &
+                [shape(arh_object%v_nonlinear), 3])
         else
-            potentials = reshape([arh_object%v_same_spin_list(:, :, :, k), &
-                                  arh_object%v_opposite_spin_list(:, :, :, k), &
+            potentials = reshape([arh_object%v_coulomb_list(:, :, :, k), &
+                                  arh_object%v_exchange_list(:, :, :, k), &
                                   arh_object%v_nonlinear_list(:, :, :, k)], &
                                  [shape(arh_object%v_nonlinear_list(:, :, :, k)), 3])
         end if
 
     end function stacked_potentials
-
-    function potential_factors(n_particle) result(factors)
-        !
-        ! this function returns the multipliers the mock density matrix evaluating
-        ! functions apply on their first call to the potentials the ARH object keeps
-        ! for the closed- or open-shell case, in the order of stacked_potentials
-        !
-        use otr_common_unit_tests, only: mock_fock_factor
-
-        integer(ip), intent(in) :: n_particle
-        real(rp), allocatable :: factors(:)
-
-        if (n_particle == 1) then
-            factors = [mock_fock_factor(1), mock_v_nonlinear_factor]
-        else
-            factors = [mock_v_same_spin_factor(1), mock_v_opposite_spin_factor(1), &
-                       mock_v_nonlinear_factor]
-        end if
-
-    end function potential_factors
 
     function ref_build_a_part(dm_cols, v_cols) result(a)
         !
@@ -446,6 +443,38 @@ contains
 
     end function ref_ms_a_inv
 
+    function ref_psd_pinv(a_tilde, scale) result(a_inv)
+        !
+        ! this function independently reproduces the pseudoinverse of a matrix positive
+        ! semidefinite in exact arithmetic: eigenvalues above the noise floor relative
+        ! to the given spectral scale are inverted, all others discarded
+        !
+        use otr_arh, only: eig_val_noise_factor
+
+        real(rp), intent(in) :: a_tilde(:, :), scale
+        real(rp), allocatable :: a_inv(:, :)
+
+        integer(ip) :: n, i, info, lwork
+        real(rp), allocatable :: vecs(:, :), vals(:), diag(:, :), work(:)
+        external :: dsyev
+
+        n = size(a_tilde, 1)
+        allocate(vecs(n, n), vals(n), diag(n, n))
+        vecs = 0.5_rp * (a_tilde + transpose(a_tilde))
+        lwork = 3_ip * n
+        allocate(work(lwork))
+        call dsyev("V", "U", n, vecs, n, vals, work, lwork, info)
+        deallocate(work)
+
+        diag = 0.0_rp
+        do i = 1, n
+            if (vals(i) > eig_val_noise_factor * epsilon(1.0_rp) * scale) &
+                diag(i, i) = 1.0_rp / vals(i)
+        end do
+        a_inv = matmul(vecs, matmul(diag, transpose(vecs)))
+
+    end function ref_psd_pinv
+
     function ref_congruence_transform(a, map, chol) result(a_tilde)
         !
         ! this function independently reproduces the congruence transformation used to
@@ -504,9 +533,8 @@ contains
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_object, arh_mo_type, arh_oao_type, arh_settings_type, &
-                           obj_func_arh_cs_callback_ptr, obj_func_arh_os_callback_ptr, &
-                           update_orbs_arh_cs_callback_ptr, &
-                           update_orbs_arh_os_callback_ptr, precond_arh_callback_ptr
+                           obj_func_arh_callback_ptr, update_orbs_arh_callback_ptr, &
+                           precond_arh_callback_ptr
         use otr_mo, only: mo_object
         use otr_oao, only: oao_object, project_oao_callback_ptr
         use otr_arh_test_reference, only: operator(==)
@@ -606,13 +634,11 @@ contains
         end if
         if (n_particle == 1) then
             stored = associated(arh_object%evaluate_dm_cs, mock_evaluate_dm_cs)
-            returned = associated(obj_func_funptr, obj_func_arh_cs_callback_ptr) .and. &
-                       associated(update_orbs_funptr, update_orbs_arh_cs_callback_ptr)
         else
             stored = associated(arh_object%evaluate_dm_os, mock_evaluate_dm_os)
-            returned = associated(obj_func_funptr, obj_func_arh_os_callback_ptr) .and. &
-                       associated(update_orbs_funptr, update_orbs_arh_os_callback_ptr)
         end if
+        returned = associated(obj_func_funptr, obj_func_arh_callback_ptr) .and. &
+                   associated(update_orbs_funptr, update_orbs_arh_callback_ptr)
         if (.not. stored) then
             write(stderr, *) test_name// &
                 " failed: Density matrix evaluating function not stored correctly."
@@ -644,8 +670,7 @@ contains
         ! point together with the potentials the shell keeps to the history
         !
         use opentrustregion, only: obj_func_type
-        use otr_arh, only: obj_func_arh_cs_callback, obj_func_arh_os_callback, &
-                           arh_object
+        use otr_arh, only: obj_func_arh_callback, arh_object
         use otr_oao, only: oao_object
         use otr_common_test_reference, only: n_ao
         use otr_common_unit_tests, only: mock_requests
@@ -659,7 +684,7 @@ contains
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
                     kappa(n_particle * n_ao * (n_ao - 1) / 2), energy
-        real(rp), allocatable :: factors(:), potentials(:, :, :, :)
+        real(rp), allocatable :: potentials(:, :, :, :)
         integer(ip) :: k, error
         procedure(obj_func_type), pointer :: obj_func
 
@@ -667,16 +692,11 @@ contains
         passed = .true.
 
         ! set up the OAO and ARH objects with an empty history, which is removed for
-        ! the first call, and select the routine of the shell
+        ! the first call
         call setup_arh_and_scaled_oao_objects(basis_scale, dm_ao, dm_oao)
         call setup_empty_history(n_particle)
         deallocate(arh_object%dm_list)
-        if (n_particle == 1) then
-            obj_func => obj_func_arh_cs_callback
-        else
-            obj_func => obj_func_arh_os_callback
-        end if
-        factors = potential_factors(n_particle)
+        obj_func => obj_func_arh_callback
 
         ! call routine with an orbital rotation before the history exists and determine
         ! if the potentials the shell keeps are requested and nothing is added to the
@@ -694,7 +714,7 @@ contains
                 "function not called exactly once."
             passed = .false.
         end if
-        if (any(mock_requests /= merge(3_ip, 14_ip, n_particle == 1))) then
+        if (any(mock_requests /= 14_ip)) then
             write(stderr, *) test_name//" failed: Incorrect outputs requested from "// &
                 "density matrix evaluating function."
             passed = .false.
@@ -731,10 +751,11 @@ contains
                 write(stderr, *) test_name//" failed: Incorrect density matrix history."
                 passed = .false.
             end if
-            potentials = stacked_potentials(n_particle, 1_ip)
-            do k = 1, size(factors)
+            potentials = stacked_potentials(1_ip)
+            do k = 1, size(mock_potential_factors)
                 if (norm2(potentials(:, :, :, k) - basis_scale**4 * mock_potential( &
-                    factors(k), arh_object%dm_list(:, :, :, 1))) > tol) then
+                    mock_potential_factors(k), arh_object%dm_list(:, :, :, 1))) > tol) &
+                    then
                     write(stderr, *) test_name//" failed: Incorrect potential history."
                     passed = .false.
                 end if
@@ -785,8 +806,7 @@ contains
         ! adds the point the orbitals are rotated away from to the history
         !
         use opentrustregion, only: update_orbs_type, hess_x_type
-        use otr_arh, only: update_orbs_arh_cs_callback, update_orbs_arh_os_callback, &
-                           arh_object, hess_x_arh_callback_ptr
+        use otr_arh, only: update_orbs_arh_callback, arh_object, hess_x_arh_callback_ptr
         use otr_oao, only: oao_object
         use otr_common_test_reference, only: n_ao
         use otr_common_unit_tests, only: identity_matrix, mock_requests, &
@@ -801,8 +821,8 @@ contains
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
                     dm_saved(n_ao, n_ao, n_particle, 2), complement(n_ao, n_ao), func
-        real(rp), allocatable :: kappa(:), grad(:), h_diag(:), factors(:), &
-                                 potentials(:, :, :, :), potentials_saved(:, :, :, :, :)
+        real(rp), allocatable :: kappa(:), grad(:), h_diag(:), potentials(:, :, :, :), &
+                                 potentials_saved(:, :, :, :, :)
         integer(ip) :: n_param, n_list, k, error
         procedure(update_orbs_type), pointer :: update_orbs
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -810,20 +830,19 @@ contains
         ! assume test passes
         passed = .true.
 
-        ! set up the OAO and ARH objects and select the routine of the shell
+        ! set up the OAO and ARH objects
         call setup_arh_and_scaled_oao_objects(basis_scale, dm_ao, dm_oao)
         arh_object%settings%arh_type = "ms_psb"
+        update_orbs => update_orbs_arh_callback
         if (n_particle == 1) then
-            update_orbs => update_orbs_arh_cs_callback
             arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
         else
-            update_orbs => update_orbs_arh_os_callback
             arh_object%evaluate_dm_os => mock_evaluate_dm_os
         end if
-        factors = potential_factors(n_particle)
         n_param = arh_object%orbitals%n_param
-        allocate(kappa(n_param), grad(n_param), h_diag(n_param), &
-                 potentials_saved(n_ao, n_ao, n_particle, size(factors), 2))
+        allocate( &
+            kappa(n_param), grad(n_param), h_diag(n_param), &
+            potentials_saved(n_ao, n_ao, n_particle, size(mock_potential_factors), 2))
 
         ! the checks after a failed call would read quantities it did not set
         checks: block
@@ -845,10 +864,10 @@ contains
                 write(stderr, *) test_name//" failed: Incorrect energy."
                 passed = .false.
             end if
-            potentials = stacked_potentials(n_particle, 0_ip)
-            do k = 1, size(factors)
+            potentials = stacked_potentials(0_ip)
+            do k = 1, size(mock_potential_factors)
                 if (norm2(potentials(:, :, :, k) - basis_scale**2 * &
-                          mock_potential(factors(k), dm_ao)) > tol) then
+                          mock_potential(mock_potential_factors(k), dm_ao)) > tol) then
                     write(stderr, *) test_name//" failed: Incorrect potential."
                     passed = .false.
                 end if
@@ -929,7 +948,7 @@ contains
             kappa = 0.1_rp
             do k = 2, 1, -1
                 dm_saved(:, :, :, k) = oao_object%dm_oao
-                potentials_saved(:, :, :, :, k) = stacked_potentials(n_particle, 0_ip)
+                potentials_saved(:, :, :, :, k) = stacked_potentials(0_ip)
                 arh_object%model_stale = k == 1
                 call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
                 if (error /= 0) then
@@ -952,8 +971,8 @@ contains
                         " failed: Incorrect density matrix history."
                     passed = .false.
                 end if
-                if (norm2(stacked_potentials(n_particle, k) - &
-                          potentials_saved(:, :, :, :, k)) > tol) then
+                if (norm2(stacked_potentials(k) - potentials_saved(:, :, :, :, k)) > &
+                    tol) then
                     write(stderr, *) test_name//" failed: Incorrect potential history."
                     passed = .false.
                 end if
@@ -1031,7 +1050,7 @@ contains
             end if
 
             ! determine if every recompute asked for all potentials the shell needs
-            if (any(mock_requests /= merge(3_ip, 15_ip, n_particle == 1))) then
+            if (any(mock_requests /= 15_ip)) then
                 write(stderr, *) test_name//" failed: Incorrect outputs requested "// &
                     "from density matrix evaluating function."
                 passed = .false.
@@ -1044,6 +1063,7 @@ contains
     contains
 
         subroutine mock_evaluate_dm_failing_cs(dm, energy_out, fock_out, &
+                                               v_coulomb_out, v_exchange_out, &
                                                v_nonlinear_out, error_out)
             !
             ! this subroutine is a mock density matrix evaluating function for the
@@ -1051,19 +1071,22 @@ contains
             !
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out) :: energy_out
-            real(rp), intent(out), optional, target, contiguous :: fock_out(:, :), &
-                                                                   v_nonlinear_out(:, :)
+            real(rp), intent(out), optional, target, contiguous :: &
+                fock_out(:, :), v_coulomb_out(:, :), v_exchange_out(:, :), &
+                v_nonlinear_out(:, :)
             integer(ip), intent(out) :: error_out
 
             error_out = 1
             energy_out = sum(dm)
             if (present(fock_out)) fock_out = 0.0_rp
+            if (present(v_coulomb_out)) v_coulomb_out = 0.0_rp
+            if (present(v_exchange_out)) v_exchange_out = 0.0_rp
             if (present(v_nonlinear_out)) v_nonlinear_out = 0.0_rp
 
         end subroutine mock_evaluate_dm_failing_cs
 
         subroutine mock_evaluate_dm_failing_os(dm, energy_out, fock_out, &
-                                               v_same_spin_out, v_opposite_spin_out, &
+                                               v_coulomb_out, v_exchange_out, &
                                                v_nonlinear_out, error_out)
             !
             ! this subroutine is a mock density matrix evaluating function for the
@@ -1072,15 +1095,15 @@ contains
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy_out
             real(rp), intent(out), optional, target :: &
-                fock_out(:, :, :), v_same_spin_out(:, :, :), &
-                v_opposite_spin_out(:, :, :), v_nonlinear_out(:, :, :)
+                fock_out(:, :, :), v_coulomb_out(:, :, :), v_exchange_out(:, :, :), &
+                v_nonlinear_out(:, :, :)
             integer(ip), intent(out) :: error_out
 
             error_out = 1
             energy_out = sum(dm)
             if (present(fock_out)) fock_out = 0.0_rp
-            if (present(v_same_spin_out)) v_same_spin_out = 0.0_rp
-            if (present(v_opposite_spin_out)) v_opposite_spin_out = 0.0_rp
+            if (present(v_coulomb_out)) v_coulomb_out = 0.0_rp
+            if (present(v_exchange_out)) v_exchange_out = 0.0_rp
             if (present(v_nonlinear_out)) v_nonlinear_out = 0.0_rp
 
         end subroutine mock_evaluate_dm_failing_os
@@ -1090,12 +1113,13 @@ contains
     function check_build_hess_model(n_particle, test_name) result(passed)
         !
         ! this function checks the assembly of the approximate Hessian model from the
-        ! history for the closed- or open-shell case: standard ARH has to reproduce a
-        ! history in the MO basis exactly, while every ARH type in the OAO basis has to
-        ! keep the whole history in the linear system, drop the entries beyond the
-        ! step-length cutoff and those whose response is noise from the non-linear
-        ! system and cache every quantity in the basis of its own system, without
-        ! evaluating the density matrix or changing the history
+        ! history for the closed- or open-shell case: standard ARH has to reproduce any
+        ! history in the MO basis exactly and multisecant SR1 one that symmetric linear
+        ! Coulomb and exact-exchange kernels produce, while every ARH type in the OAO
+        ! basis has to keep the whole history in the linear system, drop the entries
+        ! beyond the step-length cutoff and those whose response is noise from the
+        ! non-linear system and cache every quantity in the basis of its own system,
+        ! without evaluating the density matrix or changing the history
         !
         use otr_arh, only: build_hess_model_cs, build_hess_model_os, arh_object, &
                            arh_types, arh_oao_type
@@ -1121,27 +1145,33 @@ contains
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), step_mo(n_mo, n_mo, n_particle), &
-                    v_diff_mo(n_mo, n_mo, n_particle), perturbation(n_ao, n_ao)
-        real(rp), allocatable :: steps(:, :), orth(:, :), response(:), factors(:), &
+                    v_diff_mo(n_mo, n_mo, n_particle), perturbation(n_ao, n_ao), &
+                    dm_step(n_ao, n_ao)
+        real(rp), allocatable :: steps(:, :), orth(:, :), response(:), &
                                  dm_list(:, :, :, :), current(:, :, :, :), &
                                  lists(:, :, :, :, :)
-        integer(ip) :: n_pot, n_list, n_linear, n_nonlinear, n_systems, i, j, k, &
-                       i_case, i_type, i_noisy, error
+        integer(ip) :: n_pot, n_list, n_linear, n_nonlinear, n_systems, n_terms, i, j, &
+                       k, i_case, i_type, i_noisy, error
         logical :: built
         character(len=:), allocatable :: arh_type, case_name
 
         ! assume test passes
         passed = .true.
 
-        ! the closed-shell case keeps the Fock matrix and the open-shell case the
-        ! same-spin and opposite-spin potentials besides the non-linear potential
-        n_pot = n_particle + 1
+        ! the Coulomb and exact-exchange potentials are kept besides the non-linear
+        ! potential; the linear potential of a channel is the Coulomb potential of all
+        ! channels minus its exact-exchange potential
+        n_pot = 3
 
-        ! set up the ARH object in the MO basis at random orbitals
+        ! set up the ARH object in the MO basis at random orbitals, whose MOs span the
+        ! same space for both channels as they do in practice, so that the history
+        ! inner product of the two channels agrees and a Coulomb kernel acting on both
+        ! channels is symmetric
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
+        if (n_particle == 2) mo_coeff(:, :, 2) = &
+            matmul(mo_coeff(:, :, 1), generate_random_orthogonal_matrix(n_mo))
         call setup_arh_and_mo_objects(mo_coeff, ao_overlap, n_occ(:n_particle))
-        arh_object%settings%arh_type = "arh"
 
         ! steps of every channel which are not orthogonal, so that the pivoted
         ! factorization of the history reorders them and its factor is not diagonal
@@ -1181,41 +1211,64 @@ contains
             lists(:, :, :, k, n_pot) = current(:, :, :, n_pot)
         end do
 
-        ! build the model and determine if the low-rank part reproduces the linear
-        ! potential difference of every step, which pins the scaling of the low-rank
-        ! part and the (map, chol) pair its directions are rebased with
-        call build_from_history()
-        if (error /= 0) then
-            write(stderr, *) test_name//" failed: Produced error for the MO basis."
-            passed = .false.
-        end if
-        if (arh_object%model_stale) then
-            write(stderr, *) test_name// &
-                " failed: Hessian model still marked stale for the MO basis."
-            passed = .false.
-        end if
-        if (.not. allocated(arh_object%coupling_matrix)) then
-            write(stderr, *) test_name//" failed: No low-rank part for the MO basis."
-            passed = .false.
-        else
+        ! build the model for standard ARH and for multisecant SR1 and determine if the
+        ! low-rank part reproduces the linear potential difference of every step, which
+        ! pins the scaling of the low-rank part and the (map, chol) pair its directions
+        ! are rebased with
+        do i_type = 1, 2
+            arh_type = trim(merge("arh   ", "ms_sr1", i_type == 1))
+            arh_object%settings%arh_type = arh_type
+
+            ! multisecant SR1 only reproduces a history that symmetric linear kernels
+            ! produce: Coulomb and exact-exchange potentials of every channel that are
+            ! positive multiples of its density matrix difference, so that the Coulomb
+            ! potentials of both channels act on every channel
+            if (arh_type == "ms_sr1") then
+                do k = 1, n_hist
+                    do j = 1, n_particle
+                        dm_step = dm_list(:, :, j, k) - matmul( &
+                            ao_overlap, matmul(mo_object%dm_ao(:, :, j), ao_overlap))
+                        lists(:, :, j, k, 1) = current(:, :, j, 1) + 3.0_rp * dm_step
+                        lists(:, :, j, k, 2) = current(:, :, j, 2) + dm_step
+                    end do
+                end do
+            end if
+
+            call build_from_history()
+            if (error /= 0) then
+                write(stderr, *) test_name//" failed: Produced error for "//arh_type// &
+                    " in the MO basis."
+                passed = .false.
+            end if
+            if (arh_object%model_stale) then
+                write(stderr, *) test_name//" failed: Hessian model still marked "// &
+                    "stale for "//arh_type//" in the MO basis."
+                passed = .false.
+            end if
+            if (.not. allocated(arh_object%coupling_matrix)) then
+                write(stderr, *) test_name//" failed: No low-rank part for "// &
+                    arh_type//" in the MO basis."
+                passed = .false.
+                cycle
+            end if
             do k = 1, n_hist
                 response = matmul(arh_object%expansion_dirs, matmul( &
                     arh_object%coupling_matrix, &
                     matmul(transpose(arh_object%projection_dirs), steps(:, k))))
                 do j = 1, n_particle
-                    v_diff_mo(:, :, j) = ref_mo_transform( &
-                        mo_coeff(:, :, j), sum(lists(:, :, j, k, :n_pot - 1) - &
-                                               current(:, :, j, :n_pot - 1), dim=3))
+                    v_diff_mo(:, :, j) = ref_mo_transform(mo_coeff(:, :, j), sum( &
+                        lists(:, :, :, k, 1) - current(:, :, :, 1), &
+                        dim=3) - (lists(:, :, j, k, 2) - current(:, :, j, 2)))
                 end do
                 if (norm2(response - merge(4.0_rp, 2.0_rp, n_particle == 1) * &
                           ref_pack_ov(v_diff_mo, mo_object%mo_channels)) > &
                     tol * (1.0_rp + norm2(response))) then
-                    write(stderr, *) test_name// &
-                        " failed: History not reproduced exactly for the MO basis."
+                    write(stderr, *) test_name//" failed: History not reproduced "// &
+                        "exactly for "//arh_type//" in the MO basis."
                     passed = .false.
                 end if
             end do
-        end if
+        end do
         deallocate(arh_object, mo_object, dm_list, current, lists)
 
         ! set up the OAO object with an orthonormal AO basis, so that the AO and the
@@ -1234,7 +1287,6 @@ contains
         ! build the model from a history of independent points, one spanning very
         ! different step lengths and one whose non-linear response is noise in one
         ! channel at a time
-        factors = potential_factors(n_particle)
         do i_case = 1, 2 + n_particle
             i_noisy = i_case - 2
             n_list = merge(n_noisy, 2_ip, i_noisy > 0)
@@ -1280,9 +1332,10 @@ contains
             ! potentials which are functions of the density, except for the non-linear
             ! response of the channel under test, which is noise
             do i = 1, n_pot
-                current(:, :, :, i) = mock_potential(factors(i), oao_object%dm_oao)
+                current(:, :, :, i) = mock_potential(mock_potential_factors(i), &
+                                                     oao_object%dm_oao)
                 do k = 1, n_list
-                    lists(:, :, :, k, i) = mock_potential(factors(i), &
+                    lists(:, :, :, k, i) = mock_potential(mock_potential_factors(i), &
                                                           dm_list(:, :, :, k))
                 end do
             end do
@@ -1316,8 +1369,8 @@ contains
                 end if
                 do k = 1, n_list
                     if (norm2(arh_object%dm_list(:, :, :, k) - dm_list(:, :, :, k)) > &
-                        tol .or. norm2(stacked_potentials(n_particle, k) - &
-                                       lists(:, :, :, k, :)) > tol) then
+                        tol .or. &
+                        norm2(stacked_potentials(k) - lists(:, :, :, k, :)) > tol) then
                         write(stderr, *) test_name//" failed: History changed for "// &
                             arh_type//" and "//case_name//"."
                         passed = .false.
@@ -1364,12 +1417,14 @@ contains
                     n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
                 end if
 
-                ! determine if the linear system keeps the entire history, while the
-                ! non-linear system, which multisecant SR1 factorizes for both channels
-                ! together and the ARH family per channel, drops the far and the noisy
-                ! entries
+                ! determine if the linear system keeps the entire history, for
+                ! multisecant SR1 in both its Coulomb and its exact-exchange term,
+                ! while the non-linear system, which multisecant SR1 factorizes for
+                ! both channels together and the ARH family per channel, drops the far
+                ! and the noisy entries
                 n_systems = merge(1_ip, n_particle, arh_type == "ms_sr1")
-                if (n_linear /= n_particle * n_list) then
+                n_terms = merge(2_ip, 1_ip, arh_type == "ms_sr1")
+                if (n_linear /= n_terms * n_particle * n_list) then
                     write(stderr, *) test_name//" failed: The linear system does "// &
                         "not keep the entire history for "//arh_type//" and "// &
                         case_name//"."
@@ -1439,19 +1494,17 @@ contains
             ! this subroutine hands the history and the current potentials to the ARH
             ! object, marks its model stale and builds the model for the shell
             !
-            ! history and current potentials the shell keeps
+            ! history and current potentials
             arh_object%dm_list = dm_list
             if (n_particle == 1) then
                 arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
-                arh_object%fock = current(:, :, :, 1)
-                arh_object%fock_list = lists(:, :, :, :, 1)
             else
                 arh_object%evaluate_dm_os => mock_evaluate_dm_os
-                arh_object%v_same_spin = current(:, :, :, 1)
-                arh_object%v_same_spin_list = lists(:, :, :, :, 1)
-                arh_object%v_opposite_spin = current(:, :, :, 2)
-                arh_object%v_opposite_spin_list = lists(:, :, :, :, 2)
             end if
+            arh_object%v_coulomb = current(:, :, :, 1)
+            arh_object%v_coulomb_list = lists(:, :, :, :, 1)
+            arh_object%v_exchange = current(:, :, :, 2)
+            arh_object%v_exchange_list = lists(:, :, :, :, 2)
             arh_object%v_nonlinear = current(:, :, :, n_pot)
             arh_object%v_nonlinear_list = lists(:, :, :, :, n_pot)
             arh_object%model_stale = .true.
@@ -1999,49 +2052,34 @@ contains
 
     end function test_arh_set_solver_settings
 
-    logical(c_bool) function test_obj_func_arh_cs_callback() bind(C)
+    logical(c_bool) function test_obj_func_arh_callback() bind(C)
         !
-        ! this function tests the function which defines the energy evaluation for the
-        ! closed-shell case, which also adds the evaluated point to the history
-        !
-        test_obj_func_arh_cs_callback = &
-            check_obj_func_arh(1_ip, "test_obj_func_arh_cs_callback")
-
-    end function test_obj_func_arh_cs_callback
-
-    logical(c_bool) function test_obj_func_arh_os_callback() bind(C)
-        !
-        ! this function tests the function which defines the energy evaluation for the
-        ! open-shell case, which also adds the evaluated point to the history
+        ! this function tests the function which defines the energy evaluation, which
+        ! also adds the evaluated point to the history, for the closed- and the
+        ! open-shell case
         !
         use otr_common_test_reference, only: n_particle
 
-        test_obj_func_arh_os_callback = &
-            check_obj_func_arh(n_particle, "test_obj_func_arh_os_callback")
+        test_obj_func_arh_callback = &
+            check_obj_func_arh(1_ip, "test_obj_func_arh_callback")
+        if (.not. check_obj_func_arh(n_particle, "test_obj_func_arh_callback")) &
+            test_obj_func_arh_callback = .false.
 
-    end function test_obj_func_arh_os_callback
+    end function test_obj_func_arh_callback
 
-    logical(c_bool) function test_update_orbs_arh_cs_callback() bind(C)
+    logical(c_bool) function test_update_orbs_arh_callback() bind(C)
         !
         ! this function tests the subroutine which defines the energy, gradient and
-        ! Hessian diagonal evaluation for the closed-shell case
-        !
-        test_update_orbs_arh_cs_callback = &
-            check_update_orbs_arh(1_ip, "test_update_orbs_arh_cs_callback")
-
-    end function test_update_orbs_arh_cs_callback
-
-    logical(c_bool) function test_update_orbs_arh_os_callback() bind(C)
-        !
-        ! this function tests the subroutine which defines the energy, gradient and
-        ! Hessian diagonal evaluation for the open-shell case
+        ! Hessian diagonal evaluation for the closed- and the open-shell case
         !
         use otr_common_test_reference, only: n_particle
 
-        test_update_orbs_arh_os_callback = &
-            check_update_orbs_arh(n_particle, "test_update_orbs_arh_os_callback")
+        test_update_orbs_arh_callback = &
+            check_update_orbs_arh(1_ip, "test_update_orbs_arh_callback")
+        if (.not. check_update_orbs_arh(n_particle, "test_update_orbs_arh_callback")) &
+            test_update_orbs_arh_callback = .false.
 
-    end function test_update_orbs_arh_os_callback
+    end function test_update_orbs_arh_callback
 
     logical(c_bool) function test_build_hess_model_cs() bind(C)
         !
@@ -2317,8 +2355,8 @@ contains
             use otr_mo, only: mo_object
             use otr_oao, only: oao_object
             use otr_mo_test_reference, only: n_mo
-            use otr_common_test_reference, only: n_ao, n_occ
-            use otr_common_unit_tests, only: identity_matrix, shell_names
+            use otr_common_test_reference, only: n_ao, n_occ, shell_names
+            use otr_common_unit_tests, only: identity_matrix
             use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
 
             logical, intent(in) :: mo_basis
@@ -3681,9 +3719,8 @@ contains
                            arh_types
         use otr_oao, only: oao_object
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix, &
-                                         shell_names
-        use otr_common_test_reference, only: n_particle_ref => n_particle
+        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
+        use otr_common_test_reference, only: n_particle_ref => n_particle, shell_names
 
         integer(ip), parameter :: n_param = 5, n_diff = 3, n_diff_nl = 2, &
                                   n_both = n_diff + n_diff_nl, dm_nl = 2 * n_diff, &
@@ -3855,7 +3892,7 @@ contains
 
         integer(ip), parameter :: n_diff = 3, n_rows = 7
         real(rp) :: dm_cols(n_rows, n_diff), v_cols(n_rows, n_diff), &
-                    a(n_diff, n_diff), expected(n_diff, n_diff)
+                    a(n_diff, n_diff), expected(n_diff, n_diff), a_empty(0, 0)
 
         ! assume tests pass
         test_build_a_part = .true.
@@ -3874,6 +3911,9 @@ contains
             write(stderr, *) "test_build_a_part failed: Incorrect symmetrized A matrix."
             test_build_a_part = .false.
         end if
+
+        ! call routine for an empty history
+        call build_a_part(dm_cols(:, :0), v_cols(:, :0), a_empty)
 
     end function test_build_a_part
 
@@ -3990,6 +4030,16 @@ contains
                   expected_a_block(map, map)) > tol) then
             write(stderr, *) "test_build_a_block_linear_os failed: Result does not "// &
                 "invert back to the gathered, reordered raw block matrix."
+            test_build_a_block_linear_os = .false.
+        end if
+
+        ! generate A matrix for an empty history and determine if it is empty
+        a_block = build_a_block_linear_os(dm_cols(:, :0), v_same_cols(:, :0), &
+                                          v_opp_cols(:, :0), rows, [integer(ip) :: ], &
+                                          reshape([real(rp) :: ], [0, 0]))
+        if (size(a_block) /= 0) then
+            write(stderr, *) "test_build_a_block_linear_os failed: A matrix not "// &
+                "empty for empty history."
             test_build_a_block_linear_os = .false.
         end if
 
@@ -4753,125 +4803,358 @@ contains
 
     end function test_get_ms_a_inv
 
-    logical(c_bool) function test_get_ms_a_inv_os_linear() bind(C)
+    logical(c_bool) function test_get_ms_a_inv_jk_cs() bind(C)
         !
-        ! this function tests the subroutine which computes the pseudoinverse
-        ! multisecant SR1 matrix in a spin-separated manner for the linear part in the
-        ! open-shell case
+        ! this function tests the subroutine which computes the closed-shell
+        ! multisecant SR1 term of the linear potential as the difference of a Coulomb
+        ! and an exact-exchange term: for a history in an orthonormalized basis that is
+        ! known exactly (S = Q R) and positive semidefinite kernels, the model has to
+        ! fulfill the secant condition of the linear kernel on the history, which only
+        ! holds if both terms are assembled from the responses of their own kernel
         !
-        use otr_arh, only: get_ms_a_inv_os_linear, arh_settings_type
+        use otr_arh, only: get_ms_a_inv_jk_cs, arh_settings_type
         use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_particle
+        use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
-        integer(ip), parameter :: n_diff = 2, n_col = n_particle * n_diff, &
-                                  n_accepted = 3, n_rows(n_particle) = [4, 3]
+        integer(ip), parameter :: n_rows = 6, n_diff = 3
 
-        real(rp) :: dm_cols(sum(n_rows), n_diff), &
-                    v_same_spin_cols(sum(n_rows), n_diff), &
-                    v_opposite_spin_cols(sum(n_rows), n_diff), &
-                    empty_cols(sum(n_rows), 0), chol(n_accepted, n_accepted), &
-                    s_full(sum(n_rows), n_col), y_full(sum(n_rows), n_col)
-        real(rp), allocatable :: a_inv(:, :), expected(:, :), a_tilde(:, :), &
-                                 y_gram(:, :)
-        integer(ip) :: rows(2, n_particle), map(n_accepted), error, i, j, k
+        real(rp) :: coulomb(n_rows, n_rows), exchange(n_rows, n_rows), &
+                    dm_cols(n_rows, n_diff), chol(n_diff, n_diff), &
+                    v_coulomb_cols(n_rows, n_diff), v_exchange_cols(n_rows, n_diff)
+        real(rp), allocatable :: a_inv(:, :), dirs(:, :), orth(:, :)
+        integer(ip) :: map(n_diff), i, error
         type(arh_settings_type) :: settings
 
         ! assume tests pass
-        test_get_ms_a_inv_os_linear = .true.
+        test_get_ms_a_inv_jk_cs = .true.
 
         ! setup settings object
         call setup_settings(settings)
 
-        ! initialize random history and spin-resolved potentials centered on zero,
-        ! reordered and rebased into an arbitrary orthonormalized basis that also drops
-        ! one column
-        call random_number(dm_cols)
-        call random_number(v_same_spin_cols)
-        call random_number(v_opposite_spin_cols)
-        dm_cols = dm_cols - 0.5_rp
-        v_same_spin_cols = v_same_spin_cols - 0.5_rp
-        v_opposite_spin_cols = v_opposite_spin_cols - 0.5_rp
+        ! history S = Q R in identity order, so that R is the Cholesky factor of its
+        ! metric, positive semidefinite kernels of a lower rank than the history space
+        ! and their responses, which also serve as packed columns
+        orth = generate_random_orthogonal_matrix(n_rows)
+        chol = generate_random_upper_triangular(n_diff)
+        dm_cols = matmul(orth(:, :n_diff), chol)
+        map = [(i, i=1, n_diff)]
+        coulomb = generate_random_psd_matrix(n_rows, 4_ip)
+        exchange = generate_random_psd_matrix(n_rows, 2_ip)
+        v_coulomb_cols = matmul(coulomb, dm_cols)
+        v_exchange_cols = matmul(exchange, dm_cols)
+
+        ! call routine and determine if it fulfills the secant condition and the bounds
+        ! of both terms
+        call get_ms_a_inv_jk_cs(dm_cols, v_coulomb_cols, v_exchange_cols, &
+                                v_coulomb_cols, v_exchange_cols, map, chol, a_inv, &
+                                dirs, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Produced error."
+            test_get_ms_a_inv_jk_cs = .false.
+        else if (size(a_inv, 1) /= 2 * n_diff .or. size(dirs, 2) /= 2 * n_diff) then
+            write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Incorrect dimensions."
+            test_get_ms_a_inv_jk_cs = .false.
+        else if (norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), dm_cols) - &
+                       (v_coulomb_cols - v_exchange_cols)) > tol) then
+            write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Secant condition not "// &
+                "fulfilled."
+            test_get_ms_a_inv_jk_cs = .false.
+        end if
+
+        ! call routine without exact exchange and determine if the exact-exchange term
+        ! is left out and the Coulomb term alone fulfills the secant condition
+        v_exchange_cols = 0.0_rp
+        call get_ms_a_inv_jk_cs(dm_cols, v_coulomb_cols, v_exchange_cols, &
+                                v_coulomb_cols, v_exchange_cols, map, chol, a_inv, &
+                                dirs, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Produced error "// &
+                "without exact exchange."
+            test_get_ms_a_inv_jk_cs = .false.
+        else if (size(a_inv, 1) /= n_diff .or. size(dirs, 2) /= n_diff) then
+            write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Exact-exchange term "// &
+                "not left out without exact exchange."
+            test_get_ms_a_inv_jk_cs = .false.
+        else if (norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), dm_cols) - &
+                       v_coulomb_cols) > tol) then
+            write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Secant condition not "// &
+                "fulfilled without exact exchange."
+            test_get_ms_a_inv_jk_cs = .false.
+        end if
+
+    end function test_get_ms_a_inv_jk_cs
+
+    logical(c_bool) function test_get_ms_a_inv_jk_os() bind(C)
+        !
+        ! this function tests the subroutine which computes the open-shell multisecant
+        ! SR1 term of the linear potential as the difference of a Coulomb and an
+        ! exact-exchange term on the spin-separated density difference directions: for
+        ! per-channel histories in orthonormalized bases that are known exactly, a
+        ! Coulomb kernel acting through the total density on both channels and an
+        ! exact-exchange kernel acting within every channel, the model has to fulfill
+        ! the secant condition of the linear kernel on every spin-separated direction,
+        ! which only holds if both terms are assembled from the responses of their own
+        ! kernel and channels
+        !
+        use otr_arh, only: get_ms_a_inv_jk_os, arh_settings_type
+        use opentrustregion_unit_tests, only: setup_settings
+        use otr_common_unit_tests, only: generate_random_orthogonal_matrix
+
+        integer(ip), parameter :: n_rows(2) = [4, 3], n_diff = 2, n_common = 3, &
+                                  n_flat = sum(n_rows)
+
+        real(rp) :: transform(n_common, n_flat), coulomb(n_flat, n_flat), &
+                    exchange(n_flat, n_flat), dm_cols(n_flat, n_diff), &
+                    directions(n_flat, 2 * n_diff), chol(2 * n_diff, 2 * n_diff), &
+                    v_coulomb_alpha_cols(n_flat, n_diff), &
+                    v_coulomb_beta_cols(n_flat, n_diff), v_exchange_cols(n_flat, n_diff)
+        real(rp), allocatable :: a_inv(:, :), dirs(:, :), orth(:, :)
+        integer(ip) :: rows(2, 2), map(2 * n_diff), i, error
+        type(arh_settings_type) :: settings
+
+        ! assume tests pass
+        test_get_ms_a_inv_jk_os = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! rows of the two channels, which the packed columns share
         rows = reshape([1_ip, n_rows(1), &
-                        n_rows(1) + 1_ip, sum(n_rows)], [2, 2])
-        map = [4, 1, 3]
+                        n_rows(1) + 1_ip, n_flat], [2, 2])
+
+        ! per-channel histories S = Q R in identity order, whose factors combine
+        ! block-diagonally as the per-channel factorizations do
+        chol = 0.0_rp
+        dm_cols = 0.0_rp
+        orth = generate_random_orthogonal_matrix(n_rows(1))
+        chol(:n_diff, :n_diff) = generate_random_upper_triangular(n_diff)
+        dm_cols(rows(1, 1):rows(2, 1), :) = matmul(orth(:, :n_diff), &
+                                                   chol(:n_diff, :n_diff))
+        orth = generate_random_orthogonal_matrix(n_rows(2))
+        chol(n_diff + 1:, n_diff + 1:) = generate_random_upper_triangular(n_diff)
+        dm_cols(rows(1, 2):rows(2, 2), :) = matmul(orth(:, :n_diff), &
+                                                   chol(n_diff + 1:, n_diff + 1:))
+        map = [(i, i=1, 2 * n_diff)]
+
+        ! spin-separated directions, the alpha directions first
+        directions = 0.0_rp
+        directions(rows(1, 1):rows(2, 1), :n_diff) = dm_cols(rows(1, 1):rows(2, 1), :)
+        directions(rows(1, 2):rows(2, 2), n_diff + 1:) = &
+            dm_cols(rows(1, 2):rows(2, 2), :)
+
+        ! positive semidefinite kernels: the Coulomb kernel maps the density of both
+        ! channels to a total density, on which a positive semidefinite kernel acts, and
+        ! back to both channels, the exact-exchange kernel is block-diagonal
+        call random_number(transform)
+        coulomb = matmul(transpose(transform), matmul( &
+            generate_random_psd_matrix(n_common, n_common), transform))
+        exchange = 0.0_rp
+        exchange(rows(1, 1):rows(2, 1), rows(1, 1):rows(2, 1)) = &
+            generate_random_psd_matrix(n_rows(1), 2_ip)
+        exchange(rows(1, 2):rows(2, 2), rows(1, 2):rows(2, 2)) = &
+            generate_random_psd_matrix(n_rows(2), 2_ip)
+
+        ! Coulomb responses of the alpha and beta directions in both channels and
+        ! exact-exchange responses of every channel's direction in that channel, which
+        ! also serve as packed columns
+        v_coulomb_alpha_cols = matmul(coulomb, directions(:, :n_diff))
+        v_coulomb_beta_cols = matmul(coulomb, directions(:, n_diff + 1:))
+        v_exchange_cols = matmul(exchange, directions(:, :n_diff)) + &
+                          matmul(exchange, directions(:, n_diff + 1:))
+
+        ! call routine and determine if it fulfills the secant condition and the bounds
+        ! of both terms
+        call get_ms_a_inv_jk_os(dm_cols, v_coulomb_alpha_cols, v_coulomb_beta_cols, &
+                                v_exchange_cols, v_coulomb_alpha_cols, &
+                                v_coulomb_beta_cols, v_exchange_cols, rows, rows, map, &
+                                chol, a_inv, dirs, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_ms_a_inv_jk_os failed: Produced error."
+            test_get_ms_a_inv_jk_os = .false.
+        else if (size(a_inv, 1) /= 4 * n_diff .or. size(dirs, 2) /= 4 * n_diff) then
+            write(stderr, *) "test_get_ms_a_inv_jk_os failed: Incorrect dimensions."
+            test_get_ms_a_inv_jk_os = .false.
+        else if ( &
+            norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), directions) - &
+                  matmul(coulomb - exchange, directions)) > tol) then
+            write(stderr, *) "test_get_ms_a_inv_jk_os failed: Secant condition not "// &
+                "fulfilled."
+            test_get_ms_a_inv_jk_os = .false.
+        end if
+
+        ! call routine without exact exchange and determine if the exact-exchange term
+        ! is left out and the Coulomb term alone fulfills the secant condition
+        v_exchange_cols = 0.0_rp
+        call get_ms_a_inv_jk_os(dm_cols, v_coulomb_alpha_cols, v_coulomb_beta_cols, &
+                                v_exchange_cols, v_coulomb_alpha_cols, &
+                                v_coulomb_beta_cols, v_exchange_cols, rows, rows, map, &
+                                chol, a_inv, dirs, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_ms_a_inv_jk_os failed: Produced error "// &
+                "without exact exchange."
+            test_get_ms_a_inv_jk_os = .false.
+        else if (size(a_inv, 1) /= 2 * n_diff .or. size(dirs, 2) /= 2 * n_diff) then
+            write(stderr, *) "test_get_ms_a_inv_jk_os failed: Exact-exchange term "// &
+                "not left out without exact exchange."
+            test_get_ms_a_inv_jk_os = .false.
+        else if (norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), &
+                              directions) - matmul(coulomb, directions)) > tol) then
+            write(stderr, *) "test_get_ms_a_inv_jk_os failed: Secant condition not "// &
+                "fulfilled without exact exchange."
+            test_get_ms_a_inv_jk_os = .false.
+        end if
+
+    end function test_get_ms_a_inv_jk_os
+
+    logical(c_bool) function test_get_ms_jk_inv() bind(C)
+        !
+        ! this function tests the subroutine which assembles the coupling and the
+        ! directions of the multisecant SR1 term of the linear potential from a Coulomb
+        ! and an exact-exchange A: both pseudoinverses with a joint noise floor, the
+        ! exact-exchange term left out without exact exchange, an exact-exchange A of
+        ! noise against the Coulomb A and negative eigenvalues not inverted, and an
+        ! empty history
+        !
+        use otr_arh, only: get_ms_jk_inv, arh_settings_type
+        use opentrustregion_unit_tests, only: setup_settings
+
+        integer(ip), parameter :: n_diff = 3, n_accepted = 2, n_param = 5
+        real(rp), parameter :: noise = 1e-20_rp
+
+        real(rp) :: a_coulomb(n_diff, n_diff), a_exchange(n_diff, n_diff), &
+                    chol(n_accepted, n_accepted), dirs_coulomb(n_param, n_accepted), &
+                    dirs_exchange(n_param, n_accepted), scale
+        real(rp), allocatable :: a_inv(:, :), dirs(:, :), expected(:, :), &
+                                 a_tilde_coulomb(:, :), a_tilde_exchange(:, :)
+        integer(ip) :: map(n_accepted), error
+        type(arh_settings_type) :: settings
+
+        ! assume tests pass
+        test_get_ms_jk_inv = .true.
+
+        ! setup settings object
+        call setup_settings(settings)
+
+        ! reorder and rebase into an arbitrary orthonormalized basis that also drops
+        ! one history entry, and random directions of both terms
+        map = [3, 1]
         chol = generate_random_upper_triangular(n_accepted)
+        a_coulomb = generate_random_psd_matrix(n_diff, n_diff)
+        a_exchange = generate_random_psd_matrix(n_diff, n_diff)
+        call random_number(dirs_coulomb)
+        call random_number(dirs_exchange)
 
-        ! the expected pseudoinverse is assembled independently of the routine from the
-        ! stacked history and response, whose products give both the blocks of A and
-        ! the response Gram matrix; A is symmetrized only after the transform, since
-        ! its two halves are exactly transposes of one another in exact arithmetic;
-        ! each history column touches only its own spin block, while each response
-        ! column pairs the same-spin potential of one channel with the opposite-spin
-        ! potential of the other, so that S^T Y reproduces the four blocks of A and Y^T
-        ! Y the response Gram matrix
-        s_full = 0.0_rp
-        do k = 1, n_diff
-            do i = rows(1, 1), rows(2, 1)
-                s_full(i, k) = dm_cols(i, k)
-                y_full(i, k) = v_same_spin_cols(i, k)
-                y_full(i, n_diff + k) = v_opposite_spin_cols(i, k)
-            end do
-            do i = rows(1, 2), rows(2, n_particle)
-                s_full(i, n_diff + k) = dm_cols(i, k)
-                y_full(i, k) = v_opposite_spin_cols(i, k)
-                y_full(i, n_diff + k) = v_same_spin_cols(i, k)
-            end do
-        end do
-        a_tilde = ref_congruence_transform(matmul(transpose(s_full), y_full), map, chol)
-        a_tilde = 0.5_rp * (a_tilde + transpose(a_tilde))
-        y_gram = ref_congruence_transform(matmul(transpose(y_full), y_full), map, chol)
-        expected = ref_ms_a_inv(a_tilde, y_gram)
+        ! the expected coupling is assembled independently of the routine, with the
+        ! noise floor relative to the larger of both spectra
+        a_tilde_coulomb = ref_congruence_transform(a_coulomb, map, chol)
+        a_tilde_exchange = ref_congruence_transform(a_exchange, map, chol)
+        scale = max(spectral_scale(a_tilde_coulomb), spectral_scale(a_tilde_exchange))
+        allocate(expected(2 * n_accepted, 2 * n_accepted))
+        expected = 0.0_rp
+        expected(:n_accepted, :n_accepted) = ref_psd_pinv(a_tilde_coulomb, scale)
+        expected(n_accepted + 1:, n_accepted + 1:) = &
+            -ref_psd_pinv(a_tilde_exchange, scale)
 
-        ! call routine and determine if the pseudoinverse matches
-        call get_ms_a_inv_os_linear(dm_cols, v_same_spin_cols, v_opposite_spin_cols, &
-                                    rows, map, chol, a_inv, settings, error)
+        ! call routine and determine if the coupling and directions of both terms match
+        call get_ms_jk_inv(a_coulomb, a_exchange, dirs_coulomb, dirs_exchange, &
+                           .false., map, chol, a_inv, dirs, settings, error)
         if (error /= 0) then
-            write(stderr, *) "test_get_ms_a_inv_os_linear failed: Produced error."
-            test_get_ms_a_inv_os_linear = .false.
-        else if (norm2(a_inv - expected) > tol) then
-            write(stderr, *) "test_get_ms_a_inv_os_linear failed: Incorrect "// &
-                "pseudoinverse."
-            test_get_ms_a_inv_os_linear = .false.
+            write(stderr, *) "test_get_ms_jk_inv failed: Produced error."
+            test_get_ms_jk_inv = .false.
+        else if (norm2(a_inv - expected) > tol * (1.0_rp + norm2(expected)) .or. &
+                 norm2(dirs(:, :n_accepted) - dirs_coulomb) > tol .or. &
+                 norm2(dirs(:, n_accepted + 1:) - dirs_exchange) > tol) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Incorrect coupling or "// &
+                "directions."
+            test_get_ms_jk_inv = .false.
         end if
-        deallocate(a_inv, expected, a_tilde, y_gram)
 
-        ! confining the history to the first row of every channel while suppressing the
-        ! potentials there leaves every direction badly aligned with its own response,
-        ! so the screening criterion has to discard all of them
-        do j = 1, 2
-            dm_cols(rows(1, j) + 1:rows(2, j), :) = 0.0_rp
-            v_same_spin_cols(rows(1, j), :) = 1e-3_rp * v_same_spin_cols(rows(1, j), :)
-            v_opposite_spin_cols(rows(1, j), :) = 1e-3_rp * &
-                                                  v_opposite_spin_cols(rows(1, j), :)
-        end do
-
-        ! call routine and determine if the pseudoinverse vanishes
-        call get_ms_a_inv_os_linear(dm_cols, v_same_spin_cols, v_opposite_spin_cols, &
-                                    rows, map, chol, a_inv, settings, error)
+        ! call routine without exact exchange and determine if only the Coulomb term is
+        ! returned
+        call get_ms_jk_inv(a_coulomb, 0.0_rp * a_exchange, dirs_coulomb, &
+                           dirs_exchange, .true., map, chol, a_inv, dirs, settings, &
+                           error)
+        expected = ref_psd_pinv(a_tilde_coulomb, spectral_scale(a_tilde_coulomb))
         if (error /= 0) then
-            write(stderr, *) "test_get_ms_a_inv_os_linear failed: Produced error "// &
-                "for a badly aligned history."
-            test_get_ms_a_inv_os_linear = .false.
-        else if (norm2(a_inv) > tol) then
-            write(stderr, *) "test_get_ms_a_inv_os_linear failed: Screening did "// &
-                "not discard every direction of a badly aligned history."
-            test_get_ms_a_inv_os_linear = .false.
+            write(stderr, *) "test_get_ms_jk_inv failed: Produced error without "// &
+                "exact exchange."
+            test_get_ms_jk_inv = .false.
+        else if (size(a_inv, 1) /= n_accepted .or. size(dirs, 2) /= n_accepted) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Exact-exchange term not "// &
+                "left out without exact exchange."
+            test_get_ms_jk_inv = .false.
+        else if (norm2(a_inv - expected) > tol * (1.0_rp + norm2(expected)) .or. &
+                 norm2(dirs - dirs_coulomb) > tol) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Incorrect coupling or "// &
+                "directions without exact exchange."
+            test_get_ms_jk_inv = .false.
         end if
-        deallocate(a_inv)
 
-        ! call routine for an empty history and determine if dimensions of the
-        ! resulting pseudoinverse vanish
-        call get_ms_a_inv_os_linear( &
-            empty_cols, empty_cols, empty_cols, rows, [integer(ip) :: ], &
-            reshape([real(rp) :: ], [0, 0]), a_inv, settings, error)
-        if (size(a_inv, 1) /= 0 .or. size(a_inv, 2) /= 0) then
-            write(stderr, *) "test_get_ms_a_inv_os_linear failed: Incorrect "// &
-                "pseudoinverse dimensions for empty history."
-            test_get_ms_a_inv_os_linear = .false.
+        ! call routine for an exact-exchange A at the level of rounding noise against
+        ! the Coulomb A and determine if it is not inverted, which a noise floor
+        ! relative to its own spectrum would do
+        call get_ms_jk_inv(a_coulomb, noise * a_exchange, dirs_coulomb, dirs_exchange, &
+                           .false., map, chol, a_inv, dirs, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Produced error for an "// &
+                "exact-exchange A of noise."
+            test_get_ms_jk_inv = .false.
+        else if (norm2(a_inv(n_accepted + 1:, n_accepted + 1:)) > tol) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Exact-exchange A of noise "// &
+                "inverted."
+            test_get_ms_jk_inv = .false.
         end if
-        deallocate(a_inv)
 
-    end function test_get_ms_a_inv_os_linear
+        ! call routine for a negative definite exact-exchange A and determine if its
+        ! eigenvalues, which a positive semidefinite matrix only has below the noise
+        ! floor, are not inverted however large they are
+        call get_ms_jk_inv(a_coulomb, -a_exchange, dirs_coulomb, dirs_exchange, &
+                           .false., map, chol, a_inv, dirs, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Produced error for a "// &
+                "negative definite exact-exchange A."
+            test_get_ms_jk_inv = .false.
+        else if (norm2(a_inv(n_accepted + 1:, n_accepted + 1:)) > tol) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Negative eigenvalues of "// &
+                "exact-exchange A inverted."
+            test_get_ms_jk_inv = .false.
+        end if
+
+        ! call routine for an empty history and determine if the coupling and the
+        ! directions are empty
+        call get_ms_jk_inv(a_coulomb(:0, :0), a_exchange(:0, :0), dirs_coulomb(:, :0), &
+                           dirs_exchange(:, :0), .false., [integer(ip) :: ], reshape( &
+                               [real(rp) :: ], [0, 0]), a_inv, dirs, settings, error)
+        if (error /= 0 .or. size(a_inv) /= 0 .or. size(dirs, 1) /= n_param .or. &
+            size(dirs, 2) /= 0) then
+            write(stderr, *) "test_get_ms_jk_inv failed: Incorrect coupling or "// &
+                "directions for empty history."
+            test_get_ms_jk_inv = .false.
+        end if
+
+    contains
+
+        function spectral_scale(a) result(scale_out)
+            !
+            ! this function returns the largest absolute eigenvalue of a symmetric
+            ! matrix, the scale the noise floor is relative to
+            !
+            real(rp), intent(in) :: a(:, :)
+            real(rp) :: scale_out
+
+            integer(ip) :: n, info
+            real(rp), allocatable :: vecs(:, :), vals(:), work(:)
+            external :: dsyev
+
+            n = size(a, 1)
+            allocate(vecs(n, n), vals(n), work(3 * n))
+            vecs = 0.5_rp * (a + transpose(a))
+            call dsyev("N", "U", n, vecs, n, vals, work, 3_ip * n, info)
+            scale_out = maxval(abs(vals))
+
+        end function spectral_scale
+
+    end function test_get_ms_jk_inv
 
     logical(c_bool) function test_response_gram() bind(C)
         !
@@ -4910,57 +5193,6 @@ contains
         end if
 
     end function test_response_gram
-
-    logical(c_bool) function test_response_gram_os_linear() bind(C)
-        !
-        ! this function tests the function which returns the Gram matrix of the
-        ! open-shell linear response history, whose same-spin and opposite-spin
-        ! potentials are interleaved exactly as the rows of A pair them
-        !
-        use otr_arh, only: response_gram_os_linear
-        use otr_common_test_reference, only: n_particle
-
-        integer(ip), parameter :: n_dm = 2, n_accepted = 3, n_rows(n_particle) = [4, 3]
-        integer(ip) :: rows(2, n_particle), map(n_accepted), k
-        real(rp) :: v_same(sum(n_rows), n_dm), v_opp(sum(n_rows), n_dm), &
-                    chol(n_accepted, n_accepted), y_full(sum(n_rows), 2 * n_dm), &
-                    gram(2 * n_dm, 2 * n_dm)
-        real(rp), allocatable :: y_gram(:, :), expected(:, :)
-
-        ! assume tests pass
-        test_response_gram_os_linear = .true.
-
-        ! random same-spin and opposite-spin response histories
-        call random_number(v_same)
-        call random_number(v_opp)
-        rows = reshape([1_ip, n_rows(1), &
-                        n_rows(1) + 1_ip, sum(n_rows)], [2, 2])
-        map = [4_ip, 1_ip, 3_ip]
-        chol = generate_random_upper_triangular(n_accepted)
-
-        ! stack the alpha and beta blocks independently, in the interleaved column
-        ! order the routine documents
-        do k = 1, n_dm
-            y_full(:n_rows(1), k) = v_same(:n_rows(1), k)
-            y_full(n_rows(1) + 1:, k) = v_opp(n_rows(1) + 1:, k)
-            y_full(:n_rows(1), n_dm + k) = v_opp(:n_rows(1), k)
-            y_full(n_rows(1) + 1:, n_dm + k) = v_same(n_rows(1) + 1:, k)
-        end do
-        gram = matmul(transpose(y_full), y_full)
-        expected = ref_congruence_transform(gram, map, chol)
-
-        ! call routine and determine if the rebased Gram matrix matches
-        y_gram = response_gram_os_linear(v_same, v_opp, rows, map, chol)
-        if (size(y_gram, 1) /= n_accepted .or. size(y_gram, 2) /= n_accepted) then
-            write(stderr, *) "test_response_gram_os_linear failed: Incorrect shape."
-            test_response_gram_os_linear = .false.
-        else if (maxval(abs(y_gram - expected)) > tol) then
-            write(stderr, *) "test_response_gram_os_linear failed: Incorrect "// &
-                "rebased open-shell linear response Gram matrix."
-            test_response_gram_os_linear = .false.
-        end if
-
-    end function test_response_gram_os_linear
 
     logical(c_bool) function test_apply_ms_sr1_skip() bind(C)
         !

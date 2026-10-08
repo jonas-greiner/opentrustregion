@@ -38,24 +38,25 @@ module otr_arh
     integer(ip), parameter :: arh_n_micro = 300
 
     abstract interface
-        subroutine evaluate_dm_cs_type(dm, energy, fock, v_nonlinear, error)
+        subroutine evaluate_dm_cs_type(dm, energy, fock, v_coulomb, v_exchange, &
+                                       v_nonlinear, error)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out) :: energy
-            real(rp), intent(out), optional, target, contiguous :: fock(:, :), &
-                                                                   v_nonlinear(:, :)
+            real(rp), intent(out), optional, target, contiguous :: &
+                fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
             integer(ip), intent(out) :: error
         end subroutine evaluate_dm_cs_type
 
-        subroutine evaluate_dm_os_type(dm, energy, fock, v_same_spin, v_opposite_spin, &
+        subroutine evaluate_dm_os_type(dm, energy, fock, v_coulomb, v_exchange, &
                                        v_nonlinear, error)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out) :: energy
             real(rp), intent(out), optional, target :: &
-                fock(:, :, :), v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
+                fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), &
                 v_nonlinear(:, :, :)
             integer(ip), intent(out) :: error
         end subroutine evaluate_dm_os_type
@@ -71,13 +72,13 @@ module otr_arh
         logical :: evaluation_stale = .true., model_stale = .false.
         class(orbital_basis_type), pointer :: orbitals => null()
         real(rp), allocatable :: &
-            fock(:, :, :), v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
-            v_nonlinear(:, :, :), a_sym(:, :), a_sym_nonlinear(:, :), a_inv(:, :), &
-            a_inv_comb(:, :), dm_list(:, :, :, :), fock_list(:, :, :, :), &
-            v_same_spin_list(:, :, :, :), v_opposite_spin_list(:, :, :, :), &
-            v_nonlinear_list(:, :, :, :), linear_potential_dirs(:, :), &
-            nonlinear_potential_dirs(:, :), dm_dirs(:, :), dm_dirs_nonlinear(:, :), &
-            expansion_dirs(:, :), projection_dirs(:, :), coupling_matrix(:, :)
+            v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :), &
+            a_sym(:, :), a_sym_nonlinear(:, :), a_inv(:, :), a_inv_comb(:, :), &
+            dm_list(:, :, :, :), v_coulomb_list(:, :, :, :), &
+            v_exchange_list(:, :, :, :), v_nonlinear_list(:, :, :, :), &
+            linear_potential_dirs(:, :), nonlinear_potential_dirs(:, :), &
+            dm_dirs(:, :), dm_dirs_nonlinear(:, :), expansion_dirs(:, :), &
+            projection_dirs(:, :), coupling_matrix(:, :)
         procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
         procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
     contains
@@ -181,14 +182,10 @@ module otr_arh
     class(arh_type), allocatable, target :: arh_object
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(obj_func_type), pointer :: obj_func_arh_cs_callback_ptr => &
-        obj_func_arh_cs_callback
-    procedure(obj_func_type), pointer :: obj_func_arh_os_callback_ptr => &
-        obj_func_arh_os_callback
-    procedure(update_orbs_type), pointer :: update_orbs_arh_cs_callback_ptr => &
-        update_orbs_arh_cs_callback
-    procedure(update_orbs_type), pointer :: update_orbs_arh_os_callback_ptr => &
-        update_orbs_arh_os_callback
+    procedure(obj_func_type), pointer :: obj_func_arh_callback_ptr => &
+        obj_func_arh_callback
+    procedure(update_orbs_type), pointer :: update_orbs_arh_callback_ptr => &
+        update_orbs_arh_callback
     procedure(hess_x_type), pointer :: hess_x_arh_callback_ptr => hess_x_arh_callback
     procedure(precond_type), pointer :: precond_arh_callback_ptr => precond_arh_callback
     procedure(precond_pd_type), pointer :: precond_pd_arh_callback_ptr => &
@@ -257,8 +254,8 @@ contains
         arh_object%evaluate_dm_cs => evaluate_dm_cs
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_cs_callback
-        update_orbs_arh_funptr => update_orbs_arh_cs_callback
+        obj_func_arh_funptr => obj_func_arh_callback
+        update_orbs_arh_funptr => update_orbs_arh_callback
 
         ! wire the remaining ARH routines into the solver settings
         call arh_set_solver_settings(solver_settings, arh_object, error)
@@ -303,8 +300,8 @@ contains
         arh_object%evaluate_dm_os => evaluate_dm_os
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_os_callback
-        update_orbs_arh_funptr => update_orbs_arh_os_callback
+        obj_func_arh_funptr => obj_func_arh_callback
+        update_orbs_arh_funptr => update_orbs_arh_callback
 
         ! wire the remaining ARH routines into the solver settings
         call arh_set_solver_settings(solver_settings, arh_object, error)
@@ -387,8 +384,8 @@ contains
         arh_object%evaluate_dm_cs => evaluate_dm_cs
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_cs_callback
-        update_orbs_arh_funptr => update_orbs_arh_cs_callback
+        obj_func_arh_funptr => obj_func_arh_callback
+        update_orbs_arh_funptr => update_orbs_arh_callback
 
         ! wire the remaining ARH routines and the projection of the OAO basis into the
         ! solver settings
@@ -433,8 +430,8 @@ contains
         arh_object%evaluate_dm_os => evaluate_dm_os
 
         ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_os_callback
-        update_orbs_arh_funptr => update_orbs_arh_os_callback
+        obj_func_arh_funptr => obj_func_arh_callback
+        update_orbs_arh_funptr => update_orbs_arh_callback
 
         ! wire the remaining ARH routines and the projection of the OAO basis into the
         ! solver settings
@@ -561,55 +558,11 @@ contains
 
     end subroutine arh_set_solver_settings
 
-    function obj_func_arh_cs_callback(kappa, error) result(energy)
+    function obj_func_arh_callback(kappa, error) result(energy)
         !
-        ! this function defines the energy evaluation for the closed-shell case, which
-        ! also adds the evaluated point with its Fock matrix and non-linear potential
-        ! to the history, unless it is already there
-        !
-        real(rp), intent(in), target :: kappa(:)
-        integer(ip), intent(out) :: error
-        real(rp) :: energy
-
-        integer(ip) :: n_ao
-        real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_hist(:, :, :), &
-                                 fock_ao(:, :, :), v_nonlinear_ao(:, :, :)
-
-        ! initialize energy in case of error
-        energy = 0.0_rp
-
-        ! number of AOs
-        n_ao = arh_object%orbitals%n_ao
-
-        ! get rotated density matrix in the AO and history basis
-        allocate(rot_dm_ao(n_ao, n_ao, 1), rot_dm_hist(n_ao, n_ao, 1), &
-                 fock_ao(n_ao, n_ao, 1), v_nonlinear_ao(n_ao, n_ao, 1))
-        call arh_object%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
-        if (error /= 0) return
-
-        ! calculate mean-field energy
-        call arh_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, fock_ao(:, :, 1), &
-                                       v_nonlinear_ao(:, :, 1), error)
-        if (error /= 0) return
-
-        ! update list of density, Fock and non-linear potential matrices
-        if (allocated(arh_object%dm_list)) then
-            if (.not. density_in_history(rot_dm_hist)) then
-                call prepend(arh_object%dm_list, rot_dm_hist)
-                call prepend(arh_object%fock_list, arh_object%to_history_basis(fock_ao))
-                call prepend(arh_object%v_nonlinear_list, &
-                             arh_object%to_history_basis(v_nonlinear_ao))
-                arh_object%model_stale = .true.
-            end if
-        end if
-
-    end function obj_func_arh_cs_callback
-
-    function obj_func_arh_os_callback(kappa, error) result(energy)
-        !
-        ! this function defines the energy evaluation for the open-shell case, which
-        ! also adds the evaluated point with its same-spin, opposite-spin and
-        ! non-linear potentials to the history, unless it is already there
+        ! this function defines the energy evaluation, which also adds the evaluated
+        ! point with its Coulomb, exact-exchange and non-linear potentials to the
+        ! history, unless it is already there
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -617,7 +570,7 @@ contains
 
         integer(ip) :: n_ao, n_particle
         real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_hist(:, :, :), &
-                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
+                                 v_coulomb_ao(:, :, :), v_exchange_ao(:, :, :), &
                                  v_nonlinear_ao(:, :, :)
 
         ! initialize energy in case of error
@@ -630,40 +583,45 @@ contains
         ! get rotated density matrix in the AO and history basis
         allocate(rot_dm_ao(n_ao, n_ao, n_particle), &
                  rot_dm_hist(n_ao, n_ao, n_particle), &
-                 v_same_spin_ao(n_ao, n_ao, n_particle), &
-                 v_opposite_spin_ao(n_ao, n_ao, n_particle), &
+                 v_coulomb_ao(n_ao, n_ao, n_particle), &
+                 v_exchange_ao(n_ao, n_ao, n_particle), &
                  v_nonlinear_ao(n_ao, n_ao, n_particle))
         call arh_object%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
         if (error /= 0) return
 
         ! calculate mean-field energy
-        call arh_object%evaluate_dm_os(rot_dm_ao, energy, v_same_spin=v_same_spin_ao, &
-                                       v_opposite_spin=v_opposite_spin_ao, &
-                                       v_nonlinear=v_nonlinear_ao, error=error)
+        if (associated(arh_object%evaluate_dm_cs)) then
+            call arh_object%evaluate_dm_cs( &
+                rot_dm_ao(:, :, 1), energy, v_coulomb=v_coulomb_ao(:, :, 1), &
+                v_exchange=v_exchange_ao(:, :, 1), &
+                v_nonlinear=v_nonlinear_ao(:, :, 1), error=error)
+        else
+            call arh_object%evaluate_dm_os(rot_dm_ao, energy, v_coulomb=v_coulomb_ao, &
+                                           v_exchange=v_exchange_ao, &
+                                           v_nonlinear=v_nonlinear_ao, error=error)
+        end if
         if (error /= 0) return
 
         ! update list of density and potential matrices
         if (allocated(arh_object%dm_list)) then
             if (.not. density_in_history(rot_dm_hist)) then
                 call prepend(arh_object%dm_list, rot_dm_hist)
-                call prepend(arh_object%v_same_spin_list, &
-                             arh_object%to_history_basis(v_same_spin_ao))
-                call prepend(arh_object%v_opposite_spin_list, &
-                             arh_object%to_history_basis(v_opposite_spin_ao))
+                call prepend(arh_object%v_coulomb_list, &
+                             arh_object%to_history_basis(v_coulomb_ao))
+                call prepend(arh_object%v_exchange_list, &
+                             arh_object%to_history_basis(v_exchange_ao))
                 call prepend(arh_object%v_nonlinear_list, &
                              arh_object%to_history_basis(v_nonlinear_ao))
                 arh_object%model_stale = .true.
             end if
         end if
 
-    end function obj_func_arh_os_callback
+    end function obj_func_arh_callback
 
-    subroutine update_orbs_arh_cs_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                           error)
+    subroutine update_orbs_arh_callback(kappa, func, grad, h_diag, hess_x_funptr, error)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation on the basis of augmented Roothaan-Hall
-        ! for the closed-shell case
         !
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
@@ -673,93 +631,7 @@ contains
 
         integer(ip) :: n_ao, n_particle
         real(rp), allocatable :: dm_current(:, :, :), fock_ao(:, :, :), &
-                                 v_nonlinear_ao(:, :, :)
-
-        ! initialize error flag
-        error = 0
-
-        ! evaluate at the rotated orbitals, or at the current ones if these have not
-        ! been evaluated yet
-        if ((sum(abs(kappa)) > 0.0_rp) .or. arh_object%evaluation_stale) then
-            ! number of AOs
-            n_ao = arh_object%orbitals%n_ao
-
-            ! number of particles
-            n_particle = arh_object%orbitals%n_particle
-
-            ! add the current point to the list of density, Fock and non-linear
-            ! potential matrices if it has been evaluated
-            if (.not. allocated(arh_object%dm_list)) then
-                allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%fock_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
-            else if (.not. arh_object%evaluation_stale) then
-                dm_current = arh_object%history_dm()
-                if (.not. density_in_history(dm_current)) then
-                    call prepend(arh_object%dm_list, dm_current)
-                    call prepend(arh_object%fock_list, arh_object%fock)
-                    call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear)
-                end if
-            end if
-
-            ! rotate orbitals, which have not been evaluated until this succeeds
-            arh_object%evaluation_stale = .true.
-            call arh_object%orbitals%rotate_orbitals(kappa, arh_object%settings, error)
-            if (error /= 0) return
-
-            ! get energy, Fock matrix and non-linear potential
-            allocate(fock_ao(n_ao, n_ao, n_particle), &
-                     v_nonlinear_ao(n_ao, n_ao, n_particle))
-            call arh_object%evaluate_dm_cs( &
-                arh_object%orbitals%dm_ao(:, :, 1), arh_object%orbitals%energy, &
-                fock_ao(:, :, 1), v_nonlinear_ao(:, :, 1), error)
-            if (error /= 0) then
-                deallocate(fock_ao, v_nonlinear_ao)
-                return
-            end if
-
-            ! transform Fock matrix and non-linear potential to the history basis
-            arh_object%fock = arh_object%to_history_basis(fock_ao)
-            arh_object%v_nonlinear = arh_object%to_history_basis(v_nonlinear_ao)
-            deallocate(fock_ao, v_nonlinear_ao)
-
-            ! calculate gradient, Hessian diagonal and static part of the Hessian from
-            ! the Fock matrix in the history basis, the basis the orbital object
-            ! represents the density matrix in
-            call arh_object%orbitals%calculate_grad_h_diag(arh_object%fock)
-
-            ! assemble the approximate Hessian model from the history
-            call build_hess_model_cs(error)
-            if (error /= 0) return
-
-            ! the rotated orbitals have been evaluated
-            arh_object%evaluation_stale = .false.
-        end if
-
-        ! set outputs
-        func = arh_object%orbitals%energy
-        grad = arh_object%orbitals%grad
-        h_diag = arh_object%orbitals%h_diag
-        hess_x_funptr => hess_x_arh_callback
-
-    end subroutine update_orbs_arh_cs_callback
-
-    subroutine update_orbs_arh_os_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                           error)
-        !
-        ! this function defines the energy, gradient, and Hessian diagonal evaluation
-        ! and the Hessian linear transformation on the basis of augmented Roothaan-Hall
-        ! for the open-shell case
-        !
-        real(rp), intent(in), target :: kappa(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-
-        integer(ip) :: n_ao, n_particle
-        real(rp), allocatable :: dm_current(:, :, :), fock_ao(:, :, :), &
-                                 v_same_spin_ao(:, :, :), v_opposite_spin_ao(:, :, :), &
+                                 v_coulomb_ao(:, :, :), v_exchange_ao(:, :, :), &
                                  v_nonlinear_ao(:, :, :)
 
         ! initialize error flag
@@ -778,16 +650,15 @@ contains
             ! has been evaluated
             if (.not. allocated(arh_object%dm_list)) then
                 allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%v_same_spin_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%v_opposite_spin_list(n_ao, n_ao, n_particle, 0), &
+                         arh_object%v_coulomb_list(n_ao, n_ao, n_particle, 0), &
+                         arh_object%v_exchange_list(n_ao, n_ao, n_particle, 0), &
                          arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
             else if (.not. arh_object%evaluation_stale) then
                 dm_current = arh_object%history_dm()
                 if (.not. density_in_history(dm_current)) then
                     call prepend(arh_object%dm_list, dm_current)
-                    call prepend(arh_object%v_same_spin_list, arh_object%v_same_spin)
-                    call prepend(arh_object%v_opposite_spin_list, &
-                                 arh_object%v_opposite_spin)
+                    call prepend(arh_object%v_coulomb_list, arh_object%v_coulomb)
+                    call prepend(arh_object%v_exchange_list, arh_object%v_exchange)
                     call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear)
                 end if
             end if
@@ -797,17 +668,24 @@ contains
             call arh_object%orbitals%rotate_orbitals(kappa, arh_object%settings, error)
             if (error /= 0) return
 
-            ! get energy, Fock matrix, same and opposite spin potentials, and
+            ! get energy, Fock matrix, Coulomb and exact-exchange potentials, and
             ! non-linear potential
             allocate(fock_ao(n_ao, n_ao, n_particle), &
-                     v_same_spin_ao(n_ao, n_ao, n_particle), &
-                     v_opposite_spin_ao(n_ao, n_ao, n_particle), &
+                     v_coulomb_ao(n_ao, n_ao, n_particle), &
+                     v_exchange_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
-            call arh_object%evaluate_dm_os( &
-                arh_object%orbitals%dm_ao, arh_object%orbitals%energy, fock_ao, &
-                v_same_spin_ao, v_opposite_spin_ao, v_nonlinear_ao, error)
+            if (associated(arh_object%evaluate_dm_cs)) then
+                call arh_object%evaluate_dm_cs( &
+                    arh_object%orbitals%dm_ao(:, :, 1), arh_object%orbitals%energy, &
+                    fock_ao(:, :, 1), v_coulomb_ao(:, :, 1), v_exchange_ao(:, :, 1), &
+                    v_nonlinear_ao(:, :, 1), error)
+            else
+                call arh_object%evaluate_dm_os( &
+                    arh_object%orbitals%dm_ao, arh_object%orbitals%energy, fock_ao, &
+                    v_coulomb_ao, v_exchange_ao, v_nonlinear_ao, error)
+            end if
             if (error /= 0) then
-                deallocate(fock_ao, v_same_spin_ao, v_opposite_spin_ao, v_nonlinear_ao)
+                deallocate(fock_ao, v_coulomb_ao, v_exchange_ao, v_nonlinear_ao)
                 return
             end if
 
@@ -818,15 +696,20 @@ contains
                 arh_object%to_history_basis(fock_ao))
             deallocate(fock_ao)
 
-            ! transform same and opposite spin and non-linear potentials to the history
-            ! basis
-            arh_object%v_same_spin = arh_object%to_history_basis(v_same_spin_ao)
-            arh_object%v_opposite_spin = arh_object%to_history_basis(v_opposite_spin_ao)
+            ! transform Coulomb, exact-exchange and non-linear potentials to the
+            ! history basis
+            arh_object%v_coulomb = arh_object%to_history_basis(v_coulomb_ao)
+            arh_object%v_exchange = arh_object%to_history_basis(v_exchange_ao)
             arh_object%v_nonlinear = arh_object%to_history_basis(v_nonlinear_ao)
-            deallocate(v_same_spin_ao, v_opposite_spin_ao, v_nonlinear_ao)
+            deallocate(v_coulomb_ao, v_exchange_ao, v_nonlinear_ao)
 
-            ! assemble the approximate Hessian model from the history
-            call build_hess_model_os(error)
+            ! assemble the approximate Hessian model from the history for the closed- or
+            ! open-shell case
+            if (associated(arh_object%evaluate_dm_cs)) then
+                call build_hess_model_cs(error)
+            else
+                call build_hess_model_os(error)
+            end if
             if (error /= 0) return
 
             ! the rotated orbitals have been evaluated
@@ -839,7 +722,7 @@ contains
         h_diag = arh_object%orbitals%h_diag
         hess_x_funptr => hess_x_arh_callback
 
-    end subroutine update_orbs_arh_os_callback
+    end subroutine update_orbs_arh_callback
 
     subroutine build_hess_model_cs(error)
         !
@@ -851,10 +734,12 @@ contains
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc, n_acc_nonlinear
         real(rp) :: min_residual
         real(rp), allocatable :: &
-            dm_current(:, :, :), dm_diff(:, :, :, :), v_linear_diff(:, :, :, :), &
-            v_nonlinear_diff(:, :, :, :), dm_cols(:, :), v_linear_cols(:, :), &
-            v_nonlinear_cols(:, :), dm_packed(:, :), v_linear_packed(:, :), &
-            v_nonlinear_packed(:, :), chol(:, :), chol_nonlinear(:, :)
+            dm_current(:, :, :), dm_diff(:, :, :, :), v_coulomb_diff(:, :, :, :), &
+            v_exchange_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :), dm_cols(:, :), &
+            v_coulomb_cols(:, :), v_exchange_cols(:, :), v_linear_cols(:, :), &
+            v_nonlinear_cols(:, :), dm_packed(:, :), v_coulomb_packed(:, :), &
+            v_exchange_packed(:, :), v_linear_packed(:, :), v_nonlinear_packed(:, :), &
+            chol(:, :), chol_nonlinear(:, :)
         integer(ip), allocatable :: map(:), map_nonlinear(:)
         logical, allocatable :: keep_nonlinear(:)
 
@@ -865,28 +750,38 @@ contains
         n_ao = arh_object%orbitals%n_ao
         n_particle = arh_object%orbitals%n_particle
 
-        ! prepare the density matrix and potential differences, splitting the potential
-        ! differences into their linear (Coulomb and exact exchange) and non-linear
-        ! (XC) parts
+        ! prepare the density matrix and potential differences: the linear potential is
+        ! split into its Coulomb and exact-exchange parts, whose difference it is, and
+        ! the non-linear (XC) potential is kept apart
         n_list = size(arh_object%dm_list, 4)
         dm_current = arh_object%history_dm()
         allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
-                 v_linear_diff(n_ao, n_ao, n_particle, n_list), &
+                 v_coulomb_diff(n_ao, n_ao, n_particle, n_list), &
+                 v_exchange_diff(n_ao, n_ao, n_particle, n_list), &
                  v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
         do i = 1, n_list
             dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - dm_current
+            v_coulomb_diff(:, :, :, i) = arh_object%v_coulomb_list(:, :, :, i) - &
+                                         arh_object%v_coulomb
+            v_exchange_diff(:, :, :, i) = arh_object%v_exchange_list(:, :, :, i) - &
+                                          arh_object%v_exchange
             v_nonlinear_diff(:, :, :, i) = arh_object%v_nonlinear_list(:, :, :, i) - &
                                            arh_object%v_nonlinear
-            v_linear_diff(:, :, :, i) = arh_object%fock_list(:, :, :, i) - &
-                                        arh_object%fock - v_nonlinear_diff(:, :, :, i)
         end do
 
-        ! express the differences as history and packed columns
+        ! express the differences as history and packed columns, and the linear
+        ! potential differences as the difference of their Coulomb and exact-exchange
+        ! parts, which the transformation to columns preserves
         call arh_object%history_columns(dm_diff, dm_cols, dm_packed)
-        call arh_object%history_columns(v_linear_diff, v_linear_cols, v_linear_packed)
+        call arh_object%history_columns(v_coulomb_diff, v_coulomb_cols, &
+                                        v_coulomb_packed)
+        call arh_object%history_columns(v_exchange_diff, v_exchange_cols, &
+                                        v_exchange_packed)
         call arh_object%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
                                         v_nonlinear_packed)
-        deallocate(dm_diff, v_linear_diff, v_nonlinear_diff)
+        deallocate(dm_diff, v_coulomb_diff, v_exchange_diff, v_nonlinear_diff)
+        v_linear_cols = v_coulomb_cols - v_exchange_cols
+        v_linear_packed = v_coulomb_packed - v_exchange_packed
 
         ! factorize the density-matrix-difference history for the linear part which
         ! resolves linear dependencies in the history; the coupling formulas below
@@ -904,10 +799,16 @@ contains
 
         ! MS-SR1
         if (arh_object%settings%arh_type == "ms_sr1") then
-            ! get inverted A matrix linear part: this is exact since Coulomb and exact
-            ! exchange are linear in the density matrix
-            call get_ms_a_inv(dm_cols, v_linear_cols, map, chol, arh_object%a_inv, &
-                              arh_object%settings, error)
+            ! linear part: the difference of a Coulomb and an exact-exchange
+            ! multisecant term, each exact since Coulomb and exact exchange are linear
+            ! in the density matrix, and each bounded by its kernel, which is positive
+            ! semidefinite, unlike the linear kernel itself; this also caches the
+            ! packed potential difference directions the low-rank Hessian factors are
+            ! assembled from, rebased into the orthonormalized S-basis
+            call get_ms_a_inv_jk_cs( &
+                dm_cols, v_coulomb_cols, v_exchange_cols, v_coulomb_packed, &
+                v_exchange_packed, map, chol, arh_object%a_inv, &
+                arh_object%linear_potential_dirs, arh_object%settings, error)
             if (error /= 0) return
             ! non-linear part: kept on its own system so that it contracts against its
             ! own inverse and the exact linear secant relationship is not averaged with
@@ -917,9 +818,8 @@ contains
                               arh_object%settings, error)
             if (error /= 0) return
 
-            ! cache the packed history-projection directions the low-rank Hessian
-            ! factors are assembled from, rebased into the orthonormalized S-basis
-            arh_object%linear_potential_dirs = rebase_dirs(v_linear_packed, map, chol)
+            ! cache the packed non-linear potential difference directions, rebased into
+            ! the orthonormalized S-basis
             arh_object%nonlinear_potential_dirs = &
                 rebase_dirs(v_nonlinear_packed, map_nonlinear, chol_nonlinear)
         ! ARH and related methods
@@ -971,14 +871,19 @@ contains
                                     history_rows(:, :), packed_rows(:, :)
         logical, allocatable :: keep_nonlinear(:)
         real(rp), allocatable :: &
-            dm_current(:, :, :), dm_diff(:, :, :, :), v_same_spin_diff(:, :, :, :), &
-            v_opposite_spin_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :), &
-            dm_cols(:, :), v_same_spin_cols(:, :), v_opposite_spin_cols(:, :), &
+            dm_current(:, :, :), dm_diff(:, :, :, :), v_coulomb_diff(:, :, :, :), &
+            v_exchange_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :), &
+            v_coulomb_alpha_diff(:, :, :, :), v_coulomb_beta_diff(:, :, :, :), &
+            v_same_spin_diff(:, :, :, :), v_opposite_spin_diff(:, :, :, :), &
+            dm_cols(:, :), v_coulomb_alpha_cols(:, :), v_coulomb_beta_cols(:, :), &
+            v_exchange_cols(:, :), v_same_spin_cols(:, :), v_opposite_spin_cols(:, :), &
             v_nonlinear_cols(:, :), dm_cols1(:, :), dm_cols2(:, :), &
             v_nonlinear_cols1(:, :), v_nonlinear_cols2(:, :), dm_packed(:, :), &
-            v_same_spin_packed(:, :), v_opposite_spin_packed(:, :), &
-            v_nonlinear_packed(:, :), chol1(:, :), chol2(:, :), chol1_nl(:, :), &
-            chol2_nl(:, :), chol_comb(:, :), chol_comb_nl(:, :), chol_nl(:, :)
+            v_coulomb_alpha_packed(:, :), v_coulomb_beta_packed(:, :), &
+            v_exchange_packed(:, :), v_same_spin_packed(:, :), &
+            v_opposite_spin_packed(:, :), v_nonlinear_packed(:, :), chol1(:, :), &
+            chol2(:, :), chol1_nl(:, :), chol2_nl(:, :), chol_comb(:, :), &
+            chol_comb_nl(:, :), chol_nl(:, :)
 
         ! initialize error flag
         error = 0
@@ -987,8 +892,8 @@ contains
         n_ao = arh_object%orbitals%n_ao
         n_particle = arh_object%orbitals%n_particle
 
-        ! prepare the density matrix and potential differences; the same-spin and
-        ! opposite-spin potential differences are kept separate from the non-linear one
+        ! prepare the density matrix and potential differences; the Coulomb and
+        ! exact-exchange potential differences are kept separate from the non-linear one
         ! since the former are exact at any distance from the current density and
         ! therefore take the full history, while the non-linear one describes a
         ! drifting Hessian and is fitted only to the history entries the screening
@@ -996,29 +901,54 @@ contains
         n_list = size(arh_object%dm_list, 4)
         dm_current = arh_object%history_dm()
         allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
-                 v_same_spin_diff(n_ao, n_ao, n_particle, n_list), &
-                 v_opposite_spin_diff(n_ao, n_ao, n_particle, n_list), &
+                 v_coulomb_diff(n_ao, n_ao, n_particle, n_list), &
+                 v_exchange_diff(n_ao, n_ao, n_particle, n_list), &
                  v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
         do i = 1, n_list
             dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - dm_current
-            v_same_spin_diff(:, :, :, i) = arh_object%v_same_spin_list(:, :, :, i) - &
-                                           arh_object%v_same_spin
-            v_opposite_spin_diff(:, :, :, i) = &
-                arh_object%v_opposite_spin_list(:, :, :, i) - arh_object%v_opposite_spin
+            v_coulomb_diff(:, :, :, i) = arh_object%v_coulomb_list(:, :, :, i) - &
+                                         arh_object%v_coulomb
+            v_exchange_diff(:, :, :, i) = arh_object%v_exchange_list(:, :, :, i) - &
+                                          arh_object%v_exchange
             v_nonlinear_diff(:, :, :, i) = arh_object%v_nonlinear_list(:, :, :, i) - &
                                            arh_object%v_nonlinear
         end do
 
-        ! express the differences as history and packed columns and get the rows every
-        ! spin channel occupies in either
+        ! express the density matrix and non-linear potential differences as history
+        ! and packed columns
         call arh_object%history_columns(dm_diff, dm_cols, dm_packed)
-        call arh_object%history_columns(v_same_spin_diff, v_same_spin_cols, &
-                                        v_same_spin_packed)
-        call arh_object%history_columns(v_opposite_spin_diff, v_opposite_spin_cols, &
-                                        v_opposite_spin_packed)
         call arh_object%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
                                         v_nonlinear_packed)
-        deallocate(dm_diff, v_same_spin_diff, v_opposite_spin_diff, v_nonlinear_diff)
+        deallocate(dm_diff, v_nonlinear_diff)
+
+        ! express the linear potential differences as history and packed columns:
+        ! multisecant SR1 takes the Coulomb potential of the alpha and of the beta
+        ! density differences, which acts on both channels, and the exact-exchange
+        ! potential of every channel's density difference, which acts on that channel
+        ! only, while the ARH family takes the same-spin potential of every channel,
+        ! its own Coulomb minus exact-exchange potential, and the opposite-spin
+        ! potential, the Coulomb potential of the other channel; the history basis is
+        ! shared by both channels, so that a potential can be moved between them
+        if (arh_object%settings%arh_type == "ms_sr1") then
+            v_coulomb_alpha_diff = spread(v_coulomb_diff(:, :, 1, :), 3, n_particle)
+            v_coulomb_beta_diff = spread(v_coulomb_diff(:, :, 2, :), 3, n_particle)
+            call arh_object%history_columns( &
+                v_coulomb_alpha_diff, v_coulomb_alpha_cols, v_coulomb_alpha_packed)
+            call arh_object%history_columns(v_coulomb_beta_diff, v_coulomb_beta_cols, &
+                                            v_coulomb_beta_packed)
+            call arh_object%history_columns(v_exchange_diff, v_exchange_cols, &
+                                            v_exchange_packed)
+            deallocate(v_coulomb_alpha_diff, v_coulomb_beta_diff)
+        else
+            v_same_spin_diff = v_coulomb_diff - v_exchange_diff
+            v_opposite_spin_diff = v_coulomb_diff(:, :, [2, 1], :)
+            call arh_object%history_columns(v_same_spin_diff, v_same_spin_cols, &
+                                            v_same_spin_packed)
+            call arh_object%history_columns( &
+                v_opposite_spin_diff, v_opposite_spin_cols, v_opposite_spin_packed)
+            deallocate(v_same_spin_diff, v_opposite_spin_diff)
+        end if
+        deallocate(v_coulomb_diff, v_exchange_diff)
         history_rows = arh_object%history_channel_rows()
         packed_rows = arh_object%packed_channel_rows()
 
@@ -1041,12 +971,18 @@ contains
 
         ! MS-SR1
         if (arh_object%settings%arh_type == "ms_sr1") then
-            ! get inverted A matrix linear part: get spin-separated multisecant SR1
-            ! matrix for which separation is exact since Coulomb and exact exchange are
-            ! linear in the density matrix
-            call get_ms_a_inv_os_linear( &
-                dm_cols, v_same_spin_cols, v_opposite_spin_cols, history_rows, &
-                map_comb, chol_comb, arh_object%a_inv, arh_object%settings, error)
+            ! linear part: spin-separated, which is exact since Coulomb and exact
+            ! exchange are linear in the density matrix, and the difference of a
+            ! Coulomb and an exact-exchange multisecant term, each bounded by its
+            ! kernel, which is positive semidefinite, unlike the linear kernel itself;
+            ! this also caches the packed potential difference directions the low-rank
+            ! Hessian factors are assembled from, rebased into the orthonormalized
+            ! S-basis
+            call get_ms_a_inv_jk_os( &
+                dm_cols, v_coulomb_alpha_cols, v_coulomb_beta_cols, v_exchange_cols, &
+                v_coulomb_alpha_packed, v_coulomb_beta_packed, v_exchange_packed, &
+                history_rows, packed_rows, map_comb, chol_comb, arh_object%a_inv, &
+                arh_object%linear_potential_dirs, arh_object%settings, error)
             if (error /= 0) return
             ! non-linear part: get spin-combined multisecant SR1 matrix; the non-linear
             ! response mixes both channels at once, so this needs its own, separate
@@ -1060,13 +996,8 @@ contains
                               arh_object%a_inv_comb, arh_object%settings, error)
             if (error /= 0) return
 
-            ! cache the packed history-projection directions the low-rank Hessian
-            ! factors are assembled from; the linear potential directions combine the
-            ! same-/opposite-spin channels, while the non-linear potential directions
-            ! need no channel-splitting; rebased into the orthonormalized S-basis
-            call cache_combined_channel_dirs( &
-                v_same_spin_packed, v_opposite_spin_packed, packed_rows, map_comb, &
-                chol_comb, arh_object%linear_potential_dirs)
+            ! cache the packed non-linear potential difference directions, which need
+            ! no channel-splitting, rebased into the orthonormalized S-basis
             arh_object%nonlinear_potential_dirs = &
                 rebase_dirs(v_nonlinear_packed, map_nl, chol_nl)
         ! ARH and related methods
@@ -2008,8 +1939,11 @@ contains
         integer(ip) :: n_dm, flat_len
         external :: dgemm
 
-        ! A = S^T Y on the full history
+        ! nothing to build for an empty history
         n_dm = size(dm_cols, 2, kind=ip)
+        if (n_dm == 0) return
+
+        ! A = S^T Y on the full history
         flat_len = size(dm_cols, 1, kind=ip)
         call dgemm("T", "N", n_dm, n_dm, flat_len, 1.0_rp, dm_cols, flat_len, v_cols, &
                    flat_len, 0.0_rp, a, n_dm)
@@ -2069,10 +2003,11 @@ contains
             v_same_rows = v_same_cols(rows(1, j):rows(2, j), :)
             v_opp_rows = v_opp_cols(rows(1, j):rows(2, j), :)
 
-            ! same-spin and opposite-spin contributions
+            ! same-spin and opposite-spin contributions, nothing for an empty history
             call build_a_part(dm_rows, v_same_rows, a_same(:, :, j))
-            call dgemm("T", "N", n_diff, n_diff, n_rows, 1.0_rp, dm_rows, n_rows, &
-                       v_opp_rows, n_rows, 0.0_rp, a_opp(:, :, j), n_diff)
+            if (n_diff > 0) &
+                call dgemm("T", "N", n_diff, n_diff, n_rows, 1.0_rp, dm_rows, n_rows, &
+                           v_opp_rows, n_rows, 0.0_rp, a_opp(:, :, j), n_diff)
         end do
 
         ! cross-symmetrize off-diagonal blocks exactly, since the opposite-spin
@@ -2571,99 +2506,208 @@ contains
 
     end subroutine get_ms_a_inv
 
-    subroutine get_ms_a_inv_os_linear(dm_cols, v_same_spin_cols, v_opposite_spin_cols, &
-                                      rows, map, chol, a_inv, settings, error)
+    subroutine get_ms_a_inv_jk_cs(dm_cols, v_coulomb_cols, v_exchange_cols, &
+                                  v_coulomb_packed, v_exchange_packed, map, chol, &
+                                  a_inv, dirs, settings, error)
         !
-        ! this subroutine computes the pseudoinverse multisecant SR1 matrix in a
-        ! spin-separated manner for the linear (Coulomb and exact exchange) part in the
-        ! open-shell case; A is exactly symmetric in exact arithmetic, so its observed
-        ! asymmetry is numerical noise, which is removed by symmetrizing A after the
-        ! congruence transformation, before the eigenvalues at the level of numerical
-        ! noise relative to the largest one are discarded
+        ! this subroutine computes the closed-shell multisecant SR1 term of the linear
+        ! potential as the difference Y_J A_J^+ Y_J^T - Y_K A_K^+ Y_K^T of a Coulomb
+        ! and an exact-exchange term with A = S^T Y, instead of a single term of the
+        ! indefinite linear kernel; returns the coupling and the matching packed
+        ! potential difference directions rebased into the orthonormalized S-basis
         !
-        use opentrustregion, only: symm_mat_diag
-
-        real(rp), intent(in) :: dm_cols(:, :), v_same_spin_cols(:, :), &
-                                v_opposite_spin_cols(:, :)
-        integer(ip), intent(in) :: rows(:, :), map(:)
-        real(rp), intent(in) :: chol(:, :)
-        real(rp), intent(out), allocatable :: a_inv(:, :)
+        real(rp), intent(in) :: dm_cols(:, :), v_coulomb_cols(:, :), &
+                                v_exchange_cols(:, :), v_coulomb_packed(:, :), &
+                                v_exchange_packed(:, :), chol(:, :)
+        integer(ip), intent(in) :: map(:)
+        real(rp), intent(out), allocatable :: a_inv(:, :), dirs(:, :)
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_dm, n_accepted, i, k, n1, n2
-        real(rp), allocatable :: a(:, :), a_tilde(:, :), eig_vecs(:, :), eig_vals(:), &
-                                 eig_vals_inv(:)
-        real(rp), allocatable :: y_gram(:, :)
-        real(rp) :: eig_val_thresh
+        integer(ip) :: n_dm
+        real(rp), allocatable :: a_coulomb(:, :), a_exchange(:, :)
 
+        ! A = S^T Y of both kernels on the full history
+        n_dm = size(dm_cols, 2, kind=ip)
+        allocate(a_coulomb(n_dm, n_dm), a_exchange(n_dm, n_dm))
+        call build_a_part(dm_cols, v_coulomb_cols, a_coulomb)
+        call build_a_part(dm_cols, v_exchange_cols, a_exchange)
+
+        ! pseudoinverses and directions of both terms
+        call get_ms_jk_inv( &
+            a_coulomb, a_exchange, rebase_dirs(v_coulomb_packed, map, chol), &
+            rebase_dirs(v_exchange_packed, map, chol), all(v_exchange_cols == 0.0_rp), &
+            map, chol, a_inv, dirs, settings, error)
+
+    end subroutine get_ms_a_inv_jk_cs
+
+    subroutine get_ms_a_inv_jk_os(dm_cols, v_coulomb_alpha_cols, v_coulomb_beta_cols, &
+                                  v_exchange_cols, v_coulomb_alpha_packed, &
+                                  v_coulomb_beta_packed, v_exchange_packed, rows, &
+                                  packed_rows, map, chol, a_inv, dirs, settings, error)
+        !
+        ! this subroutine computes the open-shell multisecant SR1 term of the linear
+        ! potential as the difference of a Coulomb and an exact-exchange term on the
+        ! spin-separated density difference directions, those of every channel with the
+        ! other channel set to zero, whose per-channel factorizations map and chol
+        ! combine; the Coulomb potential of the alpha and beta density differences acts
+        ! on both channels, which couples the directions of the two channels, the
+        ! exact-exchange potential acts on the channel of its density difference only;
+        ! returns the coupling and the matching packed potential difference directions
+        ! rebased into the orthonormalized S-basis
+        !
+        real(rp), intent(in) :: &
+            dm_cols(:, :), v_coulomb_alpha_cols(:, :), v_coulomb_beta_cols(:, :), &
+            v_exchange_cols(:, :), v_coulomb_alpha_packed(:, :), &
+            v_coulomb_beta_packed(:, :), v_exchange_packed(:, :), chol(:, :)
+        integer(ip), intent(in) :: rows(:, :), packed_rows(:, :), map(:)
+        real(rp), intent(out), allocatable :: a_inv(:, :), dirs(:, :)
+        type(arh_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_dm, n1, n2, i, k
+        real(rp), allocatable :: a_coulomb(:, :), a_exchange(:, :), raw(:, :), &
+                                 dirs_exchange(:, :)
         real(rp), external :: ddot
+
+        ! number of history entries and of rows of the two spin channels in the history
+        ! columns
+        n_dm = size(dm_cols, 2, kind=ip)
+        n1 = rows(2, 1) - rows(1, 1) + 1
+        n2 = rows(2, 2) - rows(1, 2) + 1
+
+        ! A = S^T Y of both kernels on the spin-separated directions
+        allocate(a_coulomb(2 * n_dm, 2 * n_dm), a_exchange(2 * n_dm, 2 * n_dm))
+        a_exchange = 0.0_rp
+        do k = 1, n_dm
+            do i = 1, n_dm
+                a_coulomb(i, k) = ddot(n1, dm_cols(rows(1, 1):rows(2, 1), i), 1_ip, &
+                                       v_coulomb_alpha_cols(rows(1, 1):rows(2, 1), k), &
+                                       1_ip)
+                a_coulomb(i, n_dm + k) = ddot( &
+                    n1, dm_cols(rows(1, 1):rows(2, 1), i), 1_ip, &
+                    v_coulomb_beta_cols(rows(1, 1):rows(2, 1), k), 1_ip)
+                a_coulomb(n_dm + i, k) = ddot( &
+                    n2, dm_cols(rows(1, 2):rows(2, 2), i), 1_ip, &
+                    v_coulomb_alpha_cols(rows(1, 2):rows(2, 2), k), 1_ip)
+                a_coulomb(n_dm + i, n_dm + k) = ddot( &
+                    n2, dm_cols(rows(1, 2):rows(2, 2), i), 1_ip, &
+                    v_coulomb_beta_cols(rows(1, 2):rows(2, 2), k), 1_ip)
+                a_exchange(i, k) = ddot(n1, dm_cols(rows(1, 1):rows(2, 1), i), 1_ip, &
+                                        v_exchange_cols(rows(1, 1):rows(2, 1), k), 1_ip)
+                a_exchange(n_dm + i, n_dm + k) = ddot( &
+                    n2, dm_cols(rows(1, 2):rows(2, 2), i), 1_ip, &
+                    v_exchange_cols(rows(1, 2):rows(2, 2), k), 1_ip)
+            end do
+        end do
+
+        ! the Coulomb responses of the alpha and the beta directions fill both
+        ! channels, the exact-exchange responses stay in their own channel
+        allocate(raw(size(v_coulomb_alpha_packed, 1), 2 * n_dm))
+        raw(:, :n_dm) = v_coulomb_alpha_packed
+        raw(:, n_dm + 1:) = v_coulomb_beta_packed
+        call cache_channel_split_dirs(v_exchange_packed, packed_rows, map, chol, &
+                                      dirs_exchange)
+
+        ! pseudoinverses and directions of both terms
+        call get_ms_jk_inv(a_coulomb, a_exchange, rebase_dirs(raw, map, chol), &
+                           dirs_exchange, all(v_exchange_cols == 0.0_rp), map, chol, &
+                           a_inv, dirs, settings, error)
+
+    end subroutine get_ms_a_inv_jk_os
+
+    subroutine get_ms_jk_inv(a_coulomb, a_exchange, dirs_coulomb, dirs_exchange, &
+                             no_exchange, map, chol, a_inv, dirs, settings, error)
+        !
+        ! this subroutine returns the coupling and directions of the multisecant SR1
+        ! term of the linear potential as the difference of a Coulomb and an
+        ! exact-exchange term: both kernels are positive semidefinite, so that each
+        ! term lies between zero and its kernel and a small eigenvalue of its A only
+        ! comes with a small response, which a single term of the indefinite linear
+        ! kernel cannot guarantee; both A are congruence-transformed into the
+        ! orthonormalized S-basis and inverted on their eigenvalues above a noise floor
+        ! relative to the larger of both spectra, so that an exact-exchange A of
+        ! rounding noise is never inverted; the coupling is diag(A_J^+, -A_K^+) for the
+        ! directions [Y_J, Y_K], or A_J^+ for Y_J alone without exact exchange
+        !
+        use opentrustregion, only: symm_mat_diag
+
+        real(rp), intent(in) :: a_coulomb(:, :), a_exchange(:, :), dirs_coulomb(:, :), &
+                                dirs_exchange(:, :), chol(:, :)
+        logical, intent(in) :: no_exchange
+        integer(ip), intent(in) :: map(:)
+        real(rp), intent(out), allocatable :: a_inv(:, :), dirs(:, :)
+        type(arh_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_accepted, n_param, i
+        real(rp) :: eig_val_thresh
+        real(rp), allocatable :: a_tilde_coulomb(:, :), a_tilde_exchange(:, :), &
+                                 eig_vals_coulomb(:), eig_vals_exchange(:), &
+                                 eig_vecs_coulomb(:, :), eig_vecs_exchange(:, :), &
+                                 eig_vals_inv_coulomb(:), eig_vals_inv_exchange(:)
 
         ! initialize error flag
         error = 0
 
         ! handle empty history
-        n_dm = size(dm_cols, 2, kind=ip)
         n_accepted = size(map)
-        if (n_dm == 0 .or. n_accepted == 0) then
-            allocate(a_inv(n_accepted, n_accepted))
-            a_inv = 0.0_rp
+        n_param = size(dirs_coulomb, 1, kind=ip)
+        if (n_accepted == 0) then
+            allocate(a_inv(0, 0), dirs(n_param, 0))
             return
         end if
 
-        ! number of rows of the two spin channels in the history columns
-        n1 = rows(2, 1) - rows(1, 1) + 1
-        n2 = rows(2, 2) - rows(1, 2) + 1
+        ! congruence-transform both A to the orthonormalized, rank-independent S-basis,
+        ! enforcing the symmetry they have in exact arithmetic
+        a_tilde_coulomb = congruence_transform(a_coulomb, map, chol)
+        a_tilde_coulomb = 0.5_rp * (a_tilde_coulomb + transpose(a_tilde_coulomb))
+        a_tilde_exchange = congruence_transform(a_exchange, map, chol)
+        a_tilde_exchange = 0.5_rp * (a_tilde_exchange + transpose(a_tilde_exchange))
 
-        ! A = S^T Y
-        allocate(a(2 * n_dm, 2 * n_dm))
-        do k = 1, n_dm
-            do i = 1, n_dm
-                a(i, k) = ddot(n1, dm_cols(rows(1, 1):rows(2, 1), i), 1_ip, &
-                               v_same_spin_cols(rows(1, 1):rows(2, 1), k), 1_ip)
-                a(i, n_dm + k) = ddot(n1, dm_cols(rows(1, 1):rows(2, 1), i), 1_ip, &
-                                      v_opposite_spin_cols(rows(1, 1):rows(2, 1), k), &
-                                      1_ip)
-                a(n_dm + i, k) = ddot(n2, dm_cols(rows(1, 2):rows(2, 2), i), 1_ip, &
-                                      v_opposite_spin_cols(rows(1, 2):rows(2, 2), k), &
-                                      1_ip)
-                a(n_dm + i, n_dm + k) = ddot( &
-                    n2, dm_cols(rows(1, 2):rows(2, 2), i), 1_ip, &
-                    v_same_spin_cols(rows(1, 2):rows(2, 2), k), 1_ip)
-            end do
-        end do
-
-        ! congruence-transform to the orthonormalized, rank-independent S-basis
-        a_tilde = congruence_transform(a, map, chol)
-        deallocate(a)
-
-        ! enforce the symmetry A has in exact arithmetic, which this routine does after
-        ! the transformation rather than on A itself as the routines building A from
-        ! its parts do
-        a_tilde = 0.5_rp * (a_tilde + transpose(a_tilde))
-
-        ! perform spectral decomposition
-        allocate(eig_vecs(n_accepted, n_accepted), eig_vals(n_accepted))
-        call symm_mat_diag(a_tilde, eig_vals, eig_vecs, settings, error)
+        ! perform spectral decompositions
+        allocate( &
+            eig_vals_coulomb(n_accepted), eig_vecs_coulomb(n_accepted, n_accepted), &
+            eig_vals_exchange(n_accepted), eig_vecs_exchange(n_accepted, n_accepted))
+        call symm_mat_diag(a_tilde_coulomb, eig_vals_coulomb, eig_vecs_coulomb, &
+                           settings, error)
+        if (error /= 0) return
+        call symm_mat_diag(a_tilde_exchange, eig_vals_exchange, eig_vecs_exchange, &
+                           settings, error)
         if (error /= 0) return
 
-        ! construct inverse, discarding only eigenvalues at the level of numerical
-        ! noise relative to the largest one
-        allocate(eig_vals_inv(n_accepted))
-        eig_val_thresh = eig_val_noise_factor * maxval(abs(eig_vals)) * epsilon(1.0_rp)
-        eig_vals_inv = truncated_eigval_inv(eig_vals, eig_val_thresh)
+        ! invert the eigenvalues above the noise floor, which positive semidefinite
+        ! matrices only fall below by rounding
+        eig_val_thresh = eig_val_noise_factor * epsilon(1.0_rp) * max( &
+            maxval(abs(eig_vals_coulomb)), maxval(abs(eig_vals_exchange)))
+        allocate(eig_vals_inv_coulomb(n_accepted), eig_vals_inv_exchange(n_accepted))
+        eig_vals_inv_coulomb = 0.0_rp
+        eig_vals_inv_exchange = 0.0_rp
+        do i = 1, n_accepted
+            if (eig_vals_coulomb(i) > eig_val_thresh) &
+                eig_vals_inv_coulomb(i) = 1.0_rp / eig_vals_coulomb(i)
+            if (eig_vals_exchange(i) > eig_val_thresh) &
+                eig_vals_inv_exchange(i) = 1.0_rp / eig_vals_exchange(i)
+        end do
 
-        ! discard directions failing the multisecant SR1 skipping criterion
-        y_gram = response_gram_os_linear(v_same_spin_cols, v_opposite_spin_cols, rows, &
-                                         map, chol)
-        call apply_ms_sr1_skip(eig_vals, eig_vecs, y_gram, eig_vals_inv)
-        deallocate(y_gram)
+        ! assemble the coupling and the directions, without the exact-exchange term if
+        ! there is no exact exchange
+        if (no_exchange) then
+            a_inv = spectral_to_dense(eig_vecs_coulomb, eig_vals_inv_coulomb)
+            dirs = dirs_coulomb
+        else
+            allocate(a_inv(2 * n_accepted, 2 * n_accepted), &
+                     dirs(n_param, 2 * n_accepted))
+            a_inv = 0.0_rp
+            a_inv(:n_accepted, :n_accepted) = &
+                spectral_to_dense(eig_vecs_coulomb, eig_vals_inv_coulomb)
+            a_inv(n_accepted + 1:, n_accepted + 1:) = &
+                -spectral_to_dense(eig_vecs_exchange, eig_vals_inv_exchange)
+            dirs(:, :n_accepted) = dirs_coulomb
+            dirs(:, n_accepted + 1:) = dirs_exchange
+        end if
 
-        ! reassemble the pseudoinverse
-        a_inv = spectral_to_dense(eig_vecs, eig_vals_inv)
-        deallocate(a_tilde, eig_vecs, eig_vals, eig_vals_inv)
-
-    end subroutine get_ms_a_inv_os_linear
+    end subroutine get_ms_jk_inv
 
     function response_gram(v_cols, map, chol) result(y_gram)
         !
@@ -2688,43 +2732,6 @@ contains
         deallocate(gram)
 
     end function response_gram
-
-    function response_gram_os_linear(v_same_spin_cols, v_opposite_spin_cols, rows, &
-                                     map, chol) result(y_gram)
-        !
-        ! this function returns the Gram matrix of the open-shell linear response
-        ! history rebased into the orthonormalized S-basis; the same-spin and
-        ! opposite-spin potentials are interleaved exactly as the rows of A pair them,
-        ! so that column k of the implicit response matrix stacks the alpha and beta
-        ! blocks that A(:, k) contracts against
-        !
-        real(rp), intent(in) :: v_same_spin_cols(:, :), v_opposite_spin_cols(:, :), &
-                                chol(:, :)
-        integer(ip), intent(in) :: rows(:, :), map(:)
-        real(rp), allocatable :: y_gram(:, :)
-
-        integer(ip) :: n_dm, flat_len
-        real(rp), allocatable :: y_full(:, :), gram(:, :)
-        external :: dgemm
-
-        n_dm = size(v_same_spin_cols, 2, kind=ip)
-        flat_len = size(v_same_spin_cols, 1, kind=ip)
-        allocate(y_full(flat_len, 2 * n_dm), gram(2 * n_dm, 2 * n_dm))
-        y_full = 0.0_rp
-        y_full(rows(1, 1):rows(2, 1), :n_dm) = &
-            v_same_spin_cols(rows(1, 1):rows(2, 1), :)
-        y_full(rows(1, 2):rows(2, 2), :n_dm) = &
-            v_opposite_spin_cols(rows(1, 2):rows(2, 2), :)
-        y_full(rows(1, 1):rows(2, 1), n_dm + 1:) = &
-            v_opposite_spin_cols(rows(1, 1):rows(2, 1), :)
-        y_full(rows(1, 2):rows(2, 2), n_dm + 1:) = &
-            v_same_spin_cols(rows(1, 2):rows(2, 2), :)
-        call dgemm("T", "N", 2 * n_dm, 2 * n_dm, flat_len, 1.0_rp, y_full, flat_len, &
-                   y_full, flat_len, 0.0_rp, gram, 2 * n_dm)
-        y_gram = congruence_transform(gram, map, chol)
-        deallocate(y_full, gram)
-
-    end function response_gram_os_linear
 
     subroutine apply_ms_sr1_skip(eig_vals, eig_vecs, y_gram, eig_vals_inv)
         !

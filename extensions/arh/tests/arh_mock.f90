@@ -203,7 +203,8 @@ contains
         ! test passed density matrix evaluating function
         test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
             evaluate_dm_funptr, "arh_factory_mo_c_wrapper", " by given density "// &
-            "matrix evaluating function with non-linear potential contribution")
+            "matrix evaluating function with Coulomb, exact-exchange and "// &
+            "non-linear potential contributions")
 
         ! set output quantities
         error = 0
@@ -250,8 +251,8 @@ contains
         ! test passed density matrix evaluating function
         test_passed = test_passed .and. test_evaluate_dm_os_funptr( &
             evaluate_dm_funptr, "arh_factory_mo_c_wrapper", " by given density "// &
-            "matrix evaluating function with same- and opposite-spin potential "// &
-            "contributions")
+            "matrix evaluating function with Coulomb, exact-exchange and "// &
+            "non-linear potential contributions")
 
         ! set output quantities
         error = 0
@@ -318,7 +319,8 @@ contains
         ! test passed density matrix evaluating function
         test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
             evaluate_dm_funptr, "arh_factory_oao_c_wrapper", " by given density "// &
-            "matrix evaluating function with non-linear potential contribution")
+            "matrix evaluating function with Coulomb, exact-exchange and "// &
+            "non-linear potential contributions")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -401,8 +403,8 @@ contains
         ! test passed density matrix evaluating function
         test_passed = test_passed .and. test_evaluate_dm_os_funptr( &
             evaluate_dm_os_funptr, "arh_factory_oao_c_wrapper", " by given density "// &
-            "matrix evaluating function with same- and opposite-spin potential "// &
-            "contributions")
+            "matrix evaluating function with Coulomb, exact-exchange and "// &
+            "non-linear potential contributions")
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then

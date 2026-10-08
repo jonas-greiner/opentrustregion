@@ -492,6 +492,17 @@ class OAOPyInterfaceTests(unittest.TestCase):
                 ),
                 ValueError,
             ),
+            (
+                "evaluate_dm with a wrong number of arguments",
+                (
+                    np.full(2 * (n_ao,), 1.0),
+                    ao_overlap,
+                    1,
+                    n_ao,
+                    lambda dm, fock: (0.0, None),
+                ),
+                TypeError,
+            ),
         )
         for case, args, error_type in invalid_cases:
             try:

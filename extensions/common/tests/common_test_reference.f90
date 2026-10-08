@@ -29,6 +29,11 @@ module otr_common_test_reference
     type(ref_orbital_settings_type), parameter :: ref_orbital_settings = &
         ref_orbital_settings_type(verbose=3)
 
+    ! names of the closed-shell and the open-shell case, indexed by the number of
+    ! particle channels, for the failure messages of tests covering both
+    character(len=12), parameter :: shell_names(2) = &
+        [character(len=12) :: "closed-shell", "open-shell"]
+
     ! multiples of the density matrix the mock density matrix evaluating functions
     ! return for each optional output, in the order of evaluate_dm_outputs
     real(c_rp), protected, bind(C, name="test_evaluate_dm_factors") :: &
@@ -129,94 +134,6 @@ contains
 
     end function test_evaluate_dm_cs_funptr
 
-    function test_evaluate_dm_cs_c_funptr(evaluate_dm_c_funptr, test_name, message) &
-        result(test_passed)
-        !
-        ! this function tests a provided density matrix evaluating C function pointer
-        ! for the closed-shell case for every combination of requested outputs
-        !
-        use otr_common_c_interface, only: evaluate_dm_c_type
-        use test_reference, only: tol_c
-
-        type(c_funptr), intent(in) :: evaluate_dm_c_funptr
-        character(len=*), intent(in) :: test_name, message
-        logical :: test_passed
-
-        procedure(evaluate_dm_c_type), pointer :: evaluate_dm_funptr
-        real(c_rp), target :: dm_ao(n_ao, n_ao), fock(n_ao, n_ao)
-        real(c_rp), pointer :: fock_ptr(:, :)
-        real(c_rp) :: energy
-        type(c_funptr) :: get_response_c_funptr
-        character(len=:), allocatable :: requested
-        integer(ip) :: request
-        integer(c_ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. c_associated(evaluate_dm_c_funptr)) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "evaluating function for closed-shell case provided"//message// &
-                " not associated with value."
-            return
-        end if
-
-        ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=evaluate_dm_funptr)
-
-        ! generate random density matrix
-        call random_number(dm_ao)
-
-        ! call density matrix evaluating function for every combination of requested
-        ! outputs
-        do request = 0, 3
-            requested = request_label(evaluate_dm_outputs, request)
-            nullify(fock_ptr)
-            get_response_c_funptr = c_null_funptr
-            if (btest(request, 0)) fock_ptr => fock
-            energy = 0.0_c_rp
-            fock = 0.0_c_rp
-            if (btest(request, 1)) then
-                error = &
-                    evaluate_dm_funptr(dm_ao, energy, fock_ptr, get_response_c_funptr)
-            else
-                error = evaluate_dm_funptr(dm_ao, energy, fock_ptr)
-            end if
-
-            ! check for error
-            if (error /= 0) then
-                write(stderr, *) "test_"//test_name//" failed: Error produced"// &
-                    message//" for closed-shell case"//requested//"."
-                test_passed = .false.
-                cycle
-            end if
-
-            ! check energy
-            if (abs(energy - sum(dm_ao)) > tol_c) then
-                write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
-                    message//" for closed-shell case wrong"//requested//"."
-                test_passed = .false.
-            end if
-
-            ! check Fock matrix
-            if (btest(request, 0) .and. &
-                any(abs(fock - evaluate_dm_factors(1) * dm_ao) > tol_c)) then
-                write(stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
-                    message//" for closed-shell case wrong"//requested//"."
-                test_passed = .false.
-            end if
-
-            ! test returned response function
-            if (btest(request, 1)) &
-                test_passed = test_passed .and. test_get_response_cs_c_funptr( &
-                    get_response_c_funptr, test_name, &
-                    " by response function returned"//message//requested)
-        end do
-
-    end function test_evaluate_dm_cs_c_funptr
-
     function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message) &
         result(test_passed)
         !
@@ -300,16 +217,18 @@ contains
 
     end function test_evaluate_dm_os_funptr
 
-    function test_evaluate_dm_os_c_funptr(evaluate_dm_c_funptr, test_name, message) &
-        result(test_passed)
+    function test_evaluate_dm_c_funptr(evaluate_dm_c_funptr, n_particle, test_name, &
+                                       message) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating C function pointer
-        ! for the open-shell case for every combination of requested outputs
+        ! for the closed- (n_particle = 1) or open-shell (n_particle = 2) case for every
+        ! combination of requested outputs
         !
         use otr_common_c_interface, only: evaluate_dm_c_type
         use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
+        integer(ip), intent(in) :: n_particle
         character(len=*), intent(in) :: test_name, message
         logical :: test_passed
 
@@ -319,19 +238,22 @@ contains
         real(c_rp), pointer :: fock_ptr(:, :, :)
         real(c_rp) :: energy
         type(c_funptr) :: get_response_c_funptr
-        character(len=:), allocatable :: requested
+        character(len=:), allocatable :: requested, shell
         integer(ip) :: request
         integer(c_ip) :: error
 
         ! assume tests pass
         test_passed = .true.
 
+        ! name of the shell for the messages
+        shell = trim(shell_names(n_particle))
+
         ! check if function pointer is associated
         if (.not. c_associated(evaluate_dm_c_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Density matrix "// &
-                "evaluating function for open-shell case provided"//message// &
-                " not associated with value."
+            write(stderr, *) "test_"//test_name// &
+                " failed: Density matrix evaluating function for "//shell// &
+                " case provided"//message//" not associated with value."
             return
         end if
 
@@ -360,7 +282,7 @@ contains
             ! check for error
             if (error /= 0) then
                 write(stderr, *) "test_"//test_name//" failed: Error produced"// &
-                    message//" for open-shell case"//requested//"."
+                    message//" for "//shell//" case"//requested//"."
                 test_passed = .false.
                 cycle
             end if
@@ -368,7 +290,7 @@ contains
             ! check energy
             if (abs(energy - sum(dm_ao)) > tol_c) then
                 write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
-                    message//" for open-shell case wrong"//requested//"."
+                    message//" for "//shell//" case wrong"//requested//"."
                 test_passed = .false.
             end if
 
@@ -376,18 +298,18 @@ contains
             if (btest(request, 0) .and. &
                 any(abs(fock - evaluate_dm_factors(1) * dm_ao) > tol_c)) then
                 write(stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
-                    message//" for open-shell case wrong"//requested//"."
+                    message//" for "//shell//" case wrong"//requested//"."
                 test_passed = .false.
             end if
 
             ! test returned response function
             if (btest(request, 1)) &
-                test_passed = test_passed .and. test_get_response_os_c_funptr( &
-                    get_response_c_funptr, test_name, &
+                test_passed = test_passed .and. test_get_response_c_funptr( &
+                    get_response_c_funptr, n_particle, test_name, &
                     " by response function returned"//message//requested)
         end do
 
-    end function test_evaluate_dm_os_c_funptr
+    end function test_evaluate_dm_c_funptr
 
     function test_get_response_cs_funptr(get_response_funptr, test_name, message) &
         result(test_passed)
@@ -444,65 +366,6 @@ contains
 
     end function test_get_response_cs_funptr
 
-    function test_get_response_cs_c_funptr(get_response_c_funptr, test_name, message) &
-        result(test_passed)
-        !
-        ! this function tests a provided response C function pointer for the
-        ! closed-shell case
-        !
-        use otr_common_c_interface, only: get_response_c_type
-        use test_reference, only: tol_c
-
-        type(c_funptr), intent(in) :: get_response_c_funptr
-        character(len=*), intent(in) :: test_name, message
-        logical :: test_passed
-
-        procedure(get_response_c_type), pointer :: get_response_funptr_c
-        real(c_rp), allocatable :: dm_ao(:, :), response(:, :)
-        integer(c_ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. c_associated(get_response_c_funptr)) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Response function for "// &
-                "closed-shell case provided"//message//" not associated with value."
-            return
-        end if
-
-        ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=get_response_c_funptr, fptr=get_response_funptr_c)
-
-        ! allocate arrays
-        allocate(dm_ao(n_ao, n_ao), response(n_ao, n_ao))
-
-        ! generate random density matrix
-        call random_number(dm_ao)
-
-        ! call response function
-        error = get_response_funptr_c(dm_ao, response)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_"//test_name//" failed: Error produced"//message// &
-                " for closed-shell case."
-            test_passed = .false.
-        end if
-
-        ! check response
-        if (any(abs(response - evaluate_dm_factors(2) * dm_ao) > tol_c)) then
-            write(stderr, *) "test_"//test_name//" failed: Response returned"// &
-                message//" for closed-shell case wrong."
-            test_passed = .false.
-        end if
-
-        ! deallocate arrays
-        deallocate(dm_ao, response)
-
-    end function test_get_response_cs_c_funptr
-
     function test_get_response_os_funptr(get_response_funptr, test_name, message) &
         result(test_passed)
         !
@@ -558,31 +421,36 @@ contains
 
     end function test_get_response_os_funptr
 
-    function test_get_response_os_c_funptr(get_response_c_funptr, test_name, message) &
-        result(test_passed)
+    function test_get_response_c_funptr(get_response_c_funptr, n_particle, test_name, &
+                                        message) result(test_passed)
         !
-        ! this function tests a provided response C function pointer for the open-shell
-        ! case
+        ! this function tests a provided response C function pointer for the closed-
+        ! (n_particle = 1) or open-shell (n_particle = 2) case
         !
         use otr_common_c_interface, only: get_response_c_type
         use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: get_response_c_funptr
+        integer(ip), intent(in) :: n_particle
         character(len=*), intent(in) :: test_name, message
         logical :: test_passed
 
         procedure(get_response_c_type), pointer :: get_response_funptr_c
         real(c_rp), allocatable :: dm_ao(:, :, :), response(:, :, :)
+        character(len=:), allocatable :: shell
         integer(c_ip) :: error
 
         ! assume tests pass
         test_passed = .true.
 
+        ! name of the shell for the messages
+        shell = trim(shell_names(n_particle))
+
         ! check if function pointer is associated
         if (.not. c_associated(get_response_c_funptr)) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Response function for "// &
-                "open-shell case provided"//message//" not associated with value."
+                shell//" case provided"//message//" not associated with value."
             return
         end if
 
@@ -601,21 +469,21 @@ contains
         ! check for error
         if (error /= 0) then
             write(stderr, *) "test_"//test_name//" failed: Error produced"//message// &
-                " for open-shell case."
+                " for "//shell//" case."
             test_passed = .false.
         end if
 
         ! check response
         if (any(abs(response - evaluate_dm_factors(2) * dm_ao) > tol_c)) then
             write(stderr, *) "test_"//test_name//" failed: Response returned"// &
-                message//" for open-shell case wrong."
+                message//" for "//shell//" case wrong."
             test_passed = .false.
         end if
 
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_os_c_funptr
+    end function test_get_response_c_funptr
 
     function request_label(outputs, request) result(label)
         !

@@ -9,82 +9,87 @@ module otr_arh_c_interface_unit_tests
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, tol_c
-    use otr_arh_c_interface, only: evaluate_dm_os_c_type, evaluate_dm_cs_c_type
+    use otr_arh_c_interface, only: evaluate_dm_c_type
     use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_funptr, c_funloc, &
                                            c_f_procpointer
 
     implicit none
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(evaluate_dm_cs_c_type), pointer :: mock_arh_evaluate_dm_cs_ptr => &
+    procedure(evaluate_dm_c_type), pointer :: mock_arh_evaluate_dm_cs_ptr => &
         mock_arh_evaluate_dm_cs
-    procedure(evaluate_dm_os_c_type), pointer :: mock_arh_evaluate_dm_os_ptr => &
+    procedure(evaluate_dm_c_type), pointer :: mock_arh_evaluate_dm_os_ptr => &
         mock_arh_evaluate_dm_os
 
 contains
 
-    function mock_arh_evaluate_dm_cs(dm_ao, energy, fock, v_nonlinear) result(error) &
-        bind(C)
+    function mock_arh_evaluate_dm_cs(dm_ao, energy, fock, v_coulomb, v_exchange, &
+                                     v_nonlinear) result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the density matrix evaluating C
-        ! function with a separate non-linear potential contribution for the
-        ! closed-shell case
+        ! function with separate Coulomb, exact-exchange and non-linear potential
+        ! contributions for the closed-shell case
         !
         use otr_common_test_reference, only: n_ao
-        use otr_arh_test_reference, only: evaluate_dm_cs_factors
+        use otr_arh_test_reference, only: arh_evaluate_dm_factors
         use otr_common_unit_tests, only: record_mock_call
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
-        real(c_rp), intent(out), optional :: fock(*), v_nonlinear(*)
+        real(c_rp), intent(out), optional :: fock(*), v_coulomb(*), v_exchange(*), &
+                                             v_nonlinear(*)
         integer(c_ip) :: error
 
         integer(c_ip) :: flat_len = n_ao**2
 
-        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
-                              merge(2_ip, 0_ip, present(v_nonlinear)))
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
+            2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
+                              merge(8_ip, 0_ip, present(v_nonlinear)))
         energy = sum(dm_ao(:flat_len))
         if (present(fock)) &
-            fock(:flat_len) = evaluate_dm_cs_factors(1) * dm_ao(:flat_len)
+            fock(:flat_len) = arh_evaluate_dm_factors(1) * dm_ao(:flat_len)
+        if (present(v_coulomb)) &
+            v_coulomb(:flat_len) = arh_evaluate_dm_factors(2) * dm_ao(:flat_len)
+        if (present(v_exchange)) &
+            v_exchange(:flat_len) = arh_evaluate_dm_factors(3) * dm_ao(:flat_len)
         if (present(v_nonlinear)) &
-            v_nonlinear(:flat_len) = evaluate_dm_cs_factors(2) * dm_ao(:flat_len)
+            v_nonlinear(:flat_len) = arh_evaluate_dm_factors(4) * dm_ao(:flat_len)
 
         error = 0_c_ip
 
     end function mock_arh_evaluate_dm_cs
 
-    function mock_arh_evaluate_dm_os(dm_ao, energy, fock, v_same_spin, &
-                                     v_opposite_spin, v_nonlinear) result(error) bind(C)
+    function mock_arh_evaluate_dm_os(dm_ao, energy, fock, v_coulomb, v_exchange, &
+                                     v_nonlinear) result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the density matrix evaluating C
-        ! function with separate same- and opposite-spin potential contributions and a
-        ! non-linear potential contribution for the open-shell case
+        ! function with separate Coulomb, exact-exchange and non-linear potential
+        ! contributions for the open-shell case
         !
         use otr_common_test_reference, only: n_ao, n_particle
-        use otr_arh_test_reference, only: evaluate_dm_os_factors
+        use otr_arh_test_reference, only: arh_evaluate_dm_factors
         use otr_common_unit_tests, only: record_mock_call
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
-        real(c_rp), intent(out), optional :: fock(*), v_same_spin(*), &
-                                             v_opposite_spin(*), v_nonlinear(*)
+        real(c_rp), intent(out), optional :: fock(*), v_coulomb(*), v_exchange(*), &
+                                             v_nonlinear(*)
         integer(c_ip) :: error
 
         integer(c_ip) :: flat_len = n_ao**2 * n_particle
 
-        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
-                              merge(2_ip, 0_ip, present(v_same_spin)) + &
-                              merge(4_ip, 0_ip, present(v_opposite_spin)) + &
+        call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
+            2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
                               merge(8_ip, 0_ip, present(v_nonlinear)))
         energy = sum(dm_ao(:flat_len))
         if (present(fock)) &
-            fock(:flat_len) = evaluate_dm_os_factors(1) * dm_ao(:flat_len)
-        if (present(v_same_spin)) &
-            v_same_spin(:flat_len) = evaluate_dm_os_factors(2) * dm_ao(:flat_len)
-        if (present(v_opposite_spin)) &
-            v_opposite_spin(:flat_len) = evaluate_dm_os_factors(3) * dm_ao(:flat_len)
+            fock(:flat_len) = arh_evaluate_dm_factors(1) * dm_ao(:flat_len)
+        if (present(v_coulomb)) &
+            v_coulomb(:flat_len) = arh_evaluate_dm_factors(2) * dm_ao(:flat_len)
+        if (present(v_exchange)) &
+            v_exchange(:flat_len) = arh_evaluate_dm_factors(3) * dm_ao(:flat_len)
         if (present(v_nonlinear)) &
-            v_nonlinear(:flat_len) = evaluate_dm_os_factors(4) * dm_ao(:flat_len)
+            v_nonlinear(:flat_len) = arh_evaluate_dm_factors(4) * dm_ao(:flat_len)
 
         error = 0_c_ip
 
@@ -105,8 +110,8 @@ contains
         use otr_arh, only: arh_n_micro
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
         use otr_mo_test_reference, only: mo_coeff_pattern, n_mo, case_irreps, case_names
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c
-        use otr_common_unit_tests, only: shell_names
+        use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c, &
+                                             shell_names
         use c_interface_unit_tests, only: mock_logger, test_logger, mock_project
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &
@@ -371,8 +376,7 @@ contains
         use otr_oao_mock, only: dm_ao_3d, mock_update_orbs, mock_project_oao
         use otr_arh, only: arh_n_micro
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
-        use otr_common_test_reference, only: n_ao, n_particle, n_ao_c
-        use otr_common_unit_tests, only: shell_names
+        use otr_common_test_reference, only: n_ao, n_particle, n_ao_c, shell_names
         use c_interface_unit_tests, only: mock_logger, test_logger
         use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
                                   test_precond_c_funptr, test_precond_pd_c_funptr, &
@@ -594,11 +598,11 @@ contains
     logical(c_bool) function test_evaluate_dm_cs_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the density matrix evaluating C
-        ! function with a separate non-linear potential contribution for the
-        ! closed-shell case
+        ! function with Coulomb, exact-exchange and non-linear potential contributions
+        ! for the closed-shell case
         !
         use otr_arh, only: evaluate_dm_cs_type
-        use otr_arh_c_interface, only: evaluate_dm_cs_before_wrapping, &
+        use otr_arh_c_interface, only: evaluate_dm_before_wrapping, &
                                        evaluate_dm_cs_f_wrapper
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr
         use otr_common_unit_tests, only: mock_requests
@@ -607,7 +611,7 @@ contains
         integer(ip) :: request
 
         ! inject mock subroutine
-        evaluate_dm_cs_before_wrapping => mock_arh_evaluate_dm_cs
+        evaluate_dm_before_wrapping => mock_arh_evaluate_dm_cs
 
         ! get pointer to subroutine
         evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
@@ -618,8 +622,8 @@ contains
         mock_requests = [integer(ip) :: ]
         test_evaluate_dm_cs_f_wrapper = test_evaluate_dm_cs_funptr( &
             evaluate_dm_cs_funptr, "evaluate_dm_cs_f_wrapper", "")
-        if (size(mock_requests) /= 4 .or. &
-            .not. all([(any(mock_requests == request), request=0, 3)])) then
+        if (size(mock_requests) /= 16 .or. &
+            .not. all([(any(mock_requests == request), request=0, 15)])) then
             write(stderr, *) "test_evaluate_dm_cs_f_wrapper failed: Outputs passed "// &
                 "on to density matrix evaluating C function for closed-shell case "// &
                 "wrong."
@@ -631,11 +635,11 @@ contains
     logical(c_bool) function test_evaluate_dm_os_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the density matrix evaluating C
-        ! function with same- and opposite-spin potential contributions for the
-        ! open-shell case
+        ! function with Coulomb, exact-exchange and non-linear potential contributions
+        ! for the open-shell case
         !
         use otr_arh, only: evaluate_dm_os_type
-        use otr_arh_c_interface, only: evaluate_dm_os_before_wrapping, &
+        use otr_arh_c_interface, only: evaluate_dm_before_wrapping, &
                                        evaluate_dm_os_f_wrapper
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr
         use otr_common_unit_tests, only: mock_requests
@@ -644,7 +648,7 @@ contains
         integer(ip) :: request
 
         ! inject mock subroutine
-        evaluate_dm_os_before_wrapping => mock_arh_evaluate_dm_os
+        evaluate_dm_before_wrapping => mock_arh_evaluate_dm_os
 
         ! get pointer to subroutine
         evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper

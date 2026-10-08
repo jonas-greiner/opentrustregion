@@ -664,6 +664,19 @@ class MOPyInterfaceTests(unittest.TestCase):
                 ),
                 TypeError,
             ),
+            (
+                "evaluate_dm with a wrong number of arguments",
+                (
+                    cs_mo_coeff,
+                    ao_overlap,
+                    n_occ[0],
+                    1,
+                    n_ao,
+                    n_mo,
+                    lambda dm, fock: (0.0, None),
+                ),
+                TypeError,
+            ),
         )
         for case, args, error_type in invalid_cases:
             try:

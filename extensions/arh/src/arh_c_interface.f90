@@ -21,36 +21,22 @@ module otr_arh_c_interface
     implicit none
 
     ! define procedure pointer which will point to the Fortran procedures
-    procedure(evaluate_dm_os_c_type), pointer :: evaluate_dm_os_before_wrapping => &
-        null()
-    procedure(evaluate_dm_cs_c_type), pointer :: evaluate_dm_cs_before_wrapping => &
-        null()
+    procedure(evaluate_dm_c_type), pointer :: evaluate_dm_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
-        function evaluate_dm_os_c_type(dm_ao_c, energy_c, fock_c, v_same_spin_c, &
-                                       v_opposite_spin_c, v_nonlinear_c) &
-            result(error_c) bind(C)
+        function evaluate_dm_c_type(dm_ao_c, energy_c, fock_c, v_coulomb_c, &
+                                    v_exchange_c, v_nonlinear_c) result(error_c) bind(C)
             import :: c_rp, c_ip
 
             real(c_rp), intent(in), target :: dm_ao_c(*)
             real(c_rp), intent(out) :: energy_c
-            real(c_rp), intent(out), optional :: fock_c(*), v_same_spin_c(*), &
-                                                 v_opposite_spin_c(*), v_nonlinear_c(*)
+            real(c_rp), intent(out), optional :: fock_c(*), v_coulomb_c(*), &
+                                                 v_exchange_c(*), v_nonlinear_c(*)
             integer(c_ip) :: error_c
-        end function evaluate_dm_os_c_type
-
-        function evaluate_dm_cs_c_type(dm_ao_c, energy_c, fock_c, v_nonlinear_c) &
-            result(error_c) bind(C)
-            import :: c_rp, c_ip
-
-            real(c_rp), intent(in), target :: dm_ao_c(*)
-            real(c_rp), intent(out) :: energy_c
-            real(c_rp), intent(out), optional :: fock_c(*), v_nonlinear_c(*)
-            integer(c_ip) :: error_c
-        end function evaluate_dm_cs_c_type
+        end function evaluate_dm_c_type
     end interface
 
     ! derived type for ARH settings
@@ -170,13 +156,8 @@ contains
         end if
 
         ! associate the input C pointers to Fortran procedure pointers
-        if (n_particle == 1) then
-            call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                                 fptr=evaluate_dm_cs_before_wrapping)
-        else
-            call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                                 fptr=evaluate_dm_os_before_wrapping)
-        end if
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
+                             fptr=evaluate_dm_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
@@ -293,13 +274,8 @@ contains
         end if
 
         ! associate the input C pointers to Fortran procedure pointers
-        if (n_particle == 1) then
-            call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                                 fptr=evaluate_dm_cs_before_wrapping)
-        else
-            call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                                 fptr=evaluate_dm_os_before_wrapping)
-        end if
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
+                             fptr=evaluate_dm_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
@@ -347,46 +323,76 @@ contains
 
     end function arh_factory_oao_c_wrapper
 
-    subroutine evaluate_dm_os_f_wrapper(dm, energy, fock, v_same_spin, &
-                                        v_opposite_spin, v_nonlinear, error)
+    subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
+                                        v_nonlinear, error)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
-        ! Fortran variables to C variables
+        ! Fortran variables to C variables for the closed-shell case
+        !
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target, contiguous :: &
+            fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
+        integer(ip), intent(out) :: error
+
+        real(rp), pointer :: dm_3d(:, :, :), fock_3d(:, :, :), v_coulomb_3d(:, :, :), &
+                             v_exchange_3d(:, :, :), v_nonlinear_3d(:, :, :)
+
+        dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
+        nullify(fock_3d, v_coulomb_3d, v_exchange_3d, v_nonlinear_3d)
+        if (present(fock)) fock_3d(1:size(fock, 1), 1:size(fock, 2), 1:1) => fock
+        if (present(v_coulomb)) &
+            v_coulomb_3d(1:size(v_coulomb, 1), 1:size(v_coulomb, 2), 1:1) => v_coulomb
+        if (present(v_exchange)) &
+            v_exchange_3d(1:size(v_exchange, 1), 1:size(v_exchange, 2), 1:1) => &
+            v_exchange
+        if (present(v_nonlinear)) &
+            v_nonlinear_3d(1:size(v_nonlinear, 1), 1:size(v_nonlinear, 2), 1:1) => &
+            v_nonlinear
+        call evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, v_coulomb_3d, &
+                                      v_exchange_3d, v_nonlinear_3d, error)
+
+    end subroutine evaluate_dm_cs_f_wrapper
+
+    subroutine evaluate_dm_os_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
+                                        v_nonlinear, error)
+        !
+        ! this subroutine wraps the density matrix evaluating subroutine to convert
+        ! Fortran variables to C variables for the open-shell case
         !
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), optional, target :: &
-            fock(:, :, :), v_same_spin(:, :, :), v_opposite_spin(:, :, :), &
-            v_nonlinear(:, :, :)
+            fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :)
         integer(ip), intent(out) :: error
 
         real(c_rp) :: energy_c
-        real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :), v_same_spin_c(:, :, :), &
-                               v_opposite_spin_c(:, :, :), v_nonlinear_c(:, :, :)
+        real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :), v_coulomb_c(:, :, :), &
+                               v_exchange_c(:, :, :), v_nonlinear_c(:, :, :)
         integer(c_ip) :: error_c
 
         ! convert arguments to C kind
-        nullify(fock_c, v_same_spin_c, v_opposite_spin_c, v_nonlinear_c)
+        nullify(fock_c, v_coulomb_c, v_exchange_c, v_nonlinear_c)
         if (rp == c_rp) then
             dm_c => dm
             if (present(fock)) fock_c => fock
-            if (present(v_same_spin)) v_same_spin_c => v_same_spin
-            if (present(v_opposite_spin)) v_opposite_spin_c => v_opposite_spin
+            if (present(v_coulomb)) v_coulomb_c => v_coulomb
+            if (present(v_exchange)) v_exchange_c => v_exchange
             if (present(v_nonlinear)) v_nonlinear_c => v_nonlinear
         else
             allocate(dm_c, source=real(dm, kind=c_rp))
             if (present(fock)) allocate(fock_c, mold=real(fock, kind=c_rp))
-            if (present(v_same_spin)) &
-                allocate(v_same_spin_c, mold=real(v_same_spin, kind=c_rp))
-            if (present(v_opposite_spin)) &
-                allocate(v_opposite_spin_c, mold=real(v_opposite_spin, kind=c_rp))
+            if (present(v_coulomb)) &
+                allocate(v_coulomb_c, mold=real(v_coulomb, kind=c_rp))
+            if (present(v_exchange)) &
+                allocate(v_exchange_c, mold=real(v_exchange, kind=c_rp))
             if (present(v_nonlinear)) &
                 allocate(v_nonlinear_c, mold=real(v_nonlinear, kind=c_rp))
         end if
 
         ! call density matrix evaluating C function
-        error_c = evaluate_dm_os_before_wrapping( &
-            dm_c, energy_c, fock_c, v_same_spin_c, v_opposite_spin_c, v_nonlinear_c)
+        error_c = evaluate_dm_before_wrapping(dm_c, energy_c, fock_c, v_coulomb_c, &
+                                              v_exchange_c, v_nonlinear_c)
 
         ! convert arguments to Fortran kind
         energy = real(energy_c, kind=rp)
@@ -396,13 +402,13 @@ contains
                 fock = real(fock_c, kind=rp)
                 deallocate(fock_c)
             end if
-            if (present(v_same_spin)) then
-                v_same_spin = real(v_same_spin_c, kind=rp)
-                deallocate(v_same_spin_c)
+            if (present(v_coulomb)) then
+                v_coulomb = real(v_coulomb_c, kind=rp)
+                deallocate(v_coulomb_c)
             end if
-            if (present(v_opposite_spin)) then
-                v_opposite_spin = real(v_opposite_spin_c, kind=rp)
-                deallocate(v_opposite_spin_c)
+            if (present(v_exchange)) then
+                v_exchange = real(v_exchange_c, kind=rp)
+                deallocate(v_exchange_c)
             end if
             if (present(v_nonlinear)) then
                 v_nonlinear = real(v_nonlinear_c, kind=rp)
@@ -412,54 +418,6 @@ contains
         end if
 
     end subroutine evaluate_dm_os_f_wrapper
-
-    subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, v_nonlinear, error)
-        !
-        ! this subroutine wraps the density matrix evaluating subroutine to convert
-        ! Fortran variables to C variables
-        !
-        real(rp), intent(in), target, contiguous :: dm(:, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target, contiguous :: fock(:, :), &
-                                                               v_nonlinear(:, :)
-        integer(ip), intent(out) :: error
-
-        real(c_rp) :: energy_c
-        real(c_rp), pointer, contiguous :: dm_c(:, :), fock_c(:, :), v_nonlinear_c(:, :)
-        integer(c_ip) :: error_c
-
-        ! convert arguments to C kind
-        nullify(fock_c, v_nonlinear_c)
-        if (rp == c_rp) then
-            dm_c => dm
-            if (present(fock)) fock_c => fock
-            if (present(v_nonlinear)) v_nonlinear_c => v_nonlinear
-        else
-            allocate(dm_c, source=real(dm, kind=c_rp))
-            if (present(fock)) allocate(fock_c, mold=real(fock, kind=c_rp))
-            if (present(v_nonlinear)) &
-                allocate(v_nonlinear_c, mold=real(v_nonlinear, kind=c_rp))
-        end if
-
-        ! call density matrix evaluating C function
-        error_c = evaluate_dm_cs_before_wrapping(dm_c, energy_c, fock_c, v_nonlinear_c)
-
-        ! convert arguments to Fortran kind
-        energy = real(energy_c, kind=rp)
-        error = int(error_c, kind=ip)
-        if (rp /= c_rp) then
-            if (present(fock)) then
-                fock = real(fock_c, kind=rp)
-                deallocate(fock_c)
-            end if
-            if (present(v_nonlinear)) then
-                v_nonlinear = real(v_nonlinear_c, kind=rp)
-                deallocate(v_nonlinear_c)
-            end if
-            deallocate(dm_c)
-        end if
-
-    end subroutine evaluate_dm_cs_f_wrapper
 
     function update_orbs_arh_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                        hess_x_c_funptr) result(error_c) bind(C)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 from ctypes import CFUNCTYPE, POINTER, byref, c_void_p, cast
 from dataclasses import dataclass
+from inspect import signature
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     c_int,
@@ -22,7 +23,7 @@ from pyopentrustregion.python_interface import (
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any, Dict
+    from typing import Tuple, Callable, Optional, Any, Dict, Sequence
 
     GetResponseType = Callable[[np.ndarray, np.ndarray], None]
     EvaluateDMType = Callable[
@@ -270,6 +271,24 @@ class PrecondPDPyInterface:
             raise RuntimeError(msg)
 
         return
+
+
+def check_callback_arguments(
+    callback: Any, name: str, arguments: Sequence[str]
+) -> None:
+    """
+    this function raises if a callback cannot be called with the given positional
+    arguments, which the C interface cannot check since it only receives a function
+    pointer; callbacks without an inspectable signature are not checked
+    """
+    try:
+        sig = signature(callback)
+    except (ValueError, TypeError):
+        return
+    try:
+        sig.bind(*arguments)
+    except TypeError:
+        raise TypeError(f"{name} has to take ({', '.join(arguments)}).") from None
 
 
 def attach_wired_callbacks(

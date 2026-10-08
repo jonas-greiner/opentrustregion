@@ -81,7 +81,9 @@ fortran_tests = {
         "get_extra_trial_vectors_arh_callback",
         "get_low_rank_hess_factors",
         "get_ms_a_inv",
-        "get_ms_a_inv_os_linear",
+        "get_ms_a_inv_jk_cs",
+        "get_ms_a_inv_jk_os",
+        "get_ms_jk_inv",
         "hess_x_arh_callback",
         "hess_x_static_arh_mo",
         "hess_x_static_arh_oao",
@@ -95,8 +97,7 @@ fortran_tests = {
         "init_arh_settings",
         "inv_hess_x_arh",
         "median",
-        "obj_func_arh_cs_callback",
-        "obj_func_arh_os_callback",
+        "obj_func_arh_callback",
         "packed_channel_rows_arh_mo",
         "packed_channel_rows_arh_oao",
         "precond_arh_callback",
@@ -106,15 +107,13 @@ fortran_tests = {
         "rebuild_stale_hess_model",
         "resolvable_residual",
         "response_gram",
-        "response_gram_os_linear",
         "rotate_trial_arh_mo",
         "rotate_trial_arh_oao",
         "spectral_to_dense",
         "to_history_basis_arh_mo",
         "to_history_basis_arh_oao",
         "truncated_eigval_inv",
-        "update_orbs_arh_cs_callback",
-        "update_orbs_arh_os_callback",
+        "update_orbs_arh_callback",
     ],
     "arh_c_interface_tests": [
         "arh_deconstructor_c_wrapper",
@@ -130,10 +129,9 @@ fortran_tests = {
     ],
 }
 
-# multiples of the density matrix the mock density matrix evaluating functions return
-# for each optional output, in the order of their argument lists
-evaluate_dm_cs_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_cs_factors"))
-evaluate_dm_os_factors = list((c_real * 4).in_dll(lib, "test_evaluate_dm_os_factors"))
+# multiples of the density matrix the mock density matrix evaluating function returns
+# for each optional output, in the order of its argument list
+arh_evaluate_dm_factors = list((c_real * 4).in_dll(lib, "test_arh_evaluate_dm_factors"))
 
 
 @add_tests
@@ -215,34 +213,20 @@ class ARHPyInterfaceTests(unittest.TestCase):
     assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
     equal_settings_to_ref = PyInterfaceTests.equal_settings_to_ref
 
-    def mock_evaluate_dm_cs(self, dm_ao, fock, v_nonlinear):
+    def mock_arh_evaluate_dm(self, dm_ao, fock, v_coulomb, v_exchange, v_nonlinear):
         """
         this function is a mock function for the density matrix evaluating function
-        with a separate non-linear potential contribution for the closed-shell case
+        with separate Coulomb, exact-exchange and non-linear potential contributions
+        for both shells
         """
         if fock is not None:
-            fock[:] = evaluate_dm_cs_factors[0] * dm_ao
+            fock[:] = arh_evaluate_dm_factors[0] * dm_ao
+        if v_coulomb is not None:
+            v_coulomb[:] = arh_evaluate_dm_factors[1] * dm_ao
+        if v_exchange is not None:
+            v_exchange[:] = arh_evaluate_dm_factors[2] * dm_ao
         if v_nonlinear is not None:
-            v_nonlinear[:] = evaluate_dm_cs_factors[1] * dm_ao
-
-        return np.sum(dm_ao)
-
-    def mock_evaluate_dm_os(
-        self, dm_ao, fock, v_same_spin, v_opposite_spin, v_nonlinear
-    ):
-        """
-        this function is a mock function for the density matrix evaluating function
-        with separate same- and opposite spin and non-linear contributions for the
-        open-shell case
-        """
-        if fock is not None:
-            fock[:] = evaluate_dm_os_factors[0] * dm_ao
-        if v_same_spin is not None:
-            v_same_spin[:] = evaluate_dm_os_factors[1] * dm_ao
-        if v_opposite_spin is not None:
-            v_opposite_spin[:] = evaluate_dm_os_factors[2] * dm_ao
-        if v_nonlinear is not None:
-            v_nonlinear[:] = evaluate_dm_os_factors[3] * dm_ao
+            v_nonlinear[:] = arh_evaluate_dm_factors[3] * dm_ao
 
         return np.sum(dm_ao)
 
@@ -282,29 +266,18 @@ class ARHPyInterfaceTests(unittest.TestCase):
         # MO coefficients stored row-major are copied back, those stored column-major
         # are rotated in place and those of a different precision are converted, with
         # the irreps of their MOs passed on only if they are given
-        evaluate_dm_cs, evaluate_dm_os = (
-            self.mock_evaluate_dm_cs,
-            self.mock_evaluate_dm_os,
-        )
         cases = (
-            ("closed-shell row-major", 1, False, np.float64, evaluate_dm_cs, False),
-            ("closed-shell column-major", 1, True, np.float64, evaluate_dm_cs, False),
-            (
-                "closed-shell single-precision",
-                1,
-                True,
-                np.float32,
-                evaluate_dm_cs,
-                False,
-            ),
-            ("open-shell row-major", 2, False, np.float64, evaluate_dm_os, False),
-            ("open-shell column-major", 2, True, np.float64, evaluate_dm_os, False),
-            ("closed-shell with symmetry", 1, False, np.float64, evaluate_dm_cs, True),
-            ("open-shell with symmetry", 2, True, np.float64, evaluate_dm_os, True),
+            ("closed-shell row-major", 1, False, np.float64, False),
+            ("closed-shell column-major", 1, True, np.float64, False),
+            ("closed-shell single-precision", 1, True, np.float32, False),
+            ("open-shell row-major", 2, False, np.float64, False),
+            ("open-shell column-major", 2, True, np.float64, False),
+            ("closed-shell with symmetry", 1, False, np.float64, True),
+            ("open-shell with symmetry", 2, True, np.float64, True),
         )
         mock_passed = c_bool.in_dll(lib, "test_arh_factory_mo_interface")
         orbsym_passed = c_bool.in_dll(lib, "test_orbsym_passed")
-        for case, n_particle, column_major, dtype, evaluate_dm, with_irreps in cases:
+        for case, n_particle, column_major, dtype, with_irreps in cases:
             # initialize MO coefficients
             mo_coeff = mo_coeff_pattern(n_particle, 0.0).astype(dtype)
             if n_particle == 1:
@@ -335,7 +308,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 n_particle,
                 n_ao,
                 n_mo,
-                evaluate_dm,
+                self.mock_arh_evaluate_dm,
                 solver_settings,
                 settings,
                 orbsym=(
@@ -533,7 +506,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             1,
             n_ao,
             n_mo,
-            self.mock_evaluate_dm_cs,
+            self.mock_arh_evaluate_dm,
             SolverSettings(),
             settings,
         )
@@ -557,7 +530,6 @@ class ARHPyInterfaceTests(unittest.TestCase):
         read_only_mo_coeff = mo_coeff_pattern(1, 0.0)[0]
         read_only_mo_coeff.flags.writeable = False
         cs_mo_coeff = mo_coeff_pattern(1, 0.0)[0]
-        cs_evaluate_dm = self.mock_evaluate_dm_cs
         invalid_cases = (
             (
                 "read-only MO coefficients",
@@ -568,7 +540,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     1,
                     n_ao,
                     n_mo,
-                    cs_evaluate_dm,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -581,7 +553,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     1,
                     n_ao,
                     n_mo,
-                    cs_evaluate_dm,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -594,7 +566,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     1,
                     n_ao,
                     n_mo,
-                    cs_evaluate_dm,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -607,7 +579,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     2,
                     n_ao,
                     n_mo,
-                    self.mock_evaluate_dm_os,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -620,7 +592,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     2,
                     n_ao,
                     n_mo,
-                    self.mock_evaluate_dm_os,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -633,13 +605,21 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     1,
                     n_ao + 1,
                     n_mo,
-                    cs_evaluate_dm,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
             (
                 "MO coefficients not matching the number of MOs",
-                (cs_mo_coeff, ao_overlap, n_occ[0], 1, n_ao, n_mo + 1, cs_evaluate_dm),
+                (
+                    cs_mo_coeff,
+                    ao_overlap,
+                    n_occ[0],
+                    1,
+                    n_ao,
+                    n_mo + 1,
+                    self.mock_arh_evaluate_dm,
+                ),
                 ValueError,
             ),
             (
@@ -651,7 +631,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     1,
                     n_ao,
                     n_mo,
-                    cs_evaluate_dm,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -664,12 +644,12 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     1,
                     n_ao,
                     n_mo,
-                    cs_evaluate_dm,
+                    self.mock_arh_evaluate_dm,
                 ),
                 TypeError,
             ),
             (
-                "open-shell evaluate_dm for closed-shell MO coefficients",
+                "evaluate_dm with a wrong number of arguments",
                 (
                     cs_mo_coeff,
                     ao_overlap,
@@ -677,7 +657,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     1,
                     n_ao,
                     n_mo,
-                    self.mock_evaluate_dm_os,
+                    lambda dm, fock, v_nonlinear: 0.0,
                 ),
                 TypeError,
             ),
@@ -708,7 +688,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     n_particle,
                     n_ao,
                     n_mo,
-                    cs_evaluate_dm if n_particle == 1 else self.mock_evaluate_dm_os,
+                    self.mock_arh_evaluate_dm,
                     SolverSettings(),
                     settings,
                     invalid_orbsym,
@@ -732,7 +712,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
     def test_arh_factory_oao_py_interface(self):
         """
         this function tests the ARH factory python interface (only tests whether dm_ao
-        and mock_evaluate_dm_os are passed correctly for the open-shell case since
+        and mock_arh_evaluate_dm are passed correctly for the open-shell case since
         everything else is the same in the closed-shell case)
         """
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
@@ -759,7 +739,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             ao_overlap,
             1,
             n_ao,
-            self.mock_evaluate_dm_cs,
+            self.mock_arh_evaluate_dm,
             solver_settings,
             settings,
         )
@@ -965,7 +945,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             ao_overlap,
             n_particle,
             n_ao,
-            self.mock_evaluate_dm_os,
+            self.mock_arh_evaluate_dm,
             SolverSettings(),
             settings,
         )
@@ -982,7 +962,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     ao_overlap,
                     2,
                     n_ao,
-                    self.mock_evaluate_dm_os,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -993,7 +973,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     np.full(2 * (n_ao + 1,), 2.0),
                     1,
                     n_ao + 1,
-                    self.mock_evaluate_dm_cs,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -1004,7 +984,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     ao_overlap,
                     1,
                     n_ao,
-                    self.mock_evaluate_dm_cs,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
@@ -1015,13 +995,13 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     ao_overlap,
                     1,
                     n_ao,
-                    self.mock_evaluate_dm_cs,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
             (
                 "read-only density matrix",
-                (read_only_dm_ao, ao_overlap, 1, n_ao, self.mock_evaluate_dm_cs),
+                (read_only_dm_ao, ao_overlap, 1, n_ao, self.mock_arh_evaluate_dm),
                 ValueError,
             ),
             (
@@ -1031,18 +1011,18 @@ class ARHPyInterfaceTests(unittest.TestCase):
                     ao_overlap[:-1, :-1],
                     1,
                     n_ao,
-                    self.mock_evaluate_dm_cs,
+                    self.mock_arh_evaluate_dm,
                 ),
                 ValueError,
             ),
             (
-                "open-shell evaluate_dm for a closed-shell density matrix",
+                "evaluate_dm with a wrong number of arguments",
                 (
                     np.full(2 * (n_ao,), 1.0),
                     ao_overlap,
                     1,
                     n_ao,
-                    self.mock_evaluate_dm_os,
+                    lambda dm, fock, v_nonlinear: 0.0,
                 ),
                 TypeError,
             ),
@@ -1075,7 +1055,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
         ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
         mo_coeff = np.full((n_ao, n_mo), 1.0, dtype=np.float64)
-        evaluate_dm = self.mock_evaluate_dm_cs
+        evaluate_dm = self.mock_arh_evaluate_dm
         solver_settings = SolverSettings()
         settings = ARHSettings()
         oao_args = (dm_ao, ao_overlap, 1, n_ao, evaluate_dm, solver_settings, settings)

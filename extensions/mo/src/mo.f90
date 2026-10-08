@@ -428,10 +428,10 @@ contains
         if (error /= 0) return
 
         ! calculate the mean-field energy
-        if (associated(mo_object%evaluate_dm_os)) then
-            call mo_object%evaluate_dm_os(rot_dm_ao, energy, error=error)
-        else
+        if (associated(mo_object%evaluate_dm_cs)) then
             call mo_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error)
+        else
+            call mo_object%evaluate_dm_os(rot_dm_ao, energy, error=error)
         end if
         if (error /= 0) return
 
@@ -471,13 +471,13 @@ contains
 
             ! get energy, Fock matrix, and response function
             allocate(fock_ao(n_ao, n_ao, n_particle))
-            if (associated(mo_object%evaluate_dm_os)) then
-                call mo_object%evaluate_dm_os(mo_object%dm_ao, mo_object%energy, &
-                                              fock_ao, mo_object%get_response_os, error)
-            else
+            if (associated(mo_object%evaluate_dm_cs)) then
                 call mo_object%evaluate_dm_cs(mo_object%dm_ao(:, :, 1), &
                                               mo_object%energy, fock_ao(:, :, 1), &
                                               mo_object%get_response_cs, error)
+            else
+                call mo_object%evaluate_dm_os(mo_object%dm_ao, mo_object%energy, &
+                                              fock_ao, mo_object%get_response_os, error)
             end if
             if (error /= 0) then
                 deallocate(fock_ao)

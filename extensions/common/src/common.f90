@@ -200,13 +200,13 @@ contains
 
         ! rebuild response, the energy is discarded since the caller already holds it
         ! for the current density
-        if (associated(self%evaluate_dm_os)) then
-            call self%evaluate_dm_os(self%dm_ao, energy, &
-                                     get_response_funptr=self%get_response_os, &
-                                     error=error)
-        else
+        if (associated(self%evaluate_dm_cs)) then
             call self%evaluate_dm_cs(self%dm_ao(:, :, 1), energy, &
                                      get_response_funptr=self%get_response_cs, &
+                                     error=error)
+        else
+            call self%evaluate_dm_os(self%dm_ao, energy, &
+                                     get_response_funptr=self%get_response_os, &
                                      error=error)
         end if
         if (error /= 0) return

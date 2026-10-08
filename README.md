@@ -955,10 +955,12 @@ The ARH factories construct and return ARH versions of the energy and orbital up
   Accepts an AO density matrix and returns:
   - Energy value (real)
   - Fock matrix (real array, written in-place)
-  - Same-spin potential (real array, written in-place, only for open-shell calculations)
-  - Opposite-spin potential (real array, written in-place, only for open-shell calculations)
+  - Coulomb potential (real array, written in-place): the Coulomb potential of the density matrix of every spin channel, for closed-shell calculations that of both spin channels together
+  - Exact-exchange potential (real array, written in-place): the exchange matrix of the density matrix of every spin channel, weighted by the exact-exchange fractions of the functional, and zero for a functional without exact exchange
   - Non-linear (exchange-correlation) potential (real array, written in-place)
   - An integer error code (0 for success, positive integers < 100 for errors)
+
+  The linear (Coulomb and exact exchange) potential of a spin channel is thereby the Coulomb potential of both spin channels minus its own exact-exchange potential, and the non-linear potential is the rest of the effective potential, i.e. the effective potential minus this linear potential.
 
   Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` in Python, and the callback must not build it.
 - **`obj_func_arh`** (subroutine): Returned ARH objective function as defined for the `solver` subroutine.
@@ -1036,8 +1038,7 @@ c_int n_occ[1], n_particle, n_ao, n_mo, n_param;
 c_real *mo_coeff, *ao_overlap;
 
 // set callback function pointers to existing implementations
-arh_evaluate_dm_fp evaluate_dm_funptr;
-evaluate_dm_funptr.cs = (void*)evaluate_dm;
+arh_evaluate_dm_fp evaluate_dm_funptr = (void*)evaluate_dm;
 
 // initialize ARH settings
 arh_settings_type arh_settings = arh_settings_init();
@@ -1169,8 +1170,7 @@ c_int n_particle, n_ao, n_param;
 c_real *dm_ao, *ao_overlap;
 
 // set callback function pointers to existing implementations
-arh_evaluate_dm_fp evaluate_dm_funptr;
-evaluate_dm_funptr.cs = (void*)evaluate_dm;
+arh_evaluate_dm_fp evaluate_dm_funptr = (void*)evaluate_dm;
 
 // initialize ARH settings
 arh_settings_type arh_settings = arh_settings_init();
@@ -1257,7 +1257,7 @@ The ARH factories can be fine-tuned using the following settings:
   - `"symm_arh"`: simple symmetrized version of ARH which does not fulfill the multisecant conditions,
   - `"ms_psb"`: multisecant Powell symmetric Broyden which is only symmetric and fulfills all multisecant conditions for HF and other methods for which the energy is quadratic in the density matrix,
   - `"ms_sp"`: subspace-projected multisecant method,
-  - `"ms_sr1"`: multisecant symmetric-rank-1 method, which treats the linear (Coulomb and exact exchange) part of the response exactly through a dedicated regularized system and the non-linear (exchange-correlation) part through a separate, independently regularized multisecant system.
+  - `"ms_sr1"`: multisecant symmetric-rank-1 method, which treats the linear (Coulomb and exact exchange) part of the response exactly as the difference of a Coulomb and an exact-exchange multisecant term, each bounded by its positive semidefinite kernel, and the non-linear (exchange-correlation) part through a separate multisecant system regularized by the multisecant analogue of the SR1 skipping criterion.
 - **`verbose`** (integer): Controls the verbosity of output of the ARH routines.
 
 ### Subspace Gradient-Enhanced Kriging Extension
