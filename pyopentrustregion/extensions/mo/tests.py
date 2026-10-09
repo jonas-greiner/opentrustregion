@@ -515,7 +515,9 @@ class MOPyInterfaceTests(unittest.TestCase):
         mo_coeff = initial_mo_coeff(1, False, np.float64)
         mo_coeff_buffer = np.ascontiguousarray(mo_coeff.swapaxes(-1, -2))
 
-        def failing_update_orbs(kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_ptr):
+        def failing_update_orbs(
+            kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_ptr, context
+        ):
             mo_coeff_buffer[:] = mo_coeff_pattern(1, 1000.0)[0].T
             return 1
 

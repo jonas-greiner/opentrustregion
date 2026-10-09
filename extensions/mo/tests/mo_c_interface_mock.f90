@@ -11,7 +11,7 @@ module otr_mo_c_interface_mock
     use otr_mo_c_interface, only: mo_factory_c_wrapper, init_mo_settings_c, &
                                   mo_deconstructor_c_wrapper
     use otr_mo_test_reference, only: ref_mo_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_f_pointer, c_loc
 
     implicit none
@@ -36,8 +36,8 @@ module otr_mo_c_interface_mock
 
 contains
 
-    function mock_update_orbs_mo(kappa, func, grad, h_diag, hess_x_c_funptr) &
-        result(error) bind(C)
+    function mock_update_orbs_mo(kappa, func, grad, h_diag, hess_x_c_funptr, &
+                                 context_c) result(error) bind(C)
         !
         ! this function is a test function for the orbital update C function for
         ! orbitals parameterized in the MO basis, which overwrites the MO coefficients
@@ -50,10 +50,12 @@ contains
         real(c_rp), intent(in), target :: kappa(*)
         real(c_rp), intent(out) :: func
         real(c_rp), intent(out), target :: grad(*), h_diag(*)
-        type(c_funptr), intent(out) :: hess_x_c_funptr
+        type(c_funptr), intent(inout) :: hess_x_c_funptr
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
-        error = mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr)
+        error = &
+            mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr, context_c)
 
         mo_coeff_3d_c = mo_coeff_pattern(size(mo_coeff_3d_c, 1, kind=c_ip), &
                                          size(mo_coeff_3d_c, 2, kind=c_ip), &
@@ -70,6 +72,7 @@ contains
         ! this subroutine is a mock routine for the MO orbital updating factory C
         ! wrapper subroutine
         !
+        use, intrinsic :: iso_c_binding, only: c_null_ptr
         use opentrustregion, only: default_solver_settings
         use otr_mo_c_interface, only: mo_settings_type_c, mo_coeff_3d_c
         use c_interface, only: logger_c_type, solver_settings_type_c, assignment(=)
@@ -145,7 +148,7 @@ contains
         ! get Fortran pointer to passed logging function and call it
         message = "test"//c_null_char
         call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-        call logger_funptr(message)
+        call logger_funptr(message, c_null_ptr)
 
         ! check optional settings against reference values
         if (settings_c /= ref_mo_settings) then

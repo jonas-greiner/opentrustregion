@@ -9,7 +9,8 @@ module test_reference
     use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
-                                           c_null_char, c_associated
+                                           c_null_char, c_associated, c_ptr, &
+                                           c_null_ptr, c_loc, c_f_pointer
 
     implicit none
 
@@ -30,20 +31,22 @@ module test_reference
     ! derived types for solver settings
     type ref_settings_type
         logical :: stability, line_search, refresh_hess, grad_noise, hess_symm, &
-                   stop_on_instability
+                   max_precision_reached, stop_on_instability
         real(rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
-                       n_micro, jacobi_davidson_start, seed, verbose, n_iter
+                       n_micro, jacobi_davidson_start, seed, verbose, n_update_orbs, &
+                       n_hess_x, n_iter
         character(len=kw_len, kind=c_char) :: subsystem_solver, trust_region_shape, &
                                               diag_solver
     end type
 
     type, bind(C) :: ref_settings_type_c
         logical(c_bool) :: stability, line_search, refresh_hess, grad_noise, &
-                           hess_symm, stop_on_instability
+                           hess_symm, max_precision_reached, stop_on_instability
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
-                         n_micro, jacobi_davidson_start, seed, verbose, n_iter
+                         n_micro, jacobi_davidson_start, seed, verbose, n_update_orbs, &
+                         n_hess_x, n_iter
         character(kind=c_char) :: subsystem_solver(kw_len + 1), &
                                   trust_region_shape(kw_len + 1), &
                                   diag_solver(kw_len + 1)
@@ -52,12 +55,27 @@ module test_reference
     ! general reference parameters
     type(ref_settings_type) :: ref_settings = ref_settings_type( &
         stability=.true., line_search=.true., refresh_hess=.true., grad_noise=.false., &
-        hess_symm=.false., stop_on_instability=.true., conv_tol=1e-3_rp, &
-        start_trust_radius=0.2_rp, global_red_factor=1e-2_rp, &
+        hess_symm=.false., max_precision_reached=.true., stop_on_instability=.true., &
+        conv_tol=1e-3_rp, start_trust_radius=0.2_rp, global_red_factor=1e-2_rp, &
         local_red_factor=1e-3_rp, n_random_trial_vectors=5, n_extra_trial_vectors=2, &
         n_macro=300, n_micro=200, jacobi_davidson_start=10, seed=33, verbose=3, &
-        n_iter=50, subsystem_solver="tcg", diag_solver="jacobi-davidson", &
-        trust_region_shape="spherical")
+        n_iter=50, n_update_orbs=7, n_hess_x=11, subsystem_solver="tcg", &
+        diag_solver="jacobi-davidson", trust_region_shape="spherical")
+
+    ! the callback function pointers are exercised here without host data, so they
+    ! are handed an unassociated context
+    class(*), pointer :: no_context => null()
+
+    ! host context handed to the callback functions by the tests that exercise it,
+    ! together with the bookkeeping those callback functions keep, so that a test can
+    ! check the context reached all of them unchanged
+    type :: host_context_type
+        integer(ip) :: n_calls = 0
+    end type
+    type(host_context_type), target :: host_context, stability_host_context
+
+    logical :: host_context_armed = .false., host_context_wrong = .false., &
+               host_context_missing = .false.
 
     interface assignment(=)
         module procedure assign_ref_to_solver
@@ -91,7 +109,126 @@ module test_reference
 
 contains
 
-    function test_update_orbs_funptr(update_orbs_funptr, test_name, message) &
+    subroutine check_host_context(context)
+        !
+        ! this subroutine records the host context a callback function received so that
+        ! a test can check it was handed the context it armed, unchanged, on every call
+        !
+        class(*), intent(in), pointer :: context
+
+        ! a callback function reached without a context is only a failure while a test
+        ! has armed one
+        if (.not. associated(context)) then
+            if (host_context_armed) host_context_missing = .true.
+            return
+        end if
+
+        select type (context)
+        type is (host_context_type)
+            context%n_calls = context%n_calls + 1
+        class default
+            host_context_wrong = .true.
+        end select
+
+    end subroutine check_host_context
+
+    subroutine check_host_context_c(context_c)
+        !
+        ! this subroutine records the host context a C callback function received so
+        ! that a test can check it was handed the context it armed, unchanged, on every
+        ! call
+        !
+        type(c_ptr), intent(in) :: context_c
+
+        type(host_context_type), pointer :: context
+
+        ! a callback function reached without a context is only a failure while a test
+        ! has armed one
+        if (.not. c_associated(context_c)) then
+            if (host_context_armed) host_context_missing = .true.
+            return
+        end if
+
+        if (c_associated(context_c, c_loc(host_context)) .or. &
+            c_associated(context_c, c_loc(stability_host_context))) then
+            call c_f_pointer(context_c, context)
+            context%n_calls = context%n_calls + 1
+        else
+            host_context_wrong = .true.
+        end if
+
+    end subroutine check_host_context_c
+
+    subroutine reset_host_context()
+        !
+        ! this subroutine clears the bookkeeping of the callback functions and arms the
+        ! host context for a test
+        !
+        host_context%n_calls = 0
+        stability_host_context%n_calls = 0
+        host_context_armed = .true.
+        host_context_wrong = .false.
+        host_context_missing = .false.
+
+    end subroutine reset_host_context
+
+    subroutine arm_host_context(settings)
+        !
+        ! this subroutine points a settings object at the host context the callback
+        ! functions expect and clears their bookkeeping
+        !
+        use opentrustregion, only: settings_type
+
+        class(settings_type), intent(inout) :: settings
+
+        settings%context => host_context
+        call reset_host_context()
+
+    end subroutine arm_host_context
+
+    subroutine arm_host_context_c(context_c)
+        !
+        ! this subroutine points a C callback bundle at the host context the callback
+        ! functions expect and clears their bookkeeping
+        !
+        type(c_ptr), intent(out) :: context_c
+
+        context_c = c_loc(host_context)
+        call reset_host_context()
+
+    end subroutine arm_host_context_c
+
+    logical function host_context_reached(test_name)
+        !
+        ! this function checks that the callback functions all received the host
+        ! context they were armed with, and disarms it again
+        !
+        character(len=*), intent(in) :: test_name
+
+        ! assume test passes
+        host_context_reached = .true.
+
+        if (host_context_wrong) then
+            host_context_reached = .false.
+            write(stderr, *) "test_"//test_name//" failed: A callback function "// &
+                "received a host context other than the one that was set."
+        end if
+        if (host_context_missing) then
+            host_context_reached = .false.
+            write(stderr, *) "test_"//test_name//" failed: A callback function was "// &
+                "reached without the host context that was set."
+        end if
+        if (host_context%n_calls == 0) then
+            host_context_reached = .false.
+            write(stderr, *) "test_"//test_name//" failed: No callback function "// &
+                "received the host context that was set."
+        end if
+
+        host_context_armed = .false.
+
+    end function host_context_reached
+
+    function test_update_orbs_funptr(update_orbs_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided orbital updating function pointer
@@ -100,12 +237,18 @@ contains
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
         real(rp) :: func
         integer(ip) :: error
         procedure(hess_x_type), pointer :: hess_x_funptr
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -125,7 +268,8 @@ contains
         kappa = 1.0_rp
 
         ! call orbital update
-        call update_orbs_funptr(kappa, func, grad, h_diag, hess_x_funptr, error)
+        call update_orbs_funptr(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -161,14 +305,14 @@ contains
         ! defined if the orbital update did not produce an error
         if (error == 0) then
             test_passed = test_passed .and. test_hess_x_funptr( &
-                hess_x_funptr, test_name, &
-                " by Hessian linear transformation function returned"//message)
+                hess_x_funptr, test_name, " by Hessian linear transformation "// &
+                "function returned"//message, callback_context)
         end if
 
     end function test_update_orbs_funptr
 
-    function test_update_orbs_c_funptr(update_orbs_c_funptr, test_name, message) &
-        result(test_passed)
+    function test_update_orbs_c_funptr(update_orbs_c_funptr, test_name, message, &
+                                       context_c) result(test_passed)
         !
         ! this function tests a provided orbital updating C function pointer
         !
@@ -176,13 +320,19 @@ contains
 
         type(c_funptr), intent(in) :: update_orbs_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(update_orbs_c_type), pointer :: update_orbs_funptr
         real(c_rp), allocatable :: kappa(:), grad(:), h_diag(:)
         real(c_rp) :: func
         integer(c_ip) :: error
         type(c_funptr) :: hess_x_c_funptr
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -205,7 +355,8 @@ contains
         kappa = 1.0_c_rp
 
         ! call orbital update
-        error = update_orbs_funptr(kappa, func, grad, h_diag, hess_x_c_funptr)
+        error = update_orbs_funptr(kappa, func, grad, h_diag, hess_x_c_funptr, &
+                                   callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -247,7 +398,8 @@ contains
 
     end function test_update_orbs_c_funptr
 
-    function test_hess_x_funptr(hess_x_funptr, test_name, message) result(test_passed)
+    function test_hess_x_funptr(hess_x_funptr, test_name, message, context) &
+        result(test_passed)
         !
         ! this function tests a provided Hessian linear transformation function pointer
         !
@@ -255,10 +407,16 @@ contains
 
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: x(:), hess_x(:)
         integer(ip) :: error
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -279,7 +437,7 @@ contains
         x = 1.0_rp
 
         ! call Hessian linear transformation
-        call hess_x_funptr(x, hess_x, error)
+        call hess_x_funptr(x, hess_x, error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -299,7 +457,7 @@ contains
 
     end function test_hess_x_funptr
 
-    function test_hess_x_c_funptr(hess_x_c_funptr, test_name, message) &
+    function test_hess_x_c_funptr(hess_x_c_funptr, test_name, message, context_c) &
         result(test_passed)
         !
         ! this function tests a provided Hessian linear transformation C function
@@ -309,11 +467,17 @@ contains
 
         type(c_funptr), intent(in) :: hess_x_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(hess_x_c_type), pointer :: hess_x_funptr_c
         real(c_rp), allocatable :: x(:), hess_x(:)
         integer(c_ip) :: error
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -337,7 +501,7 @@ contains
         x = 1.0_c_rp
 
         ! call Hessian linear transformation
-        error = hess_x_funptr_c(x, hess_x)
+        error = hess_x_funptr_c(x, hess_x, callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -357,7 +521,7 @@ contains
 
     end function test_hess_x_c_funptr
 
-    function test_obj_func_funptr(obj_func_funptr, test_name, message) &
+    function test_obj_func_funptr(obj_func_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided objective function function pointer
@@ -366,11 +530,17 @@ contains
 
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: kappa(:)
         real(rp) :: func
         integer(ip) :: error
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -390,7 +560,7 @@ contains
         kappa = 1.0_rp
 
         ! call objective function
-        func = obj_func_funptr(kappa, error)
+        func = obj_func_funptr(kappa, error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -410,7 +580,7 @@ contains
 
     end function test_obj_func_funptr
 
-    function test_obj_func_c_funptr(obj_func_c_funptr, test_name, message) &
+    function test_obj_func_c_funptr(obj_func_c_funptr, test_name, message, context_c) &
         result(test_passed)
         !
         ! this function tests a provided objective function C function pointer
@@ -419,12 +589,18 @@ contains
 
         type(c_funptr), intent(in) :: obj_func_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(obj_func_c_type), pointer :: obj_func_funptr
         real(c_rp), allocatable :: kappa(:)
         real(c_rp) :: func
         integer(c_ip) :: error
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -447,7 +623,7 @@ contains
         kappa = 1.0_c_rp
 
         ! call objective function
-        error = obj_func_funptr(kappa, func)
+        error = obj_func_funptr(kappa, func, callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -467,7 +643,8 @@ contains
 
     end function test_obj_func_c_funptr
 
-    function test_precond_funptr(precond_funptr, test_name, message) result(test_passed)
+    function test_precond_funptr(precond_funptr, test_name, message, context) &
+        result(test_passed)
         !
         ! this function tests a provided preconditioner function pointer
         !
@@ -475,10 +652,16 @@ contains
 
         procedure(precond_type), intent(in), pointer :: precond_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: residual(:), precond_residual(:)
         integer(ip) :: error
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -498,7 +681,7 @@ contains
         residual = 1.0_rp
 
         ! call preconditioning subroutine
-        call precond_funptr(residual, 5.0_rp, precond_residual, error)
+        call precond_funptr(residual, 5.0_rp, precond_residual, error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -518,7 +701,7 @@ contains
 
     end function test_precond_funptr
 
-    function test_precond_c_funptr(precond_c_funptr, test_name, message) &
+    function test_precond_c_funptr(precond_c_funptr, test_name, message, context_c) &
         result(test_passed)
         !
         ! this function tests a provided preconditioner C function pointer
@@ -527,11 +710,17 @@ contains
 
         type(c_funptr), intent(in) :: precond_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(precond_c_type), pointer :: precond_funptr
         real(c_rp), allocatable :: residual(:), precond_residual(:)
         integer(c_ip) :: error
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -554,7 +743,7 @@ contains
         residual = 1.0_c_rp
 
         ! call preconditioning function
-        error = precond_funptr(residual, 5.0_c_rp, precond_residual)
+        error = precond_funptr(residual, 5.0_c_rp, precond_residual, callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -574,7 +763,7 @@ contains
 
     end function test_precond_c_funptr
 
-    function test_precond_pd_funptr(precond_pd_funptr, test_name, message) &
+    function test_precond_pd_funptr(precond_pd_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided positive-definite preconditioner function
@@ -584,10 +773,16 @@ contains
 
         procedure(precond_pd_type), intent(in), pointer :: precond_pd_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: residual(:), precond_residual(:)
         integer(ip) :: error
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -608,7 +803,7 @@ contains
         residual = 1.0_rp
 
         ! call preconditioning subroutine
-        call precond_pd_funptr(residual, precond_residual, error)
+        call precond_pd_funptr(residual, precond_residual, error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -628,8 +823,8 @@ contains
 
     end function test_precond_pd_funptr
 
-    function test_precond_pd_c_funptr(precond_pd_c_funptr, test_name, message) &
-        result(test_passed)
+    function test_precond_pd_c_funptr(precond_pd_c_funptr, test_name, message, &
+                                      context_c) result(test_passed)
         !
         ! this function tests a provided positive-definite preconditioner C function
         ! pointer
@@ -638,11 +833,17 @@ contains
 
         type(c_funptr), intent(in) :: precond_pd_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(precond_pd_c_type), pointer :: precond_pd_funptr
         real(c_rp), allocatable :: residual(:), precond_residual(:)
         integer(c_ip) :: error
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -666,7 +867,7 @@ contains
         residual = 1.0_c_rp
 
         ! call preconditioning function
-        error = precond_pd_funptr(residual, precond_residual)
+        error = precond_pd_funptr(residual, precond_residual, callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -686,7 +887,8 @@ contains
 
     end function test_precond_pd_c_funptr
 
-    function test_project_funptr(project_funptr, test_name, message) result(test_passed)
+    function test_project_funptr(project_funptr, test_name, message, context) &
+        result(test_passed)
         !
         ! this function tests a provided projection function pointer
         !
@@ -694,10 +896,16 @@ contains
 
         procedure(project_type), intent(in), pointer :: project_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: vector(:)
         integer(ip) :: error
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -717,7 +925,7 @@ contains
         vector = 1.0_rp
 
         ! call projection subroutine
-        call project_funptr(vector, error)
+        call project_funptr(vector, error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -737,7 +945,7 @@ contains
 
     end function test_project_funptr
 
-    function test_project_c_funptr(project_c_funptr, test_name, message) &
+    function test_project_c_funptr(project_c_funptr, test_name, message, context_c) &
         result(test_passed)
         !
         ! this function tests a provided projection C function pointer
@@ -746,11 +954,17 @@ contains
 
         type(c_funptr), intent(in) :: project_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(project_c_type), pointer :: project_funptr
         real(c_rp), allocatable :: vector(:)
         integer(c_ip) :: error
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -773,7 +987,7 @@ contains
         vector = 1.0_c_rp
 
         ! call projection function
-        error = project_funptr(vector)
+        error = project_funptr(vector, callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -793,8 +1007,8 @@ contains
 
     end function test_project_c_funptr
 
-    function test_get_extra_trial_vectors_funptr(get_extra_trial_vectors_funptr, &
-                                                 test_name, message) result(test_passed)
+    function test_get_extra_trial_vectors_funptr( &
+        get_extra_trial_vectors_funptr, test_name, message, context) result(test_passed)
         !
         ! this function tests a provided extra trial vector function pointer
         !
@@ -803,10 +1017,16 @@ contains
         procedure(get_extra_trial_vectors_type), intent(in), pointer :: &
             get_extra_trial_vectors_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: trial_vectors(:, :)
         integer(ip) :: error, i
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -823,7 +1043,7 @@ contains
         allocate(trial_vectors(n_param, n_extra_trial_vectors))
 
         ! call extra trial vector function
-        call get_extra_trial_vectors_funptr(trial_vectors, error)
+        call get_extra_trial_vectors_funptr(trial_vectors, error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -842,8 +1062,9 @@ contains
 
     end function test_get_extra_trial_vectors_funptr
 
-    function test_get_extra_trial_vectors_c_funptr( &
-        get_extra_trial_vectors_c_funptr, test_name, message) result(test_passed)
+    function test_get_extra_trial_vectors_c_funptr(get_extra_trial_vectors_c_funptr, &
+                                                   test_name, message, context_c) &
+        result(test_passed)
         !
         ! this function tests a provided extra trial vector C function pointer
         !
@@ -851,12 +1072,18 @@ contains
 
         type(c_funptr), intent(in) :: get_extra_trial_vectors_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(get_extra_trial_vectors_c_type), pointer :: &
             get_extra_trial_vectors_funptr
         real(c_rp), allocatable :: trial_vectors(:, :)
         integer(ip) :: error, i
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -877,7 +1104,8 @@ contains
         allocate(trial_vectors(n_param, n_extra_trial_vectors))
 
         ! call extra trial vector function
-        error = get_extra_trial_vectors_funptr(trial_vectors, n_extra_trial_vectors_c)
+        error = get_extra_trial_vectors_funptr(trial_vectors, n_extra_trial_vectors_c, &
+                                               callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -896,7 +1124,7 @@ contains
 
     end function test_get_extra_trial_vectors_c_funptr
 
-    function test_conv_check_funptr(conv_check_funptr, test_name, message) &
+    function test_conv_check_funptr(conv_check_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided convergence check function pointer
@@ -905,10 +1133,16 @@ contains
 
         procedure(conv_check_type), intent(in), pointer :: conv_check_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         logical :: converged
         integer(ip) :: error
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -922,7 +1156,7 @@ contains
         end if
 
         ! call convergence check function
-        converged = conv_check_funptr(error)
+        converged = conv_check_funptr(error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -939,8 +1173,8 @@ contains
 
     end function test_conv_check_funptr
 
-    function test_conv_check_c_funptr(conv_check_c_funptr, test_name, message) &
-        result(test_passed)
+    function test_conv_check_c_funptr(conv_check_c_funptr, test_name, message, &
+                                      context_c) result(test_passed)
         !
         ! this function tests a provided convergence check C function pointer
         !
@@ -948,11 +1182,17 @@ contains
 
         type(c_funptr), intent(in) :: conv_check_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(conv_check_c_type), pointer :: conv_check_funptr
         logical(c_bool) :: converged
         integer(ip) :: error
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -969,7 +1209,7 @@ contains
         call c_f_procpointer(cptr=conv_check_c_funptr, fptr=conv_check_funptr)
 
         ! call convergence check function
-        error = conv_check_funptr(converged)
+        error = conv_check_funptr(converged, callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -986,8 +1226,8 @@ contains
 
     end function test_conv_check_c_funptr
 
-    function test_conv_check_stability_funptr(conv_check_funptr, test_name, message) &
-        result(test_passed)
+    function test_conv_check_stability_funptr(conv_check_funptr, test_name, message, &
+                                              context) result(test_passed)
         !
         ! this function tests a provided stability check convergence check function
         ! pointer
@@ -996,12 +1236,18 @@ contains
 
         procedure(conv_check_stability_type), intent(in), pointer :: conv_check_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer, optional :: context
         logical :: test_passed
 
+        class(*), pointer :: callback_context
         real(rp), allocatable :: residual(:)
         real(rp) :: eigval
         logical :: converged
         integer(ip) :: error
+
+        ! hand the callback the context the caller asked for, or none
+        callback_context => no_context
+        if (present(context)) callback_context => context
 
         ! assume tests pass
         test_passed = .true.
@@ -1024,7 +1270,7 @@ contains
         eigval = sum(residual)
 
         ! call convergence check function
-        converged = conv_check_funptr(residual, eigval, error)
+        converged = conv_check_funptr(residual, eigval, error, callback_context)
 
         ! check for error
         if (error /= 0) then
@@ -1042,7 +1288,7 @@ contains
     end function test_conv_check_stability_funptr
 
     function test_conv_check_stability_c_funptr(conv_check_c_funptr, test_name, &
-                                                message) result(test_passed)
+                                                message, context_c) result(test_passed)
         !
         ! this function tests a provided stability check convergence check C function
         ! pointer
@@ -1051,13 +1297,19 @@ contains
 
         type(c_funptr), intent(in) :: conv_check_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in), optional :: context_c
         logical :: test_passed
 
+        type(c_ptr) :: callback_context_c
         procedure(conv_check_stability_c_type), pointer :: conv_check_funptr
         real(c_rp), allocatable :: residual(:)
         real(c_rp) :: eigval
         logical(c_bool) :: converged
         integer(ip) :: error
+
+        ! hand the callback the host pointer the caller asked for, or none
+        callback_context_c = c_null_ptr
+        if (present(context_c)) callback_context_c = context_c
 
         ! assume tests pass
         test_passed = .true.
@@ -1083,7 +1335,7 @@ contains
         eigval = sum(residual)
 
         ! call convergence check function
-        error = conv_check_funptr(residual, eigval, converged)
+        error = conv_check_funptr(residual, eigval, converged, callback_context_c)
 
         ! check for error
         if (error /= 0) then
@@ -1116,37 +1368,39 @@ contains
 
         ! test passed preconditioner subroutine
         test_passed = test_passed .and. test_precond_funptr( &
-            settings%precond, test_name, " by"//message//" preconditioner subroutine")
+            settings%precond, test_name, " by"//message//" preconditioner subroutine", &
+            settings%context)
 
         ! test passed projection subroutine
         test_passed = test_passed .and. test_project_funptr( &
-            settings%project, test_name, " by"//message//" projection subroutine")
+            settings%project, test_name, " by"//message//" projection subroutine", &
+            settings%context)
 
         ! test passed positive-definite preconditioner subroutine
         test_passed = test_passed .and. test_precond_pd_funptr( &
-            settings%precond_pd, test_name, &
-            " by"//message//" positive-definite preconditioner subroutine")
+            settings%precond_pd, test_name, " by"//message// &
+            " positive-definite preconditioner subroutine", settings%context)
 
         ! test passed extra trial vector subroutine
         test_passed = test_passed .and. test_get_extra_trial_vectors_funptr( &
             settings%get_extra_trial_vectors, test_name, &
-            " by"//message//" extra trial vector subroutine")
+            " by"//message//" extra trial vector subroutine", settings%context)
 
         ! test passed convergence check function
         test_passed = test_passed .and. test_conv_check_funptr( &
             settings%conv_check, test_name, &
-            " by"//message//" convergence check function")
+            " by"//message//" convergence check function", settings%context)
 
         test_passed = test_passed .and. test_hess_x_funptr( &
-            settings%stability_hess_x, test_name, &
-            " by"//message//" stability Hessian linear transformation function")
+            settings%stability_hess_x, test_name, " by"//message// &
+            " stability Hessian linear transformation function", settings%context)
 
         ! test passed logging function
         if (.not. associated(settings%logger)) then
             test_passed = .false.
             write(stderr, *) test_name//": Logging function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
         ! check stability check optional function pointers
@@ -1174,31 +1428,33 @@ contains
 
         ! test passed preconditioner function
         test_passed = test_passed .and. test_precond_c_funptr( &
-            settings_c%precond, test_name, " by"//message//" preconditioning function")
+            settings_c%precond, test_name, &
+            " by"//message//" preconditioning function", settings_c%context)
 
         ! test passed projection function
         test_passed = test_passed .and. test_project_c_funptr( &
-            settings_c%project, test_name, " by"//message//" projection function")
+            settings_c%project, test_name, " by"//message//" projection function", &
+            settings_c%context)
 
         ! test passed positive-definite preconditioner function
         test_passed = test_passed .and. test_precond_pd_c_funptr( &
-            settings_c%precond_pd, test_name, &
-            " by"//message//" positive-definite preconditioner function")
+            settings_c%precond_pd, test_name, " by"//message// &
+            " positive-definite preconditioner function", settings_c%context)
 
         ! test passed extra trial vector function
         test_passed = test_passed .and. test_get_extra_trial_vectors_c_funptr( &
             settings_c%get_extra_trial_vectors, test_name, &
-            " by"//message//" extra trial vector function")
+            " by"//message//" extra trial vector function", settings_c%context)
 
         ! test passed convergence check function
         test_passed = test_passed .and. test_conv_check_c_funptr( &
             settings_c%conv_check, test_name, &
-            " by"//message//" convergence check function")
+            " by"//message//" convergence check function", settings_c%context)
 
         ! test passed stability check Hessian linear transformation function
         test_passed = test_passed .and. test_hess_x_c_funptr( &
-            settings_c%stability_hess_x, test_name, &
-            " by"//message//" stability check Hessian linear transformation function")
+            settings_c%stability_hess_x, test_name, " by"//message//" stability "// &
+            "check Hessian linear transformation function", settings_c%context)
 
         ! get Fortran pointer to passed logging function and call it
         if (.not. c_associated(settings_c%logger)) then
@@ -1206,7 +1462,7 @@ contains
             write(stderr, *) test_name//": Logging function not associated with value."
         else
             call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-            call logger_funptr("test"//c_null_char)
+            call logger_funptr("test"//c_null_char, settings_c%context)
         end if
 
         ! check stability check optional function pointers
@@ -1232,33 +1488,35 @@ contains
 
         ! test passed preconditioner subroutine
         test_passed = test_passed .and. test_precond_funptr( &
-            settings%precond, test_name, " by"//message//" preconditioner subroutine")
+            settings%precond, test_name, " by"//message//" preconditioner subroutine", &
+            settings%context)
 
         ! test passed projection subroutine
         test_passed = test_passed .and. test_project_funptr( &
-            settings%project, test_name, " by"//message//" projection subroutine")
+            settings%project, test_name, " by"//message//" projection subroutine", &
+            settings%context)
 
         ! test passed approximate Hessian linear transformation subroutine
         test_passed = test_passed .and. test_hess_x_funptr( &
-            settings%approx_hess_x, test_name, &
-            " by"//message//" approximate Hessian linear transformation subroutine")
+            settings%approx_hess_x, test_name, " by"//message// &
+            " approximate Hessian linear transformation subroutine", settings%context)
 
         ! test passed extra trial vector subroutine
         test_passed = test_passed .and. test_get_extra_trial_vectors_funptr( &
             settings%get_extra_trial_vectors, test_name, &
-            " by"//message//" extra trial vector subroutine")
+            " by"//message//" extra trial vector subroutine", settings%context)
 
         ! test passed convergence check subroutine
         test_passed = test_passed .and. test_conv_check_stability_funptr( &
             settings%conv_check, test_name, &
-            " by"//message//" convergence check subroutine")
+            " by"//message//" convergence check subroutine", settings%context)
 
         ! test passed logging function
         if (.not. associated(settings%logger)) then
             test_passed = .false.
             write(stderr, *) test_name//": Logging function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
     end function test_mock_stability_funptr
@@ -1283,26 +1541,28 @@ contains
 
         ! test passed preconditioner
         test_passed = test_passed .and. test_precond_c_funptr( &
-            settings_c%precond, test_name, " by"//message//" preconditioning function")
+            settings_c%precond, test_name, &
+            " by"//message//" preconditioning function", settings_c%context)
 
         ! test passed projection function
         test_passed = test_passed .and. test_project_c_funptr( &
-            settings_c%project, test_name, " by"//message//" projection function")
+            settings_c%project, test_name, " by"//message//" projection function", &
+            settings_c%context)
 
         ! test passed approximate Hessian linear transformation function
         test_passed = test_passed .and. test_hess_x_c_funptr( &
-            settings_c%approx_hess_x, test_name, &
-            " by"//message//"approximate Hessian linear transformation function")
+            settings_c%approx_hess_x, test_name, " by"//message// &
+            "approximate Hessian linear transformation function", settings_c%context)
 
         ! test passed extra trial vector function
         test_passed = test_passed .and. test_get_extra_trial_vectors_c_funptr( &
             settings_c%get_extra_trial_vectors, test_name, &
-            " by"//message//" extra trial vector function")
+            " by"//message//" extra trial vector function", settings_c%context)
 
         ! test passed convergence check function
         test_passed = test_passed .and. test_conv_check_stability_c_funptr( &
             settings_c%conv_check, test_name, &
-            " by"//message//" convergence check function")
+            " by"//message//" convergence check function", settings_c%context)
 
         ! get Fortran pointer to passed logging function and call it
         if (.not. c_associated(settings_c%logger)) then
@@ -1310,7 +1570,7 @@ contains
             write(stderr, *) test_name//": Logging function not associated with value."
         else
             call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-            call logger_funptr("test"//c_null_char)
+            call logger_funptr("test"//c_null_char, settings_c%context)
         end if
 
     end function test_mock_stability_c_funptr
@@ -1575,6 +1835,7 @@ contains
         lhs%refresh_hess = rhs%refresh_hess
         lhs%grad_noise = rhs%grad_noise
         lhs%hess_symm = rhs%hess_symm
+        lhs%max_precision_reached = rhs%max_precision_reached
         lhs%conv_tol = rhs%conv_tol
         lhs%start_trust_radius = rhs%start_trust_radius
         lhs%global_red_factor = rhs%global_red_factor
@@ -1586,6 +1847,8 @@ contains
         lhs%jacobi_davidson_start = rhs%jacobi_davidson_start
         lhs%seed = rhs%seed
         lhs%verbose = rhs%verbose
+        lhs%n_update_orbs = rhs%n_update_orbs
+        lhs%n_hess_x = rhs%n_hess_x
         lhs%subsystem_solver = rhs%subsystem_solver
         lhs%trust_region_shape = rhs%trust_region_shape
         lhs%stability_settings = rhs
@@ -1623,6 +1886,7 @@ contains
         lhs%jacobi_davidson_start = rhs%jacobi_davidson_start
         lhs%seed = rhs%seed
         lhs%verbose = rhs%verbose
+        lhs%n_hess_x = rhs%n_hess_x
         lhs%diag_solver = rhs%diag_solver
 
         ! set initialization logical
@@ -1682,6 +1946,7 @@ contains
         lhs%grad_noise = logical(rhs%grad_noise, kind=c_bool)
         lhs%hess_symm = logical(rhs%hess_symm, kind=c_bool)
         lhs%stop_on_instability = logical(rhs%stop_on_instability, kind=c_bool)
+        lhs%max_precision_reached = logical(rhs%max_precision_reached, kind=c_bool)
         lhs%conv_tol = real(rhs%conv_tol, kind=c_rp)
         lhs%start_trust_radius = real(rhs%start_trust_radius, kind=c_rp)
         lhs%global_red_factor = real(rhs%global_red_factor, kind=c_rp)
@@ -1694,6 +1959,8 @@ contains
         lhs%seed = int(rhs%seed, kind=c_ip)
         lhs%verbose = int(rhs%verbose, kind=c_ip)
         lhs%n_iter = int(rhs%n_iter, kind=c_ip)
+        lhs%n_update_orbs = int(rhs%n_update_orbs, kind=c_ip)
+        lhs%n_hess_x = int(rhs%n_hess_x, kind=c_ip)
         lhs%subsystem_solver = character_to_c(rhs%subsystem_solver)
         lhs%trust_region_shape = character_to_c(rhs%trust_region_shape)
         lhs%diag_solver = character_to_c(rhs%diag_solver)
@@ -1716,6 +1983,7 @@ contains
             (lhs%refresh_hess .eqv. rhs%refresh_hess) .and. &
             (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
+            (lhs%max_precision_reached .eqv. rhs%max_precision_reached) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
@@ -1725,6 +1993,8 @@ contains
             lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
+            lhs%n_update_orbs == rhs%n_update_orbs .and. &
+            lhs%n_hess_x == rhs%n_hess_x .and. &
             lhs%subsystem_solver == rhs%subsystem_solver .and. &
             lhs%trust_region_shape == rhs%trust_region_shape .and. &
             lhs%stability_settings == rhs
@@ -1764,7 +2034,7 @@ contains
             lhs%n_iter == rhs%n_iter .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
-            lhs%diag_solver == rhs%diag_solver
+            lhs%n_hess_x == rhs%n_hess_x .and. lhs%diag_solver == rhs%diag_solver
 
     end function equal_stability_to_ref
 
@@ -1862,6 +2132,7 @@ contains
             (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             (lhs%initialized .eqv. rhs%initialized) .and. &
+            (lhs%max_precision_reached .eqv. rhs%max_precision_reached) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
@@ -1871,6 +2142,8 @@ contains
             lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
+            lhs%n_update_orbs == rhs%n_update_orbs .and. &
+            lhs%n_hess_x == rhs%n_hess_x .and. &
             lhs%subsystem_solver == rhs%subsystem_solver .and. &
             lhs%trust_region_shape == rhs%trust_region_shape .and. &
             lhs%stability_settings == rhs%stability_settings
@@ -1900,6 +2173,7 @@ contains
         type(stability_settings_type), intent(in) :: lhs, rhs
 
         equal_stability = &
+            (lhs%initialized .eqv. rhs%initialized) .and. &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
@@ -1907,7 +2181,7 @@ contains
             lhs%n_iter == rhs%n_iter .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
-            lhs%diag_solver == rhs%diag_solver
+            lhs%n_hess_x == rhs%n_hess_x .and. lhs%diag_solver == rhs%diag_solver
 
     end function equal_stability
 

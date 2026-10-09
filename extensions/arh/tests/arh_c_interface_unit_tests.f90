@@ -776,10 +776,12 @@ contains
         use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
         use otr_arh, only: arh_settings_type
         use otr_arh_test_reference, only: assignment(=), operator(/=), ref_arh_settings
+        use c_interface, only: c_callbacks_type
         use c_interface_unit_tests, only: mock_logger, test_logger
 
         type(arh_settings_type_c) :: settings_c
         type(arh_settings_type) :: settings
+        type(c_callbacks_type), target :: callbacks
 
         ! assume test passes
         test_assign_arh_f_c = .true.
@@ -788,8 +790,11 @@ contains
         settings_c = ref_arh_settings
         settings_c%logger = c_funloc(mock_logger)
 
-        ! convert to Fortran settings
+        ! convert to Fortran settings and hand them the C logging function in a bundle
+        ! through context, as the factory does
         settings = settings_c
+        callbacks%logger => mock_logger
+        settings%context => callbacks
 
         ! check logging function
         if (.not. associated(settings%logger)) then
@@ -797,8 +802,8 @@ contains
             write(stderr, *) "test_assign_arh_f_c failed: Logging function not "// &
                 "associated with value."
         else
-            test_logger = .true.
-            call settings%logger("test")
+            test_logger = .false.
+            call settings%logger("test", settings%context)
             if (.not. test_logger) then
                 test_assign_arh_f_c = .false.
                 write(stderr, *) "test_assign_arh_f_c failed: Called logging "// &

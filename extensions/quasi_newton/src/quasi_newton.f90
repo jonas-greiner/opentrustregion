@@ -151,21 +151,23 @@ contains
 
     end subroutine update_orbs_qn_factory
 
-    subroutine update_orbs_qn(kappa, func, grad, h_diag, hess_x_funptr, error)
+    subroutine update_orbs_qn(kappa, func, grad, h_diag, hess_x_funptr, error, context)
         !
         ! this subroutine is a modified quasi-Newton orbital updating function
         !
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         ! initialize error flag
         error = 0
 
         ! update orbitals
-        call update_orbs_orig_funptr(kappa, func, grad, h_diag, hess_x_funptr, error)
+        call update_orbs_orig_funptr(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                     context)
         if (error /= 0) return
 
         ! get pointer to modified Hessian linear transformation function
@@ -332,7 +334,7 @@ contains
 
     end function sr1_skip_add
 
-    subroutine sr1_hess_x_fun(x, hess_x, error)
+    subroutine sr1_hess_x_fun(x, hess_x, error, context)
         !
         ! this implements the L-SR1 version according to Byrd, R.H., Nocedal, J. &
         ! Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
@@ -343,6 +345,7 @@ contains
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: n_param, i, info
         real(rp), allocatable :: psi(:, :), U(:, :), q(:), z(:)
@@ -463,7 +466,7 @@ contains
 
     end function bfgs_skip_add
 
-    subroutine bfgs_hess_x_fun(x, hess_x, error)
+    subroutine bfgs_hess_x_fun(x, hess_x, error, context)
         !
         ! this implements the L-BFGS version according to Byrd, R.H., Nocedal, J. &
         ! Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
@@ -474,6 +477,7 @@ contains
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: n_param, i, j, info
         real(rp) :: kappa_grad_dot

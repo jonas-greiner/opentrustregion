@@ -1467,13 +1467,14 @@ contains
 
     contains
 
-        subroutine mock_project(vector, error_out)
+        subroutine mock_project(vector, error_out, context)
             !
             ! this subroutine is a mock projection of the caller, which leaves the
             ! vector unchanged
             !
             real(rp), intent(inout), target :: vector(:)
             integer(ip), intent(out) :: error_out
+            class(*), intent(in), pointer :: context
 
             error_out = 0
             vector = vector
@@ -1487,6 +1488,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! MO basis
         !
+        use test_reference, only: no_context
         use otr_mo, only: obj_func_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo
@@ -1530,7 +1532,7 @@ contains
             ! the current density matrix
             kappa = 0.0_rp
             mock_requests = [integer(ip) :: ]
-            energy = obj_func_mo_callback(kappa, error)
+            energy = obj_func_mo_callback(kappa, error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_obj_func_mo_callback failed: Produced error "// &
                     "without an orbital rotation for the "//case_name//" case."
@@ -1569,7 +1571,7 @@ contains
             end do
             dm_ao_start = mo_object%dm_ao
             mock_requests = [integer(ip) :: ]
-            energy = obj_func_mo_callback(kappa, error)
+            energy = obj_func_mo_callback(kappa, error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_obj_func_mo_callback failed: Produced error "// &
                     "for an orbital rotation for the "//case_name//" case."
@@ -1611,6 +1613,7 @@ contains
         ! Hessian diagonal evaluation in the MO basis, for the closed-shell and the
         ! open-shell case
         !
+        use test_reference, only: no_context
         use otr_mo, only: update_orbs_mo_callback, mo_object, hess_x_mo_callback_ptr
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: setup_settings
@@ -1782,7 +1785,7 @@ contains
             end if
             kappa = 0.1_rp
             call update_orbs_mo_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                         error)
+                                         error, no_context)
             if (error == 0) then
                 write(stderr, *) "test_update_orbs_mo_callback failed: Error of "// &
                     "the density matrix evaluating function not passed on for the "// &
@@ -1845,6 +1848,7 @@ contains
             ! and if the density matrix evaluating function has been called the
             ! expected number of times in total
             !
+            use test_reference, only: no_context
             integer(ip), intent(in) :: n_calls
             character(len=*), intent(in) :: stage
             logical :: passed
@@ -1855,7 +1859,7 @@ contains
             ! call routine and determine if it produces an error and if the density
             ! matrix evaluating function was called the expected number of times
             call update_orbs_mo_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                         error)
+                                         error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_update_orbs_mo_callback failed: Produced "// &
                     "error for "//stage//" for the "//case_name//" case."
@@ -1877,6 +1881,7 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the MO basis
         !
+        use test_reference, only: no_context
         use otr_mo, only: hess_x_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
@@ -1934,7 +1939,7 @@ contains
             expected_hess_x = ref_hess_x_mo(x, mo_object%mo_channels, &
                                             mo_coeff(:, :, :n_particle), &
                                             mock_response_factor)
-            call hess_x_mo_callback(x, hess_x, error)
+            call hess_x_mo_callback(x, hess_x, error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_mo_callback failed: Produced error "// &
                     "for the "//case_name//" case."
@@ -1964,7 +1969,7 @@ contains
         expected_hess_x = &
             ref_hess_x_mo(x, mo_object%mo_channels, mo_coeff, mock_response_factor)
         mock_requests = [integer(ip) :: ]
-        call hess_x_mo_callback(x, hess_x, error)
+        call hess_x_mo_callback(x, hess_x, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_hess_x_mo_callback failed: Produced error while "// &
                 "refreshing a stale response."
@@ -2023,7 +2028,7 @@ contains
             allocate(x(mo_object%n_param), hess_x(mo_object%n_param))
             call random_number(x)
             x = x - 0.5_rp
-            call hess_x_mo_callback(x, hess_x, error)
+            call hess_x_mo_callback(x, hess_x, error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_mo_callback failed: Produced error "// &
                     "for the quadratic model energy for the "//case_name//" case."
@@ -2120,6 +2125,7 @@ contains
         ! preconditioner of the MO basis, which applies the one of the orbital basis to
         ! the MO object
         !
+        use test_reference, only: no_context
         use otr_mo, only: precond_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_test_reference, only: n_occ
@@ -2142,7 +2148,7 @@ contains
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call precond_mo_callback(residual, mu, precond_residual, error)
+        call precond_mo_callback(residual, mu, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_mo_callback failed: Produced error."
             test_precond_mo_callback = .false.
@@ -2164,6 +2170,7 @@ contains
         ! preconditioner of the MO basis, which applies the one of the orbital basis to
         ! the MO object
         !
+        use test_reference, only: no_context
         use otr_mo, only: precond_pd_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_test_reference, only: n_occ
@@ -2185,7 +2192,7 @@ contains
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call precond_pd_mo_callback(residual, precond_residual, error)
+        call precond_pd_mo_callback(residual, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_mo_callback failed: Produced error."
             test_precond_pd_mo_callback = .false.
@@ -2206,6 +2213,7 @@ contains
         ! this function tests the subroutine which returns the extra trial vectors of
         ! the MO basis for the solver's initial trial space
         !
+        use test_reference, only: no_context
         use otr_mo, only: get_extra_trial_vectors_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_test_reference, only: n_occ
@@ -2234,7 +2242,7 @@ contains
 
         ! call routine and determine if the extra trial vectors of the MO basis are
         ! returned
-        call get_extra_trial_vectors_mo_callback(trial_vectors, error)
+        call get_extra_trial_vectors_mo_callback(trial_vectors, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_mo_callback failed: "// &
                 "Produced error."

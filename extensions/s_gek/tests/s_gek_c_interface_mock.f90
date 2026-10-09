@@ -41,6 +41,7 @@ contains
         ! this subroutine is a mock routine for the S-GEK orbital updating factory C
         ! wrapper subroutine
         !
+        use, intrinsic :: iso_c_binding, only: c_null_ptr
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
         use c_interface, only: update_orbs_c_type, hess_x_c_type, logger_c_type
         use test_reference, only: test_update_orbs_c_funptr
@@ -80,7 +81,7 @@ contains
         ! get Fortran pointer to passed logging function and call it
         message = "test"//c_null_char
         call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-        call logger_funptr(message)
+        call logger_funptr(message, c_null_ptr)
 
         ! check optional settings against reference values
         if (settings_c /= ref_s_gek_settings) then

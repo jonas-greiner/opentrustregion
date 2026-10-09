@@ -121,15 +121,17 @@ contains
 
     end subroutine update_orbs_s_gek_factory
 
-    subroutine update_orbs_s_gek(kappa, func, grad, h_diag, hess_x_funptr, error)
+    subroutine update_orbs_s_gek(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                 context)
         !
         ! this subroutine is a modified S-GEK orbital updating function
         !
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         ! real(rp), allocatable :: step(:), test_kappa(:)
 
@@ -137,7 +139,8 @@ contains
         error = 0
 
         ! update orbitals
-        call update_orbs_orig_funptr(kappa, func, grad, h_diag, hess_x_funptr, error)
+        call update_orbs_orig_funptr(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                     context)
         if (error /= 0) return
 
         ! get pointer to modified Hessian linear transformation function
@@ -503,13 +506,14 @@ contains
 
     end subroutine clear_s_gek
 
-    subroutine hess_x_s_gek(x, hess_x, error)
+    subroutine hess_x_s_gek(x, hess_x, error, context)
         !
         ! this subroutine is a modified S-GEK Hessian linear transformation function
         !
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: i
         real(rp), allocatable :: actual_x(:), actual_hess_x(:)

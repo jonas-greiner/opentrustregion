@@ -48,11 +48,12 @@ contains
         ! test passed orbital update function
         test_solver_interface = test_solver_interface .and. test_update_orbs_c_funptr( &
             update_orbs_c_funptr, "solver_py_interface", &
-            " by given orbital updating function")
+            " by given orbital updating function", settings_c%context)
 
         ! test passed objective function
         test_solver_interface = test_solver_interface .and. test_obj_func_c_funptr( &
-            obj_func_c_funptr, "solver_py_interface", " by given objective function")
+            obj_func_c_funptr, "solver_py_interface", " by given objective function", &
+            settings_c%context)
 
         ! check if passed number of parameters is correct
         if (n_param_c /= 3) then
@@ -108,9 +109,9 @@ contains
 
         ! test passed Hessian linear transformation
         test_stability_check_interface = &
-            test_stability_check_interface .and. &
-            test_hess_x_c_funptr(hess_x_c_funptr, "stability_check_py_interface", &
-                                 " by given Hessian linear transformation function")
+            test_stability_check_interface .and. test_hess_x_c_funptr( &
+                hess_x_c_funptr, "stability_check_py_interface", &
+                " by given Hessian linear transformation function", settings_c%context)
 
         ! check if passed number of parameters is correct
         if (n_param_c /= 3) then

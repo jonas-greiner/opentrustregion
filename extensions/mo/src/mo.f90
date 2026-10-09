@@ -406,12 +406,13 @@ contains
 
     end subroutine mo_set_solver_settings
 
-    function obj_func_mo_callback(kappa, error) result(energy)
+    function obj_func_mo_callback(kappa, error, context) result(energy)
         !
         ! this function defines the energy evaluation in the MO basis
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
         real(rp) :: energy
 
         real(rp), allocatable :: rot_mo_coeff(:, :, :), rot_dm_ao(:, :, :)
@@ -437,7 +438,8 @@ contains
 
     end function obj_func_mo_callback
 
-    subroutine update_orbs_mo_callback(kappa, func, grad, h_diag, hess_x_funptr, error)
+    subroutine update_orbs_mo_callback(kappa, func, grad, h_diag, hess_x_funptr, &
+                                       error, context)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation in the MO basis
@@ -445,8 +447,9 @@ contains
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: n_ao, n_particle
         real(rp), allocatable :: fock_ao(:, :, :)
@@ -502,7 +505,7 @@ contains
 
     end subroutine update_orbs_mo_callback
 
-    subroutine hess_x_mo_callback(x, hess_x, error)
+    subroutine hess_x_mo_callback(x, hess_x, error, context)
         !
         ! this function defines the Hessian linear transformation in the MO basis, the
         ! static part from the occupied-occupied and virtual-virtual blocks of the Fock
@@ -513,6 +516,7 @@ contains
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: n_ao, n_occ, n_virt, i, rows(2, mo_object%n_particle)
         real(rp) :: shell_scale
@@ -594,7 +598,7 @@ contains
 
     end subroutine hess_x_mo_callback
 
-    subroutine precond_mo_callback(residual, mu, precond_residual, error)
+    subroutine precond_mo_callback(residual, mu, precond_residual, error, context)
         !
         ! this subroutine defines a level-shifted preconditioner based on the exact
         ! eigendecomposition of the static part of the Hessian
@@ -603,13 +607,14 @@ contains
         real(rp), intent(in) :: mu
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         call mo_object%precond(residual, mu, precond_residual, mo_object%settings, &
                                error)
 
     end subroutine precond_mo_callback
 
-    subroutine precond_pd_mo_callback(residual, precond_residual, error)
+    subroutine precond_pd_mo_callback(residual, precond_residual, error, context)
         !
         ! this subroutine defines the positive-definite preconditioner based on the
         ! exact eigendecomposition of the static part of the Hessian
@@ -617,18 +622,20 @@ contains
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         call mo_object%precond_pd(residual, precond_residual, mo_object%settings, error)
 
     end subroutine precond_pd_mo_callback
 
-    subroutine get_extra_trial_vectors_mo_callback(trial_vectors, error)
+    subroutine get_extra_trial_vectors_mo_callback(trial_vectors, error, context)
         !
         ! this subroutine returns the extra trial vectors of the MO basis for the
         ! solver's initial trial space
         !
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         call mo_object%get_extra_trial_vectors(trial_vectors, mo_object%settings, error)
 

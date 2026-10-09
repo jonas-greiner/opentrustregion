@@ -23,12 +23,13 @@ module otr_common_mock
 
 contains
 
-    function mock_obj_func(kappa, error) result(func)
+    function mock_obj_func(kappa, error, context) result(func)
         !
         ! this function is a test function for the objective function
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
         real(rp) :: func
 
         func = sum(kappa)
@@ -37,7 +38,8 @@ contains
 
     end function mock_obj_func
 
-    subroutine mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+    subroutine mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                context)
         !
         ! this subroutine is a test subroutine for the orbital update function
         !
@@ -46,8 +48,9 @@ contains
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         func = sum(kappa)
 
@@ -61,7 +64,7 @@ contains
 
     end subroutine mock_update_orbs
 
-    subroutine mock_hess_x(x, hess_x, error)
+    subroutine mock_hess_x(x, hess_x, error, context)
         !
         ! this subroutine is a test subroutine for the Hessian linear transformation
         ! function
@@ -69,6 +72,7 @@ contains
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         hess_x = 4 * x
 
@@ -76,7 +80,7 @@ contains
 
     end subroutine mock_hess_x
 
-    subroutine mock_precond(residual, mu, precond_residual, error)
+    subroutine mock_precond(residual, mu, precond_residual, error, context)
         !
         ! this subroutine is a test subroutine for the level-shifted preconditioner
         ! function
@@ -85,6 +89,7 @@ contains
         real(rp), intent(in) :: mu
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         precond_residual = mu * residual
 
@@ -92,7 +97,7 @@ contains
 
     end subroutine mock_precond
 
-    subroutine mock_precond_pd(residual, precond_residual, error)
+    subroutine mock_precond_pd(residual, precond_residual, error, context)
         !
         ! this subroutine is a test subroutine for the positive-definite preconditioner
         ! function
@@ -100,6 +105,7 @@ contains
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         precond_residual = 3.0_rp * residual
 
@@ -107,12 +113,13 @@ contains
 
     end subroutine mock_precond_pd
 
-    subroutine mock_get_extra_trial_vectors(trial_vectors, error)
+    subroutine mock_get_extra_trial_vectors(trial_vectors, error, context)
         !
         ! this subroutine is a test subroutine for the extra trial vector function
         !
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: i
 

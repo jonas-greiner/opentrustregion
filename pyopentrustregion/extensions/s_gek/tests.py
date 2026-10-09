@@ -44,7 +44,6 @@ fortran_tests = {
         "assign_s_gek_f_c",
         "hess_x_s_gek_c_wrapper",
         "init_s_gek_settings_c",
-        "update_orbs_orig_s_gek_f_wrapper",
         "change_reference_f_wrapper",
         "update_orbs_s_gek_c_wrapper",
         "update_orbs_s_gek_deconstructor_c_wrapper",

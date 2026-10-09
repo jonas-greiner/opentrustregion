@@ -46,7 +46,6 @@ fortran_tests = {
         "init_hess_f_wrapper",
         "init_qn_settings_c",
         "transport_f_wrapper",
-        "update_orbs_orig_qn_f_wrapper",
         "update_orbs_qn_c_wrapper",
         "update_orbs_qn_deconstructor_c_wrapper",
         "update_orbs_qn_factory_c_wrapper",

@@ -14,6 +14,11 @@ module opentrustregion_mock
 
     logical :: test_passed
 
+    ! output values the mock solver writes into the settings object, so that a test can
+    ! check the C wrapper hands them back
+    integer(ip), parameter :: mock_n_update_orbs = 3, mock_n_hess_x = 5, &
+                              mock_stability_n_hess_x = 2
+
     ! create function pointers to ensure that routines comply with interface
     procedure(solver), pointer :: mock_solver_ptr => mock_solver
     procedure(stability_check), pointer :: mock_stability_check_ptr => &
@@ -28,7 +33,8 @@ contains
         !
         use opentrustregion, only: solver_settings_type
         use test_reference, only: test_update_orbs_funptr, test_obj_func_funptr, &
-                                  test_mock_solver_funptr, test_mock_stability_funptr
+                                  test_precond_funptr, test_mock_solver_funptr, &
+                                  test_mock_stability_funptr
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
@@ -40,13 +46,14 @@ contains
         test_passed = .true.
 
         ! test passed orbital update subroutine
-        test_passed = test_passed .and. &
-                      test_update_orbs_funptr(update_orbs_funptr, "solver_c_wrapper", &
-                                              " by given orbital updating subroutine")
+        test_passed = test_passed .and. test_update_orbs_funptr( &
+            update_orbs_funptr, "solver_c_wrapper", &
+            " by given orbital updating subroutine", settings%context)
 
         ! test passed objective function
         test_passed = test_passed .and. test_obj_func_funptr( &
-            obj_func_funptr, "solver_c_wrapper", " by given objective function")
+            obj_func_funptr, "solver_c_wrapper", " by given objective function", &
+            settings%context)
 
         ! check number of parameters
         if (n_param /= 3) then
@@ -62,12 +69,29 @@ contains
         if (.not. test_mock_solver_funptr(settings, "solver_c_wrapper", " given")) &
             test_passed = .false.
 
+        ! check if the internal stability check inherits the solver's optional callback
+        ! functions and calls them with the nested settings' context
+        if (associated(settings%precond)) then
+            test_passed = test_passed .and. test_precond_funptr( &
+                settings%precond, "solver_c_wrapper", &
+                " by preconditioner inherited by the internal stability check", &
+                settings%stability_settings%context)
+        end if
+        if (associated(settings%logger)) &
+            call settings%logger("test", settings%stability_settings%context)
+
         ! check if optional settings are correctly passed
         if (settings /= ref_settings) then
             test_passed = .false.
             write(stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
                 "settings associated with wrong values."
         end if
+
+        ! set output fields
+        settings%max_precision_reached = .false.
+        settings%n_update_orbs = mock_n_update_orbs
+        settings%n_hess_x = mock_n_hess_x
+        settings%stability_settings%n_hess_x = mock_stability_n_hess_x
 
     end subroutine mock_solver
 
@@ -100,7 +124,7 @@ contains
         ! test passed Hessian linear transformation subroutine
         test_passed = test_passed .and. test_hess_x_funptr( &
             hess_x_funptr, "stability_check_c_wrapper", &
-            " by given Hessian linear transformation subroutine")
+            " by given Hessian linear transformation subroutine", settings%context)
 
         ! set output quantities
         stable = .false.

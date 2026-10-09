@@ -7,18 +7,23 @@
 module otr_arh_c_interface
 
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
-    use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
+    use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
+                           hess_x_c_type
     use otr_arh, only: standard_arh_factory_mo_cs => arh_factory_mo_cs, &
                        standard_arh_factory_mo_os => arh_factory_mo_os, &
                        standard_arh_factory_oao_cs => arh_factory_oao_cs, &
                        standard_arh_factory_oao_os => arh_factory_oao_os, &
                        standard_arh_deconstructor => arh_deconstructor, &
                        evaluate_dm_os_type, evaluate_dm_cs_type
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_loc, c_f_pointer, &
-                                           c_funloc, c_f_procpointer, c_associated, &
-                                           c_char, c_null_funptr
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_loc, &
+                                           c_f_pointer, c_funloc, c_f_procpointer, &
+                                           c_associated, c_char, c_null_funptr
 
     implicit none
+
+    ! callback bundle of the logging function of the ARH settings, held here since
+    ! the settings outlive the factory call that sets it
+    type(c_callbacks_type), target :: logger_arh_callbacks
 
     ! define procedure pointer which will point to the Fortran procedures
     procedure(evaluate_dm_c_type), pointer :: evaluate_dm_before_wrapping => null()
@@ -166,8 +171,14 @@ contains
             evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
         end if
 
-        ! convert settings
+        ! convert settings and hand the logging function to its wrapper in a bundle,
+        ! which is held by the module since the settings outlive this call
         settings = settings_c
+        logger_arh_callbacks = c_callbacks_type()
+        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
+            call c_f_procpointer(cptr=settings_c%logger, &
+                                 fptr=logger_arh_callbacks%logger)
+        settings%context => logger_arh_callbacks
 
         ! call factory function
         if (n_particle == 1) then
@@ -284,8 +295,14 @@ contains
             evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
         end if
 
-        ! convert settings
+        ! convert settings and hand the logging function to its wrapper in a bundle,
+        ! which is held by the module since the settings outlive this call
         settings = settings_c
+        logger_arh_callbacks = c_callbacks_type()
+        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
+            call c_f_procpointer(cptr=settings_c%logger, &
+                                 fptr=logger_arh_callbacks%logger)
+        settings%context => logger_arh_callbacks
 
         ! call factory function
         if (n_particle == 1) then
@@ -420,7 +437,8 @@ contains
     end subroutine evaluate_dm_os_f_wrapper
 
     function update_orbs_arh_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                       hess_x_c_funptr) result(error_c) bind(C)
+                                       hess_x_c_funptr, context_c) result(error_c) &
+        bind(C)
         !
         ! this function wraps the orbital update subroutine to convert Fortran
         ! variables to C variables
@@ -433,12 +451,14 @@ contains
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
         real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(out) :: hess_x_c_funptr
+        type(c_funptr), intent(inout) :: hess_x_c_funptr
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error_c
 
         error_c = update_orbs_c_wrapper_impl( &
             update_orbs_arh_before_wrapping, hess_x_arh_before_wrapping, &
-            hess_x_arh_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr)
+            hess_x_arh_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr, &
+            context_c)
 
         ! update the rotated orbitals passed from C if they could not be rotated in
         ! place
@@ -453,7 +473,7 @@ contains
 
     end function update_orbs_arh_c_wrapper
 
-    function hess_x_arh_c_wrapper(x_c, hess_x_c) result(error_c) bind(C)
+    function hess_x_arh_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
         !
         ! this function wraps the Hessian linear transformation to convert Fortran
         ! variables to C variables
@@ -462,9 +482,11 @@ contains
 
         real(c_rp), intent(in), target :: x_c(*)
         real(c_rp), intent(out), target :: hess_x_c(*)
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error_c
 
-        error_c = hess_x_c_wrapper_impl(hess_x_arh_before_wrapping, x_c, hess_x_c)
+        error_c = &
+            hess_x_c_wrapper_impl(hess_x_arh_before_wrapping, x_c, hess_x_c, context_c)
 
     end function hess_x_arh_c_wrapper
 
@@ -493,8 +515,7 @@ contains
         ! this subroutine converts ARH settings from C to Fortran
         !
         use otr_arh, only: arh_settings_type
-        use c_interface, only: logger_before_wrapping, logger_f_wrapper, &
-                               character_from_c
+        use c_interface, only: character_from_c, logger_f_wrapper
 
         type(arh_settings_type), intent(out) :: settings
         type(arh_settings_type_c), intent(in) :: settings_c
@@ -502,8 +523,6 @@ contains
         if (settings_c%initialized) then
             ! convert callback functions
             if (c_associated(settings_c%logger)) then
-                call c_f_procpointer(cptr=settings_c%logger, &
-                                     fptr=logger_before_wrapping)
                 settings%logger => logger_f_wrapper
             else
                 settings%logger => null()

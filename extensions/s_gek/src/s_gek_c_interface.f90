@@ -7,16 +7,21 @@
 module otr_s_gek_c_interface
 
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
-    use c_interface, only: c_ip, c_rp, update_orbs_c_type, hess_x_c_type
+    use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
+                           hess_x_c_type
     use otr_common_c_interface, only: n_param
     use otr_s_gek, only: &
         change_reference_type, &
         standard_update_orbs_s_gek_factory => update_orbs_s_gek_factory, &
         standard_update_orbs_s_gek_deconstructor => update_orbs_s_gek_deconstructor
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_funloc, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_char, c_funptr, c_funloc, &
                                            c_f_procpointer, c_associated, c_null_funptr
 
     implicit none
+
+    ! callback bundle of the logging function of the S-GEK settings, held here since
+    ! the settings outlive the factory call that sets it
+    type(c_callbacks_type), target :: logger_s_gek_callbacks
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
@@ -54,8 +59,6 @@ module otr_s_gek_c_interface
         update_orbs_s_gek_deconstructor => standard_update_orbs_s_gek_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_type), pointer :: update_orbs_orig_s_gek_f_wrapper_ptr => &
-        update_orbs_orig_s_gek_f_wrapper
     procedure(change_reference_type), pointer :: change_reference_f_wrapper_ptr => &
         change_reference_f_wrapper
     procedure(update_orbs_c_type), pointer :: update_orbs_s_gek_c_wrapper_ptr => &
@@ -80,6 +83,7 @@ contains
         ! variables to Fortran variables
         !
         use otr_s_gek, only: s_gek_settings_type
+        use c_interface, only: update_orbs_f_wrapper
 
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
                                              change_reference_c_funptr
@@ -101,15 +105,24 @@ contains
                              fptr=change_reference_before_wrapping)
 
         ! associate procedure pointer to wrapper function
-        update_orbs_funptr => update_orbs_orig_s_gek_f_wrapper
+        ! the orbital update which wraps the original one calls it through the C
+        ! wrapper of the core, which finds it in the callback bundle the returned
+        ! orbital update hands over as context
+        update_orbs_funptr => update_orbs_f_wrapper
         change_reference_funptr => change_reference_f_wrapper
 
         ! convert number of parameters to Fortran kind and store globally to access
         ! assumed size arrays passed from C to Fortran
         n_param = int(n_param_c, kind=ip)
 
-        ! convert settings
+        ! convert settings and hand the logging function to its wrapper in a bundle,
+        ! which is held by the module since the settings outlive this call
         settings = settings_c
+        logger_s_gek_callbacks = c_callbacks_type()
+        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
+            call c_f_procpointer(cptr=settings_c%logger, &
+                                 fptr=logger_s_gek_callbacks%logger)
+        settings%context => logger_s_gek_callbacks
 
         ! associate the global procedure pointer to the update_orbs function
         call update_orbs_s_gek_factory(update_orbs_funptr, change_reference_funptr, &
@@ -124,26 +137,6 @@ contains
         error_c = int(error, kind=c_ip)
 
     end function update_orbs_s_gek_factory_c_wrapper
-
-    subroutine update_orbs_orig_s_gek_f_wrapper(kappa, func, grad, h_diag, hess_x, &
-                                                error)
-        !
-        ! this subroutine wraps the orbital update subroutine to convert Fortran
-        ! variables to C variables
-        !
-        use opentrustregion, only: hess_x_type
-        use c_interface, only: update_orbs_f_wrapper_impl
-
-        real(rp), intent(in), target :: kappa(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x
-        integer(ip), intent(out) :: error
-
-        call update_orbs_f_wrapper_impl(update_orbs_orig_s_gek_before_wrapping, kappa, &
-                                        func, grad, h_diag, hess_x, error)
-
-    end subroutine update_orbs_orig_s_gek_f_wrapper
 
     subroutine change_reference_f_wrapper(new_ref, n_points, kappa_list, &
                                           local_grad_list, grad_list, error)
@@ -200,7 +193,8 @@ contains
     end subroutine change_reference_f_wrapper
 
     function update_orbs_s_gek_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                         hess_x_c_funptr) result(error_c) bind(C)
+                                         hess_x_c_funptr, context_c) result(error_c) &
+        bind(C)
         !
         ! this function wraps the orbital update subroutine to convert Fortran
         ! variables to C variables
@@ -210,16 +204,18 @@ contains
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
         real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(out) :: hess_x_c_funptr
+        type(c_funptr), intent(inout) :: hess_x_c_funptr
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error_c
 
         error_c = update_orbs_c_wrapper_impl( &
             update_orbs_s_gek_before_wrapping, hess_x_s_gek_before_wrapping, &
-            hess_x_s_gek_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr)
+            hess_x_s_gek_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, &
+            hess_x_c_funptr, context_c, update_orbs_orig_s_gek_before_wrapping)
 
     end function update_orbs_s_gek_c_wrapper
 
-    function hess_x_s_gek_c_wrapper(x_c, hess_x_c) result(error_c) bind(C)
+    function hess_x_s_gek_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
         !
         ! this function wraps the Hessian linear transformation to convert Fortran
         ! variables to C variables
@@ -228,9 +224,11 @@ contains
 
         real(c_rp), intent(in), target :: x_c(*)
         real(c_rp), intent(out), target :: hess_x_c(*)
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error_c
 
-        error_c = hess_x_c_wrapper_impl(hess_x_s_gek_before_wrapping, x_c, hess_x_c)
+        error_c = hess_x_c_wrapper_impl(hess_x_s_gek_before_wrapping, x_c, hess_x_c, &
+                                        context_c)
 
     end function hess_x_s_gek_c_wrapper
 
@@ -260,8 +258,7 @@ contains
         ! this subroutine converts S-GEK settings from C to Fortran
         !
         use otr_s_gek, only: s_gek_settings_type
-        use c_interface, only: logger_before_wrapping, logger_f_wrapper, &
-                               character_from_c
+        use c_interface, only: character_from_c, logger_f_wrapper
 
         type(s_gek_settings_type), intent(out) :: settings
         type(s_gek_settings_type_c), intent(in) :: settings_c
@@ -269,8 +266,6 @@ contains
         if (settings_c%initialized) then
             ! convert callback functions
             if (c_associated(settings_c%logger)) then
-                call c_f_procpointer(cptr=settings_c%logger, &
-                                     fptr=logger_before_wrapping)
                 settings%logger => logger_f_wrapper
             else
                 settings%logger => null()

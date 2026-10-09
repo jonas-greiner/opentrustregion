@@ -33,6 +33,8 @@ contains
         use opentrustregion, only: update_orbs_type
         use otr_s_gek, only: change_reference_type, s_gek_settings_type
         use test_reference, only: test_update_orbs_funptr
+        use c_interface, only: c_callbacks_type
+        use otr_s_gek_c_interface, only: update_orbs_orig_s_gek_before_wrapping
         use otr_s_gek_test_reference, only: test_change_reference_funptr
         use otr_common_mock, only: mock_update_orbs
 
@@ -43,13 +45,20 @@ contains
         type(s_gek_settings_type), intent(inout) :: settings
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
 
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
         ! initialize logical
         test_passed = .true.
 
-        ! test passed orbital update function
+        ! test passed orbital update function, which calls the original C function
+        ! through the C wrapper of the core, so it finds it in the callback bundle the
+        ! returned orbital update builds
+        callbacks%update_orbs => update_orbs_orig_s_gek_before_wrapping
+        context => callbacks
         test_passed = test_passed .and. test_update_orbs_funptr( &
             update_orbs_orig_funptr, "update_orbs_s_gek_factory_c_wrapper", &
-            " by given orbital updating function")
+            " by given orbital updating function", context)
 
         ! test passed change reference function
         test_passed = test_passed .and. test_change_reference_funptr( &
@@ -69,7 +78,7 @@ contains
             write(stderr, *) "test_update_orbs_s_gek_factory_c_wrapper failed: "// &
                 "Passed logging function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
         ! check if optional settings are correctly passed

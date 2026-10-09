@@ -256,7 +256,11 @@ def mo_factory(
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
     settings.set_optional_callback(
-        "logger", settings.logger, LoggerInterface, logger_interface_type
+        "logger",
+        settings.logger,
+        LoggerInterface,
+        logger_interface_type,
+        exception,
     )
 
     if not hasattr(lib, "mo_factory"):

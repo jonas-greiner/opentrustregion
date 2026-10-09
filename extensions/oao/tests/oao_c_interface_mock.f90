@@ -13,7 +13,7 @@ module otr_oao_c_interface_mock
     use otr_oao_test_reference, only: ref_oao_settings
     use otr_common_test_reference, only: n_particle, n_ao
     use test_reference, only: n_param
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_f_pointer, c_loc
 
     implicit none
@@ -33,8 +33,8 @@ module otr_oao_c_interface_mock
 
 contains
 
-    function mock_update_orbs_oao(kappa, func, grad, h_diag, hess_x_c_funptr) &
-        result(error) bind(C)
+    function mock_update_orbs_oao(kappa, func, grad, h_diag, hess_x_c_funptr, &
+                                  context_c) result(error) bind(C)
         !
         ! this function is a test function for the orbital update C function
         !
@@ -44,10 +44,12 @@ contains
         real(c_rp), intent(in), target :: kappa(*)
         real(c_rp), intent(out) :: func
         real(c_rp), intent(out), target :: grad(*), h_diag(*)
-        type(c_funptr), intent(out) :: hess_x_c_funptr
+        type(c_funptr), intent(inout) :: hess_x_c_funptr
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
-        error = mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr)
+        error = &
+            mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr, context_c)
 
         dm_ao_3d_c = 2.0_c_rp
 
@@ -61,6 +63,7 @@ contains
         ! this subroutine is a mock routine for the OAO orbital updating factory C
         ! wrapper subroutine
         !
+        use, intrinsic :: iso_c_binding, only: c_null_ptr
         use opentrustregion, only: default_solver_settings
         use otr_oao_c_interface, only: oao_settings_type_c, dm_ao_3d_c
         use c_interface, only: obj_func_c_type, update_orbs_c_type, precond_c_type, &
@@ -127,7 +130,7 @@ contains
             ! get Fortran pointer to passed logging function and call it
             message = "test"//c_null_char
             call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-            call logger_funptr(message)
+            call logger_funptr(message, c_null_ptr)
 
             ! check optional settings against reference values
             if (settings_c /= ref_oao_settings) then

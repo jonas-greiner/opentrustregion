@@ -157,7 +157,7 @@ class ObjFuncPyInterface:
         kappa_ptr = kappa.ctypes.data_as(POINTER(c_real))
 
         # objective function
-        error = self.obj_func_funptr(kappa_ptr, byref(func))
+        error = self.obj_func_funptr(kappa_ptr, byref(func), None)
         if error != 0:
             if self._otr_exception is not None and "exc" in self._otr_exception:
                 raise RuntimeError(
@@ -182,7 +182,7 @@ class ProjectPyInterface:
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
 
         # projection function
-        error = self.project_funptr(vector_ptr)
+        error = self.project_funptr(vector_ptr, None)
         if error != 0:
             if self._otr_exception is not None and "exc" in self._otr_exception:
                 raise RuntimeError(
@@ -208,7 +208,7 @@ class GetExtraTrialVectorsPyInterface:
 
         # extra trial vector function
         error = self.get_extra_trial_vectors_funptr(
-            trial_vectors_ptr, trial_vectors.shape[0]
+            trial_vectors_ptr, trial_vectors.shape[0], None
         )
         if error != 0:
             if self._otr_exception is not None and "exc" in self._otr_exception:
@@ -236,7 +236,9 @@ class PrecondPyInterface:
         precond_residual_ptr = precond_residual.ctypes.data_as(POINTER(c_real))
 
         # call preconditioner function
-        error = self.precond_funptr(residual_ptr, c_real(mu), precond_residual_ptr)
+        error = self.precond_funptr(
+            residual_ptr, c_real(mu), precond_residual_ptr, None
+        )
         if error != 0:
             if self._otr_exception is not None and "exc" in self._otr_exception:
                 raise RuntimeError(
@@ -263,7 +265,7 @@ class PrecondPDPyInterface:
         precond_residual_ptr = precond_residual.ctypes.data_as(POINTER(c_real))
 
         # call preconditioner function
-        error = self.precond_pd_funptr(residual_ptr, precond_residual_ptr)
+        error = self.precond_pd_funptr(residual_ptr, precond_residual_ptr, None)
         if error != 0:
             msg = "Positive-definite preconditioner function raised error."
             if self._otr_exception is not None and "exc" in self._otr_exception:
@@ -345,7 +347,7 @@ class HessXPyInterface:
         hess_x_ptr = hess_x.ctypes.data_as(POINTER(c_real))
 
         # update orbital function
-        error = self.hess_x_funptr(x_ptr, hess_x_ptr)
+        error = self.hess_x_funptr(x_ptr, hess_x_ptr, None)
         if error != 0:
             msg = "Hessian linear transformation function raised error."
             if self._otr_exception is not None and "exc" in self._otr_exception:
@@ -390,6 +392,7 @@ class UpdateOrbsPyInterface:
             grad_ptr,
             h_diag_ptr,
             byref(hess_x_funptr),
+            None,
         )
         if error != 0:
             msg = "Orbital updating function raised error."

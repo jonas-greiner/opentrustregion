@@ -129,7 +129,7 @@ contains
             write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Passed logging "// &
                 "function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
         ! check if optional settings are correctly passed
@@ -328,7 +328,7 @@ contains
             write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Passed "// &
                 "logging function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
         ! check if optional settings are correctly passed
@@ -412,7 +412,7 @@ contains
             write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Passed "// &
                 "logging function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
         ! check if optional settings are correctly passed

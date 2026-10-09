@@ -928,6 +928,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! OAO basis
         !
+        use test_reference, only: no_context
         use otr_common_unit_tests, only: identity_matrix, &
                                          generate_random_density_matrix, &
                                          generate_random_symm_matrix, mock_requests, &
@@ -980,7 +981,7 @@ contains
             ! of the density matrix evaluating function is requested and returned for
             ! the density matrix in the AO basis
             mock_requests = [integer(ip) :: ]
-            energy = obj_func_oao_callback(kappa, error)
+            energy = obj_func_oao_callback(kappa, error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_obj_func_oao_callback failed: Produced "// &
                     "error for the "//case_name//" case."
@@ -1014,7 +1015,7 @@ contains
         ! matrix is left untouched
         call random_number(kappa)
         kappa = 0.1_rp * kappa
-        energy = obj_func_oao_callback(kappa, error)
+        energy = obj_func_oao_callback(kappa, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_obj_func_oao_callback failed: Produced error "// &
                 "for an orbital rotation."
@@ -1036,7 +1037,7 @@ contains
         rotation = identity_matrix(n_ao)
         rotation(1:2, 1:2) = reshape([cos(angle), -sin(angle), &
                                       sin(angle), cos(angle)], [2, 2])
-        energy = obj_func_oao_callback(kappa, error)
+        energy = obj_func_oao_callback(kappa, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_obj_func_oao_callback failed: Produced error "// &
                 "for a plane rotation."
@@ -1060,6 +1061,7 @@ contains
         ! Hessian diagonal evaluation in the OAO basis, for the closed-shell and the
         ! open-shell case
         !
+        use test_reference, only: no_context
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_fock_factor, mock_requests, &
@@ -1244,7 +1246,7 @@ contains
             end if
             kappa = 0.1_rp
             call update_orbs_oao_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                          error)
+                                          error, no_context)
             if (error == 0) then
                 write(stderr, *) "test_update_orbs_oao_callback failed: Error of "// &
                     "the density matrix evaluating function not passed on for the "// &
@@ -1305,6 +1307,7 @@ contains
             ! and if the density matrix evaluating function has been called the
             ! expected number of times in total
             !
+            use test_reference, only: no_context
             integer(ip), intent(in) :: n_calls
             character(len=*), intent(in) :: stage
             logical :: passed
@@ -1315,7 +1318,7 @@ contains
             ! call routine and determine if it produces an error and if the density
             ! matrix evaluating function was called the expected number of times
             call update_orbs_oao_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                          error)
+                                          error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_update_orbs_oao_callback failed: Produced "// &
                     "error for "//stage//" for the "//case_name//" case."
@@ -1337,6 +1340,7 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the OAO basis
         !
+        use test_reference, only: no_context
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_requests, mock_response_factor, &
@@ -1412,7 +1416,7 @@ contains
 
             ! call routine and determine if values of resulting Hessian linear
             ! transformation match
-            call hess_x_oao_callback(x, hess_x, error)
+            call hess_x_oao_callback(x, hess_x, error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_oao_callback failed: Produced error "// &
                     "for the "//case_name//" case."
@@ -1435,7 +1439,7 @@ contains
         oao_object%get_response_os => mock_get_stale_response_os
         oao_object%response_stale = .true.
         mock_requests = [integer(ip) :: ]
-        call hess_x_oao_callback(x, hess_x, error)
+        call hess_x_oao_callback(x, hess_x, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_hess_x_oao_callback failed: Produced error "// &
                 "while refreshing a stale response."
@@ -1490,6 +1494,7 @@ contains
         ! occupied-occupied and virtual-virtual rotations from a vector, retaining only
         ! its occupied-virtual and virtual-occupied contributions
         !
+        use test_reference, only: no_context
         use otr_oao, only: project_oao_callback, oao_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_oao_test_reference, only: n_param
@@ -1519,7 +1524,7 @@ contains
             ref_unpack_asymm(vector, n_particle, n_ao), dm_oao), n_param)
 
         ! call routine and determine if values of resulting vector match
-        call project_oao_callback(vector, error)
+        call project_oao_callback(vector, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_project_oao_callback failed: Produced error."
             test_project_oao_callback = .false.
@@ -1540,6 +1545,7 @@ contains
         ! preconditioner of the OAO basis, which applies the one of the orbital basis
         ! to the OAO object
         !
+        use test_reference, only: no_context
         use otr_oao, only: precond_oao_callback, oao_object
 
         real(rp), parameter :: mu = 0.3_rp
@@ -1558,7 +1564,7 @@ contains
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call precond_oao_callback(residual, mu, precond_residual, error)
+        call precond_oao_callback(residual, mu, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_oao_callback failed: Produced error."
             test_precond_oao_callback = .false.
@@ -1580,6 +1586,7 @@ contains
         ! preconditioner of the OAO basis, which applies the one of the orbital basis
         ! to the OAO object
         !
+        use test_reference, only: no_context
         use otr_oao, only: precond_pd_oao_callback, oao_object
 
         real(rp), allocatable :: residual(:), precond_residual(:)
@@ -1597,7 +1604,7 @@ contains
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call precond_pd_oao_callback(residual, precond_residual, error)
+        call precond_pd_oao_callback(residual, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_oao_callback failed: Produced error."
             test_precond_pd_oao_callback = .false.
@@ -1618,6 +1625,7 @@ contains
         ! this function tests the subroutine which returns the extra trial vectors of
         ! the OAO basis for the solver's initial trial space
         !
+        use test_reference, only: no_context
         use otr_common_unit_tests, only: identity_matrix
         use otr_oao, only: get_extra_trial_vectors_oao_callback, oao_object
         use opentrustregion_unit_tests, only: setup_settings
@@ -1647,7 +1655,7 @@ contains
 
         ! call routine and determine if the extra trial vectors of the OAO basis are
         ! returned
-        call get_extra_trial_vectors_oao_callback(trial_vectors, error)
+        call get_extra_trial_vectors_oao_callback(trial_vectors, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_oao_callback failed: "// &
                 "Produced error."

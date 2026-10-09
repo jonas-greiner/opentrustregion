@@ -32,7 +32,8 @@ module otr_mo_mock
 
 contains
 
-    subroutine mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+    subroutine mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                context)
         !
         ! this subroutine is a test subroutine for the orbital update function
         !
@@ -42,10 +43,12 @@ contains
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(out), pointer :: hess_x_funptr
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
-        call orig_mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+        call orig_mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                   context)
 
         mo_coeff_3d = 2.0_rp
 
@@ -166,7 +169,7 @@ contains
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed logging "// &
                 "function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
         ! check if optional settings are correctly passed
@@ -294,7 +297,7 @@ contains
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed logging "// &
                 "function not associated with value."
         else
-            call settings%logger("test")
+            call settings%logger("test", settings%context)
         end if
 
         ! check if optional settings are correctly passed

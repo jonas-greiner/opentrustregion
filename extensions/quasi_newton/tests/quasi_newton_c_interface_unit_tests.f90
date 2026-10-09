@@ -9,11 +9,52 @@ module otr_qn_c_interface_unit_tests
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, tol_c, n_param, n_param_c
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_funloc, c_associated
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
+                                           c_associated, c_loc
 
     implicit none
 
+    ! whether the orbital update the C wrapper calls was handed the host context and
+    ! the original C orbital update in a callback bundle, and the host context the test
+    ! passes to the C wrapper
+    logical :: update_orbs_bundle_correct = .false.
+    type(c_ptr) :: expected_host_context
+
 contains
+
+    subroutine mock_update_orbs_bundle(kappa, func, grad, h_diag, hess_x_funptr, &
+                                       error, context)
+        !
+        ! this subroutine is a test subroutine for the orbital update which records
+        ! whether it was handed the host context and the original C orbital update in a
+        ! callback bundle, before it computes the mock orbital update
+        !
+        use opentrustregion, only: hess_x_type
+        use c_interface, only: c_callbacks_type
+        use otr_qn_c_interface, only: update_orbs_orig_qn_before_wrapping
+        use otr_common_mock, only: mock_update_orbs
+
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        update_orbs_bundle_correct = .false.
+        if (associated(context)) then
+            select type (context)
+            type is (c_callbacks_type)
+                update_orbs_bundle_correct = &
+                    associated(context%update_orbs, &
+                               update_orbs_orig_qn_before_wrapping) .and. &
+                    c_associated(context%host_context, expected_host_context)
+            end select
+        end if
+
+        call mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, context)
+
+    end subroutine mock_update_orbs_bundle
 
     function mock_transport(geodesic_c, tangent_vector_c) result(error) bind(C)
         !
@@ -75,7 +116,7 @@ contains
         settings%logger = c_funloc(mock_logger)
 
         ! initialize logger logical
-        test_logger = .true.
+        test_logger = .false.
 
         ! call quasi-Newton orbital updating factory C wrapper
         error_c = update_orbs_qn_factory_c_wrapper( &
@@ -104,30 +145,6 @@ contains
             test_passed_mock_update_orbs_qn_factory
 
     end function test_update_orbs_qn_factory_c_wrapper
-
-    logical(c_bool) function test_update_orbs_orig_qn_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the orbital update
-        !
-        use opentrustregion, only: update_orbs_type
-        use otr_qn_c_interface, only: update_orbs_orig_qn_before_wrapping, &
-                                      update_orbs_orig_qn_f_wrapper
-        use c_interface_unit_tests, only: mock_update_orbs
-        use test_reference, only: test_update_orbs_funptr
-
-        procedure(update_orbs_type), pointer :: update_orbs_funptr
-
-        ! inject mock subroutine
-        update_orbs_orig_qn_before_wrapping => mock_update_orbs
-
-        ! get pointer to subroutine
-        update_orbs_funptr => update_orbs_orig_qn_f_wrapper
-
-        ! test orbital update Fortran wrapper
-        test_update_orbs_orig_qn_f_wrapper = test_update_orbs_funptr( &
-            update_orbs_funptr, "update_orbs_orig_qn_f_wrapper", "")
-
-    end function test_update_orbs_orig_qn_f_wrapper
 
     logical(c_bool) function test_transport_f_wrapper() bind(C)
         !
@@ -179,19 +196,31 @@ contains
         !
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_qn_c_interface, only: update_orbs_qn_before_wrapping, &
+                                      update_orbs_orig_qn_before_wrapping, &
                                       update_orbs_qn_c_wrapper
-        use otr_common_mock, only: mock_update_orbs
-        use test_reference, only: test_update_orbs_c_funptr
+        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
+        use test_reference, only: test_update_orbs_c_funptr, host_context
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
 
-        ! inject mock subroutine
-        update_orbs_qn_before_wrapping => mock_update_orbs
+        ! inject mock subroutine and the original C orbital update the factory stores
+        update_orbs_qn_before_wrapping => mock_update_orbs_bundle
+        update_orbs_orig_qn_before_wrapping => mock_update_orbs_orig
 
-        ! test orbital update C wrapper
+        ! test orbital update C wrapper, called with a host context
+        expected_host_context = c_loc(host_context)
         test_update_orbs_qn_c_wrapper = test_update_orbs_c_funptr( &
-            c_funloc(update_orbs_qn_c_wrapper), "update_orbs_qn_c_wrapper", "")
+            c_funloc(update_orbs_qn_c_wrapper), "update_orbs_qn_c_wrapper", "", &
+            expected_host_context)
+
+        ! check that the wrapped orbital update was handed the host context and the
+        ! original C orbital update, through which it reaches the host's function
+        if (.not. update_orbs_bundle_correct) then
+            test_update_orbs_qn_c_wrapper = .false.
+            write(stderr, *) "test_update_orbs_qn_c_wrapper failed: Host context "// &
+                "or original orbital update not handed to the orbital update."
+        end if
 
     end function test_update_orbs_qn_c_wrapper
 
@@ -287,10 +316,12 @@ contains
         use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
         use otr_qn, only: qn_settings_type
         use otr_qn_test_reference, only: assignment(=), ref_qn_settings, operator(/=)
+        use c_interface, only: c_callbacks_type
         use c_interface_unit_tests, only: mock_logger, test_logger
 
         type(qn_settings_type_c) :: settings_c
         type(qn_settings_type) :: settings
+        type(c_callbacks_type), target :: callbacks
 
         ! assume test passes
         test_assign_qn_f_c = .true.
@@ -299,8 +330,11 @@ contains
         settings_c = ref_qn_settings
         settings_c%logger = c_funloc(mock_logger)
 
-        ! convert to Fortran settings
+        ! convert to Fortran settings and hand them the C logging function in a bundle
+        ! through context, as the factory does
         settings = settings_c
+        callbacks%logger => mock_logger
+        settings%context => callbacks
 
         ! check logging function
         if (.not. associated(settings%logger)) then
@@ -308,8 +342,8 @@ contains
             write(stderr, *) "test_assign_qn_f_c failed: Logging function not "// &
                 "associated with value."
         else
-            test_logger = .true.
-            call settings%logger("test")
+            test_logger = .false.
+            call settings%logger("test", settings%context)
             if (.not. test_logger) then
                 test_assign_qn_f_c = .false.
                 write(stderr, *) "test_assign_qn_f_c failed: Called logging "// &

@@ -206,7 +206,11 @@ def arh_factory_mo(
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
     settings.set_optional_callback(
-        "logger", settings.logger, LoggerInterface, logger_interface_type
+        "logger",
+        settings.logger,
+        LoggerInterface,
+        logger_interface_type,
+        exception,
     )
 
     if not hasattr(lib, "arh_factory_mo"):
@@ -327,7 +331,11 @@ def arh_factory_oao(
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
     settings.set_optional_callback(
-        "logger", settings.logger, LoggerInterface, logger_interface_type
+        "logger",
+        settings.logger,
+        LoggerInterface,
+        logger_interface_type,
+        exception,
     )
 
     if not hasattr(lib, "arh_factory_oao"):

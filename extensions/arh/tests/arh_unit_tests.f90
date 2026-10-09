@@ -669,6 +669,7 @@ contains
         ! for orbitals parameterized in the OAO basis, which also adds the evaluated
         ! point together with the potentials the shell keeps to the history
         !
+        use test_reference, only: no_context
         use opentrustregion, only: obj_func_type
         use otr_arh, only: obj_func_arh_callback, arh_object
         use otr_oao, only: oao_object
@@ -704,7 +705,7 @@ contains
         call random_number(kappa)
         kappa = 0.1_rp * kappa
         mock_requests = [integer(ip) :: ]
-        energy = obj_func(kappa, error)
+        energy = obj_func(kappa, error, no_context)
         if (error /= 0) then
             write(stderr, *) test_name//" failed: Produced error without history."
             passed = .false.
@@ -734,7 +735,7 @@ contains
         ! basis, while the current density matrix is left untouched
         allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0))
         mock_requests = [integer(ip) :: ]
-        energy = obj_func(kappa, error)
+        energy = obj_func(kappa, error, no_context)
         if (error /= 0) then
             write(stderr, *) test_name//" failed: Produced error with history."
             passed = .false.
@@ -776,7 +777,7 @@ contains
         ! call routine at the same point and determine if it is not added twice and
         ! leaves the Hessian model untouched
         arh_object%model_stale = .false.
-        energy = obj_func(kappa, error)
+        energy = obj_func(kappa, error, no_context)
         if (error /= 0) then
             write(stderr, *) test_name// &
                 " failed: Produced error for a point the history already holds."
@@ -805,6 +806,7 @@ contains
         ! which passes the Fock matrix in the history basis on to the orbital basis and
         ! adds the point the orbitals are rotated away from to the history
         !
+        use test_reference, only: no_context
         use opentrustregion, only: update_orbs_type, hess_x_type
         use otr_arh, only: update_orbs_arh_callback, arh_object, hess_x_arh_callback_ptr
         use otr_oao, only: oao_object
@@ -849,7 +851,8 @@ contains
             ! call routine without an orbital rotation for an uninitialized object
             kappa = 0.0_rp
             mock_requests = [integer(ip) :: ]
-            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                             no_context)
             if (error /= 0) then
                 write(stderr, *) test_name//" failed: Produced error."
                 passed = .false.
@@ -920,7 +923,8 @@ contains
             ! vanishing energy, without rebuilding the static part of the Hessian
             oao_object%energy = 0.0_rp
             oao_object%hess_eigen_stale = .false.
-            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                             no_context)
             if (error /= 0) then
                 write(stderr, *) test_name// &
                     " failed: Produced error for an initialized object."
@@ -950,7 +954,8 @@ contains
                 dm_saved(:, :, :, k) = oao_object%dm_oao
                 potentials_saved(:, :, :, :, k) = stacked_potentials(0_ip)
                 arh_object%model_stale = k == 1
-                call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+                call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                 no_context)
                 if (error /= 0) then
                     write(stderr, *) test_name// &
                         " failed: Produced error for an orbital rotation."
@@ -994,7 +999,8 @@ contains
             ! already holds, as after the energy evaluation of an accepted trial point,
             ! does not add that density matrix a second time
             arh_object%dm_list(:, :, :, 1) = oao_object%dm_oao
-            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                             no_context)
             if (error /= 0) then
                 write(stderr, *) test_name//" failed: Produced error for a density "// &
                     "matrix already held in the history."
@@ -1014,7 +1020,8 @@ contains
             else
                 arh_object%evaluate_dm_os => mock_evaluate_dm_failing_os
             end if
-            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                             no_context)
             if (error == 0) then
                 write(stderr, *) test_name//" failed: Error of the density matrix "// &
                     "evaluating function not passed on."
@@ -1032,7 +1039,8 @@ contains
             end if
             n_list = size(arh_object%dm_list, 4, kind=ip)
             kappa = 0.0_rp
-            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error)
+            call update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                             no_context)
             if (error /= 0) then
                 write(stderr, *) test_name// &
                     " failed: Produced error after a failed evaluation."
@@ -2187,6 +2195,7 @@ contains
         ! transformation on the basis of augmented Roothaan-Hall and related methods,
         ! which adds the low-rank part to the static part of the orbital basis
         !
+        use test_reference, only: no_context
         use otr_arh, only: hess_x_arh_callback, arh_object
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
@@ -2241,7 +2250,7 @@ contains
             else
                 case_name = "without low-rank part"
             end if
-            call hess_x_arh_callback(x, hess_x, error)
+            call hess_x_arh_callback(x, hess_x, error, no_context)
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_arh_callback failed: Produced error "// &
                     case_name//"."
@@ -2490,6 +2499,7 @@ contains
         ! preconditioner of the ARH approximate Hessian, which applies the
         ! level-shifted inverse of the approximate Hessian
         !
+        use test_reference, only: no_context
         use otr_arh, only: precond_arh_callback, arh_object
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
@@ -2520,7 +2530,7 @@ contains
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call precond_arh_callback(residual, mu, precond_residual, error)
+        call precond_arh_callback(residual, mu, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_arh_callback failed: Produced error."
             test_precond_arh_callback = .false.
@@ -2542,6 +2552,7 @@ contains
         ! preconditioner of the ARH approximate Hessian, which applies the one of the
         ! orbital basis to the orbital object
         !
+        use test_reference, only: no_context
         use otr_arh, only: precond_pd_arh_callback, arh_object
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
@@ -2570,7 +2581,7 @@ contains
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call precond_pd_arh_callback(residual, precond_residual, error)
+        call precond_pd_arh_callback(residual, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_arh_callback failed: Produced error."
             test_precond_pd_arh_callback = .false.
@@ -2591,6 +2602,7 @@ contains
         ! this function tests the subroutine which returns the extra trial vectors of
         ! the orbital basis for the solver's initial trial space
         !
+        use test_reference, only: no_context
         use otr_arh, only: get_extra_trial_vectors_arh_callback, arh_object
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
@@ -2627,7 +2639,7 @@ contains
 
         ! call routine and determine if the extra trial vectors of the orbital basis
         ! are returned
-        call get_extra_trial_vectors_arh_callback(trial_vectors, error)
+        call get_extra_trial_vectors_arh_callback(trial_vectors, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_arh_callback failed: "// &
                 "Produced error."

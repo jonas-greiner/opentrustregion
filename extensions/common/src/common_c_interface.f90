@@ -7,8 +7,8 @@
 module otr_common_c_interface
 
     use opentrustregion, only: ip, rp
-    use c_interface, only: c_ip, c_rp
-    use, intrinsic :: iso_c_binding, only: c_funptr, c_funloc, c_loc, c_f_pointer
+    use c_interface, only: c_ip, c_rp, c_callbacks_type
+    use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_funloc, c_loc, c_f_pointer
 
     implicit none
 
@@ -43,27 +43,39 @@ contains
 
     function update_orbs_c_wrapper_impl( &
         update_orbs_before_wrapping, hess_x_before_wrapping_funptr, &
-        hess_x_c_wrapper_funptr, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr) &
-        result(error_c)
+        hess_x_c_wrapper_funptr, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr, &
+        context_c, update_orbs_orig_c) result(error_c)
         !
         ! this function wraps the orbital update subroutine to convert Fortran
-        ! variables to C variables
+        ! variables to C variables, handing the host context to the Fortran subroutine
+        ! in a callback bundle, together with the host's original orbital update for
+        ! an orbital update that wraps it
         !
         use opentrustregion, only: update_orbs_type, hess_x_type
-        use c_interface, only: hess_x_c_type
+        use c_interface, only: hess_x_c_type, update_orbs_c_type
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_before_wrapping
-        procedure(hess_x_type), intent(out), pointer :: hess_x_before_wrapping_funptr
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_before_wrapping_funptr
         procedure(hess_x_c_type) :: hess_x_c_wrapper_funptr
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
         real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(out) :: hess_x_c_funptr
+        type(c_funptr), intent(inout) :: hess_x_c_funptr
+        type(c_ptr), intent(in) :: context_c
+        procedure(update_orbs_c_type), intent(in), pointer, optional :: &
+            update_orbs_orig_c
         integer(c_ip) :: error_c
 
         real(rp) :: func
         real(rp), pointer :: kappa(:), grad(:), h_diag(:)
         integer(ip) :: error
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
+        ! hand the host context and the original orbital update over as context
+        callbacks%host_context = context_c
+        if (present(update_orbs_orig_c)) callbacks%update_orbs => update_orbs_orig_c
+        context => callbacks
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -79,7 +91,7 @@ contains
 
         ! call update_orbs Fortran function
         call update_orbs_before_wrapping(kappa, func, grad, h_diag, &
-                                         hess_x_before_wrapping_funptr, error)
+                                         hess_x_before_wrapping_funptr, error, context)
 
         ! convert arguments to Fortran kind
         func_c = real(func, kind=c_rp)
@@ -97,20 +109,29 @@ contains
 
     end function update_orbs_c_wrapper_impl
 
-    function hess_x_c_wrapper_impl(hess_x_funptr, x_c, hess_x_c) result(error_c)
+    function hess_x_c_wrapper_impl(hess_x_funptr, x_c, hess_x_c, context_c) &
+        result(error_c)
         !
         ! this function wraps the Hessian linear transformation to convert Fortran
-        ! variables to C variables
+        ! variables to C variables, handing the host context to the Fortran subroutine
+        ! in a callback bundle
         !
         use opentrustregion, only: hess_x_type
 
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(c_rp), intent(in), target :: x_c(*)
         real(c_rp), intent(out), target :: hess_x_c(*)
+        type(c_ptr), intent(in) :: context_c
         integer(c_ip) :: error_c
 
         real(rp), pointer :: x(:), hess_x(:)
         integer(ip) :: error
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
+        ! hand the host context over as context
+        callbacks%host_context = context_c
+        context => callbacks
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -123,7 +144,7 @@ contains
         end if
 
         ! call Fortran function
-        call hess_x_funptr(x, hess_x, error)
+        call hess_x_funptr(x, hess_x, error, context)
 
         ! convert arguments to C kind
         error_c = int(error, kind=c_ip)
@@ -135,22 +156,30 @@ contains
 
     end function hess_x_c_wrapper_impl
 
-    function obj_func_c_wrapper_impl(obj_func_before_wrapping, kappa_c, func_c) &
-        result(error_c)
+    function obj_func_c_wrapper_impl(obj_func_before_wrapping, kappa_c, func_c, &
+                                     context_c) result(error_c)
         !
         ! this function wraps the objective function subroutine to convert Fortran
-        ! variables to C variables
+        ! variables to C variables, handing the host context to the Fortran function
+        ! in a callback bundle
         !
         use opentrustregion, only: obj_func_type
 
         procedure(obj_func_type), intent(in), pointer :: obj_func_before_wrapping
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
+        type(c_ptr), intent(in) :: context_c
         integer(c_ip) :: error_c
 
         real(rp) :: func
         real(rp), pointer :: kappa(:)
         integer(ip) :: error
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
+        ! hand the host context over as context
+        callbacks%host_context = context_c
+        context => callbacks
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -161,7 +190,7 @@ contains
         end if
 
         ! call obj_func Fortran function
-        func = obj_func_before_wrapping(kappa, error)
+        func = obj_func_before_wrapping(kappa, error, context)
 
         ! convert arguments to Fortran kind
         func_c = real(func, kind=c_rp)
@@ -173,10 +202,11 @@ contains
     end function obj_func_c_wrapper_impl
 
     function precond_c_wrapper_impl(precond_before_wrapping, residual_c, mu_c, &
-                                    precond_residual_c) result(error_c)
+                                    precond_residual_c, context_c) result(error_c)
         !
         ! this function wraps the level-shifted preconditioner subroutine to convert
-        ! Fortran variables to C variables
+        ! Fortran variables to C variables, handing the host context to the Fortran
+        ! subroutine in a callback bundle
         !
         use opentrustregion, only: precond_type
 
@@ -184,11 +214,18 @@ contains
         real(c_rp), intent(in), target :: residual_c(*)
         real(c_rp), intent(in) :: mu_c
         real(c_rp), intent(out), target :: precond_residual_c(*)
+        type(c_ptr), intent(in) :: context_c
         integer(c_ip) :: error_c
 
         real(rp) :: mu
         real(rp), pointer :: residual(:), precond_residual(:)
         integer(ip) :: error
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
+        ! hand the host context over as context
+        callbacks%host_context = context_c
+        context => callbacks
 
         ! convert arguments to Fortran kind
         mu = real(mu_c, kind=rp)
@@ -201,7 +238,7 @@ contains
         end if
 
         ! call preconditioner Fortran subroutine
-        call precond_before_wrapping(residual, mu, precond_residual, error)
+        call precond_before_wrapping(residual, mu, precond_residual, error, context)
 
         ! convert arguments to Fortran kind
         error_c = int(error, kind=c_ip)
@@ -213,20 +250,28 @@ contains
     end function precond_c_wrapper_impl
 
     function precond_pd_c_wrapper_impl(precond_pd_before_wrapping, residual_c, &
-                                       precond_residual_c) result(error_c)
+                                       precond_residual_c, context_c) result(error_c)
         !
         ! this function wraps the positive-definite preconditioner subroutine to
-        ! convert Fortran variables to C variables
+        ! convert Fortran variables to C variables, handing the host context to the
+        ! Fortran subroutine in a callback bundle
         !
         use opentrustregion, only: precond_pd_type
 
         procedure(precond_pd_type), intent(in), pointer :: precond_pd_before_wrapping
         real(c_rp), intent(in), target :: residual_c(*)
         real(c_rp), intent(out), target :: precond_residual_c(*)
+        type(c_ptr), intent(in) :: context_c
         integer(c_ip) :: error_c
 
         real(rp), pointer :: residual(:), precond_residual(:)
         integer(ip) :: error
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
+        ! hand the host context over as context
+        callbacks%host_context = context_c
+        context => callbacks
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -238,7 +283,7 @@ contains
         end if
 
         ! call preconditioner Fortran subroutine
-        call precond_pd_before_wrapping(residual, precond_residual, error)
+        call precond_pd_before_wrapping(residual, precond_residual, error, context)
 
         ! convert arguments to Fortran kind
         error_c = int(error, kind=c_ip)
@@ -251,10 +296,11 @@ contains
 
     function get_extra_trial_vectors_c_wrapper_impl( &
         get_extra_trial_vectors_before_wrapping, trial_vectors_c, &
-        n_extra_trial_vectors_c) result(error_c)
+        n_extra_trial_vectors_c, context_c) result(error_c)
         !
         ! this function wraps the extra trial vector subroutine to convert Fortran
-        ! variables to C variables
+        ! variables to C variables, handing the host context to the Fortran subroutine
+        ! in a callback bundle
         !
         use opentrustregion, only: get_extra_trial_vectors_type
 
@@ -262,10 +308,17 @@ contains
             get_extra_trial_vectors_before_wrapping
         real(c_rp), intent(out), target :: trial_vectors_c(*)
         integer(c_ip), intent(in) :: n_extra_trial_vectors_c
+        type(c_ptr), intent(in) :: context_c
         integer(c_ip) :: error_c
 
         real(rp), pointer :: trial_vectors(:, :)
         integer(ip) :: n_extra_trial_vectors, error
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
+        ! hand the host context over as context
+        callbacks%host_context = context_c
+        context => callbacks
 
         ! convert arguments to Fortran kind
         n_extra_trial_vectors = int(n_extra_trial_vectors_c, kind=ip)
@@ -277,7 +330,7 @@ contains
         end if
 
         ! call extra trial vector Fortran subroutine
-        call get_extra_trial_vectors_before_wrapping(trial_vectors, error)
+        call get_extra_trial_vectors_before_wrapping(trial_vectors, error, context)
 
         ! convert arguments to C kind
         error_c = int(error, kind=c_ip)
