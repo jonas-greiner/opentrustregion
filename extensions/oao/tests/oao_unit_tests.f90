@@ -858,7 +858,7 @@ contains
                            precond_pd_oao_callback_ptr, project_oao_callback_ptr, &
                            get_extra_trial_vectors_oao_callback_ptr
         use opentrustregion, only: solver_settings_type, default_solver_settings
-        use test_reference, only: ref_settings, assignment(=), operator(/=)
+        use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
         integer(ip) :: i_case, error
@@ -875,7 +875,7 @@ contains
                 case_name = "for uninitialized settings"
             else
                 case_name = "for initialized settings"
-                solver_settings = ref_settings
+                solver_settings = ref_solver_settings
             end if
             call oao_set_solver_settings(solver_settings, error)
             if (error /= 0) then
@@ -893,7 +893,7 @@ contains
                     "not set to their defaults "//case_name//"."
                 test_oao_set_solver_settings = .false.
             end if
-            if (i_case == 2 .and. solver_settings /= ref_settings) then
+            if (i_case == 2 .and. solver_settings /= ref_solver_settings) then
                 write(stderr, *) "test_oao_set_solver_settings failed: Settings "// &
                     "not kept "//case_name//"."
                 test_oao_set_solver_settings = .false.

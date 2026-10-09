@@ -9,8 +9,15 @@ module otr_common_mock
     use opentrustregion, only: rp, ip, stderr, obj_func_type, update_orbs_type, &
                                hess_x_type, precond_type, precond_pd_type, &
                                get_extra_trial_vectors_type
+    use c_interface, only: logger_c_type
+    use, intrinsic :: iso_c_binding, only: c_char, c_ptr
 
     implicit none
+
+    ! whether the C logging function was called with the test message, which is
+    ! recorded here rather than in a host context since the C settings of the
+    ! extensions do not hand one to their logging function
+    logical :: test_logger = .false.
 
     ! create function pointers to ensure that routines comply with interface
     procedure(obj_func_type), pointer :: mock_obj_func_ptr => mock_obj_func
@@ -20,6 +27,7 @@ module otr_common_mock
     procedure(precond_pd_type), pointer :: mock_precond_pd_ptr => mock_precond_pd
     procedure(get_extra_trial_vectors_type), pointer :: &
         mock_get_extra_trial_vectors_ptr => mock_get_extra_trial_vectors
+    procedure(logger_c_type), pointer :: mock_logger_c_ptr => mock_logger_c
 
 contains
 
@@ -130,5 +138,26 @@ contains
         error = 0
 
     end subroutine mock_get_extra_trial_vectors
+
+    subroutine mock_logger_c(message_c, context_c) bind(C)
+        !
+        ! this subroutine is a test subroutine for the C logging function, which
+        ! records a call with the test message
+        !
+        use test_reference, only: check_host_context_c
+
+        character(kind=c_char), intent(in) :: message_c(*)
+        type(c_ptr), intent(in), value :: context_c
+
+        character(len=4) :: message
+
+        ! check host context
+        call check_host_context_c(context_c)
+
+        ! record call with test message
+        message = transfer(message_c(1:4), message)
+        if (message == "test") test_logger = .true.
+
+    end subroutine mock_logger_c
 
 end module otr_common_mock

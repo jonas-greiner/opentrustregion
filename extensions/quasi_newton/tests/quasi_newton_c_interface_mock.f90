@@ -44,7 +44,7 @@ contains
         use, intrinsic :: iso_c_binding, only: c_null_ptr
         use otr_qn_c_interface, only: qn_settings_type_c
         use c_interface, only: update_orbs_c_type, hess_x_c_type, logger_c_type
-        use test_reference, only: test_update_orbs_c_funptr
+        use test_reference, only: check_update_orbs_c_funptr
         use otr_qn_test_reference, only: test_transport_c_funptr, &
                                          test_init_hess_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_update_orbs
@@ -61,9 +61,9 @@ contains
 
         ! test passed orbital update function
         test_update_orbs_qn_factory_interface = &
-            test_update_orbs_qn_factory_interface .and. test_update_orbs_c_funptr( &
+            test_update_orbs_qn_factory_interface .and. check_update_orbs_c_funptr( &
                 update_orbs_orig_c_funptr, "update_orbs_qn_factory_py_interface", &
-                " by given orbital updating function")
+                " by given orbital updating function", c_null_ptr)
 
         ! test passed transport function
         test_update_orbs_qn_factory_interface = &

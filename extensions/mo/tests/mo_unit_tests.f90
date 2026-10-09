@@ -1207,7 +1207,7 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_sanity_check
-        use opentrustregion_unit_tests, only: setup_settings, log_message
+        use opentrustregion_unit_tests, only: setup_settings, test_context_type
 
         type :: mo_sanity_case_type
             integer(ip) :: mo_coeff_shape(3), ao_overlap_shape(2), n_occ(2), &
@@ -1278,19 +1278,20 @@ contains
 
         type(mo_sanity_case_type) :: c
         type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context
         integer(ip) :: i_case, error
 
         ! assume tests pass
         test_mo_sanity_check = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! call routine for every case and determine if valid dimensions are accepted,
         ! invalid ones rejected and, where the case expects one, the right check fires
         do i_case = 1, size(cases)
             c = cases(i_case)
-            log_message = ""
+            context%log_message = ""
             call mo_sanity_check(settings, c%mo_coeff_shape, c%ao_overlap_shape, &
                                  c%n_occ(:c%n_occ_passed), c%n_particle, c%n_ao, &
                                  c%n_mo, error)
@@ -1299,7 +1300,8 @@ contains
                     "for "//trim(c%name)//"."
                 test_mo_sanity_check = .false.
             end if
-            if (len_trim(c%message) > 0 .and. adjustl(log_message) /= c%message) then
+            if (len_trim(c%message) > 0 .and. &
+                adjustl(context%log_message) /= c%message) then
                 write(stderr, *) "test_mo_sanity_check failed: Incorrect log "// &
                     "message for "//trim(c%name)//"."
                 test_mo_sanity_check = .false.
@@ -1361,7 +1363,7 @@ contains
             passed = .true.
 
             ! call routine and determine if the result and the message are correct
-            log_message = ""
+            context%log_message = ""
             call mo_sanity_check(settings, [3_ip, 3_ip, size(n_occ, kind=ip)], &
                                  [3_ip, 3_ip], n_occ, size(n_occ, kind=ip), 3_ip, &
                                  3_ip, error, orbsym)
@@ -1370,7 +1372,7 @@ contains
                     "for "//name//"."
                 passed = .false.
             end if
-            if (len(message) > 0 .and. adjustl(log_message) /= message) then
+            if (len(message) > 0 .and. adjustl(context%log_message) /= message) then
                 write(stderr, *) "test_mo_sanity_check failed: Incorrect log "// &
                     "message for "//name//"."
                 passed = .false.
@@ -1389,7 +1391,7 @@ contains
                           precond_pd_mo_callback_ptr, &
                           get_extra_trial_vectors_mo_callback_ptr
         use opentrustregion, only: solver_settings_type, default_solver_settings
-        use test_reference, only: ref_settings, assignment(=), operator(/=)
+        use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
         integer(ip) :: i_case, error
@@ -1406,7 +1408,7 @@ contains
                 case_name = "for uninitialized settings"
             else
                 case_name = "for initialized settings"
-                solver_settings = ref_settings
+                solver_settings = ref_solver_settings
                 solver_settings%project => mock_project
                 solver_settings%stability_settings%project => mock_project
             end if
@@ -1426,7 +1428,7 @@ contains
                     "set to their defaults "//case_name//"."
                 test_mo_set_solver_settings = .false.
             end if
-            if (i_case == 2 .and. solver_settings /= ref_settings) then
+            if (i_case == 2 .and. solver_settings /= ref_solver_settings) then
                 write(stderr, *) "test_mo_set_solver_settings failed: Settings not "// &
                     "kept "//case_name//"."
                 test_mo_set_solver_settings = .false.

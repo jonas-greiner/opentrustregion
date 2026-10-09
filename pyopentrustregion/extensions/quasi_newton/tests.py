@@ -23,7 +23,7 @@ from pyopentrustregion.tests import (
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
-    PyInterfaceTests,
+    LegacyPyInterfaceHelpers,
 )
 from pyopentrustregion.python_interface import c_real, c_int
 from pyopentrustregion.extensions.quasi_newton import (
@@ -115,11 +115,11 @@ class QNPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
-    equal_settings_to_ref = PyInterfaceTests.equal_settings_to_ref
+    assign_ref_to_settings = LegacyPyInterfaceHelpers.assign_ref_to_settings
+    equal_settings_to_ref = LegacyPyInterfaceHelpers.equal_settings_to_ref
 
-    mock_update_orbs = PyInterfaceTests.mock_update_orbs
-    mock_hess_x = PyInterfaceTests.mock_hess_x
+    mock_update_orbs = LegacyPyInterfaceHelpers.mock_update_orbs
+    mock_hess_x = LegacyPyInterfaceHelpers.mock_hess_x
 
     def mock_transport(self, geodesic, tangent_vector):
         """
@@ -137,7 +137,7 @@ class QNPyInterfaceTests(unittest.TestCase):
 
         return
 
-    mock_logger = PyInterfaceTests.mock_logger
+    mock_logger = LegacyPyInterfaceHelpers.mock_logger
 
     # replace original library with mock library
     @patch(

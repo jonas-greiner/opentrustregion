@@ -8,12 +8,12 @@ import unittest
 
 # load standard tests
 from pyopentrustregion.tests import (
-    OpenTrustRegionTests,
-    CInterfaceTests,
-    PyInterfaceTests,
-    SystemTests,
-    CSystemTests,
-    PySystemTests,
+    OpenTrustRegionUnitTests,
+    CInterfaceUnitTests,
+    PyInterfaceUnitTests,
+    OpenTrustRegionSystemTests,
+    CIntegrationTests,
+    PyIntegrationTests,
 )
 
 # try to load extension module tests if available

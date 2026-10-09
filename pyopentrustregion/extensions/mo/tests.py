@@ -26,7 +26,7 @@ from pyopentrustregion.tests import (
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
-    PyInterfaceTests,
+    LegacyPyInterfaceHelpers,
 )
 from pyopentrustregion.python_interface import (
     c_real,
@@ -182,10 +182,10 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
-    equal_settings_to_ref = PyInterfaceTests.equal_settings_to_ref
+    assign_ref_to_settings = LegacyPyInterfaceHelpers.assign_ref_to_settings
+    equal_settings_to_ref = LegacyPyInterfaceHelpers.equal_settings_to_ref
 
-    mock_logger = PyInterfaceTests.mock_logger
+    mock_logger = LegacyPyInterfaceHelpers.mock_logger
 
     def mock_evaluate_dm(self, dm_ao, fock, get_response):
         """

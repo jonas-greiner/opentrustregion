@@ -10,7 +10,7 @@ module otr_s_gek_c_interface_unit_tests
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
-                                           c_associated, c_loc
+                                           c_associated, c_loc, c_null_ptr
 
     implicit none
 
@@ -107,8 +107,9 @@ contains
             mock_update_orbs_s_gek_factory, &
             test_passed_mock_update_orbs_s_gek_factory => test_passed
         use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings
-        use c_interface_unit_tests, only: mock_update_orbs, mock_logger, test_logger
-        use test_reference, only: test_update_orbs_c_funptr
+        use c_interface_unit_tests, only: mock_update_orbs
+        use otr_common_mock, only: mock_logger_c, test_logger
+        use test_reference, only: check_update_orbs_c_funptr
 
         type(c_funptr) :: update_orbs_orig_c_funptr, change_reference_c_funptr, &
                           update_orbs_s_gek_c_funptr
@@ -130,7 +131,7 @@ contains
 
         ! associate optional settings with values
         settings = ref_s_gek_settings
-        settings%logger = c_funloc(mock_logger)
+        settings%logger = c_funloc(mock_logger_c)
 
         ! initialize logger logical
         test_logger = .false.
@@ -156,9 +157,9 @@ contains
 
         ! test returned orbital update function
         test_update_orbs_s_gek_factory_c_wrapper = &
-            test_update_orbs_s_gek_factory_c_wrapper .and. test_update_orbs_c_funptr( &
+            test_update_orbs_s_gek_factory_c_wrapper .and. check_update_orbs_c_funptr( &
                 update_orbs_s_gek_c_funptr, "update_orbs_s_gek_factory_c_wrapper", &
-                " by returned orbital updating function") .and. &
+                " by returned orbital updating function", c_null_ptr) .and. &
             test_passed_mock_update_orbs_s_gek_factory .and. &
             test_passed_mock_change_reference
 
@@ -200,7 +201,8 @@ contains
                                          update_orbs_orig_s_gek_before_wrapping, &
                                          update_orbs_s_gek_c_wrapper
         use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
-        use test_reference, only: test_update_orbs_c_funptr, host_context
+        use otr_common_mock, only:
+        use test_reference, only: check_update_orbs_c_funptr, host_context
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -211,7 +213,7 @@ contains
 
         ! test orbital update C wrapper, called with a host context
         expected_host_context = c_loc(host_context)
-        test_update_orbs_s_gek_c_wrapper = test_update_orbs_c_funptr( &
+        test_update_orbs_s_gek_c_wrapper = check_update_orbs_c_funptr( &
             c_funloc(update_orbs_s_gek_c_wrapper), "update_orbs_s_gek_c_wrapper", "", &
             expected_host_context)
 
@@ -233,7 +235,7 @@ contains
         use otr_s_gek_c_interface, only: hess_x_s_gek_before_wrapping, &
                                          hess_x_s_gek_c_wrapper
         use otr_common_mock, only: mock_hess_x
-        use test_reference, only: test_hess_x_c_funptr
+        use test_reference, only: check_hess_x_c_funptr
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -242,8 +244,8 @@ contains
         hess_x_s_gek_before_wrapping => mock_hess_x
 
         ! test orbital update C wrapper
-        test_hess_x_s_gek_c_wrapper = test_hess_x_c_funptr( &
-            c_funloc(hess_x_s_gek_c_wrapper), "hess_x_s_gek_c_wrapper", "")
+        test_hess_x_s_gek_c_wrapper = check_hess_x_c_funptr( &
+            c_funloc(hess_x_s_gek_c_wrapper), "hess_x_s_gek_c_wrapper", "", c_null_ptr)
 
     end function test_hess_x_s_gek_c_wrapper
 
@@ -318,7 +320,7 @@ contains
         use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings, &
                                             operator(/=)
         use c_interface, only: c_callbacks_type
-        use c_interface_unit_tests, only: mock_logger, test_logger
+        use otr_common_mock, only: mock_logger_c, test_logger
 
         type(s_gek_settings_type_c) :: settings_c
         type(s_gek_settings_type) :: settings
@@ -329,12 +331,12 @@ contains
 
         ! initialize the C settings with custom values
         settings_c = ref_s_gek_settings
-        settings_c%logger = c_funloc(mock_logger)
+        settings_c%logger = c_funloc(mock_logger_c)
 
         ! convert to Fortran settings and hand them the C logging function in a bundle
         ! through context, as the factory does
         settings = settings_c
-        callbacks%logger => mock_logger
+        callbacks%logger => mock_logger_c
         settings%context => callbacks
 
         ! check logging function

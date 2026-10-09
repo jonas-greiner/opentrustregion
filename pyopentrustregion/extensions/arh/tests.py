@@ -24,7 +24,7 @@ from pyopentrustregion.tests import (
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
-    PyInterfaceTests,
+    LegacyPyInterfaceHelpers,
 )
 from pyopentrustregion.python_interface import (
     c_real,
@@ -210,8 +210,8 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    assign_ref_to_settings = PyInterfaceTests.assign_ref_to_settings
-    equal_settings_to_ref = PyInterfaceTests.equal_settings_to_ref
+    assign_ref_to_settings = LegacyPyInterfaceHelpers.assign_ref_to_settings
+    equal_settings_to_ref = LegacyPyInterfaceHelpers.equal_settings_to_ref
 
     def mock_arh_evaluate_dm(self, dm_ao, fock, v_coulomb, v_exchange, v_nonlinear):
         """
@@ -232,7 +232,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
     mock_evaluate_dm = MOPyInterfaceTests.mock_evaluate_dm
     mock_get_response = MOPyInterfaceTests.mock_get_response
-    mock_logger = PyInterfaceTests.mock_logger
+    mock_logger = LegacyPyInterfaceHelpers.mock_logger
 
     # replace original library with mock library
     @patch(

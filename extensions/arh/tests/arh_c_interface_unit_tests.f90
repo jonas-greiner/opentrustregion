@@ -11,7 +11,7 @@ module otr_arh_c_interface_unit_tests
     use test_reference, only: tol, tol_c
     use otr_arh_c_interface, only: evaluate_dm_c_type
     use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_funptr, c_funloc, &
-                                           c_f_procpointer
+                                           c_f_procpointer, c_null_ptr
 
     implicit none
 
@@ -112,15 +112,17 @@ contains
         use otr_mo_test_reference, only: mo_coeff_pattern, n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c, &
                                              shell_names
-        use c_interface_unit_tests, only: mock_logger, test_logger, mock_project
-        use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
-                                  test_precond_c_funptr, test_precond_pd_c_funptr, &
-                                  test_get_extra_trial_vectors_c_funptr, ref_settings, &
-                                  assignment(=), operator(/=), n_param_ref => n_param
+        use c_interface_unit_tests, only: mock_project
+        use test_reference, only: &
+            get_reference_solver_values, unset_callbacks, check_obj_func_c_funptr, &
+            check_update_orbs_c_funptr, check_precond_c_funptr, &
+            check_precond_pd_c_funptr, check_get_extra_trial_vectors_c_funptr, &
+            ref_solver_settings, operator(/=), n_param_ref => n_param
         use otr_mo_c_interface, only: &
             obj_func_mo_before_wrapping, precond_mo_before_wrapping, &
             precond_pd_mo_before_wrapping, get_extra_trial_vectors_mo_before_wrapping
-        use otr_common_mock, only: mock_obj_func, mock_precond, mock_precond_pd, &
+        use otr_common_mock, only: mock_logger_c, test_logger, mock_obj_func, &
+                                   mock_precond, mock_precond_pd, &
                                    mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_mo_unit_tests, only: ref_count_mo_params
@@ -154,7 +156,7 @@ contains
 
         ! associate optional settings with values
         settings_c = ref_arh_settings
-        settings_c%logger = c_funloc(mock_logger)
+        settings_c%logger = c_funloc(mock_logger_c)
 
         ! both spin cases pass through the same C wrapper, first without and then with
         ! the irreps of the MOs of the symmetric occupation case of the shell
@@ -183,7 +185,10 @@ contains
             if (n_particle_c == 1) then
                 solver_settings_c%initialized = .false._c_bool
             else
-                solver_settings_c = ref_settings
+                call get_reference_solver_values(solver_settings_c)
+                call unset_callbacks(solver_settings_c)
+                solver_settings_c%context = c_null_ptr
+                solver_settings_c%stability_settings%context = c_null_ptr
                 solver_settings_c%project = c_funloc(mock_project)
                 solver_settings_c%stability_settings%project = c_funloc(mock_project)
             end if
@@ -297,8 +302,8 @@ contains
                     case_name//" case."
             end if
             if (n_particle_c == 2) then
-                solver_settings_c%n_micro = int(ref_settings%n_micro, kind=c_ip)
-                if (solver_settings_c /= ref_settings) then
+                solver_settings_c%n_micro = int(ref_solver_settings%n_micro, kind=c_ip)
+                if (solver_settings_c /= ref_solver_settings) then
                     test_arh_factory_mo_c_wrapper = .false.
                     write(stderr, *) "test_arh_factory_mo_c_wrapper failed: "// &
                         "Initialized solver settings not kept for the "//case_name// &
@@ -310,13 +315,14 @@ contains
             ! parameters of the wrapper tests
             n_param_global = n_param_ref
             test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. test_obj_func_c_funptr( &
-                    obj_func_c_funptr, "arh_factory_mo_c_wrapper", &
-                    " by returned objective function for the "//case_name//" case")
+                test_arh_factory_mo_c_wrapper .and. check_obj_func_c_funptr( &
+                    obj_func_c_funptr, "arh_factory_mo_c_wrapper", " by returned "// &
+                    "objective function for the "//case_name//" case", c_null_ptr)
             test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. test_update_orbs_c_funptr( &
-                    update_orbs_c_funptr, "arh_factory_mo_c_wrapper", " by "// &
-                    "returned orbital updating function for the "//case_name//" case")
+                test_arh_factory_mo_c_wrapper .and. check_update_orbs_c_funptr( &
+                    update_orbs_c_funptr, "arh_factory_mo_c_wrapper", &
+                    " by returned orbital updating function for the "//case_name// &
+                    " case", c_null_ptr)
 
             ! check if the MO coefficients passed from C were rotated in place by the
             ! returned orbital updating function
@@ -330,33 +336,33 @@ contains
 
             ! test functions wired into the solver and stability check settings
             test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. test_precond_c_funptr( &
+                test_arh_factory_mo_c_wrapper .and. check_precond_c_funptr( &
                     solver_settings_c%precond, "arh_factory_mo_c_wrapper", &
                     " by wired level-shifted preconditioner function for the "// &
-                    case_name//" case")
+                    case_name//" case", c_null_ptr)
             test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. test_precond_pd_c_funptr( &
+                test_arh_factory_mo_c_wrapper .and. check_precond_pd_c_funptr( &
                     solver_settings_c%precond_pd, "arh_factory_mo_c_wrapper", &
                     " by wired positive-definite preconditioner function for the "// &
-                    case_name//" case")
+                    case_name//" case", c_null_ptr)
             test_arh_factory_mo_c_wrapper = &
                 test_arh_factory_mo_c_wrapper .and. &
-                test_get_extra_trial_vectors_c_funptr( &
+                check_get_extra_trial_vectors_c_funptr( &
                     solver_settings_c%get_extra_trial_vectors, &
                     "arh_factory_mo_c_wrapper", " by wired extra trial vector "// &
-                    "function for the "//case_name//" case")
+                    "function for the "//case_name//" case", c_null_ptr)
             test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. test_precond_c_funptr( &
+                test_arh_factory_mo_c_wrapper .and. check_precond_c_funptr( &
                     solver_settings_c%stability_settings%precond, &
                     "arh_factory_mo_c_wrapper", " by wired stability check "// &
                     "level-shifted preconditioner function for "// &
-                    "the "//case_name//" case")
+                    "the "//case_name//" case", c_null_ptr)
             test_arh_factory_mo_c_wrapper = &
                 test_arh_factory_mo_c_wrapper .and. &
-                test_get_extra_trial_vectors_c_funptr( &
+                check_get_extra_trial_vectors_c_funptr( &
                     solver_settings_c%stability_settings%get_extra_trial_vectors, &
                     "arh_factory_mo_c_wrapper", " by wired stability check extra "// &
-                    "trial vector function for the "//case_name//" case")
+                    "trial vector function for the "//case_name//" case", c_null_ptr)
         end do
         deallocate(ao_overlap_c)
         nullify(mo_coeff_3d)
@@ -377,17 +383,18 @@ contains
         use otr_arh, only: arh_n_micro
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_ao_c, shell_names
-        use c_interface_unit_tests, only: mock_logger, test_logger
-        use test_reference, only: test_obj_func_c_funptr, test_update_orbs_c_funptr, &
-                                  test_precond_c_funptr, test_precond_pd_c_funptr, &
-                                  test_project_c_funptr, &
-                                  test_get_extra_trial_vectors_c_funptr, ref_settings, &
-                                  assignment(=), operator(/=), n_param_ref => n_param
+        use test_reference, only: &
+            get_reference_solver_values, unset_callbacks, check_obj_func_c_funptr, &
+            check_update_orbs_c_funptr, check_precond_c_funptr, &
+            check_precond_pd_c_funptr, check_project_c_funptr, &
+            check_get_extra_trial_vectors_c_funptr, ref_solver_settings, operator(/=), &
+            n_param_ref => n_param
         use otr_oao_c_interface, only: &
             obj_func_oao_before_wrapping, precond_oao_before_wrapping, &
             precond_pd_oao_before_wrapping, &
             get_extra_trial_vectors_oao_before_wrapping, project_oao_before_wrapping
-        use otr_common_mock, only: mock_obj_func, mock_precond, mock_precond_pd, &
+        use otr_common_mock, only: mock_logger_c, test_logger, mock_obj_func, &
+                                   mock_precond, mock_precond_pd, &
                                    mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
@@ -412,7 +419,7 @@ contains
 
         ! associate optional settings with values
         settings_c = ref_arh_settings
-        settings_c%logger = c_funloc(mock_logger)
+        settings_c%logger = c_funloc(mock_logger_c)
 
         ! both spin cases pass through the same C wrapper
         do n_particle_c = 1, n_particle
@@ -437,7 +444,10 @@ contains
             if (n_particle_c == 1) then
                 solver_settings_c%initialized = .false._c_bool
             else
-                solver_settings_c = ref_settings
+                call get_reference_solver_values(solver_settings_c)
+                call unset_callbacks(solver_settings_c)
+                solver_settings_c%context = c_null_ptr
+                solver_settings_c%stability_settings%context = c_null_ptr
             end if
 
             ! clear the callback slots, which only the factory call may set
@@ -520,8 +530,8 @@ contains
                     "iteration limit not passed on for the "//case_name//" case."
             end if
             if (n_particle_c == 2) then
-                solver_settings_c%n_micro = int(ref_settings%n_micro, kind=c_ip)
-                if (solver_settings_c /= ref_settings) then
+                solver_settings_c%n_micro = int(ref_solver_settings%n_micro, kind=c_ip)
+                if (solver_settings_c /= ref_solver_settings) then
                     test_arh_factory_oao_c_wrapper = .false.
                     write(stderr, *) "test_arh_factory_oao_c_wrapper failed: "// &
                         "Initialized solver settings not kept for the "//case_name// &
@@ -533,13 +543,14 @@ contains
             ! parameters of the wrapper tests
             n_param_global = n_param_ref
             test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. test_obj_func_c_funptr( &
-                    obj_func_c_funptr, "arh_factory_oao_c_wrapper", &
-                    " by returned objective function for the "//case_name//" case")
+                test_arh_factory_oao_c_wrapper .and. check_obj_func_c_funptr( &
+                    obj_func_c_funptr, "arh_factory_oao_c_wrapper", " by returned "// &
+                    "objective function for the "//case_name//" case", c_null_ptr)
             test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. test_update_orbs_c_funptr( &
-                    update_orbs_c_funptr, "arh_factory_oao_c_wrapper", " by "// &
-                    "returned orbital updating function for the "//case_name//" case")
+                test_arh_factory_oao_c_wrapper .and. check_update_orbs_c_funptr( &
+                    update_orbs_c_funptr, "arh_factory_oao_c_wrapper", &
+                    " by returned orbital updating function for the "//case_name// &
+                    " case", c_null_ptr)
 
             ! check if the density matrix was updated by the returned orbital updating
             ! function
@@ -553,42 +564,43 @@ contains
 
             ! test functions wired into the solver and stability check settings
             test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. test_precond_c_funptr( &
+                test_arh_factory_oao_c_wrapper .and. check_precond_c_funptr( &
                     solver_settings_c%precond, "arh_factory_oao_c_wrapper", &
                     " by wired level-shifted preconditioner function for the "// &
-                    case_name//" case")
+                    case_name//" case", c_null_ptr)
             test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. test_precond_pd_c_funptr( &
+                test_arh_factory_oao_c_wrapper .and. check_precond_pd_c_funptr( &
                     solver_settings_c%precond_pd, "arh_factory_oao_c_wrapper", &
                     " by wired positive-definite preconditioner function for the "// &
-                    case_name//" case")
+                    case_name//" case", c_null_ptr)
             test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. test_project_c_funptr( &
+                test_arh_factory_oao_c_wrapper .and. check_project_c_funptr( &
                     solver_settings_c%project, "arh_factory_oao_c_wrapper", &
-                    " by wired projection function for the "//case_name//" case")
+                    " by wired projection function for the "//case_name//" case", &
+                    c_null_ptr)
             test_arh_factory_oao_c_wrapper = &
                 test_arh_factory_oao_c_wrapper .and. &
-                test_get_extra_trial_vectors_c_funptr( &
+                check_get_extra_trial_vectors_c_funptr( &
                     solver_settings_c%get_extra_trial_vectors, &
                     "arh_factory_oao_c_wrapper", " by wired extra trial vector "// &
-                    "function for the "//case_name//" case")
+                    "function for the "//case_name//" case", c_null_ptr)
             test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. test_precond_c_funptr( &
+                test_arh_factory_oao_c_wrapper .and. check_precond_c_funptr( &
                     solver_settings_c%stability_settings%precond, &
                     "arh_factory_oao_c_wrapper", " by wired stability check "// &
                     "level-shifted preconditioner function for "// &
-                    "the "//case_name//" case")
+                    "the "//case_name//" case", c_null_ptr)
             test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. test_project_c_funptr( &
+                test_arh_factory_oao_c_wrapper .and. check_project_c_funptr( &
                     solver_settings_c%stability_settings%project, &
                     "arh_factory_oao_c_wrapper", " by wired stability check "// &
-                    "projection function for the "//case_name//" case")
+                    "projection function for the "//case_name//" case", c_null_ptr)
             test_arh_factory_oao_c_wrapper = &
                 test_arh_factory_oao_c_wrapper .and. &
-                test_get_extra_trial_vectors_c_funptr( &
+                check_get_extra_trial_vectors_c_funptr( &
                     solver_settings_c%stability_settings%get_extra_trial_vectors, &
                     "arh_factory_oao_c_wrapper", " by wired stability check extra "// &
-                    "trial vector function for the "//case_name//" case")
+                    "trial vector function for the "//case_name//" case", c_null_ptr)
         end do
         deallocate(ao_overlap_c)
         nullify(dm_ao_3d)
@@ -676,7 +688,7 @@ contains
         use otr_arh_c_interface, only: update_orbs_arh_before_wrapping, &
                                        update_orbs_arh_c_wrapper
         use otr_common_mock, only: mock_update_orbs
-        use test_reference, only: test_update_orbs_c_funptr, n_param
+        use test_reference, only: check_update_orbs_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -685,8 +697,9 @@ contains
         update_orbs_arh_before_wrapping => mock_update_orbs
 
         ! test orbital updating function
-        test_update_orbs_arh_c_wrapper = test_update_orbs_c_funptr( &
-            c_funloc(update_orbs_arh_c_wrapper), "update_orbs_arh_c_wrapper", "")
+        test_update_orbs_arh_c_wrapper = check_update_orbs_c_funptr( &
+            c_funloc(update_orbs_arh_c_wrapper), "update_orbs_arh_c_wrapper", "", &
+            c_null_ptr)
 
     end function test_update_orbs_arh_c_wrapper
 
@@ -697,7 +710,7 @@ contains
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_arh_c_interface, only: hess_x_arh_before_wrapping, hess_x_arh_c_wrapper
         use otr_common_mock, only: mock_hess_x
-        use test_reference, only: test_hess_x_c_funptr, n_param
+        use test_reference, only: check_hess_x_c_funptr, n_param
 
         ! set global number of parameters for assumed size arrays
         n_param_global = n_param
@@ -706,8 +719,8 @@ contains
         hess_x_arh_before_wrapping => mock_hess_x
 
         ! test orbital updating function
-        test_hess_x_arh_c_wrapper = test_hess_x_c_funptr( &
-            c_funloc(hess_x_arh_c_wrapper), "hess_x_arh_c_wrapper", "")
+        test_hess_x_arh_c_wrapper = check_hess_x_c_funptr( &
+            c_funloc(hess_x_arh_c_wrapper), "hess_x_arh_c_wrapper", "", c_null_ptr)
 
     end function test_hess_x_arh_c_wrapper
 
@@ -777,7 +790,7 @@ contains
         use otr_arh, only: arh_settings_type
         use otr_arh_test_reference, only: assignment(=), operator(/=), ref_arh_settings
         use c_interface, only: c_callbacks_type
-        use c_interface_unit_tests, only: mock_logger, test_logger
+        use otr_common_mock, only: mock_logger_c, test_logger
 
         type(arh_settings_type_c) :: settings_c
         type(arh_settings_type) :: settings
@@ -788,12 +801,12 @@ contains
 
         ! initialize the C settings with custom values
         settings_c = ref_arh_settings
-        settings_c%logger = c_funloc(mock_logger)
+        settings_c%logger = c_funloc(mock_logger_c)
 
         ! convert to Fortran settings and hand them the C logging function in a bundle
         ! through context, as the factory does
         settings = settings_c
-        callbacks%logger => mock_logger
+        callbacks%logger => mock_logger_c
         settings%context => callbacks
 
         ! check logging function

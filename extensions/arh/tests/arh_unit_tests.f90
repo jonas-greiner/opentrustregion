@@ -1935,7 +1935,7 @@ contains
         use otr_oao, only: oao_object
         use opentrustregion, only: solver_settings_type, default_solver_settings
         use opentrustregion_unit_tests, only: mock_project
-        use test_reference, only: ref_settings, assignment(=), operator(/=)
+        use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
         class(arh_type), allocatable :: arh
@@ -1961,7 +1961,7 @@ contains
             else
                 case_name = "for initialized settings"
                 arh%settings%arh_type = "ms_sr1"
-                solver_settings = ref_settings
+                solver_settings = ref_solver_settings
                 solver_settings%project => mock_project
                 solver_settings%stability_settings%project => mock_project
                 call arh_set_solver_settings(solver_settings, arh, error)
@@ -2046,10 +2046,10 @@ contains
                     test_arh_set_solver_settings = .false.
                 end if
             else
-                solver_settings%refresh_hess = ref_settings%refresh_hess
-                solver_settings%n_micro = ref_settings%n_micro
-                solver_settings%hess_symm = ref_settings%hess_symm
-                if (solver_settings /= ref_settings) then
+                solver_settings%refresh_hess = ref_solver_settings%refresh_hess
+                solver_settings%n_micro = ref_solver_settings%n_micro
+                solver_settings%hess_symm = ref_solver_settings%hess_symm
+                if (solver_settings /= ref_solver_settings) then
                     write(stderr, *) "test_arh_set_solver_settings failed: "// &
                         "Settings not kept "//case_name//"."
                     test_arh_set_solver_settings = .false.

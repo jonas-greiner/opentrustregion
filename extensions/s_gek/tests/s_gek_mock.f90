@@ -32,7 +32,7 @@ contains
         !
         use opentrustregion, only: update_orbs_type
         use otr_s_gek, only: change_reference_type, s_gek_settings_type
-        use test_reference, only: test_update_orbs_funptr
+        use test_reference, only: check_update_orbs_funptr
         use c_interface, only: c_callbacks_type
         use otr_s_gek_c_interface, only: update_orbs_orig_s_gek_before_wrapping
         use otr_s_gek_test_reference, only: test_change_reference_funptr
@@ -56,7 +56,7 @@ contains
         ! returned orbital update builds
         callbacks%update_orbs => update_orbs_orig_s_gek_before_wrapping
         context => callbacks
-        test_passed = test_passed .and. test_update_orbs_funptr( &
+        test_passed = test_passed .and. check_update_orbs_funptr( &
             update_orbs_orig_funptr, "update_orbs_s_gek_factory_c_wrapper", &
             " by given orbital updating function", context)
 
