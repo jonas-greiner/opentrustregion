@@ -6,7 +6,7 @@
 
 module opentrustregion_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion, only: rp, ip, stderr, solver_state_type
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, host_context_type
     use, intrinsic :: iso_c_binding, only: c_bool
@@ -140,6 +140,15 @@ module opentrustregion_unit_tests
     ! by the host context
     type, extends(test_context_type) :: bracket_context_type
         integer(ip) :: func_case = 0, fail_call = 0
+    end type
+
+    ! define type for the host context of the double well function whose orbital
+    ! update reads the solver state through a pointer during the optimization and
+    ! records it with the size of the step it receives
+    type, extends(double_well_context_type) :: double_well_state_context_type
+        type(solver_state_type), pointer :: state => null()
+        type(solver_state_type), allocatable :: seen_states(:)
+        real(rp), allocatable :: step_norms(:)
     end type
 
     ! error code returned by mock callback functions reached without their context,
@@ -1081,6 +1090,38 @@ contains
         hess_x_funptr => double_well_hess_x
 
     end subroutine double_well_update_orbs
+
+    subroutine state_reading_update_orbs(delta_vars, func, grad, h_diag, &
+                                         hess_x_funptr, error, context)
+        !
+        ! this subroutine describes the orbital update of the double well function,
+        ! which also records the solver state it reads through the pointer in its
+        ! context and the size of the step it receives
+        !
+        use opentrustregion, only: hess_x_type
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! update the orbitals of the double well function
+        call double_well_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                     error, context)
+        if (error /= 0) return
+
+        ! record the state and the size of the step
+        select type (context)
+        class is (double_well_state_context_type)
+            if (.not. allocated(context%seen_states)) &
+                allocate(context%seen_states(0), context%step_norms(0))
+            context%seen_states = [context%seen_states, context%state]
+            context%step_norms = [context%step_norms, norm2(delta_vars)]
+        end select
+
+    end subroutine state_reading_update_orbs
 
     function resolve_half_step_context(context, error) result(state)
         !
@@ -2325,6 +2366,9 @@ contains
         type(solver_settings_type) :: settings
         real(rp) :: start_vars(n_param)
         type(host_context_type), target :: stability_host_context
+        type(double_well_state_context_type), target :: state_context
+        type(solver_state_type), target :: state
+        integer(ip) :: n_updates, i_update
 
         ! assume tests pass
         test_solver = .true.
@@ -2593,9 +2637,11 @@ contains
         settings%subsystem_solver = "tcg"
 
         ! run solver, check that it still returns without error while flagging this in
-        ! the settings object, the final macro iteration does not update the orbitals
+        ! the settings object and in the state, the final macro iteration does not
+        ! update the orbitals
         n_update_orbs_calls = 0
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
+                    state)
         if (error /= 0) then
             write(stderr, *) "test_solver failed: Produced error when forcing "// &
                 "maximum precision heuristic."
@@ -2604,6 +2650,12 @@ contains
         if (.not. settings%max_precision_reached) then
             write(stderr, *) "test_solver failed: Did not flag that maximum "// &
                 "precision was reached when convergence tolerance could not be met."
+            test_solver = .false.
+        end if
+        if (.not. state%max_precision_reached) then
+            write(stderr, *) "test_solver failed: Did not flag in the state that "// &
+                "maximum precision was reached when convergence tolerance could "// &
+                "not be met."
             test_solver = .false.
         end if
         test_solver = test_solver .and. logical( &
@@ -2697,6 +2749,93 @@ contains
         test_solver = test_solver .and. logical( &
             call_counts_match("solver", "for missing Hessian linear transformation", &
                               n_update_orbs=settings%n_update_orbs), kind=c_bool)
+
+        ! minimize the double well function x^2 - y^2 + y^4 from (0.5, 0) with a state
+        ! record, which the orbital update reads during the optimization through the
+        ! pointer in its context, and without random or extra trial vectors and
+        ! gradient perturbation, so that the solver first converges to the saddle
+        ! point at the origin, which the requested stability check finds unstable, and
+        ! then continues to a minimum
+        update_orbs_funptr => state_reading_update_orbs
+        obj_func_funptr => double_well_obj_func
+        call settings%init(error)
+        settings%stability = .true.
+        settings%grad_noise = .false.
+        settings%n_random_trial_vectors = 0
+        settings%n_extra_trial_vectors = 0
+        settings%start_trust_radius = 0.3_rp
+        settings%context => state_context
+        state_context%vars = [0.5_rp, 0.0_rp]
+        state_context%state => state
+        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings, state)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error with state record."
+            test_solver = .false.
+        end if
+        if (abs(abs(state_context%vars(2)) - 1.0_rp / sqrt(2.0_rp)) > var_thres) then
+            write(stderr, *) "test_solver failed: Did not continue from the saddle "// &
+                "point of the double well function to a minimum."
+            test_solver = .false.
+        end if
+
+        ! check the state the solver returns, at the converged point
+        if (state%iteration /= settings%n_update_orbs - 1 .or. &
+            abs(state%func - double_well_func(state_context%vars)) > tol .or. &
+            abs(state%grad_rms - norm2([ &
+                2.0_rp * state_context%vars(1), -2.0_rp * state_context%vars(2) + &
+                4.0_rp * state_context%vars(2)**3]) / sqrt(2.0_rp)) > tol .or. &
+            state%trust_radius <= 0.0_rp .or. &
+            state%n_update_orbs /= settings%n_update_orbs .or. &
+            (state%max_precision_reached .neqv. settings%max_precision_reached)) then
+            write(stderr, *) "test_solver failed: Returned state wrong."
+            test_solver = .false.
+        end if
+
+        ! check the state the orbital update read during the optimization: the first
+        ! update sees the starting trust radius before anything was evaluated, every
+        ! later one the previous macro iteration and the step it is given, and one
+        ! update the step along the unstable mode after steps of the subsystem solver
+        n_updates = 0
+        if (allocated(state_context%seen_states)) &
+            n_updates = size(state_context%seen_states)
+        if (n_updates /= settings%n_update_orbs .or. n_updates < 3) then
+            write(stderr, *) "test_solver failed: State not read in every orbital "// &
+                "update."
+            test_solver = .false.
+        else
+            associate (seen => state_context%seen_states)
+                if (seen(1)%iteration /= 0 .or. seen(1)%n_update_orbs /= 0 .or. &
+                    abs(seen(1)%trust_radius - 0.3_rp) > tol .or. &
+                    seen(1)%n_micro /= 0 .or. abs(seen(1)%step_size) > tol) then
+                    write(stderr, *) "test_solver failed: State wrong before the "// &
+                        "starting point is evaluated."
+                    test_solver = .false.
+                end if
+                if (any([(seen(i_update)%iteration /= i_update - 2 .or. &
+                          seen(i_update)%n_update_orbs /= i_update - 1, i_update=2, &
+                          n_updates)])) then
+                    write(stderr, *) "test_solver failed: Macro iteration or "// &
+                        "number of orbital updates in the state wrong during the "// &
+                        "optimization."
+                    test_solver = .false.
+                end if
+                if (any([(abs(seen(i_update)%step_size - &
+                              state_context%step_norms(i_update)) > tol, i_update=2, &
+                          n_updates)])) then
+                    write(stderr, *) "test_solver failed: Step size in the state "// &
+                        "wrong during the optimization."
+                    test_solver = .false.
+                end if
+                if (.not. any([(seen(i_update)%n_micro == 0 .and. &
+                                seen(i_update)%step_size > 0.0_rp .and. &
+                                seen(i_update - 1)%n_micro > 0, i_update=3, &
+                                n_updates)])) then
+                    write(stderr, *) "test_solver failed: Step along the unstable "// &
+                        "mode after steps of the subsystem solver not in the state."
+                    test_solver = .false.
+                end if
+            end associate
+        end if
 
         ! deallocate space for the gradient
         deallocate(final_grad)

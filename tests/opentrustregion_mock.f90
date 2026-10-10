@@ -27,6 +27,10 @@ module opentrustregion_mock
     ! minimum eigenvalue the mock stability check returns
     real(rp), parameter :: mock_min_eigval = -1.0_rp
 
+    ! whether the mock solver received a state record, so that a test can check
+    ! whether the C wrapper passes one on
+    logical :: solver_state_received
+
     ! settings and callback bundles the mock solver and stability check received,
     ! the bundle of the settings and that of the nested settings, so that a test can
     ! check what the C wrapper handed over
@@ -47,11 +51,11 @@ module opentrustregion_mock
 contains
 
     subroutine mock_solver(update_orbs_funptr, obj_func_funptr, n_param, error, &
-                           settings)
+                           settings, state)
         !
         ! this subroutine is a mock routine for solver to test the C interface
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
                                   check_hess_x_funptr, check_precond_funptr, &
                                   check_precond_pd_funptr, check_project_funptr, &
@@ -63,9 +67,13 @@ contains
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
         type(solver_settings_type), intent(inout) :: settings
+        type(solver_state_type), intent(out), target, optional :: state
 
         ! assume tests pass
         test_passed = .true.
+
+        ! record whether a state record was passed
+        solver_state_received = present(state)
 
         ! test passed orbital update subroutine
         if (.not. check_update_orbs_funptr(update_orbs_funptr, "solver_c_wrapper", &

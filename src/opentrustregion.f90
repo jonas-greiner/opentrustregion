@@ -111,6 +111,27 @@ module opentrustregion
             "not self-projecting, redundant rotations may contaminate the trial "// &
             "space and cause convergence issues."
 
+    ! state of the optimization, which the solver keeps current in the record it is
+    ! given during the optimization and when it returns, also after an error, so that
+    ! a host program or an extension holding the same record can read it at any time
+    type :: solver_state_type
+        ! macro iteration
+        integer(ip) :: iteration = 0
+        ! objective function value and RMS gradient at the current point
+        real(rp) :: func = 0.0_rp, grad_rms = 0.0_rp
+        ! current trust radius
+        real(rp) :: trust_radius = 0.0_rp
+        ! first step
+        integer(ip) :: n_micro = 0
+        ! size of the last step in the trust-region metric
+        real(rp) :: step_size = 0.0_rp
+        ! number of orbital updates
+        integer(ip) :: n_update_orbs = 0
+        ! whether the solver stopped because neither the actual nor the predicted
+        ! function change could be resolved anymore
+        logical :: max_precision_reached = .false.
+    end type
+
     ! interfaces for callback functions
     abstract interface
         subroutine hess_x_type(x, hess_x, error, context)
@@ -301,7 +322,7 @@ module opentrustregion
 
 contains
 
-    subroutine solver(update_orbs, obj_func, n_param, error, settings)
+    subroutine solver(update_orbs, obj_func, n_param, error, settings, state)
         !
         ! this subroutine is the main solver for orbital optimization
         !
@@ -310,15 +331,17 @@ contains
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
         type(solver_settings_type), intent(inout) :: settings
+        type(solver_state_type), intent(out), target, optional :: state
 
-        real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, n_kappa, kappa_norm, &
-                    lambda
+        real(rp) :: func, grad_norm, grad_rms, mu, n_kappa, kappa_norm, lambda
         real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
         logical :: max_precision_reached, macro_converged, stable, &
                    jacobi_davidson_started, conv_check_passed, local_region
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson
         character(len=300) :: msg
         procedure(hess_x_type), pointer :: hess_x_funptr
+        type(solver_state_type), target :: local_state
+        type(solver_state_type), pointer :: current_state
         real(rp), external :: dnrm2
 
         ! initialize error flag
@@ -334,6 +357,14 @@ contains
         settings%n_update_orbs = 0
         settings%n_hess_x = 0
         settings%stability_settings%n_hess_x = 0
+
+        ! keep the state in the given record, so that it is current during the
+        ! optimization, or in a local one, both of which start from the default values
+        if (present(state)) then
+            current_state => state
+        else
+            current_state => local_state
+        end if
 
         ! initialize settings, settings that were not initialized are replaced by the
         ! default settings, which would silence the warning, so it is printed
@@ -378,7 +409,7 @@ contains
         call init_defaults(settings)
 
         ! set starting trust radius
-        trust_radius = settings%start_trust_radius
+        current_state%trust_radius = settings%start_trust_radius
 
         ! print header
         call settings%log(repeat("-", 109), verbosity_info)
@@ -407,6 +438,7 @@ contains
 
                 ! increment number of orbital updates
                 settings%n_update_orbs = settings%n_update_orbs + 1
+                current_state%n_update_orbs = settings%n_update_orbs
                 call add_error_origin(error, error_update_orbs, settings)
                 if (error /= 0) return
 
@@ -432,6 +464,11 @@ contains
                 ! calculate RMS gradient
                 grad_rms = grad_norm / sqrt(real(n_param, kind=rp))
 
+                ! update the state with the current point, whose row is printed below
+                current_state%iteration = imacro - 1
+                current_state%func = func
+                current_state%grad_rms = grad_rms
+
                 ! log results
                 if (imacro == 1) then
                     call settings%print_results(imacro - 1, func, grad_rms)
@@ -452,12 +489,13 @@ contains
                             imacro - 1, func, grad_rms, level_shift=-mu, &
                             n_micro=imicro, &
                             imicro_jacobi_davidson=imicro_jacobi_davidson, &
-                            trust_radius=trust_radius, kappa_norm=kappa_norm)
+                            trust_radius=current_state%trust_radius, &
+                            kappa_norm=kappa_norm)
                     else
-                        call settings%print_results(imacro - 1, func, grad_rms, &
-                                                    level_shift=-mu, n_micro=imicro, &
-                                                    trust_radius=trust_radius, &
-                                                    kappa_norm=kappa_norm)
+                        call settings%print_results( &
+                            imacro - 1, func, grad_rms, level_shift=-mu, &
+                            n_micro=imicro, trust_radius=current_state%trust_radius, &
+                            kappa_norm=kappa_norm)
                     end if
                 end if
             end if
@@ -479,12 +517,15 @@ contains
                                                 kappa_norm, error)
                     if (error /= 0) return
                     if (.not. stable) then
+                        current_state%n_micro = 0
+                        current_state%step_size = kappa_norm
                         max_precision_reached = .false.
                         cycle
                     end if
                 end if
                 settings%max_precision_reached = max_precision_reached .and. &
                                                  .not. conv_check_passed
+                current_state%max_precision_reached = settings%max_precision_reached
                 macro_converged = .true.
                 exit
             end if
@@ -497,21 +538,21 @@ contains
                 ! solve trust region subproblem with (Jacobi-)Davidson
                 call level_shifted_davidson( &
                     func, grad, grad_norm, h_diag, n_param, obj_func, hess_x_funptr, &
-                    settings, local_region, trust_radius, kappa, kappa_norm, mu, &
-                    imicro, imicro_jacobi_davidson, jacobi_davidson_started, &
-                    max_precision_reached, error)
+                    settings, local_region, current_state%trust_radius, kappa, &
+                    kappa_norm, mu, imicro, imicro_jacobi_davidson, &
+                    jacobi_davidson_started, max_precision_reached, error)
             else if (settings%subsystem_solver == "tcg") then
                 ! solve trust region subproblem with truncated conjugate gradient
-                call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                                  obj_func, hess_x_funptr, settings, &
-                                                  trust_radius, kappa, kappa_norm, &
-                                                  imicro, max_precision_reached, error)
+                call truncated_conjugate_gradient( &
+                    func, grad, h_diag, n_param, obj_func, hess_x_funptr, settings, &
+                    current_state%trust_radius, kappa, kappa_norm, imicro, &
+                    max_precision_reached, error)
             else if (settings%subsystem_solver == "gltr") then
                 ! solve trust region subproblem with generalized Lanczos
                 call generalized_lanczos_trust_region( &
                     func, grad, h_diag, n_param, obj_func, hess_x_funptr, settings, &
-                    local_region, trust_radius, kappa, kappa_norm, lambda, imicro, &
-                    max_precision_reached, error)
+                    local_region, current_state%trust_radius, kappa, kappa_norm, &
+                    lambda, imicro, max_precision_reached, error)
             end if
             call add_error_origin(error, error_solver, settings)
             if (error /= 0) return
@@ -538,6 +579,8 @@ contains
             ! set orbital rotation
             kappa = n_kappa * kappa
             kappa_norm = n_kappa * kappa_norm
+            current_state%n_micro = imicro
+            current_state%step_size = kappa_norm
 
             ! flush output
             flush(stdout)
