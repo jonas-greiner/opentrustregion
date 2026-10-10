@@ -1231,7 +1231,8 @@ contains
 
     logical(c_bool) function test_precond_pd_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the positive-definite preconditioner function
+        ! this function tests the Fortran wrapper for the positive-definite
+        ! preconditioner function
         !
         use opentrustregion, only: precond_pd_type
         use c_interface, only: c_callbacks_type, precond_pd_f_wrapper
@@ -1476,7 +1477,8 @@ contains
 
     logical(c_bool) function test_conv_check_stability_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the convergence check function of the stability check
+        ! this function tests the Fortran wrapper for the convergence check function of
+        ! the stability check
         !
         use opentrustregion, only: conv_check_stability_type
         use c_interface, only: c_callbacks_type, conv_check_stability_f_wrapper
@@ -1537,7 +1539,8 @@ contains
 
     logical(c_bool) function test_stability_hess_x_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the Hessian linear transformation of the stability check
+        ! this function tests the Fortran wrapper for the Hessian linear transformation
+        ! of the stability check
         !
         use opentrustregion, only: hess_x_type
         use c_interface, only: c_callbacks_type, stability_hess_x_f_wrapper
@@ -1596,7 +1599,8 @@ contains
 
     logical(c_bool) function test_approx_hess_x_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the approximate Hessian linear transformation
+        ! this function tests the Fortran wrapper for the approximate Hessian linear
+        ! transformation
         !
         use opentrustregion, only: hess_x_type
         use c_interface, only: c_callbacks_type, approx_hess_x_f_wrapper

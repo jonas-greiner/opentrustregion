@@ -124,7 +124,8 @@ The layout of a statement is the best one under these rules:
     has at least one blank between its ``!`` and its text, unless it starts with ``!!``
     or is a directive such as ``!$omp``; further blanks are kept, since they indent
     formulas, lists and code within a comment. A comment after code is preceded by two
-    blanks.
+    blanks. A comment line is held to the column limit like code but never rewrapped,
+    so an overlong one is reworded by hand.
 11. No line ends in blanks, no file starts or ends with a blank line, no two blank lines
     follow each other, and a file ends with one newline. A subroutine or function is
     followed by one blank line, unless it is the last one in an interface block, and
@@ -1846,6 +1847,9 @@ def analyse(
             if indent_of(line) == column:
                 message = "comment text not spaced as rule 10 says"
             issues.append(Issue(i, "comment", message, comment, [want]))
+        if len(want) > LIMIT and in_scope(comment, touched):
+            message = f"{len(want)} columns, comment not rewrapped, shorten by hand"
+            issues.append(Issue(i, "overlong", message, comment))
 
     for n, (stmt, base) in enumerate(zip(stmts, bases)):
         if not in_scope(stmt, touched):

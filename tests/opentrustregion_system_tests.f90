@@ -600,8 +600,8 @@ contains
     logical(c_bool) function test_h2o_fb_solver_davidson_ah() bind(C)
         !
         ! this function tests the solver for the Foster-Boys localization of the
-        ! occupied orbitals of water with the Davidson subsystem solver for the augmented
-        ! Hessian
+        ! occupied orbitals of water with the Davidson subsystem solver for the
+        ! augmented Hessian
         !
         test_h2o_fb_solver_davidson_ah = logical(check_h2o_fb_solver( &
             "h2o_fb_solver_davidson_ah", "davidson_ah"), kind=c_bool)
@@ -611,8 +611,8 @@ contains
     logical(c_bool) function test_h2o_fb_solver_jacobi_davidson_ls() bind(C)
         !
         ! this function tests the solver for the Foster-Boys localization of the
-        ! occupied orbitals of water with the Jacobi-Davidson subsystem solver for linear
-        ! systems
+        ! occupied orbitals of water with the Jacobi-Davidson subsystem solver for
+        ! linear systems
         !
         test_h2o_fb_solver_jacobi_davidson_ls = logical(check_h2o_fb_solver( &
             "h2o_fb_solver_jacobi_davidson_ls", "jacobi-davidson_ls"), kind=c_bool)
