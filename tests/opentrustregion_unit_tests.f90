@@ -3244,12 +3244,12 @@ contains
         ! set function pointer
         hess_x_funptr => double_well_hess_x
 
-        ! check the saddle point in the first macro iteration with nested stability
-        ! check settings holding the context the solver lends them and check that the
-        ! context reaches the callback functions of the stability check, that its
-        ! Hessian linear transformations are added to the solver's counter, that a step
-        ! along the unstable mode is returned with its norm and that the warning for
-        ! starting at a saddle point is printed
+        ! check the saddle point in the first macro iteration with a context in the
+        ! nested stability check settings and check that this context reaches the
+        ! callback functions of the stability check, that its Hessian linear
+        ! transformations are added to the solver's counter, that a step along the
+        ! unstable mode is returned with its norm and that the warning for starting at a
+        ! saddle point is printed
         call setup_settings(settings, context)
         state%n_hess_x = 5
         context%vars = [0.0_rp, 0.0_rp]
