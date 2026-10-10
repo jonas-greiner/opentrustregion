@@ -134,7 +134,8 @@ module opentrustregion
         ! micro iteration of the subproblem being solved and how many of these were
         ! Jacobi-Davidson iterations
         integer(ip) :: micro_iteration = 0, jacobi_davidson_iteration = 0
-        ! residual of the subproblem divided by the gradient norm in the same metric
+        ! residual of the subproblem relative to the gradient it is solved for both in
+        ! the norm of the stopping test of the micro iterations
         real(rp) :: relative_residual = 0.0_rp
         ! level shift and size of the last step in the trust-region metric
         real(rp) :: level_shift = 0.0_rp, step_size = 0.0_rp
@@ -421,7 +422,7 @@ contains
         ! initialize random number generator
         call init_rng(local_settings%seed)
 
-        ! set defaults
+        ! resolve the defaults that depend on other settings
         call init_defaults(local_settings)
 
         ! set starting trust radius
@@ -494,10 +495,11 @@ contains
                     stable = .true.
                 else if (current_state%jacobi_davidson_iteration > 0) then
                     call local_settings%print_results( &
-                        imacro - 1, func, grad_rms, current_state%level_shift, &
-                        current_state%micro_iteration, &
-                        current_state%jacobi_davidson_iteration, &
-                        current_state%trust_radius, kappa_norm)
+                        imacro - 1, func, grad_rms, &
+                        level_shift=current_state%level_shift, &
+                        n_micro=current_state%micro_iteration, &
+                        n_jacobi_davidson=current_state%jacobi_davidson_iteration, &
+                        trust_radius=current_state%trust_radius, kappa_norm=kappa_norm)
                 else
                     call local_settings%print_results( &
                         imacro - 1, func, grad_rms, &
@@ -673,7 +675,7 @@ contains
 
         ! work on a copy of the settings, or of the default settings if none are
         ! passed, which leaves the caller's settings as they are while the copy is
-        ! initialized if they were not and completed by the defaults
+        ! initialized if they were not
         if (present(settings)) then
             local_settings = settings
         else

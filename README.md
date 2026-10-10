@@ -84,12 +84,12 @@ Optional settings can be adjusted by modifying object attributes directly. Orbit
 
 ## Usage
 
-The optimization process is initiated by calling a `solver` subroutine. This routine requires the following input arguments:
+The optimization process is initiated by calling a `solver` subroutine. This routine takes the following arguments:
 
-### Required Arguments
+### Arguments
 
 - **`update_orbs`** (subroutine):  
-  Accepts and applies a variable update (e.g., orbital rotation), updates the internal state, and provides:
+  Accepts and applies a variable update (e.g., orbital rotation), updates the host's internal state, and provides:
   - Objective function value (real)
   - Gradient (real array, written in-place)
   - Hessian diagonal (real array, written in-place)
@@ -108,7 +108,7 @@ The optimization process is initiated by calling a `solver` subroutine. This rou
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
 - **`settings`** (settings_type, optional): Settings object which controls optional arguments as described below. The solver only reads it. Without it, the default settings are used.
-- **`state`** (state_type, optional): Record that the solver keeps up to date during the optimization and that holds the final state of the optimization once the solver returns, as described below.
+- **`state`** (solver_state_type, optional): Record that the solver keeps up to date during the optimization and that holds the final state of the optimization once the solver returns, as described below.
 
 ---
 
@@ -253,14 +253,14 @@ The optimization process can be fine-tuned using the following settings:
   - `"ellipsoidal"`: the trust region is measured in the norm induced by the positive-definite preconditioner `precond_pd` (or, by default, shaped by the absolute value of the (approximate) Hessian diagonal). This also accelerates convergence of the underlying Krylov iteration.
   - `"spherical"`: the trust region is a Euclidean sphere. For `"tcg"` this is combined with the preconditioned search direction at no extra cost. For `"gltr"`, obtaining an exact solution to the Euclidean-sphere subproblem requires falling back to no preconditioning at all, so this option sacrifices the preconditioner's acceleration of the Krylov iteration in exchange for a genuinely spherical trust region.
 - **`n_macro`** (integer): Maximum number of macro iterations.
-- **`n_micro`** (integer): Maximum number of micro iterations.
+- **`n_micro`** (integer): Maximum number of micro iterations per attempted trust-region step.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
 - **`global_red_factor`** (real): Reduction factor for the residual during micro iterations in the global region, also the relative size of the gradient perturbation there (see `grad_noise`).
 - **`local_red_factor`** (real): Reduction factor for the residual during micro iterations in the local region, also the relative size of the gradient perturbation there (see `grad_noise`).
 - **`verbose`** (integer): Controls the verbosity of output during optimization. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors and the random gradient perturbation.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The optional extensions keep their orbital objects and callbacks in module-level state, so solves using their factories can neither run at the same time nor be nested.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The optional extensions keep their orbital objects and callbacks in module-level state, so solves using their factories can neither run at the same time nor be nested.
 - **`stability_settings`** (stability_settings_type): Settings object controlling the internal stability check that is automatically performed upon convergence when `stability` is `True` or when starting at a stationary point (see the Stability Check section below). If `stability_settings%precond`, `stability_settings%project`, `stability_settings%logger`, or `stability_settings%context` are left unset, they default to the corresponding `precond`, `project`, `logger`, and `context` supplied to `solver`. The internal stability check hands its own context to every callback function it calls, so when `stability_settings%context` is set, the Hessian linear transformation returned by `update_orbs` and any inherited `precond`, `project` or `logger` receive it instead of the solver's `context` and must accept it. Leaving it unset keeps the solver's `context` everywhere. `stability_settings%verbose` is raised to at least the solver's own `verbose` level. Unless `stability_settings%conv_check` is set, the internal stability check stops as soon as an instability is certain (see `stop_on_instability`), and by default it uses a single random trial vector.
 
 ### Output
@@ -270,21 +270,21 @@ The solver keeps the state it is given up to date during the optimization, start
 - **`func`** (real): Objective function value at the current point.
 - **`grad_rms`** (real): RMS gradient at the current point.
 - **`trust_radius`** (real): Current trust radius.
-- **`micro_iteration`** (integer): Number of micro iterations of the subsystem solver in the current macro iteration, including those of rejected steps.
+- **`micro_iteration`** (integer): Number of micro iterations spent on the trust-region subproblem being solved or, until the next one starts, on the last one, including those of rejected steps.
 - **`jacobi_davidson_iteration`** (integer): Number of these micro iterations that were Jacobi-Davidson iterations.
 - **`relative_residual`** (real): Residual of the trust-region subproblem being solved relative to the gradient it is solved for, which `grad_noise` perturbs, both measured in the norm that the stopping test of the micro iterations uses.
-- **`level_shift`** (real): Level shift of the last step, the negated eigenvalue of the augmented Hessian for the Davidson-family subsystem solvers, the Lagrange multiplier of the trust-region constraint for `"gltr"` and 0 for `"tcg"`.
-- **`step_size`** (real): Size of the last step in the norm of the trust region, after the line search if one is performed.
+- **`level_shift`** (real): Level shift of the last step, which the Davidson-family subsystem solvers apply to the Hessian and which is the Lagrange multiplier of the trust-region constraint for `"gltr"`, so as to keep a step within the trust region, 0 for a step inside the trust region, for a step along an unstable mode and for `"tcg"`.
+- **`step_size`** (real): Size of the last step in the norm of the trust region, after the line search if one is performed. A step along an unstable mode is measured in the Euclidean norm, also for an ellipsoidal trust region.
 - **`n_update_orbs`** (integer): Number of orbital updates (`update_orbs`).
 - **`n_obj_func`** (integer): Number of objective function evaluations (`obj_func`), including those of the line search.
 - **`n_hess_x`** (integer): Number of Hessian linear transformations (`hess_x`, and `stability_hess_x` within the internal stability check), those of an internal stability check added once it returns. The approximate Hessian linear transformations of `stability_settings%approx_hess_x`, which only warm start the stability check, are not counted.
-- **`max_precision_reached`** (boolean): `true` if the solver stopped because neither the actual nor the predicted change of the objective function in a trust-region step could be resolved at floating-point precision relative to the objective function value, rather than because the RMS gradient dropped below `conv_tol` or a custom `conv_check` reported convergence. `error` is still `0` and the returned point is still the best one found; this flag lets the host program decide whether to accept it as-is, warn, or retighten and retry with a different starting point or subsystem solver. During the optimization, it turns `true` once a trust-region step cannot be resolved, and turns `false` again if the solver continues along an unstable mode of the stationary point it then reached.
-- **`stability_state`** (state_type): State of the most recent internal stability check, see the [stability check's output](#output-1).
+- **`max_precision_reached`** (boolean): `true` once neither the actual nor the predicted change of the objective function in a trust-region step can be resolved at floating-point precision relative to the objective function value. This ends the optimization like convergence, without an error of its own, and the returned point is the best one found; this flag lets the host program decide whether to accept it as-is, warn, or retighten and retry with a different starting point or subsystem solver. It turns `false` again if, with `stability` set, the internal stability check then finds the point unstable and the solver continues along the unstable mode, or if a custom `conv_check` reports convergence, which takes precedence.
+- **`stability_state`** (stability_state_type): State of the most recent internal stability check, see the [stability check's output](#output-1).
 
 ## Stability Check
-A separate `stability_check` subroutine is available to verify whether the current solution corresponds to a minimum. It returns whether the point is stable and, optionally, the lowest Hessian eigenvalue and the corresponding eigenvector, which at an unstable point is the direction along which the objective function decreases.
+A separate `stability_check` subroutine is available to verify whether the current solution corresponds to a minimum. It returns whether the point is stable and, optionally, the lowest Hessian eigenvalue and the corresponding eigenvector, which at an unstable point is the direction along which the objective function decreases. It takes the following arguments:
 
-### Required Arguments
+### Arguments
 
 - **`h_diag`** (real array): Represents the Hessian diagonal at the current point.
 - **`hess_x`** (subroutine): Performs Hessian-vector products at the current point:
@@ -294,7 +294,7 @@ A separate `stability_check` subroutine is available to verify whether the curre
 - **`stable`** (boolean): Returns whether the current point is stable.
 - **`error`** (integer): An integer code indicating the success or failure of the stability check. The error code structure is explained below.
 - **`settings`** (settings_type, optional): Settings object which controls optional arguments as described below. The stability check only reads it. Without it, the default settings are used.
-- **`state`** (state_type, optional): Record that the stability check keeps up to date during its iterations and that holds its final state once it returns, as described below.
+- **`state`** (stability_state_type, optional): Record that the stability check keeps up to date during its iterations and that holds its final state once it returns, as described below.
 - **`kappa`** (real array, optional): If provided, receives the normalized eigenvector of the lowest Hessian eigenvalue, written in-place, whether the current point is stable or not. At an unstable point (as can be checked from `stable`), this is the descent direction along the unstable mode.
 - **`min_eigval`** (real, optional): If provided, receives the lowest Hessian eigenvalue.
 
@@ -452,7 +452,7 @@ The stability check can be fine-tuned using the following settings:
 - **`verbose`** (integer): Controls the verbosity of output during the stability check. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors.
 - **`logger`** (function): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two stability checks can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two stability checks can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 
 ### Output
 The stability check keeps the state it is given up to date during its iterations, starting from the default values on every call, and leaves its final state in it when it returns, also after an error. As for the solver, a callback function can therefore read the current state. The state holds the following fields:
