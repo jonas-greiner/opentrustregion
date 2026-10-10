@@ -186,10 +186,11 @@ c_int solver(update_orbs_fp update_orbs_ptr, obj_func_fp obj_func_ptr, c_int n_p
  * @param n_param           Number of parameters
  * @param stable            Pointer to bool that receives stability result
  * @param settings          Pointer to struct of stability solver settings
- * @param kappa_ptr         Pointer to orbital rotation vector, may be NULL to skip
- *                          returning the direction of instability
- * @param min_eigval_ptr    Pointer to minimum eigenvalue, may be NULL to skip
- *                          returning it
+ * @param kappa_ptr         Pointer to array that receives the eigenvector of the
+ *                          lowest Hessian eigenvalue, the direction of instability at
+ *                          an unstable point, may be NULL to skip returning it
+ * @param min_eigval_ptr    Pointer to the lowest Hessian eigenvalue, may be NULL to
+ *                          skip returning it
  * @return                  Integer error code from Fortran
  */
 c_int stability_check(const c_real *h_diag_ptr, hess_x_fp hess_x_ptr, c_int n_param,
