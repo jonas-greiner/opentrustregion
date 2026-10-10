@@ -313,7 +313,7 @@ contains
 
         real(rp) :: trust_radius, func, grad_norm, grad_rms, mu, n_kappa, kappa_norm, &
                     lambda
-        real(rp), allocatable :: kappa(:), grad(:), h_diag(:), precond_kappa(:)
+        real(rp), allocatable :: kappa(:), grad(:), h_diag(:)
         logical :: max_precision_reached, macro_converged, stable, &
                    jacobi_davidson_started, conv_check_passed, local_region
         integer(ip) :: imacro, imicro, imicro_jacobi_davidson
@@ -391,7 +391,7 @@ contains
         call settings%log(repeat("-", 109), verbosity_info)
 
         ! allocate arrays
-        allocate(kappa(n_param), grad(n_param), h_diag(n_param), precond_kappa(n_param))
+        allocate(kappa(n_param), grad(n_param), h_diag(n_param))
 
         ! initialize orbital rotation matrix
         kappa = 0.0_rp
@@ -546,7 +546,7 @@ contains
         end do
 
         ! deallocate arrays
-        deallocate(kappa, grad, h_diag, precond_kappa)
+        deallocate(kappa, grad, h_diag)
 
         ! stop if no convergence
         if (.not. macro_converged) then
@@ -1606,6 +1606,7 @@ contains
         integer(ip) :: n, lwork, info, i
         real(rp), allocatable :: eigvals_re(:), eigvals_im(:), work(:), temp(:, :)
         character(len=300) :: msg
+        real(rp), external :: ddot
         external :: dgeev
 
         ! initialize error flag
@@ -1650,8 +1651,8 @@ contains
 
         ! scale left eigenvectors such that biorthonormality is fulfilled
         do i = 1, n
-            left_eigvecs(:, i) = left_eigvecs(:, i) / &
-                                 dot_product(left_eigvecs(:, i), right_eigvecs(:, i))
+            left_eigvecs(:, i) = left_eigvecs(:, i) / ddot( &
+                n, left_eigvecs(:, i), 1_ip, right_eigvecs(:, i), 1_ip)
         end do
 
     end subroutine general_mat_diag
