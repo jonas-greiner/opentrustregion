@@ -163,8 +163,10 @@ fortran_tests = {
         "approx_hess_x_f_wrapper",
         "assign_solver_c_f",
         "assign_solver_f_c",
+        "assign_solver_state_c_f",
         "assign_stability_c_f",
         "assign_stability_f_c",
+        "assign_stability_state_c_f",
         "character_from_c",
         "character_to_c",
         "conv_check_f_wrapper",
@@ -202,6 +204,7 @@ fortran_tests = {
         "solver_settings_init",
         "stability_check_c",
         "stability_settings_init",
+        "state_layout",
     ],
 }
 

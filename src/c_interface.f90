@@ -194,6 +194,22 @@ module c_interface
         type(c_ptr) :: context
     end type
 
+    ! derived type for the stability check state
+    type, bind(C) :: stability_state_type_c
+        real(c_rp) :: min_eigval, residual_rms
+        integer(c_ip) :: iteration, n_hess_x
+    end type
+
+    ! derived type for the solver state
+    type, bind(C) :: solver_state_type_c
+        logical(c_bool) :: max_precision_reached
+        real(c_rp) :: func, grad_rms, trust_radius, relative_residual, level_shift, &
+                      step_size
+        integer(c_ip) :: macro_iteration, micro_iteration, jacobi_davidson_iteration, &
+                         n_update_orbs, n_obj_func, n_hess_x
+        type(stability_state_type_c) :: stability_state
+    end type
+
     procedure(standard_solver), pointer :: solver => standard_solver
     procedure(standard_stability_check), pointer :: stability_check => &
         standard_stability_check
@@ -225,12 +241,15 @@ module c_interface
         module procedure assign_stability_f_c
         module procedure assign_solver_c_f
         module procedure assign_stability_c_f
+        module procedure assign_solver_state_c_f
+        module procedure assign_stability_state_c_f
     end interface
 
 contains
 
     function solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
-                              settings_c) result(error_c) bind(C, name="solver")
+                              settings_c, state_c_ptr) result(error_c) &
+        bind(C, name="solver")
         !
         ! this function exposes a Fortran-implemented solver subroutine to C
         !
@@ -241,8 +260,10 @@ contains
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
         type(solver_settings_type_c), intent(inout) :: settings_c
+        type(c_ptr), intent(in), value :: state_c_ptr
         integer(c_ip) :: error_c
 
+        type(solver_state_type_c), pointer :: state_c
         procedure(update_orbs_f_wrapper), pointer :: update_orbs
         procedure(obj_func_f_wrapper), pointer :: obj_func
         integer(ip) :: n_param, error
@@ -315,14 +336,20 @@ contains
         settings_c%stability_settings%n_hess_x = &
             int(state%stability_state%n_hess_x, kind=c_ip)
 
+        ! copy the state into the host's record if one is given, also after an error
+        if (c_associated(state_c_ptr)) then
+            call c_f_pointer(cptr=state_c_ptr, fptr=state_c)
+            state_c = state
+        end if
+
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
 
     end function solver_c_wrapper
 
-    function stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, stable_c, &
-                                       settings_c, kappa_c_ptr, min_eigval_c_ptr) &
-        result(error_c) bind(C, name="stability_check")
+    function stability_check_c_wrapper( &
+        h_diag_c, hess_x_c_funptr, n_param_c, stable_c, settings_c, state_c_ptr, &
+        kappa_c_ptr, min_eigval_c_ptr) result(error_c) bind(C, name="stability_check")
         !
         ! this function exposes a Fortran-implemented stability check subroutine to C
         !
@@ -334,9 +361,10 @@ contains
         type(c_funptr), intent(in), value :: hess_x_c_funptr
         logical(c_bool), intent(out) :: stable_c
         type(stability_settings_type_c), intent(inout) :: settings_c
-        type(c_ptr), intent(in), value :: kappa_c_ptr
-        type(c_ptr), intent(in), value :: min_eigval_c_ptr
+        type(c_ptr), intent(in), value :: state_c_ptr, kappa_c_ptr, min_eigval_c_ptr
         integer(c_ip) :: error_c
+
+        type(stability_state_type_c), pointer :: state_c
 
         real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:), min_eigval_ptr
         real(c_rp), pointer :: kappa_ptr_c(:), min_eigval_ptr_c
@@ -401,6 +429,12 @@ contains
 
         ! write the output field into the C settings object from the state
         settings_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
+
+        ! copy the state into the host's record if one is given, also after an error
+        if (c_associated(state_c_ptr)) then
+            call c_f_pointer(cptr=state_c_ptr, fptr=state_c)
+            state_c = state
+        end if
 
         ! convert return arguments to C kind
         if (rp /= c_rp) then
@@ -1241,6 +1275,60 @@ contains
         end if
 
     end subroutine assign_stability_c_f
+
+    subroutine assign_solver_state_c_f(state_c, state)
+        !
+        ! this subroutine converts a solver state from Fortran to C
+        !
+        use opentrustregion, only: solver_state_type
+
+        type(solver_state_type_c), intent(out) :: state_c
+        type(solver_state_type), intent(in) :: state
+
+        ! convert logicals
+        state_c%max_precision_reached = &
+            logical(state%max_precision_reached, kind=c_bool)
+
+        ! convert reals
+        state_c%func = real(state%func, kind=c_rp)
+        state_c%grad_rms = real(state%grad_rms, kind=c_rp)
+        state_c%trust_radius = real(state%trust_radius, kind=c_rp)
+        state_c%relative_residual = real(state%relative_residual, kind=c_rp)
+        state_c%level_shift = real(state%level_shift, kind=c_rp)
+        state_c%step_size = real(state%step_size, kind=c_rp)
+
+        ! convert integers
+        state_c%macro_iteration = int(state%macro_iteration, kind=c_ip)
+        state_c%micro_iteration = int(state%micro_iteration, kind=c_ip)
+        state_c%jacobi_davidson_iteration = &
+            int(state%jacobi_davidson_iteration, kind=c_ip)
+        state_c%n_update_orbs = int(state%n_update_orbs, kind=c_ip)
+        state_c%n_obj_func = int(state%n_obj_func, kind=c_ip)
+        state_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
+
+        ! convert objects
+        state_c%stability_state = state%stability_state
+
+    end subroutine assign_solver_state_c_f
+
+    subroutine assign_stability_state_c_f(state_c, state)
+        !
+        ! this subroutine converts a stability check state from Fortran to C
+        !
+        use opentrustregion, only: stability_state_type
+
+        type(stability_state_type_c), intent(out) :: state_c
+        type(stability_state_type), intent(in) :: state
+
+        ! convert reals
+        state_c%min_eigval = real(state%min_eigval, kind=c_rp)
+        state_c%residual_rms = real(state%residual_rms, kind=c_rp)
+
+        ! convert integers
+        state_c%iteration = int(state%iteration, kind=c_ip)
+        state_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
+
+    end subroutine assign_stability_state_c_f
 
     function character_from_c(char_c) result(char_f)
         !

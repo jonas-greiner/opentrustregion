@@ -7,10 +7,10 @@
 /* Pure-C integration tests for the public C interface declared in opentrustregion.h
  *
  * The Fortran-side c_interface_unit_tests cover the bind(C) wrappers but never compile
- * against the C header itself. These tests do, and test_settings_layout checks that
- * the settings structs have the size of the bind(C) settings types and that every
- * settings field is read back under its own name, so any drift between the bind(C)
- * settings types (Fortran) and the settings structs (C) is caught here. */
+ * against the C header itself. These tests do, and test_settings_layout and
+ * test_state_layout check that the settings and state structs have the size of the
+ * bind(C) types and that every field is read back under its own name, so any drift
+ * between the bind(C) types (Fortran) and the structs (C) is caught here. */
 
 #include <math.h>
 #include <stdio.h>
@@ -318,8 +318,8 @@ static c_int conv_check_nested(c_bool *converged, void *context) {
     for (int i = 0; i < N_PARAM; i++)
       h_diag[i] = ctx->hess[i][i];
     ctx->in_nested = 1;
-    ctx->nested_check_error =
-        stability_check(h_diag, inner_hess_x, N_PARAM, &stable, &inner, NULL, NULL);
+    ctx->nested_check_error = stability_check(h_diag, inner_hess_x, N_PARAM, &stable,
+                                              &inner, NULL, NULL, NULL);
     ctx->in_nested = 0;
   }
   return 0;
@@ -367,6 +367,18 @@ bool is_default_solver_settings(const solver_settings_type *settings);
 bool is_default_stability_settings(const stability_settings_type *settings);
 
 /* ------------------------------------------------------------------
+ * Reference states provided by test_reference.f90 in the same way: the reference
+ * value of a field by its name, prefixed by "stability_state." for the nested state, a
+ * C state filled with these values field by field, and the sizes of the bind(C) state
+ * types
+ * ------------------------------------------------------------------ */
+
+c_real reference_state_field(const char *name);
+void get_reference_solver_state_values(solver_state_type *state);
+size_t solver_state_size(void);
+size_t stability_state_size(void);
+
+/* ------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------ */
 
@@ -384,6 +396,14 @@ static bool check_field(c_real value, const char *name) {
   reference_field(name, &ref_value, ref_keyword);
   if (value != ref_value) {
     fprintf(stderr, "test_settings_layout failed: Field %s misplaced.\n", name);
+    return false;
+  }
+  return true;
+}
+
+static bool check_state_field(c_real value, const char *name) {
+  if (value != reference_state_field(name)) {
+    fprintf(stderr, "test_state_layout failed: Field %s misplaced.\n", name);
     return false;
   }
   return true;
@@ -515,6 +535,52 @@ bool test_settings_layout(void) {
   return ok;
 }
 
+bool test_state_layout(void) {
+  bool ok = true;
+
+  /* check that the state structs have the size of the bind(C) state types, so that a
+   * field missing from either is detected, which the field checks below would not
+   * read, and stop otherwise, since filling a smaller state would write past its end */
+  if (sizeof(solver_state_type) != solver_state_size()) {
+    fprintf(stderr, "test_state_layout failed: Size of solver state differs from the "
+                    "library's.\n");
+    ok = false;
+  }
+  if (sizeof(stability_state_type) != stability_state_size()) {
+    fprintf(stderr, "test_state_layout failed: Size of stability check state differs "
+                    "from the library's.\n");
+    ok = false;
+  }
+  if (!ok)
+    return false;
+
+  /* check that every field is read back under its own name */
+  solver_state_type s = {0};
+  get_reference_solver_state_values(&s);
+  ok &= check_state_field(s.max_precision_reached, "max_precision_reached");
+  ok &= check_state_field(s.func, "func");
+  ok &= check_state_field(s.grad_rms, "grad_rms");
+  ok &= check_state_field(s.trust_radius, "trust_radius");
+  ok &= check_state_field(s.relative_residual, "relative_residual");
+  ok &= check_state_field(s.level_shift, "level_shift");
+  ok &= check_state_field(s.step_size, "step_size");
+  ok &= check_state_field(s.macro_iteration, "macro_iteration");
+  ok &= check_state_field(s.micro_iteration, "micro_iteration");
+  ok &= check_state_field(s.jacobi_davidson_iteration, "jacobi_davidson_iteration");
+  ok &= check_state_field(s.n_update_orbs, "n_update_orbs");
+  ok &= check_state_field(s.n_obj_func, "n_obj_func");
+  ok &= check_state_field(s.n_hess_x, "n_hess_x");
+
+  /* the nested state, which also describes a standalone stability check state */
+  stability_state_type ss = s.stability_state;
+  ok &= check_state_field(ss.min_eigval, "stability_state.min_eigval");
+  ok &= check_state_field(ss.residual_rms, "stability_state.residual_rms");
+  ok &= check_state_field(ss.iteration, "stability_state.iteration");
+  ok &= check_state_field(ss.n_hess_x, "stability_state.n_hess_x");
+
+  return ok;
+}
+
 bool test_solver_settings_init(void) {
   bool ok = true;
 
@@ -578,10 +644,12 @@ bool test_solver_c(void) {
   logger_without_context = 0;
 
   /* the maximum precision flag starts opposite to the one the converging solve
-   * returns, so that its write-back is detected */
+   * returns, so that its write-back is detected, in the settings and the state */
   settings.max_precision_reached = true;
+  solver_state_type state = {0};
+  state.max_precision_reached = true;
 
-  c_int error = solver(update_orbs, obj_func, N_PARAM, &settings);
+  c_int error = solver(update_orbs, obj_func, N_PARAM, &settings, &state);
   if (error != 0) {
     fprintf(stderr, "test_solver_c failed: Produced error.\n");
     ok = false;
@@ -621,6 +689,13 @@ bool test_solver_c(void) {
   if (settings.stability_settings.n_hess_x <= 0) {
     fprintf(stderr, "test_solver_c failed: Hessian linear transformation counter of "
                     "the internal stability check was not populated.\n");
+    ok = false;
+  }
+  if (state.max_precision_reached || state.n_update_orbs != settings.n_update_orbs ||
+      state.n_hess_x != settings.n_hess_x ||
+      state.stability_state.n_hess_x != settings.stability_settings.n_hess_x ||
+      state.n_obj_func <= 0) {
+    fprintf(stderr, "test_solver_c failed: State was not returned.\n");
     ok = false;
   }
   if (!ctx.stability_precond_called) {
@@ -708,7 +783,8 @@ bool test_stability_check_c(void) {
   c_real direction[N_PARAM];
   c_real min_eigval = -1.0;
   c_bool stable = false;
-  c_int error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings,
+  stability_state_type state = {0};
+  c_int error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, &state,
                                 direction, &min_eigval);
   if (error != 0) {
     fprintf(stderr, "test_stability_check_c failed: Produced error.\n");
@@ -756,6 +832,11 @@ bool test_stability_check_c(void) {
                     "positive lowest eigenvalue for minimum.\n");
     ok = false;
   }
+  if (state.iteration <= 0 || state.n_hess_x != settings.n_hess_x ||
+      state.min_eigval != min_eigval) {
+    fprintf(stderr, "test_stability_check_c failed: State was not returned.\n");
+    ok = false;
+  }
 
   /* at a saddle, expect unstable */
   hartmann_hess(saddle_point, ctx.hess);
@@ -763,8 +844,8 @@ bool test_stability_check_c(void) {
     h_diag[i] = ctx.hess[i][i];
 
   stable = true;
-  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, direction,
-                          &min_eigval);
+  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL,
+                          direction, &min_eigval);
   if (error != 0) {
     fprintf(stderr, "test_stability_check_c failed: Produced error near saddle.\n");
     ok = false;
@@ -804,7 +885,8 @@ bool test_stability_check_c(void) {
    * transformation */
   settings.get_extra_trial_vectors = NULL;
   stable = true;
-  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL, NULL);
+  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL, NULL,
+                          NULL);
   if (error != 0) {
     fprintf(stderr, "test_stability_check_c failed: Produced error when not passing "
                     "direction.\n");
