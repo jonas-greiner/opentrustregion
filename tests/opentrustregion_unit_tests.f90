@@ -8062,12 +8062,13 @@ contains
                                    default_ellipsoidal_trust_radius
 
         type(solver_settings_type) :: settings
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_init_defaults = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! check that an unset trust region shape resolves to spherical and the
         ! starting trust radius resolves to the spherical default for a
@@ -8124,6 +8125,43 @@ contains
         if (abs(settings%start_trust_radius - 0.7_rp) > tol) then
             write(stderr, *) "test_init_defaults failed: Explicitly set starting "// &
                 "trust radius was overwritten."
+            test_init_defaults = .false.
+        end if
+
+        ! check that a subsystem solver given in mixed case is converted to lowercase
+        ! before the unset trust region shape is resolved
+        settings%subsystem_solver = "Davidson_LS"
+        settings%trust_region_shape = "none"
+        settings%start_trust_radius = 0.0_rp
+        call init_defaults(settings)
+        if (settings%subsystem_solver /= "davidson_ls") then
+            write(stderr, *) "test_init_defaults failed: Did not convert subsystem "// &
+                "solver to lowercase."
+            test_init_defaults = .false.
+        end if
+        if (settings%trust_region_shape /= "spherical") then
+            write(stderr, *) "test_init_defaults failed: Did not resolve unset "// &
+                "trust region shape to spherical for Davidson-based subsystem "// &
+                "solver given in mixed case."
+            test_init_defaults = .false.
+        end if
+
+        ! check that a trust region shape given in mixed case is converted to lowercase
+        ! before the unset starting trust radius is resolved
+        settings%subsystem_solver = "tcg"
+        settings%trust_region_shape = "Spherical"
+        settings%start_trust_radius = 0.0_rp
+        call init_defaults(settings)
+        if (settings%trust_region_shape /= "spherical") then
+            write(stderr, *) "test_init_defaults failed: Did not convert trust "// &
+                "region shape to lowercase."
+            test_init_defaults = .false.
+        end if
+        if (abs(settings%start_trust_radius - default_spherical_trust_radius) > tol) &
+            then
+            write(stderr, *) "test_init_defaults failed: Did not resolve unset "// &
+                "starting trust radius to spherical default for spherical trust "// &
+                "region shape given in mixed case."
             test_init_defaults = .false.
         end if
 

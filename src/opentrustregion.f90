@@ -3749,12 +3749,17 @@ contains
 
     subroutine init_defaults(settings)
         !
-        ! this subroutine defaults that depend on other settings: the Davidson-based
-        ! solvers only support a spherical trust region, whereas TCG and GLTR use the
-        ! preconditioner metric to define an ellipsoidal one; the starting trust radius
-        ! default depends on this resolved shape
+        ! this subroutine converts the string settings to lowercase and resolves the
+        ! defaults that depend on other settings: the Davidson-based solvers only
+        ! support a spherical trust region, whereas TCG and GLTR use the preconditioner
+        ! metric to define an ellipsoidal one; the starting trust radius default
+        ! depends on this resolved shape
         !
         type(solver_settings_type), intent(inout) :: settings
+
+        ! convert strings to lowercase
+        settings%subsystem_solver = string_to_lowercase(settings%subsystem_solver)
+        settings%trust_region_shape = string_to_lowercase(settings%trust_region_shape)
 
         ! resolve trust region shape
         if (settings%trust_region_shape == "none") then
@@ -3806,10 +3811,6 @@ contains
             error = 1
             return
         end if
-
-        ! convert strings to lowercase
-        settings%subsystem_solver = string_to_lowercase(settings%subsystem_solver)
-        settings%trust_region_shape = string_to_lowercase(settings%trust_region_shape)
 
         ! check that number of random trial vectors is below number of parameters
         if ((string_in("davidson", settings%subsystem_solver)) .and. &
