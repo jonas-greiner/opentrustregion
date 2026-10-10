@@ -6408,8 +6408,8 @@ contains
             trial_space(i, i) = 1.0_rp
         end do
         call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., n_block, 200_ip, .false., eigvals, &
-                            eigvecs, converged, settings, error, res_tol=res_tol)
+                            trial_space, .true., n_block, 200_ip, eigvals, eigvecs, &
+                            converged, settings, error, res_tol=res_tol)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error for block "// &
                 "of eigenpairs."
@@ -6450,7 +6450,7 @@ contains
         trial_space = 0.0_rp
         trial_space(1, 1) = 1.0_rp
         call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., 1_ip, 200_ip, .false., eigvals(:1), &
+                            trial_space, .true., 1_ip, 200_ip, eigvals(:1), &
                             eigvecs(:, :1), converged, settings, error)
         if (abs(recorded_mu - stability_thresh) > tol) then
             write(stderr, *) "test_block_davidson failed: Preconditioner not "// &
@@ -6514,8 +6514,8 @@ contains
             trial_space(i, i) = 1.0_rp
         end do
         call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .false., n_block, 200_ip, .false., eigvals, &
-                            eigvecs, converged, settings, error, res_tol=res_tol)
+                            trial_space, .false., n_block, 200_ip, eigvals, eigvecs, &
+                            converged, settings, error, res_tol=res_tol)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error for "// &
                 "non-symmetric block of eigenpairs."
@@ -6565,7 +6565,7 @@ contains
         ! convergence, since the residual is far from the tight tolerance and the
         ! eigenvalue is not consulted on its own
         call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., 1_ip, 1_ip, .false., eigvals(:1), &
+                            trial_space, .true., 1_ip, 1_ip, eigvals(:1), &
                             eigvecs(:, :1), converged, settings, error)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error when not "// &
@@ -6589,7 +6589,7 @@ contains
         trial_space = 0.0_rp
         trial_space(1, 1) = 1.0_rp
         call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., 1_ip, 1_ip, .false., eigvals(:1), &
+                            trial_space, .true., 1_ip, 1_ip, eigvals(:1), &
                             eigvecs(:, :1), converged, settings, error)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error when "// &
@@ -6605,6 +6605,36 @@ contains
         if (abs(eigvals(1) + 1.0_rp) > tol) then
             write(stderr, *) "test_block_davidson failed: Incorrect Ritz value "// &
                 "when stopping at instability."
+            test_block_davidson = .false.
+        end if
+        deallocate(trial_space)
+
+        ! check that a preconditioner which only returns the vector already spanning
+        ! the trial space leaves nothing to expand it by, which ends the iterations
+        ! unconverged without an error and without adding the linearly dependent vector
+        call legacy_setup_settings(settings)
+        settings%conv_tol = 1e-8_rp
+        settings%stop_on_instability = .false.
+        settings%precond => mock_precond_first_unit_vector
+        allocate(trial_space(n_param, 1))
+        trial_space = 0.0_rp
+        trial_space(1, 1) = 1.0_rp
+        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
+                            trial_space, .true., 1_ip, 200_ip, eigvals(:1), &
+                            eigvecs(:, :1), converged, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_block_davidson failed: Produced error for "// &
+                "linearly dependent trial vector."
+            test_block_davidson = .false.
+        end if
+        if (converged) then
+            write(stderr, *) "test_block_davidson failed: Converged although the "// &
+                "trial space cannot be expanded."
+            test_block_davidson = .false.
+        end if
+        if (size(trial_space, 2) /= 1) then
+            write(stderr, *) "test_block_davidson failed: Expanded trial space by "// &
+                "linearly dependent trial vector."
             test_block_davidson = .false.
         end if
         deallocate(trial_space)
@@ -6730,13 +6760,21 @@ contains
         settings%approx_hess_x => mock_approx_hess_x
 
         ! generate trial space and check size, whether leading vectors are the lowest
-        ! eigenvectors of the approximate Hessian and orthonormality
+        ! eigenvectors of the approximate Hessian and orthonormality, and that the
+        ! approximate Hessian linear transformations are not counted, so that the
+        ! counter set before comes back unchanged
+        settings%n_hess_x = 7
         call get_stability_trial_space(h_diag, red_space_basis, settings, error)
         if (error /= 0) then
             write(stderr, *) "test_get_stability_trial_space failed: Produced "// &
                 "error with approximate Hessian linear transformation."
             test_get_stability_trial_space = .false.
             return
+        end if
+        if (settings%n_hess_x /= 7) then
+            write(stderr, *) "test_get_stability_trial_space failed: Counted "// &
+                "approximate Hessian linear transformations."
+            test_get_stability_trial_space = .false.
         end if
         if (size(red_space_basis, 2) /= &
             settings%n_extra_trial_vectors + settings%n_random_trial_vectors) then

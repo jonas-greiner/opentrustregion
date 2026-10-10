@@ -618,8 +618,8 @@ contains
         ! determine the lowest eigenpair of the Hessian
         allocate(eigvals(1), eigvecs(n_param, 1))
         call block_davidson(hess_x_funptr, h_diag, red_space_basis, &
-                            settings%hess_symm, 1_ip, settings%n_iter, .true., &
-                            eigvals, eigvecs, stability_converged, settings, error)
+                            settings%hess_symm, 1_ip, settings%n_iter, eigvals, &
+                            eigvecs, stability_converged, settings, error)
         call add_error_origin(error, error_stability_check, settings)
         if (error /= 0) return
         eigval = eigvals(1)
@@ -1874,8 +1874,8 @@ contains
     end subroutine generate_random_trial_vectors
 
     subroutine block_davidson(hess_x_funptr, h_diag, red_space_basis, symm, n_block, &
-                              max_iter, count_hess_x, eigvals, eigvecs, converged, &
-                              settings, error, res_tol)
+                              max_iter, eigvals, eigvecs, converged, settings, error, &
+                              res_tol)
         !
         ! this subroutine determines the lowest eigenpairs of a linear transformation
         ! with a block Davidson procedure
@@ -1883,7 +1883,7 @@ contains
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(in) :: h_diag(:)
         real(rp), allocatable, intent(inout) :: red_space_basis(:, :)
-        logical, intent(in) :: symm, count_hess_x
+        logical, intent(in) :: symm
         integer(ip), intent(in) :: n_block, max_iter
         real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
         logical, intent(out) :: converged
@@ -1891,13 +1891,13 @@ contains
         integer(ip), intent(out) :: error
         real(rp), intent(in), optional :: res_tol
 
-        integer(ip) :: n_param, n_trial, n_target, n_added, n_unconverged, iter, i
+        integer(ip) :: n_param, n_trial, n_target, n_added, n_unconverged, iter, i, &
+                       jacobi_davidson_iter
         real(rp), allocatable :: h_basis(:, :), red_space_hess(:, :), red_eigvals(:), &
                                  red_eigvecs(:, :), solution(:, :), h_solution(:, :), &
-                                 residual(:, :), basis_vec(:), h_basis_vec(:)
-        real(rp) :: minres_tol
+                                 residual(:, :)
         logical :: pair_converged
-        real(rp), external :: dnrm2, ddot
+        real(rp), external :: dnrm2
         external :: dgemm
 
         ! initialize error flag
@@ -1912,15 +1912,10 @@ contains
         do i = 1, n_trial
             call hess_x_funptr(red_space_basis(:, i), h_basis(:, i), error, &
                                settings%context)
-
-            ! increment number of Hessian linear transformations, which is skipped for
-            ! transformations that are cheap relative to the exact Hessian
-            if (count_hess_x) settings%n_hess_x = settings%n_hess_x + 1
+            settings%n_hess_x = settings%n_hess_x + 1
             call add_error_origin(error, error_hess_x, settings)
             if (error /= 0) return
         end do
-
-        allocate(basis_vec(n_param), h_basis_vec(n_param))
 
         ! loop over iterations
         converged = .false.
@@ -1992,72 +1987,37 @@ contains
                     if (dnrm2(n_param, residual(:, i), 1_ip) < res_tol) cycle
                 end if
 
+                ! solve the Jacobi-Davidson correction equations for a single tracked
+                ! eigenpair once the Jacobi-Davidson method is switched on and
+                ! precondition the residual otherwise
                 if (.not. present(res_tol) .and. n_target == 1 .and. &
                     settings%diag_solver == "jacobi-davidson" .and. &
                     iter > settings%jacobi_davidson_start) then
-                    ! solve Jacobi-Davidson correction equations
-                    minres_tol = 3.0_rp**(-(iter - settings%jacobi_davidson_start - 1))
-                    call minres(-residual(:, i), hess_x_funptr, solution(:, i), &
-                                red_eigvals(i), minres_tol, basis_vec, h_basis_vec, &
-                                settings, error)
-                    call add_error_origin(error, error_stability_check, settings)
-                    if (error /= 0) return
-
-                    ! orthonormalize to current space to get new basis vector
-                    call gram_schmidt(basis_vec, red_space_basis, settings, error, &
-                                      lin_trans_vector=h_basis_vec, &
-                                      lin_trans_space=h_basis)
-                    if (error == error_gram_schmidt_lin_dep) call settings%log( &
-                        "Jacobi-Davidson correction vector is linearly dependent "// &
-                        "on the trial space.", verbosity_error, .true.)
-                    call add_error_origin(error, error_stability_check, settings)
-                    if (error /= 0) return
-
-                    ! check whether the returned linear transformation still
-                    ! respects Hessian symmetry, which can not be the case due to
-                    ! numerical noise accumulation
-                    if (abs(ddot(n_param, red_space_basis(:, n_trial), 1_ip, &
-                                 h_basis_vec, 1_ip) - &
-                            ddot(n_param, basis_vec, 1_ip, h_basis(:, n_trial), &
-                                 1_ip)) > hess_symm_thres) then
-                        call hess_x_funptr(basis_vec, h_basis_vec, error, &
-                                           settings%context)
-                        if (count_hess_x) settings%n_hess_x = settings%n_hess_x + 1
-                        call add_error_origin(error, error_hess_x, settings)
-                        if (error /= 0) return
-                    end if
+                    jacobi_davidson_iter = iter - settings%jacobi_davidson_start
                 else
-                    ! precondition residual, level-shifted to the stability threshold:
-                    ! without a shift, a preconditioner which inverts an approximate
-                    ! Hessian amplifies the directions in which that Hessian is nearly
-                    ! singular, such as a rotation that leaves the energy unchanged at
-                    ! a symmetry-broken point, so that the trial space can converge to
-                    ! the vanishing eigenvalue of such a direction before reaching a
-                    ! negative one; the shift bounds this amplification by the
-                    ! curvature the check has to resolve anyway
-                    call level_shifted_diag_precond(residual(:, i), stability_thresh, &
-                                                    h_diag, basis_vec, settings, error)
-                    if (error /= 0) return
-
-                    ! orthonormalize to current space to get new basis vector
-                    call gram_schmidt(basis_vec, red_space_basis, settings, error)
-                    if (error == error_gram_schmidt_lin_dep) then
-                        error = 0
-                        cycle
-                    end if
-                    call add_error_origin(error, error_stability_check, settings)
-                    if (error /= 0) return
-
-                    ! add linear transformation of new basis vector
-                    call hess_x_funptr(basis_vec, h_basis_vec, error, settings%context)
-                    if (count_hess_x) settings%n_hess_x = settings%n_hess_x + 1
-                    call add_error_origin(error, error_hess_x, settings)
-                    if (error /= 0) return
+                    jacobi_davidson_iter = 0
                 end if
 
-                ! add new trial vector and its linear transformation to the space
-                call add_column(red_space_basis, basis_vec)
-                call add_column(h_basis, h_basis_vec)
+                ! add the new trial vector and its linear transformation to the space,
+                ! skipping a vector which is linearly dependent on it, with the
+                ! preconditioner level-shifted to the stability threshold: without a
+                ! shift, a preconditioner which inverts an approximate Hessian
+                ! amplifies the directions in which that Hessian is nearly singular,
+                ! such as a rotation that leaves the energy unchanged at a
+                ! symmetry-broken point, so that the trial space can converge to the
+                ! vanishing eigenvalue of such a direction before reaching a negative
+                ! one; the shift bounds this amplification by the curvature the check
+                ! has to resolve anyway
+                call add_trial_vector(residual(:, i), stability_thresh, h_diag, &
+                                      jacobi_davidson_iter, solution(:, i), &
+                                      red_eigvals(i), hess_x_funptr, red_space_basis, &
+                                      h_basis, settings, error)
+                if (error == error_gram_schmidt_lin_dep) then
+                    error = 0
+                    cycle
+                end if
+                call add_error_origin(error, error_stability_check, settings)
+                if (error /= 0) return
                 n_trial = n_trial + 1
                 n_added = n_added + 1
             end do
@@ -2068,7 +2028,7 @@ contains
             if (n_added == 0) exit
         end do
 
-        deallocate(h_basis, basis_vec, h_basis_vec)
+        deallocate(h_basis)
 
     end subroutine block_davidson
 
@@ -2084,7 +2044,7 @@ contains
         real(rp), parameter :: approx_hess_trial_conv = 1e-5_rp
         integer(ip), parameter :: approx_hess_trial_extra = 3, &
                                   approx_hess_trial_max_iter = 100
-        integer(ip) :: n_param, n_total, n_extra
+        integer(ip) :: n_param, n_total, n_extra, n_hess_x
         real(rp), allocatable :: start_space(:, :), eigvals(:), leading_block(:, :)
         logical :: converged
 
@@ -2118,10 +2078,15 @@ contains
                     start_space, size(start_space, 2, kind=ip), settings, error)
                 call add_error_origin(error, error_stability_check, settings)
                 if (error /= 0) return
+
+                ! the approximate Hessian linear transformations are cheap relative to
+                ! the exact ones and are therefore not counted
+                n_hess_x = settings%n_hess_x
                 call block_davidson(settings%approx_hess_x, h_diag, start_space, &
                                     .false., n_extra, approx_hess_trial_max_iter, &
-                                    .false., eigvals, leading_block, converged, &
-                                    settings, error, res_tol=approx_hess_trial_conv)
+                                    eigvals, leading_block, converged, settings, &
+                                    error, res_tol=approx_hess_trial_conv)
+                settings%n_hess_x = n_hess_x
                 call add_error_origin(error, error_stability_check, settings)
                 if (error /= 0) return
 
