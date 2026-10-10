@@ -345,7 +345,7 @@ contains
         procedure(obj_func_type), intent(in), pointer :: obj_func
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
-        type(solver_settings_type), intent(in) :: settings
+        type(solver_settings_type), intent(in), optional :: settings
         type(solver_state_type), intent(out), target, optional :: state
 
         real(rp) :: func, grad_norm, grad_rms, mu, n_kappa, kappa_norm, lambda
@@ -374,10 +374,15 @@ contains
             current_state => local_state
         end if
 
-        ! work on a copy of the settings, which leaves the caller's settings as they
-        ! are while the copy is initialized if they were not and completed by the
-        ! defaults that depend on other settings
-        local_settings = settings
+        ! work on a copy of the settings, or of the default settings if none are
+        ! passed, which leaves the caller's settings as they are while the copy is
+        ! initialized if they were not and completed by the defaults that depend on
+        ! other settings
+        if (present(settings)) then
+            local_settings = settings
+        else
+            local_settings = default_solver_settings
+        end if
 
         ! initialize settings, settings that were not initialized are replaced by the
         ! default settings, which would silence the warning, so it is printed
@@ -638,7 +643,7 @@ contains
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable
         integer(ip), intent(out) :: error
-        type(stability_settings_type), intent(in) :: settings
+        type(stability_settings_type), intent(in), optional :: settings
         type(stability_state_type), intent(out), target, optional :: state
         real(rp), intent(out), optional :: kappa(:), min_eigval
 
@@ -666,9 +671,14 @@ contains
             current_state => local_state
         end if
 
-        ! work on a copy of the settings, which leaves the caller's settings as they are
-        ! while the copy is initialized if they were not and completed by the defaults
-        local_settings = settings
+        ! work on a copy of the settings, or of the default settings if none are
+        ! passed, which leaves the caller's settings as they are while the copy is
+        ! initialized if they were not and completed by the defaults
+        if (present(settings)) then
+            local_settings = settings
+        else
+            local_settings = default_stability_settings
+        end if
 
         ! initialize settings, settings that were not initialized are replaced by the
         ! default settings, which would silence the warning, so it is printed

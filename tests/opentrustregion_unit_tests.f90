@@ -2382,6 +2382,7 @@ contains
         type(host_context_type), target :: stability_host_context
         type(double_well_state_context_type), target :: state_context
         type(solver_state_type), target :: state
+        type(solver_state_type) :: explicit_state
         integer(ip) :: n_updates, i_update
 
         ! assume tests pass
@@ -2424,6 +2425,26 @@ contains
         if (state%max_precision_reached) then
             write(stderr, *) "test_solver failed: Flagged that maximum precision "// &
                 "was reached when convergence tolerance was met."
+            test_solver = .false.
+        end if
+
+        ! run solver again from the same point without settings, so that it uses the
+        ! default settings the first run was given, with the same seed, and has to take
+        ! exactly the same steps
+        explicit_state = state
+        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, state=state)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error without settings."
+            test_solver = .false.
+        end if
+        if (state%n_update_orbs /= explicit_state%n_update_orbs .or. &
+            state%n_hess_x /= explicit_state%n_hess_x .or. &
+            abs(state%func - explicit_state%func) > 0.0_rp .or. &
+            abs(state%grad_rms - explicit_state%grad_rms) > 0.0_rp .or. &
+            abs(state%step_size - explicit_state%step_size) > 0.0_rp) then
+            write(stderr, *) "test_solver failed: Did not use the default settings "// &
+                "without settings."
             test_solver = .false.
         end if
 
@@ -2840,12 +2861,12 @@ contains
         use test_reference, only: n_extra_trial_vectors
 
         real(rp) :: vars(n_param), h_diag(n_param), direction(n_param), min_eigval, &
-                    eigval_vec(n_param)
+                    eigval_vec(n_param), explicit_min_eigval
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable
         integer(ip) :: error, i
         type(stability_settings_type) :: settings
-        type(stability_state_type) :: state
+        type(stability_state_type) :: state, explicit_state
 
         ! assume tests pass
         test_stability_check = .true.
@@ -2890,6 +2911,26 @@ contains
         if (dot_product(direction, eigval_vec) - min_eigval > tol) then
             write(stderr, *) "test_stability_check failed: Stability check does "// &
                 "not return correct eigenvector direction for minimum."
+            test_stability_check = .false.
+        end if
+
+        ! run stability check again without settings, so that it uses the default
+        ! settings the first run was given, with the same seed, and has to reach exactly
+        ! the same eigenvalue and residual with the same Hessian linear transformations
+        explicit_state = state
+        explicit_min_eigval = min_eigval
+        call stability_check(h_diag, hess_x_funptr, stable, error, state=state, &
+                             min_eigval=min_eigval)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error without "// &
+                "settings."
+            test_stability_check = .false.
+        end if
+        if (state%n_hess_x /= explicit_state%n_hess_x .or. &
+            abs(min_eigval - explicit_min_eigval) > 0.0_rp .or. &
+            abs(state%residual_rms - explicit_state%residual_rms) > 0.0_rp) then
+            write(stderr, *) "test_stability_check failed: Did not use the default "// &
+                "settings without settings."
             test_stability_check = .false.
         end if
 
