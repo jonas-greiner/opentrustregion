@@ -7,7 +7,8 @@
 module test_reference
 
     use opentrustregion, only: rp, ip, kw_len, stderr, solver_settings_type, &
-                               stability_settings_type
+                               stability_settings_type, solver_state_type, &
+                               stability_state_type
     use c_interface, only: c_rp, c_ip
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_null_char, c_funptr, &
                                            c_null_funptr, c_f_procpointer, &
@@ -42,7 +43,7 @@ module test_reference
             get_extra_trial_vectors=null(), conv_check=null(), logger=null(), &
             hess_symm=.false., stop_on_instability=.true., initialized=.true., &
             conv_tol=5e-6_rp, n_random_trial_vectors=6, n_extra_trial_vectors=14, &
-            n_iter=60, jacobi_davidson_start=13, seed=34, verbose=2, n_hess_x=12, &
+            n_iter=60, jacobi_davidson_start=13, seed=34, verbose=2, &
             diag_solver="jacobi-davidson")
     type(solver_settings_type), parameter :: ref_solver_settings = &
         solver_settings_type( &
@@ -50,13 +51,22 @@ module test_reference
             get_extra_trial_vectors=null(), conv_check=null(), &
             stability_hess_x=null(), logger=null(), stability=.true., &
             line_search=.false., refresh_hess=.true., grad_noise=.false., &
-            hess_symm=.false., initialized=.true., max_precision_reached=.true., &
-            conv_tol=2e-3_rp, start_trust_radius=0.3_rp, global_red_factor=3e-2_rp, &
+            hess_symm=.false., initialized=.true., conv_tol=2e-3_rp, &
+            start_trust_radius=0.3_rp, global_red_factor=3e-2_rp, &
             local_red_factor=4e-3_rp, n_random_trial_vectors=5, &
             n_extra_trial_vectors=4, n_macro=300, n_micro=200, &
-            jacobi_davidson_start=10, seed=33, verbose=3, n_update_orbs=7, &
-            n_hess_x=11, subsystem_solver="tcg", trust_region_shape="spherical", &
-            stability_settings=ref_stability_settings)
+            jacobi_davidson_start=10, seed=33, verbose=3, subsystem_solver="tcg", &
+            trust_region_shape="spherical", stability_settings=ref_stability_settings)
+
+    ! reference states, whose output fields the C settings carry, with values
+    ! distinct from those of the reference settings, so that the layout tests tell
+    ! these fields apart as well, the nested state of the internal stability check of
+    ! the reference solver state is the reference stability check state
+    type(stability_state_type), parameter :: ref_stability_state = &
+        stability_state_type(n_hess_x=12)
+    type(solver_state_type), parameter :: ref_solver_state = &
+        solver_state_type(n_update_orbs=7, n_hess_x=11, max_precision_reached=.true., &
+                          stability_state=ref_stability_state)
 
     ! host context handed to the callback functions by the tests that exercise it,
     ! together with the bookkeeping those callback functions keep, so that a test can
@@ -301,7 +311,7 @@ contains
             values_out%grad_noise = ref_solver_settings%grad_noise
             values_out%hess_symm = ref_solver_settings%hess_symm
             values_out%initialized = ref_solver_settings%initialized
-            values_out%max_precision_reached = ref_solver_settings%max_precision_reached
+            values_out%max_precision_reached = ref_solver_state%max_precision_reached
         else
             values_out%stability = name == "stability"
             values_out%line_search = name == "line_search"
@@ -326,8 +336,8 @@ contains
         values_out%jacobi_davidson_start = ref_solver_settings%jacobi_davidson_start
         values_out%seed = ref_solver_settings%seed
         values_out%verbose = ref_solver_settings%verbose
-        values_out%n_update_orbs = ref_solver_settings%n_update_orbs
-        values_out%n_hess_x = ref_solver_settings%n_hess_x
+        values_out%n_update_orbs = ref_solver_state%n_update_orbs
+        values_out%n_hess_x = ref_solver_state%n_hess_x
 
         ! set keywords
         values_out%subsystem_solver = &
@@ -380,7 +390,7 @@ contains
         values_out%jacobi_davidson_start = ref_stability_settings%jacobi_davidson_start
         values_out%seed = ref_stability_settings%seed
         values_out%verbose = ref_stability_settings%verbose
-        values_out%n_hess_x = ref_stability_settings%n_hess_x
+        values_out%n_hess_x = ref_stability_state%n_hess_x
 
         ! set keyword
         values_out%diag_solver = ref_character_to_c(ref_stability_settings%diag_solver)
@@ -648,7 +658,6 @@ contains
             (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             (lhs%initialized .eqv. rhs%initialized) .and. &
-            (lhs%max_precision_reached .eqv. rhs%max_precision_reached) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
@@ -658,8 +667,6 @@ contains
             lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
-            lhs%n_update_orbs == rhs%n_update_orbs .and. &
-            lhs%n_hess_x == rhs%n_hess_x .and. &
             lhs%subsystem_solver == rhs%subsystem_solver .and. &
             lhs%trust_region_shape == rhs%trust_region_shape .and. &
             lhs%stability_settings == rhs%stability_settings
@@ -694,7 +701,7 @@ contains
             lhs%n_iter == rhs%n_iter .and. &
             lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
-            lhs%n_hess_x == rhs%n_hess_x .and. lhs%diag_solver == rhs%diag_solver
+            lhs%diag_solver == rhs%diag_solver
 
     end function equal_stability
 
@@ -727,8 +734,6 @@ contains
             (lhs_c%grad_noise .eqv. logical(rhs%grad_noise, kind=c_bool)) .and. &
             (lhs_c%hess_symm .eqv. logical(rhs%hess_symm, kind=c_bool)) .and. &
             (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
-            (lhs_c%max_precision_reached .eqv. &
-             logical(rhs%max_precision_reached, kind=c_bool)) .and. &
             abs(lhs_c%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs_c%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs_c%global_red_factor - rhs%global_red_factor) <= tol .and. &
@@ -738,8 +743,6 @@ contains
             lhs_c%n_macro == rhs%n_macro .and. lhs_c%n_micro == rhs%n_micro .and. &
             lhs_c%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs_c%seed == rhs%seed .and. lhs_c%verbose == rhs%verbose .and. &
-            lhs_c%n_update_orbs == rhs%n_update_orbs .and. &
-            lhs_c%n_hess_x == rhs%n_hess_x .and. &
             ref_character_from_c(lhs_c%subsystem_solver) == &
             trim(rhs%subsystem_solver) .and. &
             ref_character_from_c(lhs_c%trust_region_shape) == &
@@ -784,7 +787,6 @@ contains
             lhs_c%n_iter == rhs%n_iter .and. &
             lhs_c%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
             lhs_c%seed == rhs%seed .and. lhs_c%verbose == rhs%verbose .and. &
-            lhs_c%n_hess_x == rhs%n_hess_x .and. &
             ref_character_from_c(lhs_c%diag_solver) == trim(rhs%diag_solver)
 
     end function equal_stability_c

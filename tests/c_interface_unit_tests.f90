@@ -1789,9 +1789,9 @@ contains
         type(solver_settings_type_c) :: settings_c
         type(solver_settings_type) :: settings, expected_settings
         integer(ip) :: i
-        character(len=21), parameter :: logical_names(6) = &
-            [character(len=21) :: "stability", "line_search", "refresh_hess", &
-             "grad_noise", "hess_symm", "max_precision_reached"]
+        character(len=12), parameter :: logical_names(5) = &
+            [character(len=12) :: "stability", "line_search", "refresh_hess", &
+             "grad_noise", "hess_symm"]
 
         ! assume tests pass
         test_assign_solver_f_c = .true.
@@ -1832,8 +1832,6 @@ contains
             expected_settings%refresh_hess = logical_names(i) == "refresh_hess"
             expected_settings%grad_noise = logical_names(i) == "grad_noise"
             expected_settings%hess_symm = logical_names(i) == "hess_symm"
-            expected_settings%max_precision_reached = &
-                logical_names(i) == "max_precision_reached"
             expected_settings%stability_settings%hess_symm = .false.
             expected_settings%stability_settings%stop_on_instability = .false.
             settings = settings_c
@@ -1974,9 +1972,9 @@ contains
         type(solver_settings_type) :: settings
         type(solver_settings_type_c) :: settings_c
         integer(ip) :: i
-        character(len=21), parameter :: logical_names(6) = &
-            [character(len=21) :: "stability", "line_search", "refresh_hess", &
-             "grad_noise", "hess_symm", "max_precision_reached"]
+        character(len=12), parameter :: logical_names(5) = &
+            [character(len=12) :: "stability", "line_search", "refresh_hess", &
+             "grad_noise", "hess_symm"]
 
         ! assume tests pass
         test_assign_solver_c_f = .true.
@@ -2010,6 +2008,14 @@ contains
             test_assign_solver_c_f = .false.
         end if
 
+        ! check that the output fields, which the Fortran settings do not hold, start
+        ! from the default values of the state instead of keeping the reference values
+        if (settings_c%max_precision_reached .or. settings_c%n_update_orbs /= 0 .or. &
+            settings_c%n_hess_x /= 0) then
+            write(stderr, *) "test_assign_solver_c_f failed: Output fields not reset."
+            test_assign_solver_c_f = .false.
+        end if
+
         ! convert the default settings into C settings which hold the reference values
         ! and are marked as not initialized, so that a field which is not converted,
         ! including the initialized flags, keeps a value that differs from the
@@ -2036,7 +2042,6 @@ contains
             settings%refresh_hess = logical_names(i) == "refresh_hess"
             settings%grad_noise = logical_names(i) == "grad_noise"
             settings%hess_symm = logical_names(i) == "hess_symm"
-            settings%max_precision_reached = logical_names(i) == "max_precision_reached"
             settings_c = settings
             if (settings_c /= settings) then
                 write(stderr, *) "test_assign_solver_c_f failed: Settings with "// &
@@ -2088,6 +2093,13 @@ contains
         if (settings_c /= ref_stability_settings) then
             write(stderr, *) "test_assign_stability_c_f failed: Settings not "// &
                 "converted correctly."
+            test_assign_stability_c_f = .false.
+        end if
+
+        ! check that the output field, which the Fortran settings do not hold, starts
+        ! from the default value of the state instead of keeping the reference value
+        if (settings_c%n_hess_x /= 0) then
+            write(stderr, *) "test_assign_stability_c_f failed: Output field not reset."
             test_assign_stability_c_f = .false.
         end if
 
