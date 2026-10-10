@@ -939,6 +939,7 @@ contains
         real(rp), pointer :: rot_dm_oao_ptr(:, :, :)
         real(rp), allocatable, target :: u(:, :, :), rot_dm_oao_local(:, :, :)
         integer(ip) :: n_ao, n_particle, i
+        external :: dgemm
 
         ! initialize error flag
         error = 0

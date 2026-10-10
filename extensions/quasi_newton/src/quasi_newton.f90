@@ -78,13 +78,13 @@ module otr_qn
     end interface
 
     ! global variables
-    class(updating_type), pointer :: update_object
+    class(updating_type), pointer :: update_object => null()
     type(sr1_updating_type), target :: sr1_object
     type(bfgs_updating_type), target :: bfgs_object
-    procedure(update_orbs_type), pointer :: update_orbs_orig_funptr
-    procedure(hess_x_type), pointer :: hess_x_qn_funptr
-    procedure(transport_type), pointer :: transport_funptr
-    procedure(init_hess_type), pointer :: init_hess_funptr
+    procedure(update_orbs_type), pointer :: update_orbs_orig_funptr => null()
+    procedure(hess_x_type), pointer :: hess_x_qn_funptr => null()
+    procedure(transport_type), pointer :: transport_funptr => null()
+    procedure(init_hess_type), pointer :: init_hess_funptr => null()
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_type), pointer :: update_orbs_qn_ptr => update_orbs_qn
@@ -282,6 +282,9 @@ contains
         !
         class(updating_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
+
+        ! start from an empty object so that nothing of an earlier setup survives
+        call self%clear()
 
         ! allocate arrays
         allocate(self%kappa_list(n_param, self%settings%max_points), &
@@ -518,7 +521,6 @@ contains
             if (error /= 0) return
             do i = 1, bfgs_object%n_points
                 ! Weighted Top-Left: kappa_i^T * h_start * kappa_j
-                ! Using a manual loop or dot_product for weighted sum
                 compact_scal_mat(i, j) = ddot(n_param, bfgs_object%kappa_list(:, i), &
                                               1_ip, init_hess_x, 1_ip)
 

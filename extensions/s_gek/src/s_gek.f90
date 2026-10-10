@@ -58,9 +58,9 @@ module otr_s_gek
 
     ! global variables
     type(s_gek_type) :: s_gek_object
-    procedure(update_orbs_type), pointer :: update_orbs_orig_funptr
-    procedure(hess_x_type), pointer :: hess_x_s_gek_funptr
-    procedure(change_reference_type), pointer :: change_reference_funptr
+    procedure(update_orbs_type), pointer :: update_orbs_orig_funptr => null()
+    procedure(hess_x_type), pointer :: hess_x_s_gek_funptr => null()
+    procedure(change_reference_type), pointer :: change_reference_funptr => null()
 
     ! bias
     real(rp), parameter :: bias = 10.0_rp
@@ -194,6 +194,9 @@ contains
         !
         class(s_gek_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
+
+        ! start from an empty object so that nothing of an earlier setup survives
+        call self%clear()
 
         ! initialize dimensions
         self%n_points = 0
@@ -485,6 +488,7 @@ contains
         !
         class(s_gek_type), intent(inout) :: self
 
+        if (allocated(self%h_diag)) deallocate(self%h_diag)
         if (allocated(self%kappa_list)) deallocate(self%kappa_list)
         if (allocated(self%disp_list)) deallocate(self%disp_list)
         if (allocated(self%obj_func_list)) deallocate(self%obj_func_list)
@@ -517,6 +521,7 @@ contains
 
         integer(ip) :: i
         real(rp), allocatable :: actual_x(:), actual_hess_x(:)
+        real(rp), external :: ddot
         external :: dgemv
 
         ! initialize error flag
@@ -526,7 +531,8 @@ contains
         allocate(actual_x(s_gek_object%n_space), actual_hess_x(s_gek_object%n_space))
         if (s_gek_object%settings%use_subspace) then
             do i = 1, s_gek_object%n_space
-                actual_x(i) = sum(x * s_gek_object%subspace(:, i))
+                actual_x(i) = ddot(size(x, kind=ip), x, 1_ip, &
+                                   s_gek_object%subspace(:, i), 1_ip)
             end do
         else
             actual_x = x
