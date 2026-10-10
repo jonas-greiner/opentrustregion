@@ -73,13 +73,29 @@ module opentrustregion
             "eigenvector direction corresponding to negative eigenvalue.", &
         reached_saddle_point_warning_msg = &
             "Reached saddle point. This is likely due to symmetry and can be "// &
-            "avoided by increasing the number of random trial vectors. The "// &
+            "avoided by decreasing the convergence criterion. The algorithm will "// &
+            "continue by moving along eigenvector direction corresponding to "// &
+            "negative eigenvalue.", &
+        reached_saddle_point_no_grad_noise_warning_msg = &
+            "Reached saddle point. This is likely due to symmetry and can be "// &
+            "avoided by enabling the gradient perturbation grad_noise. The "// &
             "algorithm will continue by moving along eigenvector direction "// &
             "corresponding to negative eigenvalue.", &
         reached_saddle_point_stability_hess_x_warning_msg = &
             "Reached saddle point. The algorithm will continue by moving along "// &
             "eigenvector direction corresponding to negative eigenvalue.", &
         unstable_warning_msg = "Solution not stable. Lowest eigenvalue: ", &
+        bisection_imaginary_eigval_warning_msg = &
+            "Bisection cannot reach trust region due to imaginary part of lowest "// &
+            "eigenvalue. This is purely an artifact of using an asymmetric Hessian.", &
+        approx_hess_trial_vectors_warning_msg = &
+            "Approximate Hessian eigenvectors for the initial trial space did not "// &
+            "fully converge. The resulting trial vectors are still used.", &
+        vanishing_trial_vector_warning_msg = &
+            "Provided trial vector is vanishing and is being removed.", &
+        lin_dep_trial_vector_warning_msg = &
+            "Provided trial vector is linearly dependent and is being removed.", &
+        minres_max_iter_warning_msg = "MINRES: The iteration limit was reached.", &
         function_unchanged_warning_msg = "No further improvement of cost function "// &
                                          "possible. Convergence criterion is not "// &
                                          "fulfilled but calculation should be "// &
@@ -722,10 +738,13 @@ contains
         call saddle_point_step(grad, grad_rms, min_eigval, settings, kappa, kappa_norm)
         if (imacro == 1) then
             call settings%log(started_at_saddle_point_warning_msg, verbosity_warning)
-        else if (.not. associated(settings%stability_hess_x)) then
+        else if (associated(settings%stability_hess_x)) then
+            call settings%log(reached_saddle_point_stability_hess_x_warning_msg, &
+                              verbosity_warning)
+        else if (settings%grad_noise) then
             call settings%log(reached_saddle_point_warning_msg, verbosity_warning)
         else
-            call settings%log(reached_saddle_point_stability_hess_x_warning_msg, &
+            call settings%log(reached_saddle_point_no_grad_noise_warning_msg, &
                               verbosity_warning)
         end if
 
@@ -1150,10 +1169,8 @@ contains
                 ! trust radius cannot be reached because imaginary part leads to no
                 ! pole in the solution norm
                 else
-                    call settings%log("Bisection cannot reach trust region due to "// &
-                                      "imaginary part of lowest eigenvalue. This "// &
-                                      "is purely an artifact of using an "// &
-                                      "asymmetric Hessian.", verbosity_warning, .false.)
+                    call settings%log(bisection_imaginary_eigval_warning_msg, &
+                                      verbosity_warning)
                 end if
 
                 ! set final level shift to the lowest eigenvalue
@@ -2092,9 +2109,7 @@ contains
 
                 ! trial vectors remain usable even if the block did not fully converge
                 if (.not. converged) call settings%log( &
-                    "Approximate Hessian eigenvectors for the initial trial space "// &
-                    "did not fully converge. The resulting trial vectors are still "// &
-                    "used.", verbosity_warning)
+                    approx_hess_trial_vectors_warning_msg, verbosity_warning)
                 deallocate(start_space, eigvals)
             else
                 ! unit vectors along the lowest Hessian diagonal elements
@@ -2160,15 +2175,13 @@ contains
             ! it has nothing to contribute for this slot, so it is dropped before
             ! Gram-Schmidt, whose own zero-vector guard is an unconditional error
             if (dnrm2(n_param, red_space_basis(:, i), 1_ip) < numerical_zero) then
-                call settings%log("Provided trial vector is vanishing and is being "// &
-                                  "removed.", verbosity_warning, .false.)
+                call settings%log(vanishing_trial_vector_warning_msg, verbosity_warning)
                 cycle
             end if
             call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :num_valid), &
                               settings, error)
             if (error == error_gram_schmidt_lin_dep) then
-                call settings%log("Provided trial vector is linearly dependent and "// &
-                                  "is being removed.", verbosity_warning, .false.)
+                call settings%log(lin_dep_trial_vector_warning_msg, verbosity_warning)
                 error = 0
                 cycle
             end if
@@ -2655,8 +2668,7 @@ contains
                 exit
             ! check if maximum number of iterations has been reached
             else if (iteration == max_iterations) then
-                call settings%log("MINRES: The iteration limit was reached.", &
-                                  verbosity_warning)
+                call settings%log(minres_max_iter_warning_msg, verbosity_warning)
                 exit
             ! these tests ensure convergence is still achieved when r_tol
             ! approaches machine precision

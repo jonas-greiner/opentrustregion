@@ -3044,6 +3044,7 @@ contains
                                    check_stationary_point, verbosity_debug, &
                                    error_hess_x, started_at_saddle_point_warning_msg, &
                                    reached_saddle_point_warning_msg, &
+                                   reached_saddle_point_no_grad_noise_warning_msg, &
                                    reached_saddle_point_stability_hess_x_warning_msg
         use test_reference, only: arm_host_context, host_context_reached
 
@@ -3216,6 +3217,27 @@ contains
         if (index(context%log_message, " "//reached_saddle_point_warning_msg) == 0) then
             write(stderr, *) "test_check_stationary_point failed: Warning not "// &
                 "printed for reaching saddle point."
+            test_check_stationary_point = .false.
+        end if
+
+        ! check the saddle point in a later macro iteration without the gradient
+        ! perturbation and check that the warning for reaching a saddle point advises
+        ! enabling it
+        call setup_settings(settings, context)
+        context%vars = [0.0_rp, 0.0_rp]
+        settings%grad_noise = .false.
+        call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
+                                    hess_x_funptr, 2_ip, settings, stable, kappa, &
+                                    kappa_norm, error)
+        if (error /= 0) then
+            write(stderr, *) "test_check_stationary_point failed: Produced error "// &
+                "at saddle point without gradient perturbation."
+            test_check_stationary_point = .false.
+        end if
+        if (index(context%log_message, &
+                  " "//reached_saddle_point_no_grad_noise_warning_msg) == 0) then
+            write(stderr, *) "test_check_stationary_point failed: Warning not "// &
+                "printed for reaching saddle point without gradient perturbation."
             test_check_stationary_point = .false.
         end if
 
@@ -4456,7 +4478,7 @@ contains
         ! this function tests the minimum residual method subroutine
         !
         use opentrustregion, only: solver_settings_type, hess_x_type, minres, &
-                                   verbosity_warning
+                                   verbosity_warning, minres_max_iter_warning_msg
 
         type(solver_settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -4598,7 +4620,7 @@ contains
                 "limit is reached."
             test_minres = .false.
         end if
-        if (len_trim(context%log_message) == 0) then
+        if (index(context%log_message, " "//minres_max_iter_warning_msg) == 0) then
             write(stderr, *) "test_minres failed: No warning printed when "// &
                 "iteration limit is reached."
             test_minres = .false.
@@ -7957,27 +7979,32 @@ contains
         !
         ! this function tests the subroutine which orthogonalizes trial vectors
         !
-        use opentrustregion, only: stability_settings_type, orthogonalize_trial_vectors
+        use opentrustregion, only: &
+            stability_settings_type, orthogonalize_trial_vectors, &
+            vanishing_trial_vector_warning_msg, lin_dep_trial_vector_warning_msg
 
         type(stability_settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
+        real(rp) :: weights(2)
         integer(ip) :: error
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_orthogonalize_trial_vectors = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
-        ! allocate reduced space basis with 4 vectors, where the third vector is
-        ! linearly dependent and the fourth vanishes
-        allocate(red_space_basis(4, 4))
-        red_space_basis(:, 1) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-        red_space_basis(:, 2) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
-        red_space_basis(:, 3) = [1.0_rp, 1.0_rp, 0.0_rp, 0.0_rp]
-        red_space_basis(:, 4) = [0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
+        ! allocate reduced space basis with 4 random vectors, where the third vector
+        ! is linearly dependent on the first two and the fourth vanishes
+        allocate(red_space_basis(n_param, 4))
+        call random_number(red_space_basis(:, :2))
+        call random_number(weights)
+        red_space_basis(:, 3) = matmul(red_space_basis(:, :2), weights)
+        red_space_basis(:, 4) = 0.0_rp
 
-        ! orthogonalize trial vectors
+        ! orthogonalize trial vectors and check that a warning is printed for the
+        ! removal of the linearly dependent and of the vanishing vector
         call orthogonalize_trial_vectors(red_space_basis, settings, error)
         if (error /= 0) then
             write(stderr, *) "test_orthogonalize_trial_vectors failed: Produced error."
@@ -7998,14 +8025,27 @@ contains
                 "not orthogonal."
             test_orthogonalize_trial_vectors = .false.
         end if
+        if (index(context%log_message, " "//lin_dep_trial_vector_warning_msg) == 0) then
+            write(stderr, *) "test_orthogonalize_trial_vectors failed: No warning "// &
+                "printed when removing linearly dependent vector."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (index(context%log_message, " "//vanishing_trial_vector_warning_msg) == 0) &
+            then
+            write(stderr, *) "test_orthogonalize_trial_vectors failed: No warning "// &
+                "printed when removing vanishing vector."
+            test_orthogonalize_trial_vectors = .false.
+        end if
         deallocate(red_space_basis)
 
         ! a block whose vectors all vanish leaves no vector space behind, which is a
         ! legitimate outcome for a caller that has no direction to contribute
-        allocate(red_space_basis(4, 2))
+        allocate(red_space_basis(n_param, 2))
         red_space_basis = 0.0_rp
 
-        ! orthogonalize trial vectors
+        ! orthogonalize trial vectors and check that the warning for the removal of a
+        ! vanishing vector is printed
+        context%log_message = ""
         call orthogonalize_trial_vectors(red_space_basis, settings, error)
         if (error /= 0) then
             write(stderr, *) "test_orthogonalize_trial_vectors failed: Produced "// &
@@ -8015,6 +8055,13 @@ contains
         if (size(red_space_basis, 2) /= 0) then
             write(stderr, *) "test_orthogonalize_trial_vectors failed: Block of "// &
                 "vanishing vectors did not produce an empty vector space."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (index(context%log_message, " "//vanishing_trial_vector_warning_msg) == 0) &
+            then
+            write(stderr, *) "test_orthogonalize_trial_vectors failed: No warning "// &
+                "printed when removing vanishing vectors of a block of vanishing "// &
+                "vectors."
             test_orthogonalize_trial_vectors = .false.
         end if
         deallocate(red_space_basis)
