@@ -881,7 +881,7 @@ def solver(
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
     n_param: int,
-    settings: SolverSettings,
+    settings: Optional[SolverSettings] = None,
     state: Optional[SolverState] = None,
 ):
     # collector for exceptions raised inside the callback interfaces, adopted from a
@@ -899,7 +899,8 @@ def solver(
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
-    settings.set_optional_callbacks(n_param, exception)
+    if settings is not None:
+        settings.set_optional_callbacks(n_param, exception)
 
     # define result and argument types
     lib.solver.restype = c_int
@@ -916,7 +917,7 @@ def solver(
         update_orbs_interface,
         obj_func_interface,
         n_param,
-        byref(settings.settings_c),
+        byref(settings.settings_c) if settings is not None else None,
         byref(state.state_c) if state is not None else None,
     )
 
@@ -927,7 +928,7 @@ def stability_check(
     h_diag: np.ndarray,
     hess_x: Callable[[np.ndarray, np.ndarray], None],
     n_param: int,
-    settings: StabilitySettings,
+    settings: Optional[StabilitySettings] = None,
     state: Optional[StabilityState] = None,
     kappa: Optional[np.ndarray] = None,
 ) -> Tuple[bool, float]:
@@ -941,7 +942,8 @@ def stability_check(
     # set interfaces for optional callback functions, these need to be set here since
     # the interface might need parameters that are not known when the attribute to
     # settings is set (e.g. n_param)
-    settings.set_optional_callbacks(n_param, exception)
+    if settings is not None:
+        settings.set_optional_callbacks(n_param, exception)
 
     # define result and argument types
     lib.stability_check.restype = c_int
@@ -966,7 +968,7 @@ def stability_check(
         hess_x_interface,
         n_param,
         byref(stable),
-        byref(settings.settings_c),
+        byref(settings.settings_c) if settings is not None else None,
         byref(state.state_c) if state is not None else None,
         kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
         byref(min_eigval),

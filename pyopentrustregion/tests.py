@@ -554,13 +554,28 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "function was not reported."
             )
 
+        # call solver python interface without settings, which have to be passed as
+        # none so that the library uses its default settings, the results of the mock
+        # start opposite to the expected ones
+        settings_flag = c_bool.in_dll(lib, "solver_settings_passed")
+        settings_flag.value = True
+        interface_flag.value = False
+        solver(mock_obj_func, mock_update_orbs, n_param)
+        no_settings_passed = interface_flag.value and not settings_flag.value
+        if settings_flag.value:
+            print(
+                " test_solver_py_interface failed: Settings passed although none were "
+                "given."
+            )
+
         self.assertTrue(
             interface_passed
             and state_passed
             and test_logger
             and callbacks_called
             and logger_error_reported
-            and callback_error_reported,
+            and callback_error_reported
+            and no_settings_passed,
             "test_solver_py_interface failed",
         )
         print(" test_solver_py_interface PASSED")
@@ -702,6 +717,22 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "Hessian linear transformation was not reported."
             )
 
+        # call stability check python interface without settings, which have to be
+        # passed as none so that the library uses its default settings, the results of
+        # the mock start opposite to the expected ones
+        settings_flag = c_bool.in_dll(lib, "stability_settings_passed")
+        settings_flag.value = True
+        interface_flag.value = False
+        stable_without_settings, _ = stability_check(h_diag, mock_hess_x, n_param)
+        no_settings_passed = (
+            interface_flag.value and not settings_flag.value and stable_without_settings
+        )
+        if settings_flag.value:
+            print(
+                " test_stability_check_py_interface failed: Settings passed although "
+                "none were given."
+            )
+
         self.assertTrue(
             interface_passed
             and state_passed
@@ -712,7 +743,8 @@ class PyInterfaceUnitTests(unittest.TestCase):
             and logger_error_reported
             and stable_with_failed_logger
             and stable_without_direction
-            and callback_error_reported,
+            and callback_error_reported
+            and no_settings_passed,
             "test_stability_check_py_interface failed",
         )
         print(" test_stability_check_py_interface PASSED")

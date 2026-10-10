@@ -263,7 +263,7 @@ contains
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
-        type(solver_settings_type_c), intent(inout) :: settings_c
+        type(solver_settings_type_c), intent(in), optional :: settings_c
         type(c_ptr), intent(in), value :: state_c_ptr
         integer(c_ip) :: error_c
 
@@ -271,18 +271,27 @@ contains
         procedure(obj_func_f_wrapper), pointer :: obj_func
         integer(ip) :: n_param, error
         type(solver_settings_type) :: settings
+        type(solver_settings_type_c) :: local_settings_c
         type(solver_state_type), target :: state
         type(c_callbacks_type), target :: callbacks, stability_callbacks
+
+        ! work on a copy of the given settings or, without any, of the default
+        ! settings
+        if (present(settings_c)) then
+            local_settings_c = settings_c
+        else
+            local_settings_c = default_solver_settings
+        end if
 
         ! bundle the C function pointers
         call c_f_procpointer(cptr=update_orbs_c_funptr, fptr=callbacks%update_orbs)
         call c_f_procpointer(cptr=obj_func_c_funptr, fptr=callbacks%obj_func)
         call store_optional_c_callbacks( &
-            callbacks, settings_c%initialized, settings_c%precond, &
-            settings_c%precond_pd, settings_c%project, &
-            settings_c%get_extra_trial_vectors, settings_c%conv_check, c_null_funptr, &
-            settings_c%stability_hess_x, c_null_funptr, settings_c%logger, &
-            settings_c%context)
+            callbacks, local_settings_c%initialized, local_settings_c%precond, &
+            local_settings_c%precond_pd, local_settings_c%project, &
+            local_settings_c%get_extra_trial_vectors, local_settings_c%conv_check, &
+            c_null_funptr, local_settings_c%stability_hess_x, c_null_funptr, &
+            local_settings_c%logger, local_settings_c%context)
 
         ! let the bundle refer to the state and to the host's record, if one is given,
         ! so that the state is copied into it before every callback function
@@ -296,14 +305,15 @@ contains
         ! bundle starts as a copy of the solver's and only the provided ones override
         stability_callbacks = callbacks
         call store_optional_c_callbacks( &
-            stability_callbacks, &
-            settings_c%initialized .and. settings_c%stability_settings%initialized, &
-            settings_c%stability_settings%precond, c_null_funptr, &
-            settings_c%stability_settings%project, &
-            settings_c%stability_settings%get_extra_trial_vectors, c_null_funptr, &
-            settings_c%stability_settings%conv_check, c_null_funptr, &
-            settings_c%stability_settings%approx_hess_x, &
-            settings_c%stability_settings%logger, settings_c%stability_settings%context)
+            stability_callbacks, local_settings_c%initialized .and. &
+            local_settings_c%stability_settings%initialized, &
+            local_settings_c%stability_settings%precond, c_null_funptr, &
+            local_settings_c%stability_settings%project, &
+            local_settings_c%stability_settings%get_extra_trial_vectors, &
+            c_null_funptr, local_settings_c%stability_settings%conv_check, &
+            c_null_funptr, local_settings_c%stability_settings%approx_hess_x, &
+            local_settings_c%stability_settings%logger, &
+            local_settings_c%stability_settings%context)
         callbacks%stability => stability_callbacks
 
         ! associate procedure pointer to wrapper function
@@ -315,7 +325,7 @@ contains
 
         ! convert settings and hand the bundles to the callback wrappers as opaque
         ! context
-        settings = settings_c
+        settings = local_settings_c
         settings%context => callbacks
         settings%stability_settings%context => stability_callbacks
 
@@ -324,9 +334,9 @@ contains
         ! printed here regardless of the verbosity, through the logging function of
         ! the solver settings or on stderr since settings that were not initialized
         ! provide none
-        if (.not. settings_c%initialized) then
+        if (.not. local_settings_c%initialized) then
             write(stderr, '(A)') " "//settings_uninitialized_warning_msg
-        else if (.not. settings_c%stability_settings%initialized) then
+        else if (.not. local_settings_c%stability_settings%initialized) then
             if (associated(settings%logger)) then
                 call settings%logger( &
                     " "//stability_settings_uninitialized_warning_msg, settings%context)
@@ -359,7 +369,7 @@ contains
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: hess_x_c_funptr
         logical(c_bool), intent(out) :: stable_c
-        type(stability_settings_type_c), intent(inout) :: settings_c
+        type(stability_settings_type_c), intent(in), optional :: settings_c
         type(c_ptr), intent(in), value :: state_c_ptr, kappa_c_ptr, min_eigval_c_ptr
         integer(c_ip) :: error_c
 
@@ -369,16 +379,27 @@ contains
         integer(ip) :: error
         procedure(hess_x_f_wrapper), pointer :: hess_x
         type(stability_settings_type) :: settings
+        type(stability_settings_type_c) :: local_settings_c
         type(stability_state_type), target :: state
         type(c_callbacks_type), target :: callbacks
+
+        ! work on a copy of the given settings or, without any, of the default
+        ! settings
+        if (present(settings_c)) then
+            local_settings_c = settings_c
+        else
+            local_settings_c = default_stability_settings
+        end if
 
         ! bundle the C function pointers
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=callbacks%hess_x)
         call store_optional_c_callbacks( &
-            callbacks, settings_c%initialized, settings_c%precond, c_null_funptr, &
-            settings_c%project, settings_c%get_extra_trial_vectors, c_null_funptr, &
-            settings_c%conv_check, c_null_funptr, settings_c%approx_hess_x, &
-            settings_c%logger, settings_c%context)
+            callbacks, local_settings_c%initialized, local_settings_c%precond, &
+            c_null_funptr, local_settings_c%project, &
+            local_settings_c%get_extra_trial_vectors, c_null_funptr, &
+            local_settings_c%conv_check, c_null_funptr, &
+            local_settings_c%approx_hess_x, local_settings_c%logger, &
+            local_settings_c%context)
 
         ! let the bundle refer to the state and to the host's record, if one is given,
         ! so that the state is copied into it before every callback function
@@ -417,14 +438,14 @@ contains
 
         ! convert settings and hand the bundle to the callback wrappers as opaque
         ! context
-        settings = settings_c
+        settings = local_settings_c
         settings%context => callbacks
 
         ! the conversion replaces settings that were not initialized by the default
         ! settings, so the stability check cannot detect these anymore and the warning
         ! is printed here on stderr regardless of the verbosity since settings that
         ! were not initialized provide no logging function
-        if (.not. settings_c%initialized) &
+        if (.not. local_settings_c%initialized) &
             write(stderr, '(A)') " "//settings_uninitialized_warning_msg
 
         ! call stability check
