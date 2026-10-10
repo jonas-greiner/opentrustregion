@@ -363,12 +363,13 @@ contains
             allocate(h_diag_ptr(n_param_c))
             h_diag_ptr = real(h_diag_c(:n_param_c), kind=rp)
         end if
-        allocate(kappa_ptr(n_param_c), min_eigval_ptr)
+        nullify(kappa_ptr, min_eigval_ptr)
         if (c_associated(kappa_c_ptr)) then
             if (rp == c_rp) then
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr, shape=[n_param_c])
             else
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
+                allocate(kappa_ptr(n_param_c))
             end if
         end if
         if (c_associated(min_eigval_c_ptr)) then
@@ -376,6 +377,7 @@ contains
                 call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr)
             else
                 call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr_c)
+                allocate(min_eigval_ptr)
             end if
         end if
 
@@ -400,9 +402,15 @@ contains
 
         ! convert return arguments to C kind
         if (rp /= c_rp) then
-            kappa_ptr_c = real(kappa_ptr, kind=c_rp)
-            min_eigval_ptr_c = real(min_eigval_ptr, kind=c_rp)
-            deallocate(kappa_ptr, h_diag_ptr, min_eigval_ptr)
+            if (associated(kappa_ptr)) then
+                kappa_ptr_c = real(kappa_ptr, kind=c_rp)
+                deallocate(kappa_ptr)
+            end if
+            if (associated(min_eigval_ptr)) then
+                min_eigval_ptr_c = real(min_eigval_ptr, kind=c_rp)
+                deallocate(min_eigval_ptr)
+            end if
+            deallocate(h_diag_ptr)
         end if
         stable_c = logical(stable, kind=c_bool)
         error_c = int(error, kind=c_ip)
@@ -889,6 +897,7 @@ contains
         ! convert arguments to Fortran kind
         converged = logical(converged_c)
         error = int(error_c, kind=ip)
+        if (rp /= c_rp) deallocate(residual_c)
 
     end function conv_check_stability_f_wrapper
 

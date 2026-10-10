@@ -706,7 +706,8 @@ contains
         use opentrustregion_mock, only: mock_stability_check, test_passed, mock_error, &
                                         mock_stability_check_n_hess_x, mock_stable, &
                                         mock_min_eigval, received_stability_settings, &
-                                        received_callbacks
+                                        received_callbacks, kappa_received, &
+                                        min_eigval_received
         use test_reference, only: get_reference_stability_values, host_context, &
                                   arm_host_context_c, host_context_reached, &
                                   ref_stability_settings, operator(/=)
@@ -808,6 +809,19 @@ contains
             if (i_case == 2 .and. abs(min_eigval - mock_min_eigval) > tol_c) then
                 write(stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                     "minimum eigenvalue wrong "//trim(case_names(i_case))//"."
+                test_stability_check_c_wrapper = .false.
+            end if
+
+            ! check that the direction and the minimum eigenvalue are only requested
+            ! from the stability check where the caller provides memory for them
+            if (kappa_received .neqv. c_associated(kappa_c_ptr)) then
+                write(stderr, *) "test_stability_check_c_wrapper failed: Direction "// &
+                    "requested wrongly "//trim(case_names(i_case))//"."
+                test_stability_check_c_wrapper = .false.
+            end if
+            if (min_eigval_received .neqv. c_associated(min_eigval_c_ptr)) then
+                write(stderr, *) "test_stability_check_c_wrapper failed: Minimum "// &
+                    "eigenvalue requested wrongly "//trim(case_names(i_case))//"."
                 test_stability_check_c_wrapper = .false.
             end if
 
