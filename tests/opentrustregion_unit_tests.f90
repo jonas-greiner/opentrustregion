@@ -1377,6 +1377,26 @@ contains
 
     end subroutine mock_project_error
 
+    subroutine mock_project_first_component(vector, error, context)
+        !
+        ! this subroutine is a test subroutine for the projection subroutine which
+        ! keeps only the first component
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector(2:) = 0.0_rp
+
+        error = 0
+
+    end subroutine mock_project_first_component
+
     function mock_conv_check(error, context) result(converged)
         !
         ! this function describes a convergence check which always passes
@@ -3880,15 +3900,15 @@ contains
         end do
         deallocate(red_space_basis)
 
-        ! fill a trial vector behind leading columns which already span the whole
-        ! space, so that every attempt produces a linearly dependent vector, and
-        ! determine whether an error is returned and an error message is printed once
-        ! the maximum number of attempts is reached
-        allocate(red_space_basis(n_param, n_param + 1))
+        ! fill a trial vector behind the first unit vector with a projection onto the
+        ! first unit vector, which the orthogonalization applies, so that every attempt
+        ! produces a linearly dependent vector, and determine whether an error is
+        ! returned and an error message is printed once the maximum number of attempts
+        ! is reached
+        allocate(red_space_basis(n_param, 2))
         red_space_basis = 0.0_rp
-        do i = 1, n_param
-            red_space_basis(i, i) = 1.0_rp
-        end do
+        red_space_basis(1, 1) = 1.0_rp
+        settings%project => mock_project_first_component
         call setup_error_logging(settings, context)
         call generate_random_trial_vectors(red_space_basis, 1_ip, settings, error)
         if (error /= 1) then
