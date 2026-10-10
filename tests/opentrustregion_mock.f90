@@ -49,6 +49,11 @@ module opentrustregion_mock
     ! where the caller provides memory for them
     logical :: kappa_received, min_eigval_received
 
+    ! whether the callback bundles the mock solver and stability check received refer
+    ! to the state record they were given, so that a test can check that the C
+    ! wrappers copy this record into the host's
+    logical :: solver_state_bundled, stability_state_bundled
+
     ! create function pointers to ensure that routines comply with interface
     procedure(solver), pointer :: mock_solver_ptr => mock_solver
     procedure(stability_check), pointer :: mock_stability_check_ptr => &
@@ -154,6 +159,23 @@ contains
             received_stability_callbacks = callbacks
         end select
 
+        ! record whether the callback bundles of the settings and the nested settings
+        ! both refer to the state record
+        solver_state_bundled = .false.
+        if (present(state)) then
+            select type (callbacks => settings%context)
+            type is (c_callbacks_type)
+                solver_state_bundled = associated(callbacks%solver_state, state)
+            end select
+            select type (callbacks => settings%stability_settings%context)
+            type is (c_callbacks_type)
+                solver_state_bundled = solver_state_bundled .and. &
+                                       associated(callbacks%solver_state, state)
+            class default
+                solver_state_bundled = .false.
+            end select
+        end if
+
         ! set state
         if (present(state)) state = mock_solver_state
 
@@ -250,6 +272,15 @@ contains
         end select
         kappa_received = present(kappa)
         min_eigval_received = present(min_eigval)
+
+        ! record whether the callback bundle refers to the state record
+        stability_state_bundled = .false.
+        if (present(state)) then
+            select type (callbacks => settings%context)
+            type is (c_callbacks_type)
+                stability_state_bundled = associated(callbacks%stability_state, state)
+            end select
+        end if
 
         ! set optional output quantities and state
         if (present(kappa)) kappa = 1.0_rp

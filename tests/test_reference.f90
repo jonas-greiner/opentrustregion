@@ -9,7 +9,7 @@ module test_reference
     use opentrustregion, only: rp, ip, kw_len, stderr, solver_settings_type, &
                                stability_settings_type, solver_state_type, &
                                stability_state_type
-    use c_interface, only: c_rp, c_ip
+    use c_interface, only: c_rp, c_ip, solver_state_type_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_null_char, c_funptr, &
                                            c_null_funptr, c_f_procpointer, &
                                            c_associated, c_ptr, c_null_ptr, c_loc, &
@@ -86,6 +86,13 @@ module test_reference
 
     logical :: host_context_armed = .false., host_context_wrong = .false., &
                host_context_missing = .false.
+
+    ! a solver state with its default values that a test lets a callback bundle refer
+    ! to, the host's record holding the reference values it is copied into, and
+    ! whether a C callback function found it not copied when it was called
+    type(solver_state_type), target :: armed_state
+    type(solver_state_type_c), target :: armed_state_c
+    logical :: state_armed = .false., state_not_copied = .false.
 
     ! the extension tests call callback functions that ignore the host context without
     ! one
@@ -177,6 +184,12 @@ contains
             host_context_wrong = .true.
         end if
 
+        ! a callback function of a bundle a test armed with a state finds the state
+        ! copied into the host's record
+        if (state_armed) then
+            if (armed_state_c /= armed_state) state_not_copied = .true.
+        end if
+
     end subroutine check_host_context_c
 
     function host_context_error(context_c) result(error)
@@ -248,6 +261,8 @@ contains
         host_context_armed = .true.
         host_context_wrong = .false.
         host_context_missing = .false.
+        state_armed = .false.
+        state_not_copied = .false.
 
     end subroutine reset_host_context
 
@@ -282,6 +297,26 @@ contains
         call reset_host_context()
 
     end subroutine arm_host_context_c
+
+    subroutine arm_state_c(callbacks)
+        !
+        ! this subroutine lets a callback bundle refer to a solver state with its
+        ! default values and to a host's record holding the reference values, so that
+        ! the C callback functions find whether the state was copied into the record
+        ! before they were called
+        !
+        use c_interface, only: c_callbacks_type
+
+        type(c_callbacks_type), intent(inout) :: callbacks
+
+        armed_state = solver_state_type()
+        call get_reference_solver_state_values(armed_state_c)
+        callbacks%solver_state => armed_state
+        callbacks%solver_state_c => armed_state_c
+        state_armed = .true.
+        state_not_copied = .false.
+
+    end subroutine arm_state_c
 
     subroutine get_reference_solver_values(values_out, true_logical) bind(C)
         !
@@ -786,8 +821,14 @@ contains
                 "received the host context that was set."
             host_context_reached = .false.
         end if
+        if (state_not_copied) then
+            write(stderr, *) "test_"//test_name//" failed: A callback function was "// &
+                "called before the state was copied into the host's record."
+            host_context_reached = .false.
+        end if
 
         host_context_armed = .false.
+        state_armed = .false.
 
     end function host_context_reached
 

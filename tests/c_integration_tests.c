@@ -40,10 +40,17 @@ static const c_real *saddle_point = hartmann6d_saddle_point;
 extern const c_real hartmann6d_near_minimum[N_PARAM];
 
 /* Host data handed to the callbacks through the context of the settings: the current
- * point and its Hessian, and flags recording which callbacks were reached. */
+ * point and its Hessian, flags recording which callbacks were reached, and the state
+ * records of the call with what the callbacks read from them. */
 typedef struct {
   c_real curr_vars[N_PARAM];
   c_real hess[N_PARAM][N_PARAM];
+  const solver_state_type *solver_state;
+  const stability_state_type *stability_state;
+  int n_update_orbs_calls;
+  int state_not_current;
+  c_int n_hess_x_seen;
+  c_int nested_n_hess_x_seen;
   int precond_called;
   int project_called;
   int logger_called;
@@ -122,6 +129,8 @@ static c_int hess_x_fun(const c_real *x, c_real *hx, void *context) {
   hartmann_context *ctx = context;
   if (!ctx)
     return 1;
+  if (ctx->stability_state)
+    ctx->n_hess_x_seen = ctx->stability_state->n_hess_x;
   for (int i = 0; i < N_PARAM; i++) {
     c_real s = 0.0;
     for (int j = 0; j < N_PARAM; j++)
@@ -136,6 +145,11 @@ static c_int update_orbs(const c_real *delta_vars, c_real *func, c_real *grad,
   hartmann_context *ctx = context;
   if (!ctx)
     return 1;
+  /* the state is copied before every callback, so it counts the updates before this
+   * one */
+  if (ctx->solver_state && ctx->solver_state->n_update_orbs != ctx->n_update_orbs_calls)
+    ctx->state_not_current = 1;
+  ctx->n_update_orbs_calls++;
   for (int i = 0; i < N_PARAM; i++)
     ctx->curr_vars[i] += delta_vars[i];
   *func = hartmann_func(ctx->curr_vars);
@@ -285,6 +299,8 @@ static c_int stability_hess_x(const c_real *x, c_real *hx, void *context) {
   if (!ctx)
     return 1;
   ctx->stability_hess_x_called = 1;
+  if (ctx->solver_state)
+    ctx->nested_n_hess_x_seen = ctx->solver_state->stability_state.n_hess_x;
   return hess_x_fun(x, hx, context);
 }
 
@@ -648,6 +664,7 @@ bool test_solver_c(void) {
   settings.max_precision_reached = true;
   solver_state_type state = {0};
   state.max_precision_reached = true;
+  ctx.solver_state = &state;
 
   c_int error = solver(update_orbs, obj_func, N_PARAM, &settings, &state);
   if (error != 0) {
@@ -696,6 +713,13 @@ bool test_solver_c(void) {
       state.stability_state.n_hess_x != settings.stability_settings.n_hess_x ||
       state.n_obj_func <= 0) {
     fprintf(stderr, "test_solver_c failed: State was not returned.\n");
+    ok = false;
+  }
+  /* every orbital update read the updates before it, and the last Hessian linear
+   * transformation of the internal stability check the ones before it */
+  if (ctx.state_not_current || ctx.n_update_orbs_calls != state.n_update_orbs ||
+      ctx.nested_n_hess_x_seen != state.stability_state.n_hess_x - 1) {
+    fprintf(stderr, "test_solver_c failed: State was not current in the callbacks.\n");
     ok = false;
   }
   if (!ctx.stability_precond_called) {
@@ -784,6 +808,7 @@ bool test_stability_check_c(void) {
   c_real min_eigval = -1.0;
   c_bool stable = false;
   stability_state_type state = {0};
+  ctx.stability_state = &state;
   c_int error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, &state,
                                 direction, &min_eigval);
   if (error != 0) {
@@ -837,6 +862,13 @@ bool test_stability_check_c(void) {
     fprintf(stderr, "test_stability_check_c failed: State was not returned.\n");
     ok = false;
   }
+  /* the last Hessian linear transformation read the ones before it */
+  if (ctx.n_hess_x_seen != state.n_hess_x - 1) {
+    fprintf(stderr, "test_stability_check_c failed: State was not current in the "
+                    "callbacks.\n");
+    ok = false;
+  }
+  ctx.stability_state = NULL;
 
   /* at a saddle, expect unstable */
   hartmann_hess(saddle_point, ctx.hess);

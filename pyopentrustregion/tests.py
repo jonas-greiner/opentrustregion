@@ -171,6 +171,7 @@ fortran_tests = {
         "character_to_c",
         "conv_check_f_wrapper",
         "conv_check_stability_f_wrapper",
+        "copy_state_to_c",
         "get_extra_trial_vectors_f_wrapper",
         "hess_x_f_wrapper",
         "init_solver_settings_c",

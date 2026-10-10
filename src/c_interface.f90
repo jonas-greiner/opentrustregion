@@ -11,7 +11,8 @@ module c_interface
         standard_stability_check => stability_check, default_solver_settings, &
         default_stability_settings, update_orbs_type, hess_x_type, obj_func_type, &
         precond_type, precond_pd_type, project_type, conv_check_type, &
-        get_extra_trial_vectors_type, conv_check_stability_type, logger_type
+        get_extra_trial_vectors_type, conv_check_stability_type, logger_type, &
+        solver_state_type, stability_state_type
     use, intrinsic :: iso_c_binding, only: &
         c_double, c_int64_t, c_int32_t, c_bool, c_ptr, c_funptr, c_f_pointer, &
         c_f_procpointer, c_associated, c_char, c_null_char, c_null_ptr, c_null_funptr
@@ -146,6 +147,22 @@ module c_interface
         end subroutine logger_c_type
     end interface
 
+    ! derived type for the stability check state
+    type, bind(C) :: stability_state_type_c
+        real(c_rp) :: min_eigval, residual_rms
+        integer(c_ip) :: iteration, n_hess_x
+    end type
+
+    ! derived type for the solver state
+    type, bind(C) :: solver_state_type_c
+        logical(c_bool) :: max_precision_reached
+        real(c_rp) :: func, grad_rms, trust_radius, relative_residual, level_shift, &
+                      step_size
+        integer(c_ip) :: macro_iteration, micro_iteration, jacobi_davidson_iteration, &
+                         n_update_orbs, n_obj_func, n_hess_x
+        type(stability_state_type_c) :: stability_state
+    end type
+
     ! bundle of the C callback functions belonging to a single call
     type :: c_callbacks_type
         procedure(update_orbs_c_type), pointer, nopass :: update_orbs => null()
@@ -164,6 +181,10 @@ module c_interface
         procedure(logger_c_type), pointer, nopass :: logger => null()
         type(c_ptr) :: host_context = c_null_ptr
         type(c_callbacks_type), pointer :: stability => null()
+        type(solver_state_type), pointer :: solver_state => null()
+        type(solver_state_type_c), pointer :: solver_state_c => null()
+        type(stability_state_type), pointer :: stability_state => null()
+        type(stability_state_type_c), pointer :: stability_state_c => null()
     end type
 
     ! derived type for stability check settings
@@ -192,22 +213,6 @@ module c_interface
         character(kind=c_char) :: trust_region_shape(kw_len + 1)
         type(stability_settings_type_c) :: stability_settings
         type(c_ptr) :: context
-    end type
-
-    ! derived type for the stability check state
-    type, bind(C) :: stability_state_type_c
-        real(c_rp) :: min_eigval, residual_rms
-        integer(c_ip) :: iteration, n_hess_x
-    end type
-
-    ! derived type for the solver state
-    type, bind(C) :: solver_state_type_c
-        logical(c_bool) :: max_precision_reached
-        real(c_rp) :: func, grad_rms, trust_radius, relative_residual, level_shift, &
-                      step_size
-        integer(c_ip) :: macro_iteration, micro_iteration, jacobi_davidson_iteration, &
-                         n_update_orbs, n_obj_func, n_hess_x
-        type(stability_state_type_c) :: stability_state
     end type
 
     procedure(standard_solver), pointer :: solver => standard_solver
@@ -263,12 +268,11 @@ contains
         type(c_ptr), intent(in), value :: state_c_ptr
         integer(c_ip) :: error_c
 
-        type(solver_state_type_c), pointer :: state_c
         procedure(update_orbs_f_wrapper), pointer :: update_orbs
         procedure(obj_func_f_wrapper), pointer :: obj_func
         integer(ip) :: n_param, error
         type(solver_settings_type) :: settings
-        type(solver_state_type) :: state
+        type(solver_state_type), target :: state
         type(c_callbacks_type), target :: callbacks, stability_callbacks
 
         ! bundle the C function pointers
@@ -280,6 +284,13 @@ contains
             settings_c%get_extra_trial_vectors, settings_c%conv_check, c_null_funptr, &
             settings_c%stability_hess_x, c_null_funptr, settings_c%logger, &
             settings_c%context)
+
+        ! let the bundle refer to the state and to the host's record, if one is given,
+        ! so that the state is copied into it before every callback function
+        if (c_associated(state_c_ptr)) then
+            callbacks%solver_state => state
+            call c_f_pointer(cptr=state_c_ptr, fptr=callbacks%solver_state_c)
+        end if
 
         ! the solver lets the internal stability check inherit its optional callback
         ! functions when the nested settings do not provide their own, so the nested
@@ -336,11 +347,8 @@ contains
         settings_c%stability_settings%n_hess_x = &
             int(state%stability_state%n_hess_x, kind=c_ip)
 
-        ! copy the state into the host's record if one is given, also after an error
-        if (c_associated(state_c_ptr)) then
-            call c_f_pointer(cptr=state_c_ptr, fptr=state_c)
-            state_c = state
-        end if
+        ! copy the state into the host's record once more, also after an error
+        call copy_state_to_c(callbacks)
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
@@ -364,15 +372,13 @@ contains
         type(c_ptr), intent(in), value :: state_c_ptr, kappa_c_ptr, min_eigval_c_ptr
         integer(c_ip) :: error_c
 
-        type(stability_state_type_c), pointer :: state_c
-
         real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:), min_eigval_ptr
         real(c_rp), pointer :: kappa_ptr_c(:), min_eigval_ptr_c
         logical :: stable
         integer(ip) :: error
         procedure(hess_x_f_wrapper), pointer :: hess_x
         type(stability_settings_type) :: settings
-        type(stability_state_type) :: state
+        type(stability_state_type), target :: state
         type(c_callbacks_type), target :: callbacks
 
         ! bundle the C function pointers
@@ -382,6 +388,13 @@ contains
             settings_c%project, settings_c%get_extra_trial_vectors, c_null_funptr, &
             settings_c%conv_check, c_null_funptr, settings_c%approx_hess_x, &
             settings_c%logger, settings_c%context)
+
+        ! let the bundle refer to the state and to the host's record, if one is given,
+        ! so that the state is copied into it before every callback function
+        if (c_associated(state_c_ptr)) then
+            callbacks%stability_state => state
+            call c_f_pointer(cptr=state_c_ptr, fptr=callbacks%stability_state_c)
+        end if
 
         ! associate procedure pointer to wrapper function
         hess_x => hess_x_f_wrapper
@@ -430,11 +443,8 @@ contains
         ! write the output field into the C settings object from the state
         settings_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
 
-        ! copy the state into the host's record if one is given, also after an error
-        if (c_associated(state_c_ptr)) then
-            call c_f_pointer(cptr=state_c_ptr, fptr=state_c)
-            state_c = state
-        end if
+        ! copy the state into the host's record once more, also after an error
+        call copy_state_to_c(callbacks)
 
         ! convert return arguments to C kind
         if (rp /= c_rp) then
@@ -502,6 +512,20 @@ contains
 
     end subroutine store_optional_c_callbacks
 
+    subroutine copy_state_to_c(callbacks)
+        !
+        ! this subroutine copies the state of a call into the host's record if the
+        ! host gave one, before a callback function into C and when the call returns
+        !
+        type(c_callbacks_type), intent(in) :: callbacks
+
+        if (associated(callbacks%solver_state_c)) &
+            callbacks%solver_state_c = callbacks%solver_state
+        if (associated(callbacks%stability_state_c)) &
+            callbacks%stability_state_c = callbacks%stability_state
+
+    end subroutine copy_state_to_c
+
     subroutine update_orbs_f_wrapper(kappa, func, grad, h_diag, hess_x, error, context)
         !
         ! this subroutine exposes a C-implemented orbital update function to Fortran
@@ -537,6 +561,7 @@ contains
         hess_x_c_funptr = c_null_funptr
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%update_orbs(kappa_c, func_c, grad_c, h_diag_c, &
                                             hess_x_c_funptr, callbacks%host_context)
             if (c_associated(hess_x_c_funptr)) then
@@ -583,6 +608,7 @@ contains
         ! call C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             call hess_x_f_wrapper_impl(callbacks%hess_x, x, hess_x, error, &
                                        callbacks%host_context)
         class default
@@ -654,6 +680,7 @@ contains
         obj_func_c = 0.0_c_rp
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%obj_func(kappa_c, obj_func_c, callbacks%host_context)
         class default
             error_c = 1
@@ -696,6 +723,7 @@ contains
         ! call precond C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%precond(residual_c, mu_c, precond_residual_c, &
                                         callbacks%host_context)
         class default
@@ -738,6 +766,7 @@ contains
         ! call precond_pd C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%precond_pd(residual_c, precond_residual_c, &
                                            callbacks%host_context)
         class default
@@ -776,6 +805,7 @@ contains
         ! call project C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%project(vector_c, callbacks%host_context)
         class default
             error_c = 1
@@ -805,6 +835,7 @@ contains
         converged_c = .false._c_bool
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%conv_check(converged_c, callbacks%host_context)
         class default
             error_c = 1
@@ -829,6 +860,7 @@ contains
         ! call C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             call hess_x_f_wrapper_impl(callbacks%stability_hess_x, x, hess_x, error, &
                                        callbacks%host_context)
         class default
@@ -850,6 +882,7 @@ contains
         ! call C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             call hess_x_f_wrapper_impl(callbacks%approx_hess_x, x, hess_x, error, &
                                        callbacks%host_context)
         class default
@@ -880,6 +913,7 @@ contains
         ! call get_extra_trial_vectors C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%get_extra_trial_vectors(trial_vectors_c, size( &
                 trial_vectors, 2, kind=c_ip), callbacks%host_context)
         class default
@@ -924,6 +958,7 @@ contains
         converged_c = .false._c_bool
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             error_c = callbacks%conv_check_stability( &
                 residual_c, eigval_c, converged_c, callbacks%host_context)
         class default
@@ -960,6 +995,7 @@ contains
         ! call logging C function
         select type (callbacks => context)
         type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
             call callbacks%logger(message_c, callbacks%host_context)
         end select
         deallocate(message_c)
