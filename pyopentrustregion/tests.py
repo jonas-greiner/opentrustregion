@@ -1500,10 +1500,10 @@ class PyIntegrationTests(unittest.TestCase):
 
         # the maximum precision flag starts opposite to the one the converging solve
         # returns, so that its write-back is detected
-        settings.max_precision_reached = True
+        solver_state.state_c.max_precision_reached = True
 
         solver(obj_func, update_orbs, self.n_param, settings, state=solver_state)
-        if settings.max_precision_reached:
+        if solver_state.max_precision_reached:
             print(
                 " test_solver_py failed: Maximum precision reached flag was not "
                 "returned."
@@ -1525,30 +1525,25 @@ class PyIntegrationTests(unittest.TestCase):
                 "stability check was not called by the internal stability check."
             )
             test_passed = False
-        if settings.n_update_orbs <= 0:
+        if solver_state.n_update_orbs <= 0:
             print(" test_solver_py failed: Orbital update counter was not populated.")
             test_passed = False
-        if settings.n_hess_x <= 0:
+        if solver_state.n_obj_func <= 0:
+            print(
+                " test_solver_py failed: Objective function counter was not populated."
+            )
+            test_passed = False
+        if solver_state.n_hess_x <= 0:
             print(
                 " test_solver_py failed: Hessian linear transformation counter was not "
                 "populated."
             )
             test_passed = False
-        if settings.stability_settings.n_hess_x <= 0:
+        if solver_state.stability_state.n_hess_x <= 0:
             print(
                 " test_solver_py failed: Hessian linear transformation counter of the "
                 "internal stability check was not populated."
             )
-            test_passed = False
-        if (
-            solver_state.max_precision_reached
-            or solver_state.n_update_orbs != settings.n_update_orbs
-            or solver_state.n_hess_x != settings.n_hess_x
-            or solver_state.stability_state.n_hess_x
-            != settings.stability_settings.n_hess_x
-            or solver_state.n_obj_func <= 0
-        ):
-            print(" test_solver_py failed: State was not returned.")
             test_passed = False
 
         # every orbital update read the updates before it, and the last Hessian linear
@@ -1654,11 +1649,7 @@ class PyIntegrationTests(unittest.TestCase):
                 "stability of minimum."
             )
             test_passed = False
-        if (
-            stability_state.iteration <= 0
-            or stability_state.n_hess_x != settings.n_hess_x
-            or stability_state.min_eigval != min_eigval
-        ):
+        if stability_state.iteration <= 0 or stability_state.min_eigval != min_eigval:
             print(" test_stability_check_py failed: State was not returned.")
             test_passed = False
 
@@ -1679,7 +1670,7 @@ class PyIntegrationTests(unittest.TestCase):
             if name not in called:
                 print(f" test_stability_check_py failed: {description} was not called.")
                 test_passed = False
-        if settings.n_hess_x <= 0:
+        if stability_state.n_hess_x <= 0:
             print(
                 " test_stability_check_py failed: Hessian linear transformation "
                 "counter was not populated."

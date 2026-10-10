@@ -194,7 +194,7 @@ module c_interface
         logical(c_bool) :: hess_symm, stop_on_instability, initialized
         real(c_rp) :: conv_tol
         integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_iter, &
-                         jacobi_davidson_start, seed, verbose, n_hess_x
+                         jacobi_davidson_start, seed, verbose
         character(kind=c_char) :: diag_solver(kw_len + 1)
         type(c_ptr) :: context
     end type
@@ -204,11 +204,10 @@ module c_interface
         type(c_funptr) :: precond, precond_pd, project, get_extra_trial_vectors, &
                           conv_check, stability_hess_x, logger
         logical(c_bool) :: stability, line_search, refresh_hess, grad_noise, &
-                           hess_symm, initialized, max_precision_reached
+                           hess_symm, initialized
         real(c_rp) :: conv_tol, start_trust_radius, global_red_factor, local_red_factor
         integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_macro, &
-                         n_micro, jacobi_davidson_start, seed, verbose, n_update_orbs, &
-                         n_hess_x
+                         n_micro, jacobi_davidson_start, seed, verbose
         character(kind=c_char) :: subsystem_solver(kw_len + 1)
         character(kind=c_char) :: trust_region_shape(kw_len + 1)
         type(stability_settings_type_c) :: stability_settings
@@ -258,7 +257,7 @@ contains
         !
         ! this function exposes a Fortran-implemented solver subroutine to C
         !
-        use opentrustregion, only: solver_settings_type, solver_state_type, stderr, &
+        use opentrustregion, only: solver_settings_type, stderr, &
                                    settings_uninitialized_warning_msg, &
                                    stability_settings_uninitialized_warning_msg
 
@@ -339,14 +338,6 @@ contains
         ! call solver
         call solver(update_orbs, obj_func, n_param, error, settings, state)
 
-        ! write the output fields into the C settings object from the state
-        settings_c%max_precision_reached = &
-            logical(state%max_precision_reached, kind=c_bool)
-        settings_c%n_update_orbs = int(state%n_update_orbs, kind=c_ip)
-        settings_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
-        settings_c%stability_settings%n_hess_x = &
-            int(state%stability_state%n_hess_x, kind=c_ip)
-
         ! copy the state into the host's record once more, also after an error
         call copy_state_to_c(callbacks)
 
@@ -361,8 +352,8 @@ contains
         !
         ! this function exposes a Fortran-implemented stability check subroutine to C
         !
-        use opentrustregion, only: stability_settings_type, stability_state_type, &
-                                   stderr, settings_uninitialized_warning_msg
+        use opentrustregion, only: stability_settings_type, stderr, &
+                                   settings_uninitialized_warning_msg
 
         real(c_rp), intent(in), target :: h_diag_c(*)
         integer(c_ip), intent(in), value :: n_param_c
@@ -439,9 +430,6 @@ contains
         ! call stability check
         call stability_check(h_diag_ptr, hess_x, stable, error, settings, state, &
                              kappa=kappa_ptr, min_eigval=min_eigval_ptr)
-
-        ! write the output field into the C settings object from the state
-        settings_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
 
         ! copy the state into the host's record once more, also after an error
         call copy_state_to_c(callbacks)
@@ -1192,12 +1180,10 @@ contains
         !
         ! this subroutine converts solver settings from Fortran to C
         !
-        use opentrustregion, only: solver_settings_type, solver_state_type
+        use opentrustregion, only: solver_settings_type
 
         type(solver_settings_type_c), intent(out) :: settings_c
         type(solver_settings_type), intent(in) :: settings
-
-        type(solver_state_type) :: state
 
         if (settings%initialized) then
             ! callback functions cannot be converted
@@ -1234,13 +1220,6 @@ contains
             settings_c%seed = int(settings%seed, kind=c_ip)
             settings_c%verbose = int(settings%verbose, kind=c_ip)
 
-            ! the output fields, which the solver writes from its state, start from
-            ! the default values of the state
-            settings_c%max_precision_reached = &
-                logical(state%max_precision_reached, kind=c_bool)
-            settings_c%n_update_orbs = int(state%n_update_orbs, kind=c_ip)
-            settings_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
-
             ! convert characters
             settings_c%subsystem_solver = character_to_c(settings%subsystem_solver)
             settings_c%trust_region_shape = character_to_c(settings%trust_region_shape)
@@ -1261,12 +1240,10 @@ contains
         !
         ! this subroutine converts stability settings from Fortran to C
         !
-        use opentrustregion, only: stability_settings_type, stability_state_type
+        use opentrustregion, only: stability_settings_type
 
         type(stability_settings_type_c), intent(out) :: settings_c
         type(stability_settings_type), intent(in) :: settings
-
-        type(stability_state_type) :: state
 
         if (settings%initialized) then
             ! callback functions cannot be converted
@@ -1296,10 +1273,6 @@ contains
             settings_c%seed = int(settings%seed, kind=c_ip)
             settings_c%verbose = int(settings%verbose, kind=c_ip)
 
-            ! the output field, which the stability check writes from its state,
-            ! starts from the default value of the state
-            settings_c%n_hess_x = int(state%n_hess_x, kind=c_ip)
-
             ! convert characters
             settings_c%diag_solver = character_to_c(settings%diag_solver)
 
@@ -1316,8 +1289,6 @@ contains
         !
         ! this subroutine converts a solver state from Fortran to C
         !
-        use opentrustregion, only: solver_state_type
-
         type(solver_state_type_c), intent(out) :: state_c
         type(solver_state_type), intent(in) :: state
 
@@ -1351,8 +1322,6 @@ contains
         !
         ! this subroutine converts a stability check state from Fortran to C
         !
-        use opentrustregion, only: stability_state_type
-
         type(stability_state_type_c), intent(out) :: state_c
         type(stability_state_type), intent(in) :: state
 

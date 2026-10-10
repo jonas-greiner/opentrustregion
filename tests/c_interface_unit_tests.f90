@@ -634,31 +634,6 @@ contains
                 test_solver_c_wrapper = .false.
             end if
 
-            ! check if output fields are written back with the values set by the solver
-            if (settings%max_precision_reached) then
-                write(stderr, *) "test_solver_c_wrapper failed: Returned maximum "// &
-                    "precision reached flag wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (settings%n_update_orbs /= mock_solver_state%n_update_orbs) then
-                write(stderr, *) "test_solver_c_wrapper failed: Returned number of "// &
-                    "orbital updates wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (settings%n_hess_x /= mock_solver_state%n_hess_x) then
-                write(stderr, *) "test_solver_c_wrapper failed: Returned number of "// &
-                    "Hessian linear transformations wrong "// &
-                    trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (settings%stability_settings%n_hess_x /= &
-                mock_solver_state%stability_state%n_hess_x) then
-                write(stderr, *) "test_solver_c_wrapper failed: Returned number of "// &
-                    "Hessian linear transformations of internal stability check "// &
-                    "wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-
             ! check that the host context reached the callback functions unchanged
             if (.not. host_context_reached("solver_c_wrapper")) &
                 test_solver_c_wrapper = .false.
@@ -876,15 +851,6 @@ contains
                 .not. associated(received_callbacks%stability_state_c, state)) then
                 write(stderr, *) "test_stability_check_c_wrapper failed: State not "// &
                     "handed to the callback bundle "//trim(case_names(i_case))//"."
-                test_stability_check_c_wrapper = .false.
-            end if
-
-            ! check if output field is written back with the value set by the
-            ! stability check
-            if (settings%n_hess_x /= mock_stability_state%n_hess_x) then
-                write(stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
-                    "number of Hessian linear transformations wrong "// &
-                    trim(case_names(i_case))//"."
                 test_stability_check_c_wrapper = .false.
             end if
 
@@ -2127,14 +2093,6 @@ contains
             test_assign_solver_c_f = .false.
         end if
 
-        ! check that the output fields, which the Fortran settings do not hold, start
-        ! from the default values of the state instead of keeping the reference values
-        if (settings_c%max_precision_reached .or. settings_c%n_update_orbs /= 0 .or. &
-            settings_c%n_hess_x /= 0) then
-            write(stderr, *) "test_assign_solver_c_f failed: Output fields not reset."
-            test_assign_solver_c_f = .false.
-        end if
-
         ! convert the default settings into C settings which hold the reference values
         ! and are marked as not initialized, so that a field which is not converted,
         ! including the initialized flags, keeps a value that differs from the
@@ -2212,13 +2170,6 @@ contains
         if (settings_c /= ref_stability_settings) then
             write(stderr, *) "test_assign_stability_c_f failed: Settings not "// &
                 "converted correctly."
-            test_assign_stability_c_f = .false.
-        end if
-
-        ! check that the output field, which the Fortran settings do not hold, starts
-        ! from the default value of the state instead of keeping the reference value
-        if (settings_c%n_hess_x /= 0) then
-            write(stderr, *) "test_assign_stability_c_f failed: Output field not reset."
             test_assign_stability_c_f = .false.
         end if
 

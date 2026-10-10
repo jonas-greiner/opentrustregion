@@ -106,7 +106,6 @@ typedef struct {
   c_int jacobi_davidson_start;
   c_int seed;
   c_int verbose;
-  c_int n_hess_x;
 
   char diag_solver[OTR_KW_LEN + 1];
 
@@ -133,7 +132,6 @@ typedef struct {
   c_bool grad_noise;
   c_bool hess_symm;
   c_bool initialized;
-  c_bool max_precision_reached;
 
   c_real conv_tol;
   c_real start_trust_radius;
@@ -147,8 +145,6 @@ typedef struct {
   c_int jacobi_davidson_start;
   c_int seed;
   c_int verbose;
-  c_int n_update_orbs;
-  c_int n_hess_x;
 
   char subsystem_solver[OTR_KW_LEN + 1];
   char trust_region_shape[OTR_KW_LEN + 1];

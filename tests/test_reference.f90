@@ -62,8 +62,7 @@ module test_reference
     ! the same kind in either state and from its default value, so that a field read
     ! from or written to the wrong place or not converted at all is detected, the
     ! nested state of the internal stability check of the reference solver state is
-    ! the reference stability check state, and their counters and maximum precision
-    ! flag also give the output fields the C settings carry
+    ! the reference stability check state
     type(stability_state_type), parameter :: ref_stability_state = &
         stability_state_type(iteration=16, min_eigval=-0.25_rp, residual_rms=0.125_rp, &
                              n_hess_x=12)
@@ -355,7 +354,6 @@ contains
             values_out%grad_noise = ref_solver_settings%grad_noise
             values_out%hess_symm = ref_solver_settings%hess_symm
             values_out%initialized = ref_solver_settings%initialized
-            values_out%max_precision_reached = ref_solver_state%max_precision_reached
         else
             values_out%stability = name == "stability"
             values_out%line_search = name == "line_search"
@@ -363,7 +361,6 @@ contains
             values_out%grad_noise = name == "grad_noise"
             values_out%hess_symm = name == "hess_symm"
             values_out%initialized = name == "initialized"
-            values_out%max_precision_reached = name == "max_precision_reached"
         end if
 
         ! set reals
@@ -380,8 +377,6 @@ contains
         values_out%jacobi_davidson_start = ref_solver_settings%jacobi_davidson_start
         values_out%seed = ref_solver_settings%seed
         values_out%verbose = ref_solver_settings%verbose
-        values_out%n_update_orbs = ref_solver_state%n_update_orbs
-        values_out%n_hess_x = ref_solver_state%n_hess_x
 
         ! set keywords
         values_out%subsystem_solver = &
@@ -434,7 +429,6 @@ contains
         values_out%jacobi_davidson_start = ref_stability_settings%jacobi_davidson_start
         values_out%seed = ref_stability_settings%seed
         values_out%verbose = ref_stability_settings%verbose
-        values_out%n_hess_x = ref_stability_state%n_hess_x
 
         ! set keyword
         values_out%diag_solver = ref_character_to_c(ref_stability_settings%diag_solver)
@@ -597,8 +591,6 @@ contains
             field_value = merge(1.0_c_rp, 0.0_c_rp, values%hess_symm)
         case ("initialized")
             field_value = merge(1.0_c_rp, 0.0_c_rp, values%initialized)
-        case ("max_precision_reached")
-            field_value = merge(1.0_c_rp, 0.0_c_rp, values%max_precision_reached)
         case ("conv_tol")
             field_value = values%conv_tol
         case ("start_trust_radius")
@@ -621,10 +613,6 @@ contains
             field_value = values%seed
         case ("verbose")
             field_value = values%verbose
-        case ("n_update_orbs")
-            field_value = values%n_update_orbs
-        case ("n_hess_x")
-            field_value = values%n_hess_x
         case ("subsystem_solver")
             keyword_c = values%subsystem_solver
         case ("trust_region_shape")
@@ -666,8 +654,6 @@ contains
             field_value = values%stability_settings%seed
         case ("stability_settings.verbose")
             field_value = values%stability_settings%verbose
-        case ("stability_settings.n_hess_x")
-            field_value = values%stability_settings%n_hess_x
         case ("stability_settings.diag_solver")
             keyword_c = values%stability_settings%diag_solver
         case default

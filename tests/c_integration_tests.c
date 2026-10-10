@@ -468,7 +468,6 @@ bool test_settings_layout(void) {
                                    "grad_noise",
                                    "hess_symm",
                                    "initialized",
-                                   "max_precision_reached",
                                    "stability_settings.hess_symm",
                                    "stability_settings.stop_on_instability",
                                    "stability_settings.initialized"};
@@ -482,7 +481,6 @@ bool test_settings_layout(void) {
                    s.grad_noise,
                    s.hess_symm,
                    s.initialized,
-                   s.max_precision_reached,
                    s.stability_settings.hess_symm,
                    s.stability_settings.stop_on_instability,
                    s.stability_settings.initialized};
@@ -519,8 +517,6 @@ bool test_settings_layout(void) {
   ok &= check_field(s.jacobi_davidson_start, "jacobi_davidson_start");
   ok &= check_field(s.seed, "seed");
   ok &= check_field(s.verbose, "verbose");
-  ok &= check_field(s.n_update_orbs, "n_update_orbs");
-  ok &= check_field(s.n_hess_x, "n_hess_x");
   ok &= check_keyword(s.subsystem_solver, "subsystem_solver");
   ok &= check_keyword(s.trust_region_shape, "trust_region_shape");
 
@@ -545,7 +541,6 @@ bool test_settings_layout(void) {
       check_field(ss.jacobi_davidson_start, "stability_settings.jacobi_davidson_start");
   ok &= check_field(ss.seed, "stability_settings.seed");
   ok &= check_field(ss.verbose, "stability_settings.verbose");
-  ok &= check_field(ss.n_hess_x, "stability_settings.n_hess_x");
   ok &= check_keyword(ss.diag_solver, "stability_settings.diag_solver");
 
   return ok;
@@ -660,8 +655,7 @@ bool test_solver_c(void) {
   logger_without_context = 0;
 
   /* the maximum precision flag starts opposite to the one the converging solve
-   * returns, so that its write-back is detected, in the settings and the state */
-  settings.max_precision_reached = true;
+   * returns, so that its write-back is detected */
   solver_state_type state = {0};
   state.max_precision_reached = true;
   ctx.solver_state = &state;
@@ -671,7 +665,7 @@ bool test_solver_c(void) {
     fprintf(stderr, "test_solver_c failed: Produced error.\n");
     ok = false;
   }
-  if (settings.max_precision_reached) {
+  if (state.max_precision_reached) {
     fprintf(stderr, "test_solver_c failed: Maximum precision reached flag was not "
                     "returned.\n");
     ok = false;
@@ -693,26 +687,24 @@ bool test_solver_c(void) {
                     "context.\n");
     ok = false;
   }
-  if (settings.n_update_orbs <= 0) {
+  if (state.n_update_orbs <= 0) {
     fprintf(stderr, "test_solver_c failed: Orbital update counter was not "
                     "populated.\n");
     ok = false;
   }
-  if (settings.n_hess_x <= 0) {
+  if (state.n_obj_func <= 0) {
+    fprintf(stderr, "test_solver_c failed: Objective function counter was not "
+                    "populated.\n");
+    ok = false;
+  }
+  if (state.n_hess_x <= 0) {
     fprintf(stderr, "test_solver_c failed: Hessian linear transformation counter was "
                     "not populated.\n");
     ok = false;
   }
-  if (settings.stability_settings.n_hess_x <= 0) {
+  if (state.stability_state.n_hess_x <= 0) {
     fprintf(stderr, "test_solver_c failed: Hessian linear transformation counter of "
                     "the internal stability check was not populated.\n");
-    ok = false;
-  }
-  if (state.max_precision_reached || state.n_update_orbs != settings.n_update_orbs ||
-      state.n_hess_x != settings.n_hess_x ||
-      state.stability_state.n_hess_x != settings.stability_settings.n_hess_x ||
-      state.n_obj_func <= 0) {
-    fprintf(stderr, "test_solver_c failed: State was not returned.\n");
     ok = false;
   }
   /* every orbital update read the updates before it, and the last Hessian linear
@@ -847,7 +839,7 @@ bool test_stability_check_c(void) {
                     "host context.\n");
     ok = false;
   }
-  if (settings.n_hess_x <= 0) {
+  if (state.n_hess_x <= 0) {
     fprintf(stderr, "test_stability_check_c failed: Hessian linear transformation "
                     "counter was not populated.\n");
     ok = false;
@@ -857,8 +849,7 @@ bool test_stability_check_c(void) {
                     "positive lowest eigenvalue for minimum.\n");
     ok = false;
   }
-  if (state.iteration <= 0 || state.n_hess_x != settings.n_hess_x ||
-      state.min_eigval != min_eigval) {
+  if (state.iteration <= 0 || state.min_eigval != min_eigval) {
     fprintf(stderr, "test_stability_check_c failed: State was not returned.\n");
     ok = false;
   }
