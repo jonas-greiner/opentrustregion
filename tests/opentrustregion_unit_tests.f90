@@ -2427,34 +2427,12 @@ contains
             test_solver = .false.
         end if
 
-        ! check if number of random trial vectors for internal stability check is
-        ! correct
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        call settings%init(error)
-        settings%stability = .true.
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
-        if (settings%stability_settings%n_random_trial_vectors /= 1) then
-            write(stderr, *) "test_solver failed: Automatic number of random trial "// &
-                "vectors for stability check not reduced."
-            test_solver = .false.
-        end if
-
-        ! check if explicitly requested number of trial vectors survives
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        call settings%init(error)
-        settings%stability = .true.
-        settings%stability_settings%n_random_trial_vectors = 2
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
-        if (settings%stability_settings%n_random_trial_vectors /= 2) then
-            write(stderr, *) "test_solver failed: Explicitly requested number of "// &
-                "random trial vectors for stability check not respected."
-            test_solver = .false.
-        end if
-
-        ! start near saddle point
+        ! start near saddle point with the stability check
         curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
         update_orbs_funptr => legacy_update_orbs
         obj_func_funptr => legacy_obj_func
+        call settings%init(error)
+        settings%stability = .true.
 
         ! run solver, check if error has occured and check whether gradient is zero and
         ! agrees with correct minimum, the state record of the first call is reused so
@@ -2486,17 +2464,9 @@ contains
         update_orbs_funptr => legacy_update_orbs
         obj_func_funptr => legacy_obj_func
 
-        ! set a custom logger only on the nested stability check settings and check
-        ! that the internal stability check does not replace it, since starting exactly
-        ! at a stationary point always triggers it on the first iteration
-        settings%stability_settings%logger => legacy_logger
-
-        ! raise the solver verbosity above the nested stability check settings' default
-        ! verbosity and check that it gets propagated to the nested settings
-        settings%verbose = 2_ip
-
-        ! hand the callback functions a host context, the internal stability check has
-        ! to inherit it since it calls back into the same host
+        ! hand the callback functions a host context, the internal stability check,
+        ! which starting exactly at a stationary point always triggers on the first
+        ! iteration, has to inherit it since it calls back into the same host
         call arm_host_context(settings)
 
         ! run solver, check if error has occured and check whether gradient is zero and
@@ -2504,16 +2474,6 @@ contains
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_solver failed: Produced error."
-            test_solver = .false.
-        end if
-        if (.not. associated(settings%stability_settings%logger, legacy_logger)) then
-            write(stderr, *) "test_solver failed: Custom logger set on nested "// &
-                "stability check settings was overwritten."
-            test_solver = .false.
-        end if
-        if (settings%stability_settings%verbose < settings%verbose) then
-            write(stderr, *) "test_solver failed: Solver verbosity was not "// &
-                "propagated to nested stability check settings."
             test_solver = .false.
         end if
         call hartmann6d_gradient(curr_vars, final_grad)
@@ -2529,21 +2489,11 @@ contains
         end if
         test_solver = test_solver .and. &
                       logical(host_context_reached("solver"), kind=c_bool)
-        if (associated(settings%stability_settings%context)) then
-            write(stderr, *) "test_solver failed: Host context lent to the "// &
-                "internal stability check was left on the nested settings."
-            test_solver = .false.
-        end if
 
         ! start at saddle point again but give the nested stability check settings a
         ! context of their own, the internal stability check hands it to the Hessian
-        ! linear transformation instead of the solver's and leaves it in place, the
-        ! logging function is removed so that only the Hessian linear transformation is
-        ! called during the internal stability check
+        ! linear transformation instead of the solver's
         curr_vars = saddle_point
-        settings%verbose = 0_ip
-        settings%stability_settings%verbose = 0_ip
-        settings%stability_settings%logger => null()
         call arm_host_context(settings)
         settings%stability_settings%context => stability_host_context
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
@@ -2557,12 +2507,6 @@ contains
         if (stability_host_context%n_calls == 0) then
             write(stderr, *) "test_solver failed: Hessian linear transformation "// &
                 "did not receive the context of the nested stability check settings."
-            test_solver = .false.
-        end if
-        if (.not. associated(settings%stability_settings%context, &
-                             stability_host_context)) then
-            write(stderr, *) "test_solver failed: Context of the nested stability "// &
-                "check settings was replaced."
             test_solver = .false.
         end if
 
@@ -2582,11 +2526,6 @@ contains
         end if
         test_solver = test_solver .and. &
                       logical(host_context_reached("solver"), kind=c_bool)
-        if (.not. settings%stability_settings%initialized) then
-            write(stderr, *) "test_solver failed: Nested stability check settings "// &
-                "were left uninitialized."
-            test_solver = .false.
-        end if
 
         ! start at saddle point but allow only a single macro iteration, the internal
         ! stability check finds the saddle point unstable and the solver stops before
@@ -3236,12 +3175,11 @@ contains
         ! this function tests the subroutine which performs the stability check at a
         ! stationary point and determines the step along an unstable mode
         !
-        use opentrustregion, only: solver_settings_type, hess_x_type, &
-                                   check_stationary_point, verbosity_debug, &
-                                   error_hess_x, started_at_saddle_point_warning_msg, &
-                                   reached_saddle_point_warning_msg, &
-                                   reached_saddle_point_no_grad_noise_warning_msg, &
-                                   reached_saddle_point_stability_hess_x_warning_msg
+        use opentrustregion, only: &
+            solver_settings_type, hess_x_type, check_stationary_point, error_hess_x, &
+            started_at_saddle_point_warning_msg, reached_saddle_point_warning_msg, &
+            reached_saddle_point_no_grad_noise_warning_msg, &
+            reached_saddle_point_stability_hess_x_warning_msg
         use test_reference, only: arm_host_context, host_context_reached
 
         type(solver_settings_type) :: settings
@@ -3266,21 +3204,15 @@ contains
         hess_x_funptr => double_well_hess_x
 
         ! check the saddle point in the first macro iteration with nested stability
-        ! check settings without callback functions, verbosity, number of random trial
-        ! vectors or context of their own, which have to inherit the solver's for the
-        ! duration of the check, stop as soon as an instability is certain since they
-        ! have no convergence check and use a single random trial vector, and check
-        ! that the Hessian linear transformations of the check are added to the
-        ! solver's counter, that a step along the unstable mode is returned with its
-        ! norm and that the warning for starting at a saddle point is printed
+        ! check settings holding the context the solver lends them and check that the
+        ! context reaches the callback functions of the stability check, that its
+        ! Hessian linear transformations are added to the solver's counter, that a step
+        ! along the unstable mode is returned with its norm and that the warning for
+        ! starting at a saddle point is printed
         call setup_settings(settings, context)
-        settings%precond => identity_precond
-        settings%project => identity_project
         state%n_hess_x = 5
-        settings%stability_settings%n_random_trial_vectors = -1
-        settings%stability_settings%stop_on_instability = .false.
         context%vars = [0.0_rp, 0.0_rp]
-        call arm_host_context(settings, context)
+        call arm_host_context(settings%stability_settings, context)
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 1_ip, settings, state, stable, &
                                     kappa, kappa_norm, error)
@@ -3304,45 +3236,8 @@ contains
                 "along unstable mode not returned."
             test_check_stationary_point = .false.
         end if
-        if (.not. associated(settings%stability_settings%precond, identity_precond)) &
-            then
-            write(stderr, *) "test_check_stationary_point failed: Solver's "// &
-                "preconditioner not inherited."
-            test_check_stationary_point = .false.
-        end if
-        if (.not. associated(settings%stability_settings%project, identity_project)) &
-            then
-            write(stderr, *) "test_check_stationary_point failed: Solver's "// &
-                "projection not inherited."
-            test_check_stationary_point = .false.
-        end if
-        if (.not. associated(settings%stability_settings%logger, logger)) then
-            write(stderr, *) "test_check_stationary_point failed: Solver's logging "// &
-                "function not inherited."
-            test_check_stationary_point = .false.
-        end if
-        if (settings%stability_settings%verbose /= settings%verbose) then
-            write(stderr, *) "test_check_stationary_point failed: Solver's "// &
-                "verbosity not inherited."
-            test_check_stationary_point = .false.
-        end if
-        if (.not. settings%stability_settings%stop_on_instability) then
-            write(stderr, *) "test_check_stationary_point failed: Nested settings "// &
-                "without convergence check do not stop on instability."
-            test_check_stationary_point = .false.
-        end if
-        if (settings%stability_settings%n_random_trial_vectors /= 1) then
-            write(stderr, *) "test_check_stationary_point failed: Unset number of "// &
-                "random trial vectors of nested settings not set to one."
-            test_check_stationary_point = .false.
-        end if
         if (.not. host_context_reached("check_stationary_point", context)) &
             test_check_stationary_point = .false.
-        if (associated(settings%stability_settings%context)) then
-            write(stderr, *) "test_check_stationary_point failed: Host context "// &
-                "lent to the stability check left on the nested settings."
-            test_check_stationary_point = .false.
-        end if
         if (state%stability_state%n_hess_x <= 0) then
             write(stderr, *) "test_check_stationary_point failed: Hessian linear "// &
                 "transformations of the stability check not counted."
@@ -3362,20 +3257,13 @@ contains
         end if
 
         ! check the saddle point in a later macro iteration with nested stability check
-        ! settings with a verbosity above the solver's, a convergence check, a number of
-        ! random trial vectors, which differs from the one the check sets and leaves a
-        ! trial space of the extra trial vector, and a context of their own, which they
-        ! have to keep, the stability check hands this context to every callback
-        ! function it calls, which its own test covers, so the Hessian linear
-        ! transformation has to receive it, and check that the warning for reaching a
-        ! saddle point is printed
+        ! settings with a context of their own, which the stability check hands to
+        ! every callback function it calls, which its own test covers, so that the
+        ! Hessian linear transformation has to receive it instead of the solver's, and
+        ! check that the warning for reaching a saddle point is printed
         call setup_settings(settings, context)
         context%vars = [0.0_rp, 0.0_rp]
         stability_context%vars = [0.0_rp, 0.0_rp]
-        settings%stability_settings%verbose = verbosity_debug
-        settings%stability_settings%conv_check => mock_conv_check_stability
-        settings%stability_settings%n_random_trial_vectors = 0
-        settings%stability_settings%stop_on_instability = .false.
         settings%stability_settings%context => stability_context
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
@@ -3383,27 +3271,6 @@ contains
         if (error /= 0) then
             write(stderr, *) "test_check_stationary_point failed: Produced error "// &
                 "at saddle point in later macro iteration."
-            test_check_stationary_point = .false.
-        end if
-        if (settings%stability_settings%verbose /= verbosity_debug) then
-            write(stderr, *) "test_check_stationary_point failed: Verbosity of "// &
-                "nested settings above the solver's replaced."
-            test_check_stationary_point = .false.
-        end if
-        if (settings%stability_settings%stop_on_instability) then
-            write(stderr, *) "test_check_stationary_point failed: Nested settings "// &
-                "with convergence check stop on instability."
-            test_check_stationary_point = .false.
-        end if
-        if (settings%stability_settings%n_random_trial_vectors /= 0) then
-            write(stderr, *) "test_check_stationary_point failed: Number of random "// &
-                "trial vectors of nested settings replaced."
-            test_check_stationary_point = .false.
-        end if
-        if (.not. associated(settings%stability_settings%context, stability_context)) &
-            then
-            write(stderr, *) "test_check_stationary_point failed: Context of "// &
-                "nested settings replaced."
             test_check_stationary_point = .false.
         end if
         if (.not. stability_context%hess_x_called) then
@@ -3423,6 +3290,7 @@ contains
         call setup_settings(settings, context)
         context%vars = [0.0_rp, 0.0_rp]
         settings%grad_noise = .false.
+        settings%stability_settings%context => context
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
                                     kappa, kappa_norm, error)
@@ -3445,6 +3313,7 @@ contains
         call setup_settings(settings, context)
         context%vars = [0.0_rp, 0.0_rp]
         context%hess_x_called = .false.
+        settings%stability_settings%context => context
         settings%stability_hess_x => double_well_hess_x
         hess_x_funptr => failing_double_well_hess_x
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
@@ -3473,18 +3342,10 @@ contains
             test_check_stationary_point = .false.
         end if
 
-        ! check a minimum with nested stability check settings which provide their own
-        ! preconditioner and projection, which differ from the solver's, and their own
-        ! logging function while the solver has none, all of which they have to keep,
-        ! and check that the minimum is found to be stable
+        ! check that a minimum is found to be stable
         call setup_settings(settings, context)
+        settings%stability_settings%context => context
         hess_x_funptr => double_well_hess_x
-        settings%precond => mock_precond
-        settings%project => mock_project
-        settings%logger => null()
-        settings%stability_settings%precond => identity_precond
-        settings%stability_settings%project => identity_project
-        settings%stability_settings%logger => logger
         context%vars = [0.0_rp, 1.0_rp / sqrt(2.0_rp)]
         call check_stationary_point(stationary_grad, 0.0_rp, minimum_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
@@ -3499,27 +3360,11 @@ contains
                 "found to be stable."
             test_check_stationary_point = .false.
         end if
-        if (.not. associated(settings%stability_settings%precond, identity_precond)) &
-            then
-            write(stderr, *) "test_check_stationary_point failed: Preconditioner "// &
-                "of nested settings replaced."
-            test_check_stationary_point = .false.
-        end if
-        if (.not. associated(settings%stability_settings%project, identity_project)) &
-            then
-            write(stderr, *) "test_check_stationary_point failed: Projection of "// &
-                "nested settings replaced."
-            test_check_stationary_point = .false.
-        end if
-        if (.not. associated(settings%stability_settings%logger, logger)) then
-            write(stderr, *) "test_check_stationary_point failed: Logging function "// &
-                "of nested settings replaced."
-            test_check_stationary_point = .false.
-        end if
 
         ! check that the error of a failing Hessian linear transformation during the
         ! stability check is reported with its origin
         call setup_settings(settings, context)
+        settings%stability_settings%context => context
         hess_x_funptr => failing_double_well_hess_x
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 1_ip, settings, state, stable, &
@@ -8461,12 +8306,12 @@ contains
         ! this function tests the subroutine that resolves settings defaults that
         ! depend on other settings
         !
-        use opentrustregion, only: solver_settings_type, init_defaults, &
-                                   default_spherical_trust_radius, &
-                                   default_ellipsoidal_trust_radius
+        use opentrustregion, only: &
+            solver_settings_type, init_defaults, default_spherical_trust_radius, &
+            default_ellipsoidal_trust_radius, verbosity_info, verbosity_debug
 
         type(solver_settings_type) :: settings
-        type(test_context_type), target :: context
+        type(test_context_type), target :: context, stability_context
 
         ! assume tests pass
         test_init_defaults = .true.
@@ -8566,6 +8411,96 @@ contains
             write(stderr, *) "test_init_defaults failed: Did not resolve unset "// &
                 "starting trust radius to spherical default for spherical trust "// &
                 "region shape given in mixed case."
+            test_init_defaults = .false.
+        end if
+
+        ! check that nested stability check settings without callback functions, a
+        ! context or a convergence check of their own, with a verbosity below the
+        ! solver's and an unset number of random trial vectors inherit the solver's
+        ! preconditioning, projection and logging functions, context and verbosity,
+        ! stop as soon as an instability is certain and use a single random trial
+        ! vector
+        call setup_settings(settings, context)
+        settings%precond => identity_precond
+        settings%project => identity_project
+        settings%verbose = verbosity_debug
+        settings%stability_settings%stop_on_instability = .false.
+        settings%stability_settings%n_random_trial_vectors = -1
+        call init_defaults(settings)
+        if (.not. associated(settings%stability_settings%precond, &
+                             identity_precond) .or. &
+            .not. associated(settings%stability_settings%project, &
+                             identity_project) .or. &
+            .not. associated(settings%stability_settings%logger, logger)) then
+            write(stderr, *) "test_init_defaults failed: Nested stability check "// &
+                "settings did not inherit the solver's callback functions."
+            test_init_defaults = .false.
+        end if
+        if (.not. associated(settings%stability_settings%context, context)) then
+            write(stderr, *) "test_init_defaults failed: Nested stability check "// &
+                "settings did not inherit the solver's context."
+            test_init_defaults = .false.
+        end if
+        if (settings%stability_settings%verbose /= verbosity_debug) then
+            write(stderr, *) "test_init_defaults failed: Nested stability check "// &
+                "settings did not inherit the solver's higher verbosity."
+            test_init_defaults = .false.
+        end if
+        if (.not. settings%stability_settings%stop_on_instability) then
+            write(stderr, *) "test_init_defaults failed: Nested stability check "// &
+                "settings without convergence check do not stop on instability."
+            test_init_defaults = .false.
+        end if
+        if (settings%stability_settings%n_random_trial_vectors /= 1) then
+            write(stderr, *) "test_init_defaults failed: Unset number of random "// &
+                "trial vectors of nested stability check settings not set to one."
+            test_init_defaults = .false.
+        end if
+
+        ! check that nested stability check settings with callback functions, a context
+        ! and a convergence check of their own, a verbosity above the solver's and a
+        ! number of random trial vectors keep all of these
+        call setup_settings(settings, context)
+        settings%precond => mock_precond
+        settings%project => mock_project
+        settings%verbose = verbosity_info
+        settings%stability_settings%precond => identity_precond
+        settings%stability_settings%project => identity_project
+        settings%stability_settings%logger => legacy_logger
+        settings%stability_settings%context => stability_context
+        settings%stability_settings%conv_check => mock_conv_check_stability
+        settings%stability_settings%verbose = verbosity_debug
+        settings%stability_settings%stop_on_instability = .false.
+        settings%stability_settings%n_random_trial_vectors = 3
+        call init_defaults(settings)
+        if (.not. associated(settings%stability_settings%precond, &
+                             identity_precond) .or. &
+            .not. associated(settings%stability_settings%project, &
+                             identity_project) .or. &
+            .not. associated(settings%stability_settings%logger, legacy_logger)) then
+            write(stderr, *) "test_init_defaults failed: Callback functions of "// &
+                "nested stability check settings replaced."
+            test_init_defaults = .false.
+        end if
+        if (.not. associated(settings%stability_settings%context, stability_context)) &
+            then
+            write(stderr, *) "test_init_defaults failed: Context of nested "// &
+                "stability check settings replaced."
+            test_init_defaults = .false.
+        end if
+        if (settings%stability_settings%verbose /= verbosity_debug) then
+            write(stderr, *) "test_init_defaults failed: Higher verbosity of "// &
+                "nested stability check settings replaced."
+            test_init_defaults = .false.
+        end if
+        if (settings%stability_settings%stop_on_instability) then
+            write(stderr, *) "test_init_defaults failed: Nested stability check "// &
+                "settings with convergence check stop on instability."
+            test_init_defaults = .false.
+        end if
+        if (settings%stability_settings%n_random_trial_vectors /= 3) then
+            write(stderr, *) "test_init_defaults failed: Number of random trial "// &
+                "vectors of nested stability check settings replaced."
             test_init_defaults = .false.
         end if
 

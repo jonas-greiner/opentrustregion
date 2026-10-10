@@ -62,7 +62,7 @@ contains
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
-        type(solver_settings_type), intent(inout) :: settings
+        type(solver_settings_type), intent(in) :: settings
         type(solver_state_type), intent(out), target, optional :: state
 
         ! assume tests pass
@@ -163,7 +163,7 @@ contains
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         logical, intent(out) :: stable
         integer(ip), intent(out) :: error
-        type(stability_settings_type), intent(inout) :: settings
+        type(stability_settings_type), intent(in) :: settings
         type(stability_state_type), intent(out), target, optional :: state
         real(rp), intent(out), optional :: kappa(:), min_eigval
 
