@@ -3711,12 +3711,14 @@ contains
         ! default to maximum precision not yet reached
         max_precision_reached = .false.
 
-        ! check if function value has not decreased up to floating point precision
+        ! check if function value has not decreased up to floating point precision, in
+        ! which case the step is not taken
         func_resolution = func_resolution_safety_factor * abs(func) * epsilon(1.0_rp)
-        if (abs(actual_func_diff) < func_resolution .and. &
-            abs(pred_func_diff) < func_resolution) then
+        if (abs(actual_func_diff) <= func_resolution .and. &
+            abs(pred_func_diff) <= func_resolution) then
             call settings%log(function_unchanged_warning_msg, verbosity_warning)
             max_precision_reached = .true.
+            accept_trust_region_step = .false.
             return
         end if
 

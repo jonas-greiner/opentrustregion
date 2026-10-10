@@ -5330,6 +5330,30 @@ contains
             test_accept_trust_region_step = .false.
         end if
 
+        ! check that maximum precision is detected for a vanishing objective function
+        ! value, whose resolution vanishes as well, when both function changes vanish,
+        ! and that the step is then not taken and the trust radius is left unchanged
+        trust_radius = 1.0_rp
+        accept_step = accept_trust_region_step(solution, norm2(solution), 0.0_rp, &
+                                               0.0_rp, 0.0_rp, .true., settings, &
+                                               trust_radius, max_precision_reached)
+        if (.not. max_precision_reached) then
+            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
+                "precision not detected for vanishing function changes of a "// &
+                "vanishing objective function value."
+            test_accept_trust_region_step = .false.
+        end if
+        if (accept_step) then
+            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
+                "when maximum precision is reached."
+            test_accept_trust_region_step = .false.
+        end if
+        if (abs(trust_radius - 1.0_rp) > tol) then
+            write(stderr, *) "test_accept_trust_region_step failed: Trust radius "// &
+                "changed when maximum precision is reached."
+            test_accept_trust_region_step = .false.
+        end if
+
         ! check that both changes have to be unresolvable
         trust_radius = 1.0_rp
         accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
