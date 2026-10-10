@@ -211,7 +211,7 @@ settings.n_macro = 100
 settings.subsystem_solver = "tcg"
 
 # run solver
-solver(obj_func, update_orbs, n_param, settings, state)
+solver(update_orbs, obj_func, n_param, settings, state)
 
 # read the final state
 print(f"Number of orbital updates: {state.n_update_orbs}")
@@ -221,7 +221,7 @@ print(f"Number of orbital updates: {state.n_update_orbs}")
 - `n_param` is also assumed to be defined elsewhere.
 - Solver settings are initialized via the `SolverSettings` class, which returns an object with default values; individual settings (here, `conv_tol`, and `n_macro`) can then be overridden.
 - There is no `context` setting in Python. Any callable works as a callback function, so a closure, a bound method or a `functools.partial` already carries whatever host data the callback function needs.
-- Finally, the `solver` is called with the callback functions, the settings and a state object, and errors can be caught in pythonic fashion in the form of a `RuntimeError`. Unlike in Fortran and C, the objective function comes before the orbital updating function. The settings and the state are optional: without settings, the default settings are used, and the state is only needed to read it.
+- Finally, the `solver` is called with the callback functions, the settings and a state object, and errors can be caught in pythonic fashion in the form of a `RuntimeError`. The settings and the state are optional: without settings, the default settings are used, and the state is only needed to read it.
 - After the call, `state` holds the final state of the optimization (here, `n_update_orbs`), see [Output](#output), whose fields are read-only attributes. The settings are left unchanged.
 
 ### Optional Settings
@@ -679,7 +679,7 @@ obj_func_mo, update_orbs_mo = mo_factory(
 n_param = sum(occ * (n_mo - occ) for occ in np.atleast_1d(n_occ))
 
 # call solver
-solver(obj_func_mo, update_orbs_mo, n_param, settings)
+solver(update_orbs_mo, obj_func_mo, n_param, settings)
 
 # deallocate MO objects
 mo_deconstructor()
@@ -864,7 +864,7 @@ obj_func_oao, update_orbs_oao = oao_factory(
 n_param = n_particle * n_ao * (n_ao - 1) // 2
 
 # call solver
-solver(obj_func_oao, update_orbs_oao, n_param, settings)
+solver(update_orbs_oao, obj_func_oao, n_param, settings)
 
 # deallocate OAO objects
 oao_deconstructor()
@@ -1009,7 +1009,7 @@ update_orbs_qn = update_orbs_qn_factory(update_orbs, n_param, qn_settings)
 settings = SolverSettings()
 
 # call solver
-solver(obj_func, update_orbs_qn, n_param, settings)
+solver(update_orbs_qn, obj_func, n_param, settings)
 
 # clean up quasi-Newton objects
 update_orbs_qn_deconstructor()
@@ -1210,7 +1210,7 @@ obj_func_arh, update_orbs_arh = arh_factory(
 n_param = sum(occ * (n_mo - occ) for occ in np.atleast_1d(n_occ))
 
 # call solver
-solver(obj_func_arh, update_orbs_arh, n_param, settings)
+solver(update_orbs_arh, obj_func_arh, n_param, settings)
 
 # deallocate ARH objects
 arh_deconstructor()
@@ -1340,7 +1340,7 @@ obj_func_arh, update_orbs_arh = arh_factory(
 n_param = n_particle * n_ao * (n_ao - 1) // 2
 
 # call solver
-solver(obj_func_arh, update_orbs_arh, n_param, settings)
+solver(update_orbs_arh, obj_func_arh, n_param, settings)
 
 # deallocate ARH objects
 arh_deconstructor()
@@ -1498,7 +1498,7 @@ update_orbs_s_gek = update_orbs_s_gek_factory(update_orbs, n_param, s_gek_settin
 settings = SolverSettings()
 
 # call solver
-solver(obj_func, update_orbs_s_gek, n_param, settings)
+solver(update_orbs_s_gek, obj_func, n_param, settings)
 
 # clean up S-GEK objects
 update_orbs_s_gek_deconstructor()
