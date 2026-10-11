@@ -402,6 +402,34 @@ contains
 
     end subroutine hess_x_fun_failing
 
+    subroutine approx_hess_x_fun(x, hess_x, error, context)
+        !
+        ! this subroutine describes an approximate Hessian linear transformation for the
+        ! Hartmann 6D function, which applies the diagonal of its Hessian
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(hartmann6d_context_type), pointer :: state
+        integer(ip) :: i
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get Hartmann 6D state
+        hess_x = 0.0_rp
+        state => resolve_hartmann6d_context(context, error)
+        if (error /= 0) return
+
+        ! apply the diagonal of the Hessian
+        hess_x = [(state%hess(i, i) * x(i), i=1, size(x))]
+
+    end subroutine approx_hess_x_fun
+
     function obj_func(delta_vars, error, context) result(func)
         !
         ! this function describes the objective function evaluation for the Hartmann 6D
@@ -3270,333 +3298,231 @@ contains
         !
         ! this function tests the stability check subroutine
         !
-        use opentrustregion, only: hess_x_type, stability_settings_type, &
-                                   stability_state_type, stability_check, &
-                                   error_stability_check_max_iter
-        use test_reference, only: n_extra_trial_vectors
+        use opentrustregion, only: &
+            hess_x_type, stability_settings_type, stability_state_type, &
+            stability_check, error_stability_check, error_stability_check_max_iter, &
+            verbosity_debug, verbosity_warning, error_hess_x, error_precond, &
+            error_project, error_conv_check, error_get_extra_trial_vectors, &
+            diag_solver_options, unstable_warning_msg, &
+            settings_uninitialized_warning_msg, default_stability_settings
+        use test_reference, only: arm_host_context, host_context_reached, &
+                                  n_extra_trial_vectors
 
-        real(rp) :: vars(n_param), h_diag(n_param), direction(n_param), min_eigval, &
-                    eigval_vec(n_param), explicit_min_eigval
+        real(rp), parameter :: points(n_param, 2) = &
+            reshape([minimum1, saddle_point], [n_param, 2])
+        character(len=*), parameter :: &
+            point_names(2) = [character(len=12) :: "minimum", "saddle point"], &
+            trial_space_names(4) = [character(len=41) :: "default trial space", &
+                                    "extra trial vectors", &
+                                    "approximate Hessian linear transformation", &
+                                    "purely random trial space"]
+        integer(ip), parameter :: &
+            fault_callbacks(6) = [fault_hess_x, fault_precond, fault_project, &
+                                  fault_get_extra_trial_vectors, fault_approx_hess_x, &
+                                  fault_conv_check_stability], &
+            fault_origins(6) = [error_hess_x, error_precond, error_project, &
+                                error_get_extra_trial_vectors, error_hess_x, &
+                                error_conv_check]
+        real(rp) :: h_diag(n_param), direction(n_param), min_eigval, &
+                    hess_eigvals(n_param), hess_eigvecs(n_param, n_param)
         procedure(hess_x_type), pointer :: hess_x_funptr
-        logical :: stable
-        integer(ip) :: error, i
-        type(stability_settings_type) :: settings
+        logical :: stable, expected_calls(n_fault_callbacks)
+        integer(ip) :: error, i, i_point, i_space, i_solver, i_config, callback, &
+                       i_call, n_calls(n_fault_callbacks)
+        character(len=300) :: msg
+        character(len=20) :: call_number
+        character(len=100) :: case_name
+        type(stability_settings_type) :: settings, uninitialized_settings
         type(stability_state_type) :: state, explicit_state
+        type(hartmann6d_fault_context_type), target :: fault_context
+        type(hartmann6d_context_type), target :: context
 
         ! assume tests pass
         test_stability_check = .true.
 
-        ! start at minimum and determine Hessian diagonal and define Hessian linear
-        ! transformation
-        vars = minimum1
-        call legacy_hartmann6d_hessian(vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_funptr => legacy_hess_x_fun
+        ! run the stability check at the minimum and at the saddle point with the
+        ! default trial space, with extra trial vectors, with the approximate Hessian
+        ! linear transformation and with a purely random trial space, and check that it
+        ! classifies the point correctly and returns the lowest Hessian eigenvalue and
+        ! its eigenvector, which are determined independently, at the minimum as well,
+        ! that the state holds the iteration, this eigenvalue and its converged
+        ! residual and that the reported number of Hessian linear transformations
+        ! agrees with the calls, the state record is reused so that the counter must
+        ! not include the previous calls
+        hess_x_funptr => hess_x_fun
+        do i_point = 1, size(points, 2)
+            context%hess = hartmann6d_hessian(points(:, i_point))
+            call ref_symm_mat_diag(context%hess, hess_eigvals, hess_eigvecs)
+            h_diag = [(context%hess(i, i), i=1, size(h_diag))]
+            do i_space = 1, size(trial_space_names)
+                call settings%init(error)
+                settings%context => context
+                select case (i_space)
+                case (2)
+                    settings%n_extra_trial_vectors = n_extra_trial_vectors
+                    settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+                case (3)
+                    settings%approx_hess_x => approx_hess_x_fun
+                case (4)
+                    settings%n_extra_trial_vectors = 0
+                    settings%n_random_trial_vectors = 3
+                end select
+                case_name = trim(trial_space_names(i_space))//" at "// &
+                            trim(point_names(i_point))
+                context%n_hess_x_calls = 0
+                call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                                     state, direction, min_eigval)
+                if (error /= 0) then
+                    write(stderr, *) "test_stability_check failed: Produced error "// &
+                        "for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (stable .neqv. i_point == 1) then
+                    write(stderr, *) "test_stability_check failed: Stability "// &
+                        "incorrectly classified for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (abs(min_eigval - hess_eigvals(1)) > tol) then
+                    write(stderr, *) "test_stability_check failed: Lowest "// &
+                        "eigenvalue not returned for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (abs(abs(dot_product(direction, hess_eigvecs(:, 1))) - 1.0_rp) > &
+                    tol) then
+                    write(stderr, *) "test_stability_check failed: Eigenvector of "// &
+                        "the lowest eigenvalue not returned for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (state%iteration < 1 .or. &
+                    abs(state%min_eigval - min_eigval) > tol .or. &
+                    state%residual_rms >= settings%conv_tol) then
+                    write(stderr, *) "test_stability_check failed: Iteration, "// &
+                        "lowest eigenvalue or its residual not in the state for "// &
+                        trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (.not. check_call_counts( &
+                    context, "stability_check", "for "//trim(case_name), &
+                    n_hess_x=state%n_hess_x)) test_stability_check = .false.
+            end do
+        end do
 
-        ! initialize settings
+        ! check that a warning with the lowest eigenvalue is printed at the saddle point
         call settings%init(error)
-
-        ! run stability, check if error has occured check and determine whether minimum
-        ! is stable and returned direction and eigenvalue are correct
-        n_hess_x_calls = 0
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, state, &
-                             direction, min_eigval)
+        settings%context => context
+        settings%logger => logger
+        settings%verbose = verbosity_warning
+        context%log_message = ""
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings)
         if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error."
+            write(stderr, *) "test_stability_check failed: Produced error for "// &
+                "saddle point with logging function."
             test_stability_check = .false.
         end if
-        if (.not. stable) then
+        write(msg, '(A, F0.4)') unstable_warning_msg, hess_eigvals(1)
+        if (index(context%log_message, " "//trim(msg)) == 0) then
+            write(stderr, *) "test_stability_check failed: Warning not printed for "// &
+                "saddle point."
+            test_stability_check = .false.
+        end if
+
+        ! check that the Hessian linear transformation, the preconditioner, the
+        ! projection, the extra trial vector function, the convergence check and the
+        ! logging function receive the host context of the settings, and so does the
+        ! approximate Hessian linear transformation, which the extra trial vectors take
+        ! precedence over, in a second call
+        do i_config = 1, 2
+            call setup_settings(settings, context)
+            settings%precond => identity_precond
+            settings%project => identity_project
+            settings%conv_check => mock_conv_check_stability
+            if (i_config == 1) then
+                settings%n_extra_trial_vectors = n_extra_trial_vectors
+                settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+            else
+                settings%approx_hess_x => approx_hess_x_fun
+            end if
+            call arm_host_context(settings, context)
+            call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                                 kappa=direction)
+            if (error /= 0) then
+                write(stderr, *) "test_stability_check failed: Produced error for "// &
+                    "saddle point with every callback function."
+                test_stability_check = .false.
+            end if
+            if (.not. host_context_reached("stability_check", context)) &
+                test_stability_check = .false.
+        end do
+
+        ! check that the saddle point is found to be unstable without a returned
+        ! direction and eigenvalue
+        call setup_settings(settings, context)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error for "// &
+                "saddle point without returned direction."
+            test_stability_check = .false.
+        end if
+        if (stable) then
             write(stderr, *) "test_stability_check failed: Stability check "// &
-                "incorrectly classifies stability of minimum."
-            test_stability_check = .false.
-        end if
-        if (min_eigval <= 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return correct eigenvalue for minimum."
-            test_stability_check = .false.
-        end if
-        test_stability_check = test_stability_check .and. logical(call_counts_match( &
-            "stability_check", "for minimum", state%n_hess_x), kind=c_bool)
-        if (state%iteration < 1 .or. abs(state%min_eigval - min_eigval) > tol) then
-            write(stderr, *) "test_stability_check failed: Iteration or lowest "// &
-                "eigenvalue not in the state for minimum."
-            test_stability_check = .false.
-        end if
-        call hess_x_funptr(direction, eigval_vec, error, settings%context)
-        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
-            write(stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return correct eigenvector direction for minimum."
+                "incorrectly classifies stability of saddle point without returned "// &
+                "direction."
             test_stability_check = .false.
         end if
 
-        ! run stability check again without settings, so that it uses the default
-        ! settings the first run was given, with the same seed, and has to reach exactly
-        ! the same eigenvalue and residual with the same Hessian linear transformations
-        explicit_state = state
-        explicit_min_eigval = min_eigval
-        call stability_check(h_diag, hess_x_funptr, stable, error, state=state, &
-                             min_eigval=min_eigval)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error without "// &
-                "settings."
-            test_stability_check = .false.
-        end if
-        if (state%n_hess_x /= explicit_state%n_hess_x .or. &
-            abs(min_eigval - explicit_min_eigval) > 0.0_rp .or. &
-            abs(state%residual_rms - explicit_state%residual_rms) > 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Did not use the default "// &
-                "settings without settings."
-            test_stability_check = .false.
-        end if
-
-        ! initialize settings
+        ! run stability check with settings which the sanity check rejects and check
+        ! that its error is returned with the stability check's origin
         call settings%init(error)
-
-        ! supply the extra trial vectors
-        settings%n_extra_trial_vectors = n_extra_trial_vectors
-        settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
-
-        ! run stability, check if error has occured check and determine whether minimum
-        ! is stable and the returned direction vanishes
+        settings%diag_solver = "unknown"
+        call setup_error_logging(settings, context)
         call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction, min_eigval=min_eigval)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error with "// &
-                "supplied extra trial vectors."
-            test_stability_check = .false.
-        end if
-        if (.not. stable) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "supplied extra trial vectors incorrectly classifies stability of "// &
-                "minimum."
-            test_stability_check = .false.
-        end if
-        if (min_eigval <= 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "supplied extra trial vectors does not return correct eigenvalue "// &
-                "for minimum."
-            test_stability_check = .false.
-        end if
-        call hess_x_funptr(direction, eigval_vec, error, settings%context)
-        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "supplied extra trial vectors does not return correct eigenvector "// &
-                "direction for minimum."
+                             kappa=direction)
+        if (error /= error_stability_check + 1) then
+            write(stderr, *) "test_stability_check failed: Did not return error of "// &
+                "sanity check."
             test_stability_check = .false.
         end if
 
         ! force non-convergence by allowing only a single iteration and check that the
-        ! specific maximum iteration error code is returned
+        ! specific maximum iteration error code is returned and that the state holds
+        ! this iteration and its unconverged residual after the error
         call settings%init(error)
         settings%n_iter = 1
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction, min_eigval=min_eigval)
+        call setup_error_logging(settings, context)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, state)
         if (error /= error_stability_check_max_iter) then
             write(stderr, *) "test_stability_check failed: Did not return maximum "// &
                 "iteration error code when exceeding n_iter."
             test_stability_check = .false.
         end if
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! set approximate Hessian linear transformation
-        settings%approx_hess_x => mock_approx_hess_x
-
-        ! run stability, check if error has occured check and determine whether minimum
-        ! is stable and the returned direction vanishes
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction, min_eigval=min_eigval)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error with "// &
-                "approximate Hessian linear transformation."
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_stability_check failed: No error message "// &
+                "printed when exceeding n_iter."
             test_stability_check = .false.
         end if
-        if (.not. stable) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation incorrectly classifies "// &
-                "stability of minimum."
-            test_stability_check = .false.
-        end if
-        if (min_eigval <= 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation does not return correct "// &
-                "eigenvalue for minimum."
-            test_stability_check = .false.
-        end if
-        call hess_x_funptr(direction, eigval_vec, error, settings%context)
-        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation does not return correct "// &
-                "eigenvector direction for minimum."
-            test_stability_check = .false.
-        end if
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! start at saddle point and determine Hessian diagonal and define linear
-        ! transformation
-        vars = saddle_point
-        call legacy_hartmann6d_hessian(vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_funptr => legacy_hess_x_fun
-
-        ! run stability check, check if error has occured and determine whether saddle
-        ! point is unstable and the returned direction is correct, the state record of
-        ! the first call is reused so the reported counter must not include that call
-        n_hess_x_calls = 0
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, state, &
-                             direction, min_eigval)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error."
-            test_stability_check = .false.
-        end if
-        if (stable) then
-            write(stderr, *) "test_stability_check failed: Stability check "// &
-                "incorrectly classifies stability of saddle point."
-            test_stability_check = .false.
-        end if
-        if (min_eigval >= 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return correct eigenvalue for saddle point."
-            test_stability_check = .false.
-        end if
-        test_stability_check = test_stability_check .and. logical(call_counts_match( &
-            "stability_check", "for saddle point", state%n_hess_x), kind=c_bool)
-        call hess_x_funptr(direction, eigval_vec, error, settings%context)
-        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
-            write(stderr, *) "test_stability_check failed: Stability check does "// &
-                "not return correct eigenvector direction for saddle point."
-            test_stability_check = .false.
-        end if
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! supply the extra trial vectors
-        settings%n_extra_trial_vectors = n_extra_trial_vectors
-        settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
-
-        ! run stability check, check if error has occured and determine whether saddle
-        ! point is unstable and the returned direction is correct
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction, min_eigval=min_eigval)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error with "// &
-                "supplied extra trial vectors."
-            test_stability_check = .false.
-        end if
-        if (stable) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "supplied extra trial vectors incorrectly classifies stability of "// &
-                "saddle point."
-            test_stability_check = .false.
-        end if
-        if (min_eigval >= 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "supplied extra trial vectors does not return correct eigenvalue "// &
-                "for saddle point."
-            test_stability_check = .false.
-        end if
-        call hess_x_funptr(direction, eigval_vec, error, settings%context)
-        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "supplied extra trial vectors does not return correct eigenvector "// &
-                "direction for saddle point."
-            test_stability_check = .false.
-        end if
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! set approximate Hessian linear transformation
-        settings%approx_hess_x => mock_approx_hess_x
-
-        ! run stability check, check if error has occured and determine whether saddle
-        ! point is unstable and the returned direction is correct
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction, min_eigval=min_eigval)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error with "// &
-                "approximate Hessian linear transformation."
-            test_stability_check = .false.
-        end if
-        if (stable) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation incorrectly classifies "// &
-                "stability of saddle point."
-            test_stability_check = .false.
-        end if
-        if (min_eigval >= 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation does not return correct "// &
-                "eigenvalue for saddle point."
-            test_stability_check = .false.
-        end if
-        call hess_x_funptr(direction, eigval_vec, error, settings%context)
-        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "approximate Hessian linear transformation does not return correct "// &
-                "eigenvector direction for saddle point."
-            test_stability_check = .false.
-        end if
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! request a purely random trial space
-        settings%n_extra_trial_vectors = 0
-        settings%n_random_trial_vectors = 3
-
-        ! run stability check, check if error has occured and determine whether saddle
-        ! point is unstable and the returned direction is correct
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction, min_eigval=min_eigval)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error with "// &
-                "purely random trial space."
-            test_stability_check = .false.
-        end if
-        if (stable) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "purely random trial space incorrectly classifies stability of "// &
-                "saddle point."
-            test_stability_check = .false.
-        end if
-        if (min_eigval >= 0.0_rp) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "purely random trial space does not return correct eigenvalue for "// &
-                "saddle point."
-            test_stability_check = .false.
-        end if
-        call hess_x_funptr(direction, eigval_vec, error, settings%context)
-        if (dot_product(direction, eigval_vec) - min_eigval > tol) then
-            write(stderr, *) "test_stability_check failed: Stability check with "// &
-                "purely random trial space does not return correct eigenvector "// &
-                "direction for saddle point."
+        if (state%iteration /= 1 .or. state%residual_rms < settings%conv_tol) then
+            write(stderr, *) "test_stability_check failed: Iteration or "// &
+                "unconverged residual not in the state when exceeding n_iter."
             test_stability_check = .false.
         end if
 
         ! run stability check at saddle point with the Jacobi-Davidson method switched
-        ! on after the first iteration, so that the Hessian linear transformations
-        ! performed in the Jacobi-Davidson correction are counted as well, the Hessian
-        ! linear transformation is slightly asymmetric so that the ones recalculated
-        ! when Hessian symmetry is violated are also counted
-        hess_x_funptr => legacy_hess_x_fun_asymmetric
-        call settings%init(error)
+        ! on after the first iteration and check that the correction equations are
+        ! solved, which is logged at debug verbosity
+        call setup_settings(settings, context)
+        settings%verbose = verbosity_debug
         settings%diag_solver = "jacobi-davidson"
         settings%jacobi_davidson_start = 1
-        n_hess_x_calls = 0
-
-        ! the antisymmetric contribution leaves a residual of its own size, so the
-        ! convergence threshold has to lie above it for the check to converge
-        settings%conv_tol = 1e-6_rp
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, state, &
-                             direction)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             kappa=direction)
         if (error /= 0) then
             write(stderr, *) "test_stability_check failed: Produced error with "// &
                 "Jacobi-Davidson method."
+            test_stability_check = .false.
+        end if
+        if (index(context%log_message, "MINRES") == 0) then
+            write(stderr, *) "test_stability_check failed: Jacobi-Davidson "// &
+                "correction equations not solved."
             test_stability_check = .false.
         end if
         if (stable) then
@@ -3605,24 +3531,245 @@ contains
                 "Jacobi-Davidson method."
             test_stability_check = .false.
         end if
-        test_stability_check = test_stability_check .and. logical(call_counts_match( &
-            "stability_check", "with Jacobi-Davidson method", state%n_hess_x), &
-            kind=c_bool)
 
-        ! run stability check with a Hessian linear transformation which fails, the
-        ! failing call is still counted
-        hess_x_funptr => legacy_hess_x_fun_failing
-        call settings%init(error)
-        n_hess_x_calls = 0
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, state)
-        if (error == 0) then
-            write(stderr, *) "test_stability_check failed: Did not report a "// &
-                "failing Hessian linear transformation."
+        ! check that the Jacobi-Davidson method is used neither by the Davidson method
+        ! nor before the iteration at which it is requested to start, which the
+        ! stability check never reaches for a problem of this size
+        call setup_settings(settings, context)
+        settings%verbose = verbosity_debug
+        settings%jacobi_davidson_start = 0
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             kappa=direction)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error for "// &
+                "Davidson method with Jacobi-Davidson start at first iteration."
             test_stability_check = .false.
         end if
-        test_stability_check = test_stability_check .and. logical(call_counts_match( &
-            "stability_check", "for failing Hessian linear transformation", &
-            state%n_hess_x), kind=c_bool)
+        if (index(context%log_message, "MINRES") /= 0) then
+            write(stderr, *) "test_stability_check failed: Jacobi-Davidson "// &
+                "correction equations solved with Davidson method."
+            test_stability_check = .false.
+        end if
+        call setup_settings(settings, context)
+        settings%verbose = verbosity_debug
+        settings%diag_solver = "jacobi-davidson"
+        settings%jacobi_davidson_start = settings%n_iter
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                             kappa=direction)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error for "// &
+                "Jacobi-Davidson method started after last iteration."
+            test_stability_check = .false.
+        end if
+        if (index(context%log_message, "MINRES") /= 0) then
+            write(stderr, *) "test_stability_check failed: Jacobi-Davidson "// &
+                "correction equations solved before Jacobi-Davidson method is started."
+            test_stability_check = .false.
+        end if
+
+        ! run stability check at saddle point with the Jacobi-Davidson method and a
+        ! slightly asymmetric Hessian linear transformation, whose products are
+        ! recalculated once the symmetry is found to be violated, and check that these
+        ! are counted as well, the antisymmetric contribution leaves a residual of its
+        ! own size, so the convergence threshold has to lie above it
+        hess_x_funptr => hess_x_fun_asymmetric
+        call settings%init(error)
+        settings%context => context
+        settings%diag_solver = "jacobi-davidson"
+        settings%jacobi_davidson_start = 1
+        settings%conv_tol = 1e-6_rp
+        context%n_hess_x_calls = 0
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, state, &
+                             direction)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error with "// &
+                "asymmetric Hessian linear transformation."
+            test_stability_check = .false.
+        end if
+        if (stable) then
+            write(stderr, *) "test_stability_check failed: Stability check "// &
+                "incorrectly classifies stability of saddle point with asymmetric "// &
+                "Hessian linear transformation."
+            test_stability_check = .false.
+        end if
+        if (.not. check_call_counts( &
+            context, "stability_check", "with asymmetric Hessian linear "// &
+            "transformation", n_hess_x=state%n_hess_x)) test_stability_check = .false.
+        hess_x_funptr => hess_x_fun
+
+        ! run stability check with settings that were not initialized but carry a
+        ! logging function and check that a warning is printed through the logging
+        ! function and that the stability check initializes a copy of them, which leaves
+        ! the caller's settings as they are, the initialization also resets the host
+        ! context of the copy, so the Hessian linear transformation is one that needs no
+        ! test context
+        hess_x_funptr => identity_hess_x
+        uninitialized_settings%logger => logger
+        uninitialized_settings%context => context
+        context%log_message = ""
+        call stability_check(h_diag, hess_x_funptr, stable, error, &
+                             uninitialized_settings)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error for "// &
+                "settings that were not initialized."
+            test_stability_check = .false.
+        end if
+        if (uninitialized_settings%initialized .or. &
+            .not. associated(uninitialized_settings%logger, logger)) then
+            write(stderr, *) "test_stability_check failed: Settings of the caller "// &
+                "changed."
+            test_stability_check = .false.
+        end if
+        if (index(context%log_message, " "//settings_uninitialized_warning_msg) == 0) &
+            then
+            write(stderr, *) "test_stability_check failed: Warning not printed for "// &
+                "settings that were not initialized."
+            test_stability_check = .false.
+        end if
+
+        ! run stability check at the saddle point without settings, so that it uses the
+        ! default settings, and with the default settings and check that both reach
+        ! exactly the same eigenvalue and residual with the same Hessian linear
+        ! transformations, the Hessian linear transformation reaches the Hessian
+        ! through the module context since the stability check hands it no host
+        ! context without settings
+        hess_x_funptr => settingless_hess_x
+        settingless_context%hess = context%hess
+        call stability_check(h_diag, hess_x_funptr, stable, error, &
+                             default_stability_settings, explicit_state)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error with "// &
+                "default settings."
+            test_stability_check = .false.
+        end if
+        call stability_check(h_diag, hess_x_funptr, stable, error, state=state)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error without "// &
+                "settings."
+            test_stability_check = .false.
+        end if
+        if (state%n_hess_x /= explicit_state%n_hess_x .or. &
+            state%iteration /= explicit_state%iteration .or. &
+            abs(state%min_eigval - explicit_state%min_eigval) > 0.0_rp .or. &
+            abs(state%residual_rms - explicit_state%residual_rms) > 0.0_rp) then
+            write(stderr, *) "test_stability_check failed: Did not use the default "// &
+                "settings without settings."
+            test_stability_check = .false.
+        end if
+
+        ! inject faults by running the stability check at the saddle point with every
+        ! optional callback function, for every diagonalization solver and once with
+        ! extra trial vectors and once with the approximate Hessian linear
+        ! transformation they take precedence over, once without a fault to count the
+        ! calls of every callback function and then letting every one of these calls
+        ! fail in turn, and check that the unfaulted run reaches exactly the callback
+        ! functions the case uses, that the error is reported with the origin of the
+        ! failing callback function and that the reported counter still agrees with
+        ! the calls
+        fault_context%hess = hartmann6d_hessian(saddle_point)
+        h_diag = [(fault_context%hess(i, i), i=1, size(h_diag))]
+        hess_x_funptr => faulty_hess_x
+        do i_solver = 1, size(diag_solver_options)
+            do i_config = 1, 2
+                if (i_config == 1) then
+                    case_name = trim(diag_solver_options(i_solver))// &
+                                " diagonalization solver and extra trial vectors"
+                else
+                    case_name = trim(diag_solver_options(i_solver))// &
+                                " diagonalization solver and approximate Hessian "// &
+                                "linear transformation"
+                end if
+                call run_with_fault(0_ip, 0_ip)
+                if (error /= 0) then
+                    write(stderr, *) "test_stability_check failed: Produced error "// &
+                        "without fault for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                    cycle
+                end if
+                n_calls = fault_context%n_callback_calls
+
+                ! the unfaulted run reaches every callback function of the stability
+                ! check, the extra trial vector function only in the first case and the
+                ! approximate Hessian linear transformation only in the second, and the
+                ! preconditioner, which the Jacobi-Davidson method started at the first
+                ! iteration replaces, only with the Davidson method or the approximate
+                ! Hessian linear transformation, whose warm start uses it
+                expected_calls = .false.
+                expected_calls(fault_callbacks) = .true.
+                expected_calls(fault_get_extra_trial_vectors) = i_config == 1
+                expected_calls(fault_approx_hess_x) = i_config == 2
+                expected_calls(fault_precond) = &
+                    diag_solver_options(i_solver) == "davidson" .or. i_config == 2
+                do callback = 1, n_fault_callbacks
+                    if ((n_calls(callback) > 0) .neqv. expected_calls(callback)) then
+                        write(stderr, *) "test_stability_check failed: Unfaulted "// &
+                            "run "//trim(merge("did not call", "called      ", &
+                                               expected_calls(callback)))//" "// &
+                            trim(fault_callback_names(callback))//" for "// &
+                            trim(case_name)//"."
+                        test_stability_check = .false.
+                    end if
+                end do
+
+                ! let every call fail in turn
+                do callback = 1, size(fault_callbacks)
+                    do i_call = 1, n_calls(fault_callbacks(callback))
+                        call run_with_fault(fault_callbacks(callback), i_call)
+                        write(call_number, '(I0)') i_call
+                        if (error /= fault_origins(callback) + 1) then
+                            write(stderr, *) "test_stability_check failed: Error "// &
+                                "of failing "//trim( &
+                                    fault_callback_names(fault_callbacks(callback)))// &
+                                " at call "//trim(call_number)//" not reported "// &
+                                "with its origin for "//trim(case_name)//"."
+                            test_stability_check = .false.
+                        end if
+                        if (.not. check_call_counts( &
+                            fault_context, "stability_check", "for failing "// &
+                            trim(fault_callback_names(fault_callbacks(callback)))// &
+                            " at call "//trim(call_number)//" for "//trim(case_name), &
+                            n_hess_x=state%n_hess_x)) test_stability_check = .false.
+                    end do
+                end do
+            end do
+        end do
+
+    contains
+
+        subroutine run_with_fault(fault_callback, fault_call)
+            !
+            ! this subroutine runs the stability check at the saddle point with the
+            ! diagonalization solver and the trial space of the current case and lets
+            ! the given call of the given callback function fail
+            !
+            integer(ip), intent(in) :: fault_callback, fault_call
+
+            ! set up fault injection context
+            fault_context%n_callback_calls = 0
+            fault_context%n_hess_x_calls = 0
+            fault_context%fault_callback = fault_callback
+            fault_context%fault_call = fault_call
+
+            ! set up settings with every optional callback function, the extra trial
+            ! vectors only in the first case
+            call settings%init(error)
+            settings%context => fault_context
+            settings%diag_solver = diag_solver_options(i_solver)
+            settings%jacobi_davidson_start = 0
+            settings%precond => faulty_precond
+            settings%project => faulty_project
+            settings%conv_check => faulty_conv_check_stability
+            settings%approx_hess_x => faulty_approx_hess_x
+            if (i_config == 1) then
+                settings%n_extra_trial_vectors = n_extra_trial_vectors
+                settings%get_extra_trial_vectors => faulty_get_extra_trial_vectors
+            end if
+
+            ! run stability check
+            call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                                 state, direction)
+
+        end subroutine run_with_fault
 
     end function test_stability_check
 
