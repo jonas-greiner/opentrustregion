@@ -1221,8 +1221,10 @@ contains
         call get_level_shifted_step(upper_mu, singular_start)
         if (error /= 0) return
 
-        ! check if trust radius can be reached in bisection
-        if (current_norm < trust_radius) then
+        ! check if trust radius can be reached in bisection, a step which reaches it
+        ! already at this shift is taken as it is, since the bisection could not
+        ! converge towards a shift of zero
+        if (current_norm <= trust_radius) then
             ! check if reduced space Hessian is non-positive definite otherwise accept
             ! interior solution as Newton step
             if (red_space_hess_eigvals(min_idx)%re <= newton_eigval_thresh) then

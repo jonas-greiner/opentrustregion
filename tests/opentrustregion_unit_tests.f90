@@ -126,6 +126,19 @@ module opentrustregion_unit_tests
         real(rp) :: recorded_mu = 0.0_rp
     end type
 
+    ! define type for the host context of a quadratic model whose Hessian linear
+    ! transformation carries spurious negative curvature along the first coordinate
+    ! until an objective function evaluation marks the model stale, after which the
+    ! next Hessian linear transformation corrects it, as an approximate Hessian
+    ! learning from the evaluated points does, used to test the Hessian refresh after
+    ! rejected steps, which counts the objective function evaluations and whose
+    ! Hessian linear transformation can be made to fail when it corrects the model
+    type, extends(quadratic_context_type) :: refresh_context_type
+        logical :: hess_correct = .false., model_stale = .false., &
+                   fail_on_correction = .false.
+        integer(ip) :: n_obj_func_calls = 0
+    end type
+
     ! define type for the host context handed to the mock callback functions of the
     ! double well function x^2 - y^2 + y^4, which has a saddle point at the origin and
     ! minima at y = +-1/sqrt(2), and holds its current variables, records whether the
@@ -185,15 +198,9 @@ module opentrustregion_unit_tests
     real(rp) :: overflow_hess(n_param, n_param), overflow_grad(n_param)
     integer(ip) :: n_overflow_empty_steps = 0
 
-    ! quadratic model whose Hessian model carries spurious negative curvature along
-    ! the first coordinate until an objective function evaluation marks it stale, after
-    ! which the next Hessian linear transformation corrects it, as an approximate
-    ! Hessian learning from the evaluated points does, used to test the Hessian refresh
-    ! after rejected steps
+    ! spurious negative curvature of the Hessian model of a refresh context along the
+    ! first coordinate before the model is corrected
     real(rp), parameter :: refresh_hess_error = 7.0_rp
-    real(rp) :: refresh_true_hess(n_param, n_param), refresh_grad(n_param)
-    logical :: refresh_hess_correct, refresh_model_stale
-    integer(ip) :: n_refresh_obj_func
 
     ! global log message
     character(len=:), allocatable :: log_message
@@ -1106,6 +1113,103 @@ contains
 
     end subroutine mu_recording_precond
 
+    function resolve_refresh_context(context, error) result(state)
+        !
+        ! this function returns the refresh model context handed to a mock callback
+        ! function and an error if no such context was handed over
+        !
+        class(*), intent(in), pointer :: context
+        integer(ip), intent(out) :: error
+        class(refresh_context_type), pointer :: state
+
+        ! initialize error flag
+        error = 0
+
+        ! get context
+        state => null()
+        if (associated(context)) then
+            select type (context)
+            class is (refresh_context_type)
+                state => context
+            end select
+        end if
+
+        ! report missing test context
+        if (.not. associated(state)) error = missing_context_error
+
+    end function resolve_refresh_context
+
+    function refresh_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes the objective function evaluation for the quadratic
+        ! model used to test the Hessian refresh after rejected steps, which marks the
+        ! Hessian model stale
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        class(refresh_context_type), pointer :: state
+
+        ! initialize result in case the refresh model state is missing
+        func = 0.0_rp
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get refresh model state
+        state => resolve_refresh_context(context, error)
+        if (error /= 0) return
+
+        ! count call, mark the model stale and evaluate the true model
+        state%n_obj_func_calls = state%n_obj_func_calls + 1
+        state%model_stale = .true.
+        func = dot_product(state%grad, delta_vars) + &
+               0.5_rp * dot_product(delta_vars, matmul(state%hess, delta_vars))
+
+    end function refresh_obj_func
+
+    subroutine refresh_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes the Hessian linear transformation for the quadratic
+        ! model used to test the Hessian refresh after rejected steps, which carries
+        ! spurious negative curvature along the first coordinate until the first call
+        ! after an objective function evaluation corrects the model
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(refresh_context_type), pointer :: state
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get refresh model state
+        hess_x = 0.0_rp
+        state => resolve_refresh_context(context, error)
+        if (error /= 0) return
+
+        ! correct a stale model, unless the correction fails, and apply it
+        if (state%model_stale) then
+            if (state%fail_on_correction) then
+                error = 1
+                return
+            end if
+            state%hess_correct = .true.
+            state%model_stale = .false.
+        end if
+        hess_x = matmul(state%hess, x)
+        if (.not. state%hess_correct) hess_x(1) = hess_x(1) - refresh_hess_error * x(1)
+
+    end subroutine refresh_hess_x
+
     subroutine identity_hess_x(x, hess_x, error, context)
         !
         ! this subroutine describes an identity Hessian linear transformation which
@@ -1405,6 +1509,32 @@ contains
         end select
 
     end subroutine state_reading_update_orbs
+
+    subroutine state_reading_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes the Hessian linear transformation of the double
+        ! well function, which also records the solver state it reads through the
+        ! pointer in its context
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! apply the Hessian of the double well function
+        call double_well_hess_x(x, hess_x, error, context)
+        if (error /= 0) return
+
+        ! record the state
+        select type (context)
+        class is (double_well_state_context_type)
+            if (.not. allocated(context%seen_states)) &
+                allocate(context%seen_states(0), context%step_norms(0), &
+                         context%precond_step_norms(0))
+            context%seen_states = [context%seen_states, context%state]
+        end select
+
+    end subroutine state_reading_hess_x
 
     function resolve_half_step_context(context, error) result(state)
         !
@@ -1875,6 +2005,32 @@ contains
 
     end subroutine setup_error_logging
 
+    subroutine setup_refresh_context(context, func, h_diag)
+        !
+        ! this subroutine sets up the quadratic model used to test the Hessian refresh
+        ! after rejected steps: the gradient is small enough for a step along the
+        ! spurious negative curvature of the uncorrected model to be rejected, while
+        ! the corrected model yields an interior Newton step
+        !
+        type(refresh_context_type), intent(inout) :: context
+        real(rp), intent(out) :: func, h_diag(:)
+
+        integer(ip) :: i
+
+        context%hess = identity_matrix(n_param)
+        do i = 1, n_param
+            context%hess(i, i) = real(i + 1, kind=rp)
+        end do
+        context%grad = spread(1e-3_rp, 1, n_param)
+        context%hess_correct = .false.
+        context%model_stale = .false.
+        context%fail_on_correction = .false.
+        context%n_obj_func_calls = 0
+        func = 0.0_rp
+        h_diag = [(context%hess(i, i), i=1, n_param)]
+
+    end subroutine setup_refresh_context
+
     subroutine ref_symm_mat_diag(matrix, eigvals, eigvecs)
         !
         ! this subroutine reimplements the eigendecomposition of a symmetric matrix,
@@ -2029,36 +2185,6 @@ contains
 
     end subroutine legacy_hess_x_fun
 
-    subroutine legacy_hess_x_fun_asymmetric(x, hess_x, error, context)
-        !
-        ! this function describes the Hessian linear transformation operation for the
-        ! Hartmann 6D function with a small antisymmetric contribution, which mimics
-        ! numerical noise large enough that the Jacobi-Davidson method has to
-        ! recalculate linear transformations which no longer respect Hessian symmetry
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        real(rp), parameter :: asymmetry = 1e-8_rp
-
-        ! check host context
-        call check_host_context(context)
-
-        ! count call
-        n_hess_x_calls = n_hess_x_calls + 1
-
-        ! initialize error flag
-        error = 0
-
-        hess_x = hartmann6d_hess_x(x) + &
-                 asymmetry * [x(2), -x(1), x(4), -x(3), x(6), -x(5)]
-
-    end subroutine legacy_hess_x_fun_asymmetric
-
     subroutine legacy_hess_x_fun_failing(x, hess_x, error, context)
         !
         ! this function describes a Hessian linear transformation which always fails
@@ -2150,46 +2276,6 @@ contains
         func = hartmann6d_func(curr_vars + delta_vars)
 
     end function legacy_obj_func
-
-    subroutine legacy_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                  error, context)
-        !
-        ! this function describes the orbital update equivalent for the Hartmann 6D
-        ! function
-        !
-        use test_reference, only: check_host_context
-        use opentrustregion, only: hess_x_type
-
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        integer(ip) :: i
-
-        ! check host context
-        call check_host_context(context)
-
-        ! count call
-        n_update_orbs_calls = n_update_orbs_calls + 1
-
-        ! initialize error flag
-        error = 0
-
-        ! update variables
-        curr_vars = curr_vars + delta_vars
-
-        ! evaluate function, calculate gradient and Hessian diagonal and define Hessian
-        ! linear transformation
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        call legacy_hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
-        hess_x_funptr => legacy_hess_x_fun
-
-    end subroutine legacy_update_orbs
 
     subroutine mock_precond_pd(residual, precond_residual, error, context)
         !
@@ -2298,58 +2384,6 @@ contains
 
     end subroutine mock_vanishing_extra_trial_vectors
 
-    function refresh_mock_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes the objective function evaluation for the quadratic
-        ! model used to test the Hessian refresh after rejected steps, which marks the
-        ! Hessian model stale
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        n_refresh_obj_func = n_refresh_obj_func + 1
-        refresh_model_stale = .true.
-        func = dot_product(refresh_grad, delta_vars) + &
-               0.5_rp * dot_product(delta_vars, matmul(refresh_true_hess, delta_vars))
-
-    end function refresh_mock_obj_func
-
-    subroutine refresh_mock_hess_x(x, hess_x, error, context)
-        !
-        ! this subroutine describes the Hessian linear transformation for the quadratic
-        ! model used to test the Hessian refresh after rejected steps, which carries
-        ! spurious negative curvature along the first coordinate until the first call
-        ! after an objective function evaluation corrects the model
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        if (refresh_model_stale) then
-            refresh_hess_correct = .true.
-            refresh_model_stale = .false.
-        end if
-        hess_x = matmul(refresh_true_hess, x)
-        if (.not. refresh_hess_correct) &
-            hess_x(1) = hess_x(1) - refresh_hess_error * x(1)
-
-    end subroutine refresh_mock_hess_x
-
     subroutine legacy_logger(message, context)
         !
         ! this subroutine is a mock logging subroutine
@@ -2411,30 +2445,6 @@ contains
         deallocate(work)
 
     end subroutine diagonalize_test_matrix
-
-    subroutine setup_refresh_model(func, h_diag)
-        !
-        ! this subroutine sets up the quadratic model used to test the Hessian refresh
-        ! after rejected steps: the gradient is small enough for a step along the
-        ! spurious negative curvature of the uncorrected model to be rejected, while
-        ! the corrected model yields an interior Newton step
-        !
-        real(rp), intent(out) :: func, h_diag(:)
-
-        integer(ip) :: i
-
-        refresh_true_hess = 0.0_rp
-        do i = 1, n_param
-            refresh_true_hess(i, i) = real(i + 1, kind=rp)
-        end do
-        refresh_grad = 1e-3_rp
-        refresh_hess_correct = .false.
-        refresh_model_stale = .false.
-        n_refresh_obj_func = 0
-        func = 0.0_rp
-        h_diag = [(refresh_true_hess(i, i), i=1, n_param)]
-
-    end subroutine setup_refresh_model
 
     subroutine setup_truncation_model(coupled, func, h_diag)
         !
@@ -6380,57 +6390,56 @@ contains
         ! this function tests the level-shifted Davidson subroutine
         !
         use opentrustregion, only: solver_settings_type, subsystem_solver_options, &
-                                   obj_func_type, hess_x_type, level_shifted_davidson
+                                   obj_func_type, hess_x_type, level_shifted_davidson, &
+                                   error_hess_x, error_obj_func
 
+        integer(ip), parameter :: n_stagnation = 20
+        character(len=*), parameter :: &
+            growth_case_names(2) = [character(len=8) :: "diagonal", "rotated"], &
+            stagnation_solvers(2) = &
+                [character(len=18) :: "davidson_ls", "jacobi-davidson_ls"]
         type(solver_settings_type) :: settings
-        type(solver_state_type) :: state
-        real(rp) :: func, grad_norm, input_trust_radius, mu, solution_norm, &
-                    residual_tol, noise
-        real(rp), dimension(n_param) :: grad, h_diag, solution, newton_solution
-        integer(ip) :: i, n_micro_ref, error
+        type(solver_state_type), target :: state
+        real(rp) :: func, grad_norm, mu, solution_norm, noise, residual_tol
+        real(rp), dimension(n_param) :: grad, h_diag, solution, newton_solution, eigvals
+        real(rp) :: rotation(n_param, n_param), h_diag_stagnation(n_stagnation), &
+                    solution_stagnation(n_stagnation), double_well_grad(2), &
+                    double_well_h_diag(2), double_well_solution(2)
+        integer(ip) :: i, i_solver, i_case, n_micro_ref, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: local_region
-        character(len=6) :: region_str
+        type(hartmann6d_context_type), target :: context
+        type(quadratic_context_type), target :: quadratic_context
+        type(refresh_context_type), target :: refresh_context
+        type(double_well_state_context_type), target :: state_context
 
         ! assume tests pass
         test_level_shifted_davidson = .true.
 
-        ! setup settings object
-        call legacy_setup_settings(settings)
-        settings%grad_noise = .false.
-
-        do i = 1, size(subsystem_solver_options)
-            if (index(subsystem_solver_options(i), "davidson") == 0) cycle
-            settings%subsystem_solver = subsystem_solver_options(i)
-            call run_level_shifted_davidson_test("near minimum", &
-                                                 subsystem_solver_options(i))
-            call run_level_shifted_davidson_test("near saddle point", &
-                                                 subsystem_solver_options(i))
-            call run_level_shifted_davidson_test("after rejected step", &
-                                                 subsystem_solver_options(i))
+        ! solve the subproblem near a minimum, near a saddle point and after a rejected
+        ! step with every Davidson-family subsystem solver
+        do i_solver = 1, size(subsystem_solver_options)
+            if (index(subsystem_solver_options(i_solver), "davidson") == 0) cycle
+            call check_region("near minimum")
+            call check_region("near saddle point")
+            call check_region("after rejected step")
         end do
 
-        ! run level-shifted Jacobi-Davidson from the first micro iteration with a
-        ! slightly asymmetric Hessian linear transformation and check whether the
-        ! reported number of Hessian linear transformations agrees with the calls,
-        ! including the ones recalculated when Hessian symmetry is violated, and
-        ! whether the micro iterations after the first one are reported as
-        ! Jacobi-Davidson iterations
+        ! run level-shifted Jacobi-Davidson near a saddle point with a slightly
+        ! asymmetric Hessian linear transformation and check whether the reported number
+        ! of Hessian linear transformations agrees with the calls, including the ones
+        ! recalculated when Hessian symmetry is violated
+        call setup_settings(settings, context)
+        settings%grad_noise = .false.
         settings%subsystem_solver = "jacobi-davidson_ls"
-        settings%refresh_hess = .false.
         settings%jacobi_davidson_start = 1
-        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        grad_norm = norm2(grad)
-        call legacy_hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, n_param)]
-        obj_func_funptr => legacy_obj_func
-        hess_x_funptr => legacy_hess_x_fun_asymmetric
+        call set_hartmann6d_point(near_saddle_point)
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x_fun_asymmetric
         state%trust_radius = 0.4_rp
         state%n_hess_x = 0
-        n_hess_x_calls = 0
+        context%n_hess_x_calls = 0
         call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
                                     obj_func_funptr, hess_x_funptr, settings, .false., &
                                     state, solution, solution_norm, mu, error)
@@ -6439,303 +6448,536 @@ contains
                 "with asymmetric Hessian linear transformation."
             test_level_shifted_davidson = .false.
         end if
-        test_level_shifted_davidson = test_level_shifted_davidson .and. logical( &
-            call_counts_match("level_shifted_davidson", &
-                              "with asymmetric Hessian linear transformation", &
-                              n_hess_x=state%n_hess_x), kind=c_bool)
-        if (state%micro_iteration < 2 .or. &
-            state%jacobi_davidson_iteration /= state%micro_iteration - 1) then
-            write(stderr, *) "test_level_shifted_davidson failed: Micro iterations "// &
-                "after the first one not reported as Jacobi-Davidson iterations."
+        if (.not. check_call_counts(context, "level_shifted_davidson", &
+                                    "with asymmetric Hessian linear transformation", &
+                                    n_hess_x=state%n_hess_x)) &
             test_level_shifted_davidson = .false.
-        end if
 
-        ! run level-shifted Davidson with a Hessian linear transformation which fails
-        ! and check that the failing call is still counted
-        hess_x_funptr => legacy_hess_x_fun_failing
+        ! run level-shifted Davidson with a Hessian linear transformation and with an
+        ! objective function which fail and check that their errors are reported with
+        ! their origins and that a failing Hessian linear transformation is counted
+        call setup_settings(settings, context)
+        settings%grad_noise = .false.
+        do i_case = 1, 2
+            if (i_case == 1) then
+                obj_func_funptr => obj_func
+                hess_x_funptr => hess_x_fun_failing
+            else
+                obj_func_funptr => obj_func_failing
+                hess_x_funptr => hess_x_fun
+            end if
+            state%trust_radius = 0.4_rp
+            state%n_hess_x = 0
+            context%n_hess_x_calls = 0
+            call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+                                        obj_func_funptr, hess_x_funptr, settings, &
+                                        .false., state, solution, solution_norm, mu, &
+                                        error)
+            if (error /= merge(error_hess_x, error_obj_func, i_case == 1) + 1) then
+                write(stderr, *) "test_level_shifted_davidson failed: Error of "// &
+                    "failing "// &
+                    trim(merge("Hessian linear transformation", &
+                               "objective function           ", i_case == 1))// &
+                    " not reported with its origin."
+                test_level_shifted_davidson = .false.
+            end if
+            if (.not. check_call_counts( &
+                context, "level_shifted_davidson", "for failing callback function", &
+                n_hess_x=state%n_hess_x)) test_level_shifted_davidson = .false.
+        end do
+
+        ! reject the step of the refresh model with a Hessian linear transformation
+        ! which fails when it corrects the model and check that the error of the
+        ! reduced space rebuilt after the rejected step is reported with its origin
+        call setup_settings(settings, refresh_context)
+        settings%grad_noise = .false.
+        settings%refresh_hess = .true.
+        call setup_refresh_context(refresh_context, func, h_diag)
+        refresh_context%fail_on_correction = .true.
+        obj_func_funptr => refresh_obj_func
+        hess_x_funptr => refresh_hess_x
         state%trust_radius = 0.4_rp
-        state%n_hess_x = 0
-        n_hess_x_calls = 0
-        call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
+        call level_shifted_davidson(func, refresh_context%grad, &
+                                    norm2(refresh_context%grad), h_diag, n_param, &
                                     obj_func_funptr, hess_x_funptr, settings, .false., &
                                     state, solution, solution_norm, mu, error)
-        if (error == 0) then
-            write(stderr, *) "test_level_shifted_davidson failed: Did not report a "// &
-                "failing Hessian linear transformation."
+        if (error /= error_hess_x + 1) then
+            write(stderr, *) "test_level_shifted_davidson failed: Error of failing "// &
+                "Hessian linear transformation of the rebuilt reduced space not "// &
+                "reported with its origin."
             test_level_shifted_davidson = .false.
         end if
-        test_level_shifted_davidson = &
-            test_level_shifted_davidson .and. logical(call_counts_match( &
-                "level_shifted_davidson", "for failing Hessian linear transformation", &
-                n_hess_x=state%n_hess_x), kind=c_bool)
 
-        ! force the reduced space to grow until it spans the full parameter space, a
-        ! vanishing reduction factor prevents natural convergence, and one large
-        ! diagonal entry ensures that even the exact full-rank solution's residual
-        ! carries enough floating-point noise to stay above the solver's fixed
-        ! convergence floor
-        call legacy_setup_settings(settings)
+        ! run level-shifted Davidson on a quadratic model with a gradient too small for
+        ! its step to change the objective function, which does not change at all, so
+        ! that the first step reaches maximum precision, and check that the subproblem
+        ! stops without error and reports this
+        call setup_settings(settings, quadratic_context)
         settings%grad_noise = .false.
-        settings%local_red_factor = 0.0_rp
-        settings%global_red_factor = 0.0_rp
-        overflow_hess = 0.0_rp
-        do i = 1, n_param
-            overflow_hess(i, i) = 1.0_rp
-        end do
-        overflow_hess(1, 1) = 1e8_rp
-        overflow_grad = 1.0_rp
-        residual_tol = 1e2_rp * epsilon(1.0_rp) * overflow_hess(1, 1)
-        h_diag = [(overflow_hess(i, i), i=1, n_param)]
-        grad_norm = norm2(overflow_grad)
-        func = 0.0_rp
-        input_trust_radius = 1.0_rp
-        state%trust_radius = input_trust_radius
-        obj_func_funptr => overflow_obj_func
-        hess_x_funptr => overflow_hess_x
-
-        call level_shifted_davidson(func, overflow_grad, grad_norm, h_diag, n_param, &
+        quadratic_context%hess = identity_matrix(n_param)
+        quadratic_context%grad = spread(1e-9_rp, 1, n_param)
+        h_diag = 1.0_rp
+        obj_func_funptr => constant_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.4_rp
+        state%max_precision_reached = .false.
+        call level_shifted_davidson(1.0_rp, quadratic_context%grad, &
+                                    norm2(quadratic_context%grad), h_diag, n_param, &
                                     obj_func_funptr, hess_x_funptr, settings, .false., &
                                     state, solution, solution_norm, mu, error)
         if (error /= 0) then
             write(stderr, *) "test_level_shifted_davidson failed: Produced error "// &
-                "when reduced space grows to dimension of full parameter space."
+                "when the objective function does not change."
             test_level_shifted_davidson = .false.
         end if
-        if (abs(norm2(solution) - input_trust_radius) > residual_tol) then
-            write(stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not lie at trust region boundary when reduced space grows to "// &
-                "dimension of full parameter space."
-            test_level_shifted_davidson = .false.
-        end if
-        if (sum(abs(overflow_grad + matmul(overflow_hess, solution) - &
-                    mu * solution)) > residual_tol) then
-            write(stderr, *) "test_level_shifted_davidson failed: Solution does "// &
-                "not describe level-shifted Newton step when reduced space grows "// &
-                "to dimension of full parameter space."
+        if (.not. state%max_precision_reached) then
+            write(stderr, *) "test_level_shifted_davidson failed: Maximum "// &
+                "precision not reached when the objective function does not change."
             test_level_shifted_davidson = .false.
         end if
 
-        ! run level-shifted Davidson with a perturbed gradient on a diagonal Hessian
-        ! that the projection preserves and the diagonal preconditioner inverts
-        ! exactly, after a subproblem solved in either region, and check that the
-        ! step deviates from the Newton step by roughly the size of the perturbation,
-        ! which is the reduction factor of that region, stays in the
-        ! projected subspace and needs no more micro iterations than without the
-        ! perturbation
-        do i = 1, 2
-            local_region = i == 2
-            region_str = merge("local ", "global", local_region)
-            call legacy_setup_settings(settings)
+        ! let the residual stagnate with a quadratic model whose gradient only couples
+        ! to the second unit vector and a preconditioner which returns the following
+        ! unit vectors, which can never reduce the residual, and check that the
+        ! Davidson method stops without sufficient residual reduction, so that its step
+        ! is rejected, while the Jacobi-Davidson method switches to the correction
+        ! equations after ten micro iterations without sufficient residual reduction,
+        ! long before the reduced space reaches the dimension of the full parameter
+        ! space or the Jacobi-Davidson method would otherwise be started
+        do i_case = 1, 2
+            call setup_settings(settings, quadratic_context)
             settings%grad_noise = .false.
-            settings%project => legacy_mock_project
-            call setup_truncation_model(.false., func, h_diag)
-            grad_norm = norm2(overflow_grad)
-            newton_solution = -overflow_grad / h_diag
+            settings%n_random_trial_vectors = 0
+            settings%precond => mock_precond_next_unit_vector
+            settings%subsystem_solver = stagnation_solvers(i_case)
+            quadratic_context%hess = identity_matrix(n_stagnation)
+            quadratic_context%hess(1:2, 1:2) = reshape([2.0_rp, 1.0_rp, &
+                                                        1.0_rp, 3.0_rp], [2, 2])
+            quadratic_context%grad = spread(0.0_rp, 1, n_stagnation)
+            quadratic_context%grad(1) = 1.0_rp
+            quadratic_context%next_unit_vector = 2
+            h_diag_stagnation = [(quadratic_context%hess(i, i), i=1, n_stagnation)]
+            obj_func_funptr => quadratic_obj_func
+            hess_x_funptr => quadratic_hess_x
+            state%trust_radius = 1.0_rp
+            state%n_obj_func = 0
+            call level_shifted_davidson( &
+                0.0_rp, quadratic_context%grad, 1.0_rp, h_diag_stagnation, &
+                n_stagnation, obj_func_funptr, hess_x_funptr, settings, .false., &
+                state, solution_stagnation, solution_norm, mu, error)
+            if (error /= 0) then
+                write(stderr, *) "test_level_shifted_davidson failed: Produced "// &
+                    "error when residual stagnates with "// &
+                    trim(stagnation_solvers(i_case))//" solver."
+                test_level_shifted_davidson = .false.
+            end if
+            if (i_case == 1 .and. state%n_obj_func < 2) then
+                write(stderr, *) "test_level_shifted_davidson failed: Davidson "// &
+                    "method did not stop and have its step rejected when residual "// &
+                    "stagnates."
+                test_level_shifted_davidson = .false.
+            end if
+            if (i_case == 2 .and. &
+                state%micro_iteration - state%jacobi_davidson_iteration /= 10) then
+                write(stderr, *) "test_level_shifted_davidson failed: "// &
+                    "Jacobi-Davidson method not switched to after ten micro "// &
+                    "iterations when residual stagnates."
+                test_level_shifted_davidson = .false.
+            end if
+        end do
+
+        ! let the reduced space grow until it can no longer be expanded, a vanishing
+        ! reduction factor prevents natural convergence, and one large Hessian
+        ! eigenvalue ensures that even the exact full-rank solution's residual carries
+        ! enough floating-point noise to stay above the solver's fixed convergence
+        ! floor, for a diagonal Hessian with only two distinct eigenvalues the
+        ! preconditioned residuals stay in a small subspace so that a new trial vector
+        ! becomes linearly dependent before the reduced space reaches the dimension of
+        ! the full parameter space, while for the same Hessian in a random orthonormal
+        ! basis the reduced space grows to this dimension, each trial vector costs one
+        ! Hessian linear transformation
+        do i_case = 1, 2
+            call setup_settings(settings, quadratic_context)
+            settings%grad_noise = .false.
+            settings%local_red_factor = 0.0_rp
+            settings%global_red_factor = 0.0_rp
+            quadratic_context%hess = identity_matrix(n_param)
+            quadratic_context%hess(1, 1) = 1e8_rp
+            if (i_case == 2) then
+                call ref_symm_mat_diag(generate_random_symm_matrix(n_param), eigvals, &
+                                       rotation)
+                quadratic_context%hess = matmul( &
+                    rotation, matmul(quadratic_context%hess, transpose(rotation)))
+            end if
+            quadratic_context%grad = spread(1.0_rp, 1, n_param)
+            residual_tol = 1e2_rp * epsilon(1.0_rp) * 1e8_rp
+            h_diag = [(quadratic_context%hess(i, i), i=1, n_param)]
+            obj_func_funptr => quadratic_obj_func
+            hess_x_funptr => quadratic_hess_x
+            state%trust_radius = 1.0_rp
+            state%n_hess_x = 0
+            call level_shifted_davidson( &
+                0.0_rp, quadratic_context%grad, norm2(quadratic_context%grad), h_diag, &
+                n_param, obj_func_funptr, hess_x_funptr, settings, .false., state, &
+                solution, solution_norm, mu, error)
+            if (error /= 0) then
+                write(stderr, *) "test_level_shifted_davidson failed: Produced "// &
+                    "error when reduced space stops growing for the "// &
+                    trim(growth_case_names(i_case))//" Hessian."
+                test_level_shifted_davidson = .false.
+            end if
+            if (i_case == 1 .and. state%n_hess_x >= n_param) then
+                write(stderr, *) "test_level_shifted_davidson failed: Reduced "// &
+                    "space does not stop at a linearly dependent trial vector for "// &
+                    "the diagonal Hessian."
+                test_level_shifted_davidson = .false.
+            end if
+            if (i_case == 2 .and. state%n_hess_x /= n_param) then
+                write(stderr, *) "test_level_shifted_davidson failed: Reduced "// &
+                    "space does not grow to the dimension of the full parameter "// &
+                    "space for the rotated Hessian."
+                test_level_shifted_davidson = .false.
+            end if
+            if (abs(norm2(solution) - 1.0_rp) > residual_tol) then
+                write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
+                    "does not lie at trust region boundary when reduced space "// &
+                    "stops growing for the "//trim(growth_case_names(i_case))// &
+                    " Hessian."
+                test_level_shifted_davidson = .false.
+            end if
+            if (norm2(quadratic_context%grad + matmul( &
+                quadratic_context%hess, solution) - mu * solution) > residual_tol) then
+                write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
+                    "does not describe level-shifted Newton step when reduced "// &
+                    "space stops growing for the "//trim(growth_case_names(i_case))// &
+                    " Hessian."
+                test_level_shifted_davidson = .false.
+            end if
+        end do
+
+        ! run level-shifted Davidson with a perturbed gradient in the range of a
+        ! projection on a diagonal Hessian that the projection preserves and the
+        ! diagonal preconditioner inverts exactly, after a subproblem solved in either
+        ! region, and check that the step deviates from the Newton step by roughly the
+        ! size of the perturbation, which is the reduction factor of that region, stays
+        ! in the range of the projection and needs no more micro iterations than
+        ! without the perturbation
+        do i_case = 1, 2
+            local_region = i_case == 2
+            call setup_settings(settings, quadratic_context)
+            settings%grad_noise = .false.
+            settings%project => mock_project_out_pair
+            quadratic_context%hess = identity_matrix(n_param)
+            do i = 1, n_param
+                quadratic_context%hess(i, i) = real(max(i, 2), kind=rp)
+            end do
+            call random_number(grad)
+            grad = grad + 0.5_rp
+            grad(1:2) = grad(1:2) - 0.5_rp * sum(grad(1:2))
+            quadratic_context%grad = grad
+            grad_norm = norm2(grad)
+            h_diag = [(quadratic_context%hess(i, i), i=1, n_param)]
+            newton_solution = -grad / h_diag
+            obj_func_funptr => quadratic_obj_func
+            hess_x_funptr => quadratic_hess_x
             state%trust_radius = 10.0_rp
-            obj_func_funptr => overflow_obj_func
-            hess_x_funptr => overflow_hess_x
-            call level_shifted_davidson(func, overflow_grad, grad_norm, h_diag, &
-                                        n_param, obj_func_funptr, hess_x_funptr, &
-                                        settings, local_region, state, solution, &
-                                        solution_norm, mu, error)
+            call level_shifted_davidson(0.0_rp, grad, grad_norm, h_diag, n_param, &
+                                        obj_func_funptr, hess_x_funptr, settings, &
+                                        local_region, state, solution, solution_norm, &
+                                        mu, error)
             n_micro_ref = state%micro_iteration
             settings%grad_noise = .true.
             noise = merge(settings%local_red_factor, settings%global_red_factor, &
                           local_region)
             state%trust_radius = 10.0_rp
-            call level_shifted_davidson(func, overflow_grad, grad_norm, h_diag, &
-                                        n_param, obj_func_funptr, hess_x_funptr, &
-                                        settings, local_region, state, solution, &
-                                        solution_norm, mu, error)
+            call level_shifted_davidson(0.0_rp, grad, grad_norm, h_diag, n_param, &
+                                        obj_func_funptr, hess_x_funptr, settings, &
+                                        local_region, state, solution, solution_norm, &
+                                        mu, error)
             if (error /= 0) then
                 write(stderr, *) "test_level_shifted_davidson failed: Produced "// &
-                    "error for perturbed gradient in "//trim(region_str)//" region."
+                    "error for perturbed gradient in "// &
+                    trim(merge("local ", "global", local_region))//" region."
                 test_level_shifted_davidson = .false.
             end if
             if (norm2(solution - newton_solution) < &
                 0.1_rp * noise * grad_norm / maxval(h_diag)) then
                 write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
                     "does not solve a perturbed system for perturbed gradient in "// &
-                    trim(region_str)//" region."
+                    trim(merge("local ", "global", local_region))//" region."
                 test_level_shifted_davidson = .false.
             end if
             if (norm2(solution - newton_solution) > &
                 10.0_rp * noise * grad_norm / minval(h_diag)) then
                 write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
                     "deviates from the Newton step by more than the perturbation "// &
-                    "for perturbed gradient in "//trim(region_str)//" region."
+                    "for perturbed gradient in "// &
+                    trim(merge("local ", "global", local_region))//" region."
                 test_level_shifted_davidson = .false.
             end if
-            if (abs(solution(1) - solution(2)) > tol) then
+            if (abs(solution(1) + solution(2)) > tol) then
                 write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
-                    "leaves the subspace of the projection for perturbed gradient "// &
-                    "in "//trim(region_str)//" region."
+                    "leaves the range of the projection for perturbed gradient in "// &
+                    trim(merge("local ", "global", local_region))//" region."
                 test_level_shifted_davidson = .false.
             end if
             if (state%micro_iteration > n_micro_ref) then
                 write(stderr, *) "test_level_shifted_davidson failed: Perturbed "// &
                     "gradient needs more micro iterations than the unperturbed one "// &
-                    "in "//trim(region_str)//" region."
+                    "in "//trim(merge("local ", "global", local_region))//" region."
                 test_level_shifted_davidson = .false.
             end if
         end do
 
+        ! solve the subproblem of a quadratic model with a random coupling, which the
+        ! diagonal preconditioner does not invert, so that the residual decreases
+        ! gradually, after a subproblem solved in the global region, with a local
+        ! reduction factor far below the global one, and check that the perturbed
+        ! gradient, whose perturbation is the global reduction factor, stops the micro
+        ! iterations as soon as the residual falls below the perturbation, earlier
+        ! than the unperturbed gradient, which is solved to the local reduction factor
+        call setup_settings(settings, quadratic_context)
+        settings%local_red_factor = 1e-12_rp
+        quadratic_context%hess = 0.1_rp * generate_random_symm_matrix(n_stagnation)
+        do i = 1, n_stagnation
+            quadratic_context%hess(i, i) = quadratic_context%hess(i, i) + &
+                                           real(i + 4, kind=rp)
+        end do
+        quadratic_context%grad = spread(0.0_rp, 1, n_stagnation)
+        call random_number(quadratic_context%grad)
+        quadratic_context%grad = quadratic_context%grad + 0.5_rp
+        h_diag_stagnation = [(quadratic_context%hess(i, i), i=1, n_stagnation)]
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        do i_case = 1, 2
+            settings%grad_noise = i_case == 2
+            state%trust_radius = 10.0_rp
+            call level_shifted_davidson( &
+                0.0_rp, quadratic_context%grad, norm2(quadratic_context%grad), &
+                h_diag_stagnation, n_stagnation, obj_func_funptr, hess_x_funptr, &
+                settings, .false., state, solution_stagnation, solution_norm, mu, error)
+            if (i_case == 1) n_micro_ref = state%micro_iteration
+        end do
+        if (error /= 0) then
+            write(stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "for perturbed gradient on a coupled quadratic model."
+            test_level_shifted_davidson = .false.
+        end if
+        if (state%micro_iteration >= n_micro_ref) then
+            write(stderr, *) "test_level_shifted_davidson failed: Micro iterations "// &
+                "for perturbed gradient not stopped at the perturbation."
+            test_level_shifted_davidson = .false.
+        end if
+
+        ! solve the subproblem of the double well function with a state holding the
+        ! values of an earlier subproblem and a Hessian linear transformation which
+        ! reads the state through the pointer in its context, and check that the
+        ! initial linear transformations already see no micro iterations and the
+        ! residual of the vanishing solution, which is the gradient
+        call setup_settings(settings, state_context)
+        settings%grad_noise = .false.
+        state_context%vars = [0.5_rp, 0.1_rp]
+        state_context%state => state
+        double_well_grad = [2.0_rp * state_context%vars(1), -2.0_rp * &
+                            state_context%vars(2) + 4.0_rp * state_context%vars(2)**3]
+        double_well_h_diag = [2.0_rp, -2.0_rp + 12.0_rp * state_context%vars(2)**2]
+        obj_func_funptr => double_well_obj_func
+        hess_x_funptr => state_reading_hess_x
+        state%trust_radius = 0.4_rp
+        state%micro_iteration = 7
+        state%jacobi_davidson_iteration = 3
+        state%relative_residual = 0.3_rp
+        call level_shifted_davidson(double_well_func(state_context%vars), &
+                                    double_well_grad, norm2(double_well_grad), &
+                                    double_well_h_diag, 2_ip, obj_func_funptr, &
+                                    hess_x_funptr, settings, .false., state, &
+                                    double_well_solution, solution_norm, mu, error)
+        if (error /= 0) then
+            write(stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "with a state of an earlier subproblem."
+            test_level_shifted_davidson = .false.
+        end if
+        if (.not. allocated(state_context%seen_states)) then
+            write(stderr, *) "test_level_shifted_davidson failed: Hessian linear "// &
+                "transformation did not read the state."
+            test_level_shifted_davidson = .false.
+        else if (state_context%seen_states(1)%micro_iteration /= 0 .or. &
+                 state_context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
+                 abs(state_context%seen_states(1)%relative_residual - 1.0_rp) > tol) &
+            then
+            write(stderr, *) "test_level_shifted_davidson failed: State of an "// &
+                "earlier subproblem seen by the initial Hessian linear transformations."
+            test_level_shifted_davidson = .false.
+        end if
+
     contains
 
-        subroutine run_level_shifted_davidson_test(region_str, solver_name)
+        subroutine set_hartmann6d_point(vars)
             !
-            ! this subroutine runs a level-shifted Davidson test for a given solver
+            ! this subroutine moves the Hartmann 6D context to a point and evaluates the
+            ! function, its gradient and Hessian and the Hessian diagonal there
             !
-            use opentrustregion, only: &
-                obj_func_type, hess_x_type, solver_settings_type, &
-                level_shifted_davidson, trust_radius_shrink_ratio, &
-                trust_radius_expand_ratio, trust_radius_shrink_factor, &
-                trust_radius_expand_factor
+            real(rp), intent(in) :: vars(:)
 
-            character(len=*), intent(in) :: region_str, solver_name
+            integer(ip) :: i_param
 
+            context%vars = vars
+            func = hartmann6d_func(vars)
+            call hartmann6d_gradient(vars, grad)
+            grad_norm = norm2(grad)
+            context%hess = hartmann6d_hessian(vars)
+            h_diag = [(context%hess(i_param, i_param), i_param=1, n_param)]
+
+        end subroutine set_hartmann6d_point
+
+        subroutine check_region(region)
+            !
+            ! this subroutine solves the subproblem in a region with the current
+            ! subsystem solver, the Jacobi-Davidson ones switching after the first
+            ! micro iteration of every step, and checks the solution, the level shift,
+            ! the trust region, the state and the counters
+            !
+            character(len=*), intent(in) :: region
+
+            character(len=60) :: case_name
             real(rp) :: ratio
+            logical :: jacobi_davidson
 
-            ! initialize variables
-            state%trust_radius = 0.4_rp
-            obj_func_funptr => legacy_obj_func
-            hess_x_funptr => legacy_hess_x_fun
+            case_name = region//" with "//trim(subsystem_solver_options(i_solver))// &
+                        " solver"
+            jacobi_davidson = index(subsystem_solver_options(i_solver), "jacobi") > 0
 
-            if (region_str == "near minimum") then
-                curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-            else if (region_str == "near saddle point") then
-                curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
-            end if
-
-            ! after a rejected step, the step a Hessian model with spurious negative
-            ! curvature proposes is rejected and the objective function evaluation
-            ! corrects the model, for which the Hessian refresh is requested
-            settings%refresh_hess = region_str == "after rejected step"
-            if (region_str == "after rejected step") then
-                call setup_refresh_model(func, h_diag)
-                grad = refresh_grad
+            ! set up the Hartmann 6D function at the point or the refresh model, whose
+            ! step along the spurious negative curvature is rejected, for which the
+            ! Hessian refresh is requested
+            if (region == "after rejected step") then
+                call setup_settings(settings, refresh_context)
+                settings%refresh_hess = .true.
+                call setup_refresh_context(refresh_context, func, h_diag)
+                grad = refresh_context%grad
                 grad_norm = norm2(grad)
-                obj_func_funptr => refresh_mock_obj_func
-                hess_x_funptr => refresh_mock_hess_x
+                obj_func_funptr => refresh_obj_func
+                hess_x_funptr => refresh_hess_x
             else
-                func = hartmann6d_func(curr_vars)
-                call hartmann6d_gradient(curr_vars, grad)
-                grad_norm = norm2(grad)
-                call legacy_hartmann6d_hessian(curr_vars)
-                h_diag = [(hess(i, i), i=1, size(h_diag))]
+                call setup_settings(settings, context)
+                call set_hartmann6d_point( &
+                    merge(near_minimum, near_saddle_point, region == "near minimum"))
+                obj_func_funptr => obj_func
+                hess_x_funptr => hess_x_fun
             end if
-
-            ! run level-shifted Davidson
+            settings%grad_noise = .false.
+            settings%subsystem_solver = subsystem_solver_options(i_solver)
+            settings%jacobi_davidson_start = 1
+            state%trust_radius = 0.4_rp
             state%n_hess_x = 0
             state%n_obj_func = 0
-            n_hess_x_calls = 0
-            n_obj_func_calls = 0
+            context%n_hess_x_calls = 0
+            context%n_obj_func_calls = 0
+
+            ! run level-shifted Davidson
             call level_shifted_davidson(func, grad, grad_norm, h_diag, n_param, &
                                         obj_func_funptr, hess_x_funptr, settings, &
                                         .false., state, solution, solution_norm, mu, &
                                         error)
-
             if (error /= 0) then
                 write(stderr, *) "test_level_shifted_davidson failed: Produced "// &
-                    "error "//trim(region_str)//" with "//trim(solver_name)//" solver."
+                    "error "//trim(case_name)//"."
                 test_level_shifted_davidson = .false.
             end if
-            if (region_str == "near minimum") then
+
+            ! the micro iterations of every step after its first one are
+            ! Jacobi-Davidson iterations for the Jacobi-Davidson solvers
+            if (state%jacobi_davidson_iteration /= merge( &
+                state%micro_iteration - state%n_obj_func, 0_ip, jacobi_davidson)) then
+                write(stderr, *) "test_level_shifted_davidson failed: "// &
+                    "Jacobi-Davidson iterations wrong "//trim(case_name)//"."
+                test_level_shifted_davidson = .false.
+            end if
+
+            select case (region)
+            case ("near minimum")
                 if (abs(mu) > tol) then
                     write(stderr, *) "test_level_shifted_davidson failed: Level "// &
-                        "shift is not zero near minimum with "//trim(solver_name)// &
-                        " solver."
+                        "shift is not zero "//trim(case_name)//"."
                     test_level_shifted_davidson = .false.
                 end if
-                if (norm2(grad + hartmann6d_hess_x(solution)) > &
+                if (norm2(grad + matmul(context%hess, solution)) > &
                     settings%local_red_factor * grad_norm) then
                     write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
-                        "does not describe Newton step near minimum with "// &
-                        trim(solver_name)//" solver."
+                        "does not describe Newton step "//trim(case_name)//"."
                     test_level_shifted_davidson = .false.
                 end if
-                test_level_shifted_davidson = &
-                    test_level_shifted_davidson .and. logical(call_counts_match( &
-                        "level_shifted_davidson", "near minimum with "// &
-                        trim(solver_name)//" solver", n_hess_x=state%n_hess_x, &
-                        n_obj_func=state%n_obj_func), kind=c_bool)
-            else if (region_str == "near saddle point") then
+            case ("near saddle point")
                 if (mu >= 0.0_rp) then
                     write(stderr, *) "test_level_shifted_davidson failed: Level "// &
-                        "shift is not negative near saddle point with "// &
-                        trim(solver_name)//" solver."
+                        "shift is not negative "//trim(case_name)//"."
                     test_level_shifted_davidson = .false.
                 end if
-                if (norm2(grad + hartmann6d_hess_x(solution) - mu * solution) > &
+                if (norm2(grad + matmul(context%hess, solution) - mu * solution) > &
                     settings%global_red_factor * grad_norm) then
                     write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
-                        "does not describe level-shifted Newton step near saddle "// &
-                        "point with "//trim(solver_name)//" solver."
+                        "does not describe level-shifted Newton step "// &
+                        trim(case_name)//"."
                     test_level_shifted_davidson = .false.
                 end if
-            else if (region_str == "after rejected step") then
-                if (n_refresh_obj_func /= 2) then
+            case ("after rejected step")
+                if (refresh_context%n_obj_func_calls /= 2) then
                     write(stderr, *) "test_level_shifted_davidson failed: Step of "// &
                         "rebuilt reduced space not accepted right after the "// &
-                        "rejected step with "//trim(solver_name)//" solver."
+                        "rejected step "//trim(case_name)//"."
                     test_level_shifted_davidson = .false.
                 end if
-                if (state%micro_iteration < n_refresh_obj_func) then
+                if (state%micro_iteration < refresh_context%n_obj_func_calls) then
                     write(stderr, *) "test_level_shifted_davidson failed: Micro "// &
-                        "iterations of the rejected step not counted with "// &
-                        trim(solver_name)//" solver."
+                        "iterations of the rejected step not counted "// &
+                        trim(case_name)//"."
                     test_level_shifted_davidson = .false.
                 end if
-                if (norm2(grad + matmul(refresh_true_hess, solution)) > &
+                if (norm2(grad + matmul(refresh_context%hess, solution)) > &
                     settings%local_red_factor * grad_norm) then
                     write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
                         "does not describe Newton step of corrected Hessian model "// &
-                        "after rejected step with "//trim(solver_name)//" solver."
+                        trim(case_name)//"."
                     test_level_shifted_davidson = .false.
                 end if
 
-                ! the trust region checks below only apply to the Hartmann function
+                ! the checks below only apply to the Hartmann 6D function
                 return
-            end if
+            end select
 
             ! the relative residual is that of the returned level-shifted Newton step
-            if (abs(state%relative_residual - &
-                    norm2(grad + hartmann6d_hess_x(solution) - mu * solution) / &
-                    grad_norm) > tol) then
+            if (abs(state%relative_residual - norm2(grad + matmul( &
+                context%hess, solution) - mu * solution) / grad_norm) > tol) then
                 write(stderr, *) "test_level_shifted_davidson failed: Relative "// &
-                    "residual wrong "//trim(region_str)//" with "//trim(solver_name)// &
-                    " solver."
+                    "residual wrong "//trim(case_name)//"."
                 test_level_shifted_davidson = .false.
             end if
 
-            ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                    dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-
-            if (region_str == "near minimum") then
-                if ((ratio < trust_radius_shrink_ratio .and. solution_norm > &
-                     state%trust_radius / trust_radius_shrink_factor) .or. &
-                    (ratio > trust_radius_expand_ratio .and. &
-                     solution_norm > state%trust_radius / trust_radius_expand_factor)) &
-                    then
-                    write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
-                        "does not stay within trust region near minimum with "// &
-                        trim(solver_name)//" solver."
-                    test_level_shifted_davidson = .false.
-                end if
-            else if (region_str == "near saddle point") then
-                if ((trust_radius_shrink_ratio > ratio .and. abs( &
-                    solution_norm - state%trust_radius / trust_radius_shrink_factor) > &
-                     tol) .or. (ratio > trust_radius_expand_ratio .and. abs( &
-                         solution_norm - &
-                         state%trust_radius / trust_radius_expand_factor) > tol)) then
-                    write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
-                        "does not lie at trust region boundary near saddle point "// &
-                        "with "//trim(solver_name)//" solver."
-                    test_level_shifted_davidson = .false.
-                end if
+            ! the step stays within the trust region near the minimum and lies at its
+            ! boundary near the saddle point
+            ratio = (hartmann6d_func(context%vars + solution) - func) / dot_product( &
+                solution, grad + 0.5_rp * matmul(context%hess, solution))
+            if (region == "near minimum" .and. norm2(solution) > &
+                ref_step_trust_radius(state%trust_radius, ratio) + tol) then
+                write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
+                    "does not stay within trust region "//trim(case_name)//"."
+                test_level_shifted_davidson = .false.
+            end if
+            if (region == "near saddle point" .and. &
+                abs(norm2(solution) - &
+                    ref_step_trust_radius(state%trust_radius, ratio)) > tol) then
+                write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
+                    "does not lie at trust region boundary "//trim(case_name)//"."
+                test_level_shifted_davidson = .false.
             end if
 
-        end subroutine run_level_shifted_davidson_test
+            ! the counters agree with the calls
+            if (.not. check_call_counts(context, "level_shifted_davidson", &
+                                        trim(case_name), n_hess_x=state%n_hess_x, &
+                                        n_obj_func=state%n_obj_func)) &
+                test_level_shifted_davidson = .false.
+
+        end subroutine check_region
 
     end function test_level_shifted_davidson
 
@@ -9195,6 +9437,7 @@ contains
         type(solver_settings_type) :: settings
         logical :: local_region
         character(len=6) :: region_str
+        type(refresh_context_type), target :: refresh_context
 
         ! assume tests pass
         test_generalized_lanczos_trust_region = .true.
@@ -9517,31 +9760,33 @@ contains
         ! determine if Lanczos starts over with the corrected model when the Hessian
         ! refresh is requested, so that the next step is the Newton step of the true
         ! model and accepted
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, refresh_context)
         settings%grad_noise = .false.
         settings%refresh_hess = .true.
-        call setup_refresh_model(func, h_diag)
+        call setup_refresh_context(refresh_context, func, h_diag)
         state%trust_radius = 0.4_rp
-        obj_func_funptr => refresh_mock_obj_func
-        hess_x_funptr => refresh_mock_hess_x
-        call generalized_lanczos_trust_region( &
-            func, refresh_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
-            settings, .false., state, solution, solution_norm, lambda, error)
+        obj_func_funptr => refresh_obj_func
+        hess_x_funptr => refresh_hess_x
+        call generalized_lanczos_trust_region(func, refresh_context%grad, h_diag, &
+                                              n_param, obj_func_funptr, hess_x_funptr, &
+                                              settings, .false., state, solution, &
+                                              solution_norm, lambda, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Produced error after rejected step."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (n_refresh_obj_func /= 2) then
+        if (refresh_context%n_obj_func_calls /= 2) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: Step "// &
                 "of restarted Lanczos not accepted right after the rejected step."
             test_generalized_lanczos_trust_region = .false.
         end if
-        residual = refresh_grad + matmul(refresh_true_hess, solution)
+        residual = refresh_context%grad + matmul(refresh_context%hess, solution)
         precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
         if (sqrt(dot_product(residual, residual / precond)) > &
             settings%local_red_factor * &
-            sqrt(dot_product(refresh_grad, refresh_grad / precond))) then
+            sqrt(dot_product(refresh_context%grad, refresh_context%grad / precond))) &
+            then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not describe Newton step of corrected Hessian model "// &
                 "after rejected step."
