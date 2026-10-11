@@ -150,18 +150,16 @@ module opentrustregion
     end type
 
     ! derived type for the Lanczos process of the generalized Lanczos trust region
-    ! method: the tridiagonal matrix of the reduced problem with its factorization
-    ! and right hand side, the solution and the eigenvector of the lowest eigenvalue
-    ! of the reduced problem with its size, whether it is interior, whether the hard
-    ! case occurred, the hard case step size, the multiplier and the lowest
-    ! eigenvalue, a work array, and the step sizes, residual dot products and
-    ! preconditioned residuals of the Lanczos iterations, from which the solution is
-    ! assembled
+    ! method: the tridiagonal matrix of the reduced problem and its right hand side,
+    ! the solution and the eigenvector of the lowest eigenvalue of the reduced problem
+    ! with its size, whether it is interior, whether the hard case occurred, the hard
+    ! case step size, the multiplier and the lowest eigenvalue, and the step sizes,
+    ! residual dot products and preconditioned residuals of the Lanczos iterations,
+    ! from which the solution is assembled
     type :: gltr_lanczos_type
-        real(rp), allocatable :: diag(:), off_diag(:), diag_fact(:), off_diag_fact(:), &
-                                 rhs(:), red_space_solution(:), red_space_eigenvec(:), &
-                                 work(:), stepsize_list(:), residual_dot_list(:), &
-                                 precond_residuals(:, :)
+        real(rp), allocatable :: diag(:), off_diag(:), rhs(:), red_space_solution(:), &
+                                 red_space_eigenvec(:), stepsize_list(:), &
+                                 residual_dot_list(:), precond_residuals(:, :)
         integer(ip) :: n_red_space = 0
         logical :: interior = .true., hard_case = .false.
         real(rp) :: hard_case_step_size = 0.0_rp, lambda = 0.0_rp, &
@@ -3632,18 +3630,15 @@ contains
         ! allocate space for residual
         allocate(residual(n_param))
 
-        ! allocate space for the Lanczos tridiagonal with its factorization, the right
-        ! hand side, solution and eigenvector of the reduced problem, a work array
-        ! for solving it, and the step sizes, residual dot products and preconditioned
-        ! residuals of the Lanczos iterations, from which the solution is assembled
+        ! allocate space for the Lanczos tridiagonal, the right hand side, solution and
+        ! eigenvector of the reduced problem, and the step sizes, residual dot products
+        ! and preconditioned residuals of the Lanczos iterations, from which the
+        ! solution is assembled
         allocate(lanczos%diag(settings%n_micro + 1), &
                  lanczos%off_diag(settings%n_micro), &
-                 lanczos%diag_fact(settings%n_micro + 1), &
-                 lanczos%off_diag_fact(settings%n_micro), &
                  lanczos%rhs(settings%n_micro + 1), &
                  lanczos%red_space_solution(settings%n_micro + 1), &
                  lanczos%red_space_eigenvec(settings%n_micro + 1), &
-                 lanczos%work(settings%n_micro + 1), &
                  lanczos%stepsize_list(settings%n_micro), &
                  lanczos%residual_dot_list(settings%n_micro), &
                  lanczos%precond_residuals(n_param, settings%n_micro))
@@ -4526,12 +4521,11 @@ contains
 
         call solve_tridiagonal_subproblem( &
             n_red_space, lanczos%diag(:n_red_space), &
-            lanczos%off_diag(:n_red_space - 1), lanczos%diag_fact(:n_red_space), &
-            lanczos%off_diag_fact(:n_red_space - 1), lanczos%rhs(:n_red_space), &
+            lanczos%off_diag(:n_red_space - 1), lanczos%rhs(:n_red_space), &
             trust_radius, lanczos%interior, try_warm, use_old, lanczos%lowest_eigval, &
             lanczos%lambda, func_diff, lanczos%red_space_solution(:n_red_space), &
-            lanczos%red_space_eigenvec(:n_red_space), lanczos%work(:n_red_space), &
-            lanczos%hard_case, lanczos%hard_case_step_size)
+            lanczos%red_space_eigenvec(:n_red_space), lanczos%hard_case, &
+            lanczos%hard_case_step_size)
 
     end subroutine solve_lanczos_subproblem
 
@@ -4684,9 +4678,9 @@ contains
     end subroutine find_point_on_boundary
 
     subroutine solve_tridiagonal_subproblem( &
-        n_red_space, diagonal, off_diagonal, diagonal_fact, off_diagonal_fact, linear, &
-        trust_radius, interior, try_warm, use_old, lowest_eigenval, lambda, func, &
-        solution, eigenvec, work, hard_case, hard_case_step_size)
+        n_red_space, diagonal, off_diagonal, linear, trust_radius, interior, try_warm, &
+        use_old, lowest_eigenval, lambda, func, solution, eigenvec, hard_case, &
+        hard_case_step_size)
         !
         ! this subroutine determines a vector x which approximately minimizes the
         ! quadratic function
@@ -4701,8 +4695,6 @@ contains
         ! - if solution_sol is the solution to the problem, the approximate solution
         !   satisfies func(solution) <= func(solution_sol) * (1 - rtol) ** 2
         ! - diagonal and off_diagonal: tridiagonal matrix
-        ! - diagonal_fact and off_diagonal_fact: LDL.T factorization of the tridiagonal
-        !   matrix shifted by lambda
         ! - try_warm is true: an initial estimate of lambda should be provided
         ! - use_old is true: the lowest eigenvalue of the leading n-1 by n-1 block
         !   should be provided
@@ -4716,16 +4708,15 @@ contains
         real(rp), intent(in) :: trust_radius
         logical, intent(inout) :: interior
         real(rp), intent(inout) :: lambda, lowest_eigenval
-        real(rp), intent(out) :: func, hard_case_step_size, &
-                                 off_diagonal_fact(n_red_space - 1), &
-                                 diagonal_fact(n_red_space), solution(n_red_space), &
-                                 eigenvec(n_red_space), work(n_red_space)
+        real(rp), intent(out) :: func, hard_case_step_size, solution(n_red_space), &
+                                 eigenvec(n_red_space)
         logical, intent(out) :: hard_case
 
         real(rp), parameter :: rel_tol = 1e-12_rp, mach_eps = epsilon(1.0_rp)
         integer(ip), parameter :: iter_max = 100
         real(rp) :: solution_norm, func_linear_term, norm_eigenvec_solution_dot, dist, &
-                    delta_lambda, pert_l
+                    delta_lambda, pert_l, diagonal_fact(n_red_space), &
+                    off_diagonal_fact(n_red_space - 1), work(n_red_space)
         integer(ip) :: iter, indefinite
         real(rp), external :: dnrm2, ddot
         external :: dpttrf
@@ -4747,10 +4738,9 @@ contains
                 ! if shifted tridiagonal is positive definite, solve
                 ! (tridiagonal + lambda * I) solution = -linear
                 if (indefinite == 0) then
-                    work = -linear
                     call solve_tridiagonal(n_red_space, diagonal, off_diagonal, &
                                            lambda, diagonal_fact, off_diagonal_fact, &
-                                           work, solution, eigenvec, func_linear_term)
+                                           -linear, solution, func_linear_term)
 
                     ! if the solution lies outside the trust-region, it provides a good
                     ! initial estimate of the solution to the TR problem
@@ -4775,8 +4765,8 @@ contains
                 ! if tridiagonal is positive definite, solve  T x = -linear
                 if (indefinite == 0) then
                     solution = -linear
-                    call inverse_iteration(n_red_space, diagonal_fact, &
-                                           off_diagonal_fact, solution)
+                    call solve_factorized_tridiagonal(n_red_space, diagonal_fact, &
+                                                      off_diagonal_fact, solution)
 
                     ! if the solution lies within the trust-region, it provides an
                     ! interior solution to the TR problem
@@ -4807,13 +4797,7 @@ contains
 
                 ! construct a Lagrange multiplier to ensure that shifted tridiagonal is
                 ! positive definite
-                if (lowest_eigenval <= 0.0_rp) then
-                    lambda = -lowest_eigenval * (1.0_rp + pert_l) + pert_l
-                ! construct a Lagrange multiplier which can become negative for large
-                ! trust regions while keeping the shifted tridiagonal positive definite
-                else
-                    lambda = -lowest_eigenval * (1.0_rp - pert_l) + pert_l
-                end if
+                lambda = -lowest_eigenval * (1.0_rp + pert_l) + pert_l
 
                 ! loop until Lagrange multiplier is found which makes lambda-shifted
                 ! tridiagonal positive definite
@@ -4828,25 +4812,20 @@ contains
                     ! shifted tridiagonal is still numerically indefinite and must be
                     ! perturbed a bit more
                     pert_l = 2.0_rp * pert_l
-                    if (lowest_eigenval <= 0.0_rp) then
-                        lambda = lambda * (1.0_rp + pert_l) + pert_l
-                    else
-                        lambda = lambda * (1.0_rp - pert_l) + pert_l
-                    end if
+                    lambda = lambda * (1.0_rp + pert_l) + pert_l
                 end do
 
                 ! solve T x = -linear
-                work = -linear
                 call solve_tridiagonal(n_red_space, diagonal, off_diagonal, lambda, &
-                                       diagonal_fact, off_diagonal_fact, work, &
-                                       solution, eigenvec, func_linear_term)
+                                       diagonal_fact, off_diagonal_fact, -linear, &
+                                       solution, func_linear_term)
                 solution_norm = dnrm2(n_red_space, solution, 1_ip)
 
                 ! if the step length stays below trust radius even as the exact
                 ! eigenvalue is approached by the Lagrange multiplier, the gradient
                 ! must be orthogonal to the corresponding eigenvector
                 if (solution_norm < trust_radius) then
-                    ! hard case is occuring
+                    ! hard case is occurring
                     hard_case = .true.
 
                     ! lambda can be lowest eigenvalue
@@ -4854,8 +4833,7 @@ contains
 
                     ! compute lowest eigenvector
                     call get_tridiagonal_lowest_eigenvector( &
-                        n_red_space, lowest_eigenval, diagonal, off_diagonal, &
-                        diagonal_fact, off_diagonal_fact, eigenvec)
+                        n_red_space, lowest_eigenval, diagonal, off_diagonal, eigenvec)
 
                     ! get normalized overlap of eigenvector and solution (should be
                     ! close to zero in hard case)
@@ -4873,8 +4851,6 @@ contains
                         sqrt(norm_eigenvec_solution_dot**2 + dist / trust_radius)), &
                                                norm_eigenvec_solution_dot)
                     func = -0.5_rp * (func_linear_term + lambda * trust_radius**2)
-                    solution_norm = dnrm2( &
-                        n_red_space, solution + hard_case_step_size * eigenvec, 1_ip)
                     return
                 end if
             else
@@ -4907,10 +4883,9 @@ contains
             call dpttrf(n_red_space, diagonal_fact, off_diagonal_fact, indefinite)
 
             ! solve the equation (tridiagonal + lambda * I) solution = -linear
-            work = -linear
             call solve_tridiagonal(n_red_space, diagonal, off_diagonal, lambda, &
-                                   diagonal_fact, off_diagonal_fact, work, solution, &
-                                   eigenvec, func_linear_term)
+                                   diagonal_fact, off_diagonal_fact, -linear, &
+                                   solution, func_linear_term)
             solution_norm = dnrm2(n_red_space, solution, 1_ip)
 
             ! test for convergence
@@ -4923,7 +4898,6 @@ contains
         ! could not converge in maximum number of iterations, return best available
         ! approximation
         func = -0.5_rp * (func_linear_term + lambda * solution_norm**2)
-        return
 
     end subroutine solve_tridiagonal_subproblem
 
@@ -4980,9 +4954,13 @@ contains
             pivot = diagonal(1) - lowest_eigenvalue
             pivot_derivative = -1.0_rp
 
-            ! if a zero pivot is encountered, reset the upper bound
+            ! if a zero pivot is encountered, the estimate is an eigenvalue of the
+            ! leading block and therefore, by interlacing, not below the lowest
+            ! eigenvalue, which it is at the lower bound, otherwise reset the upper
+            ! bound
             if (abs(pivot) < numerical_zero) then
                 upper = lowest_eigenvalue
+                if (upper <= lower) return
                 lowest_eigenvalue = 0.5_rp * (lower + upper)
                 cycle iter_loop
             ! if a negative pivot is encountered, exit
@@ -5002,9 +4980,11 @@ contains
                     ! return if a zero last pivot is encountered
                     if (n_neg_pivots == 0 .and. i == n_elem) then
                         return
-                    ! reduce the upper bound if a zero pivot is encountered
+                    ! reduce the upper bound if a zero pivot is encountered, unless the
+                    ! estimate lies at the lower bound and is the lowest eigenvalue
                     else
                         upper = lowest_eigenvalue
+                        if (upper <= lower) return
                         lowest_eigenvalue = 0.5_rp * (lower + upper)
                         cycle iter_loop
                     end if
@@ -5060,8 +5040,7 @@ contains
     end function get_tridiagonal_lowest_eigenvalue
 
     subroutine get_tridiagonal_lowest_eigenvector(n_elem, eigenval_est, diagonal, &
-                                                  off_diagonal, diagonal_fact, &
-                                                  off_diagonal_fact, eigenvec)
+                                                  off_diagonal, eigenvec)
         !
         ! this subroutine computes an eigenvector corresponding to the lowest
         ! eigenvalue of a symmetric tridiagonal matrix using inverse iteration
@@ -5069,13 +5048,12 @@ contains
         integer(ip), intent(in) :: n_elem
         real(rp), intent(in) :: eigenval_est
         real(rp), intent(in) :: diagonal(n_elem), off_diagonal(n_elem - 1)
-        real(rp), intent(out) :: diagonal_fact(n_elem), off_diagonal_fact(n_elem - 1), &
-                                 eigenvec(n_elem)
+        real(rp), intent(out) :: eigenvec(n_elem)
 
         real(rp), parameter :: perturb_factor = 1e-6_rp, conv_tol = 1e-8_rp
         integer(ip), parameter :: max_iter = 5
         integer(ip) :: indefinite, iter
-        real(rp) :: wnorm, perturb
+        real(rp) :: wnorm, perturb, diagonal_fact(n_elem), off_diagonal_fact(n_elem - 1)
         real(rp), external :: dnrm2
         external :: dpttrf
 
@@ -5104,7 +5082,8 @@ contains
         ! which should converge very quickly since eigenvalue estimate is accurate
         do iter = 1, max_iter
             ! solve (T - eigenval_est I) eigenvec_new = eigenvec
-            call inverse_iteration(n_elem, diagonal_fact, off_diagonal_fact, eigenvec)
+            call solve_factorized_tridiagonal(n_elem, diagonal_fact, &
+                                              off_diagonal_fact, eigenvec)
 
             ! normalize eigenvector
             wnorm = 1.0_rp / dnrm2(n_elem, eigenvec, 1_ip)
@@ -5118,67 +5097,64 @@ contains
 
     subroutine solve_tridiagonal(n_elem, diagonal, off_diagonal, lambda, &
                                  diagonal_fact, off_diagonal_fact, rhs, solution, &
-                                 work, scaled_solution_norm_squared)
+                                 rhs_solution_dot)
         !
-        ! this subroutine solves the system (T + lambda I) x = b using iterative
-        ! refinement given the factors of the tridiagonal matrix T + lambda I
+        ! this subroutine solves the system (T + lambda I) x = b with one step of
+        ! iterative refinement given the LDL^T factorization of the tridiagonal matrix
+        ! T + lambda I, and returns the dot product b^T (T + lambda I)^-1 b of the right
+        ! hand side and the solution before the refinement
         !
         integer(ip), intent(in) :: n_elem
         real(rp), intent(in) :: lambda
         real(rp), intent(in) :: off_diagonal(n_elem - 1), &
                                 off_diagonal_fact(n_elem - 1), diagonal(n_elem), &
                                 diagonal_fact(n_elem), rhs(n_elem)
-        real(rp), intent(out) :: solution(n_elem), work(n_elem), &
-                                 scaled_solution_norm_squared
+        real(rp), intent(out) :: solution(n_elem), rhs_solution_dot
 
-        integer(ip), parameter :: itmax = 1
-        integer(ip) :: i, it
+        integer(ip) :: i
+        real(rp) :: work(n_elem)
         real(rp), external :: ddot
 
-        ! use inverse iteration to solve (T - lambda I) solution = rhs which should
-        ! converge very quickly since eigenvalue estimate is accurate
+        ! solve (T + lambda I) solution = rhs with the factorization, the dot product
+        ! of the right hand side and the solution is that of the forward substituted
+        ! right hand side and its scaling by the diagonal factor
         work = rhs
-
-        ! solve (T + lambda I) solution = rhs with inverse iteration
         call forward_substitution(n_elem, off_diagonal_fact, work)
-        solution = work
-        call diagonal_scaling(n_elem, diagonal_fact, solution)
-        scaled_solution_norm_squared = ddot(n_elem, work, 1_ip, solution, 1_ip)
+        solution = work / diagonal_fact
+        rhs_solution_dot = ddot(n_elem, work, 1_ip, solution, 1_ip)
         call backward_substitution(n_elem, off_diagonal_fact, solution)
 
-        ! start of iterative refinement, only a single iteration is used since this is
-        ! enough to achieve floating-point precision for well-conditioned problems
-        do it = 1, itmax
-            ! compute the residual r = b - (T + lambda I) x
-            work = rhs - (diagonal + lambda) * solution
-            do i = 1, n_elem - 1
-                work(i) = work(i) - off_diagonal(i) * solution(i + 1)
-                work(i + 1) = work(i + 1) - off_diagonal(i) * solution(i)
-            end do
-
-            ! solve (T + lambda I) dx = r with inverse iteration
-            call inverse_iteration(n_elem, diagonal_fact, off_diagonal_fact, work)
-
-            ! update solution
-            solution = solution + work
+        ! a single step of iterative refinement is enough to achieve floating-point
+        ! precision for well-conditioned problems, compute the residual
+        ! r = b - (T + lambda I) x
+        work = rhs - (diagonal + lambda) * solution
+        do i = 1, n_elem - 1
+            work(i) = work(i) - off_diagonal(i) * solution(i + 1)
+            work(i + 1) = work(i + 1) - off_diagonal(i) * solution(i)
         end do
+
+        ! solve (T + lambda I) dx = r with the factorization and update the solution
+        call solve_factorized_tridiagonal(n_elem, diagonal_fact, off_diagonal_fact, &
+                                          work)
+        solution = solution + work
 
     end subroutine solve_tridiagonal
 
-    subroutine inverse_iteration(n, diagonal, off_diagonal, arr)
+    subroutine solve_factorized_tridiagonal(n, diagonal_fact, off_diagonal_fact, arr)
         !
-        ! this subroutine performs in-place inverse iteration for a unit lower
-        ! bidiagonal matrix
+        ! this subroutine solves a tridiagonal system L D L^T x = b in place given the
+        ! diagonal of D and the off-diagonal of the unit lower bidiagonal matrix L of
+        ! the LDL^T factorization of the tridiagonal matrix
         !
         integer(ip), intent(in) :: n
-        real(rp), intent(in) :: diagonal(n), off_diagonal(n - 1)
+        real(rp), intent(in) :: diagonal_fact(n), off_diagonal_fact(n - 1)
         real(rp), intent(inout) :: arr(n)
 
-        call forward_substitution(n, off_diagonal, arr)
-        call diagonal_scaling(n, diagonal, arr)
-        call backward_substitution(n, off_diagonal, arr)
+        call forward_substitution(n, off_diagonal_fact, arr)
+        arr = arr / diagonal_fact
+        call backward_substitution(n, off_diagonal_fact, arr)
 
-    end subroutine inverse_iteration
+    end subroutine solve_factorized_tridiagonal
 
     subroutine forward_substitution(n, off_diagonal, arr)
         !
@@ -5196,19 +5172,6 @@ contains
         end do
 
     end subroutine forward_substitution
-
-    subroutine diagonal_scaling(n, diagonal, arr)
-        !
-        ! this subroutine performs in-place diagonal scaling D * x = b for a diagonal
-        ! matrix
-        !
-        integer(ip), intent(in) :: n
-        real(rp), intent(in) :: diagonal(n)
-        real(rp), intent(inout) :: arr(n)
-
-        arr = arr / diagonal
-
-    end subroutine diagonal_scaling
 
     subroutine backward_substitution(n, off_diagonal, arr)
         !
@@ -5229,7 +5192,7 @@ contains
 
     subroutine quadratic_roots(a0, a1, a2, tol, root1, root2)
         !
-        ! this subroutine finds the number and values of real roots of an quadratic
+        ! this subroutine finds the number and values of real roots of a quadratic
         ! equation (a2 * x**2 + a1 * x + a0 = 0) where a0, a1 and a2 are real
         !
         real(rp), intent(in) :: a2, a1, a0, tol
@@ -5284,7 +5247,7 @@ contains
                 root1 = -a0 / a1
                 root2 = 0.0_rp
             end if
-        ! function isvery ill-conditioned quadratic
+        ! function is very ill-conditioned quadratic
         else
             nroots = 2
             if (-a1 / a2 > 0.0_rp) then

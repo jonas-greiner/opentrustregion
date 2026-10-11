@@ -187,9 +187,12 @@ module opentrustregion_unit_tests
     ! chosen so that it cannot be mistaken for an expected error code
     integer(ip), parameter :: missing_context_error = 42
 
-    ! spurious negative curvature of the Hessian model of a refresh context along the
-    ! first coordinate before the model is corrected
-    real(rp), parameter :: refresh_hess_error = 7.0_rp
+    ! tolerances of the lowest eigenvalue of a tridiagonal matrix, whose iterations
+    ! stop at a pivot of about 5e-11, which leaves errors up to about 2e-10, and of
+    ! results which depend on its eigenvector, whose inverse iteration stops once the
+    ! inverse norm of its iterate agrees with the shift to 1e-8, which leaves
+    ! residuals up to about 1e-8
+    real(rp), parameter :: tridiag_eigval_tol = 1e-8_rp, tridiag_eigvec_tol = 1e-6_rp
 
     ! module state of the sanity check tests that have not been moved onto host
     ! contexts yet, the global log message of their mock logging function below
@@ -1195,6 +1198,10 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
+        ! spurious negative curvature along the first coordinate before the model is
+        ! corrected
+        real(rp), parameter :: refresh_hess_error = 7.0_rp
+
         class(refresh_context_type), pointer :: state
 
         ! check host context
@@ -2032,6 +2039,22 @@ contains
 
     end function tridiagonal_matrix
 
+    function unit_lower_bidiagonal_matrix(off_diagonal) result(matrix)
+        !
+        ! this function returns the unit lower bidiagonal matrix of an off-diagonal
+        !
+        real(rp), intent(in) :: off_diagonal(:)
+        real(rp) :: matrix(size(off_diagonal) + 1, size(off_diagonal) + 1)
+
+        integer(ip) :: i
+
+        matrix = identity_matrix(size(off_diagonal, kind=ip) + 1_ip)
+        do i = 1, size(off_diagonal)
+            matrix(i + 1, i) = off_diagonal(i)
+        end do
+
+    end function unit_lower_bidiagonal_matrix
+
     function generate_random_symm_matrix(n) result(matrix)
         !
         ! this function generates a random symmetric matrix
@@ -2215,19 +2238,15 @@ contains
         integer(ip), intent(in) :: n_param, n_micro
 
         allocate(lanczos%diag(n_micro + 1), lanczos%off_diag(n_micro), &
-                 lanczos%diag_fact(n_micro + 1), lanczos%off_diag_fact(n_micro), &
                  lanczos%rhs(n_micro + 1), lanczos%red_space_solution(n_micro + 1), &
-                 lanczos%red_space_eigenvec(n_micro + 1), lanczos%work(n_micro + 1), &
+                 lanczos%red_space_eigenvec(n_micro + 1), &
                  lanczos%stepsize_list(n_micro), lanczos%residual_dot_list(n_micro), &
                  lanczos%precond_residuals(n_param, n_micro))
         lanczos%diag = -1.0_rp
         lanczos%off_diag = -1.0_rp
-        lanczos%diag_fact = -1.0_rp
-        lanczos%off_diag_fact = -1.0_rp
         lanczos%rhs = -1.0_rp
         lanczos%red_space_solution = -1.0_rp
         lanczos%red_space_eigenvec = -1.0_rp
-        lanczos%work = -1.0_rp
         lanczos%stepsize_list = -1.0_rp
         lanczos%residual_dot_list = -1.0_rp
         lanczos%precond_residuals = -1.0_rp
@@ -7522,6 +7541,473 @@ contains
         end if
 
     end function test_find_point_on_boundary
+
+    logical(c_bool) function test_solve_tridiagonal_subproblem() bind(C)
+        !
+        ! this function tests the subroutine which solves the trust region subproblem
+        ! of a tridiagonal matrix
+        !
+        use opentrustregion, only: solve_tridiagonal_subproblem
+
+        integer(ip), parameter :: n_elem = 4
+        real(rp), parameter :: rel_tol = 1e-12_rp
+        real(rp) :: diagonal(n_elem), off_diagonal(n_elem - 1), linear(n_elem), &
+                    solution(n_elem), eigenvec(n_elem), ref_eigvals(n_elem), &
+                    ref_eigvecs(n_elem, n_elem), trust_radius, lowest_eigenval, &
+                    lambda, func, hard_case_step_size, warm_lambda
+        logical :: interior, hard_case
+
+        ! assume tests pass
+        test_solve_tridiagonal_subproblem = .true.
+
+        ! generate a random positive-definite tridiagonal matrix and linear term
+        call random_number(diagonal)
+        diagonal = diagonal + 3.0_rp
+        call random_number(off_diagonal)
+        call random_number(linear)
+        linear = linear + 0.5_rp
+
+        ! solve the subproblem within a trust region far beyond the Newton step,
+        ! starting from a multiplier which is not used without a warm start, and check
+        ! that the solution is the Newton step inside the trust region with a
+        ! vanishing multiplier
+        call run_subproblem(100.0_rp, .false., 1.0_rp)
+        call check_solution("inside the trust region", solution, tol)
+        if (.not. interior .or. abs(lambda) > 0.0_rp .or. hard_case) then
+            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
+                "not inside the trust region with a vanishing multiplier."
+            test_solve_tridiagonal_subproblem = .false.
+        end if
+
+        ! solve the subproblem within a trust region half as long as the Newton step
+        ! and check that the solution lies on the boundary with a positive multiplier
+        call run_subproblem(0.5_rp * norm2(solution), .false., 0.0_rp)
+        call check_solution("on the trust region boundary", solution, tol)
+        if (lambda <= 0.0_rp .or. hard_case .or. &
+            abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
+            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
+                "not on the trust region boundary with a positive multiplier."
+            test_solve_tridiagonal_subproblem = .false.
+        end if
+
+        ! solve the subproblem again with a warm start at a multiplier which differs
+        ! from this one by less than the accuracy of the boundary and check that the
+        ! solution is returned with the multiplier of the warm start
+        warm_lambda = (1.0_rp + 1e-13_rp) * lambda
+        call run_subproblem(trust_radius, .true., warm_lambda)
+        call check_solution("with a warm start", solution, tol)
+        if (abs(lambda - warm_lambda) > 0.0_rp .or. &
+            abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
+            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
+                "with the multiplier of the warm start not returned."
+            test_solve_tridiagonal_subproblem = .false.
+        end if
+
+        ! shift the tridiagonal matrix so that it becomes indefinite, solve the
+        ! subproblem and check that the solution lies on the boundary with a
+        ! multiplier which makes the shifted tridiagonal matrix positive
+        ! semidefinite, that no interior solution is reported and that the lowest
+        ! eigenvalue is returned
+        diagonal = diagonal - 5.0_rp
+        call ref_symm_mat_diag(tridiagonal_matrix(diagonal, off_diagonal), &
+                               ref_eigvals, ref_eigvecs)
+        call run_subproblem(1.0_rp, .false., 0.0_rp)
+        call check_solution("for an indefinite tridiagonal matrix", solution, tol)
+        if (interior .or. hard_case .or. lambda < -ref_eigvals(1) .or. &
+            abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
+            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
+                "for an indefinite tridiagonal matrix not on the trust region "// &
+                "boundary with a multiplier above the negative lowest eigenvalue."
+            test_solve_tridiagonal_subproblem = .false.
+        end if
+        if (abs(lowest_eigenval - ref_eigvals(1)) > tridiag_eigval_tol) then
+            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Lowest "// &
+                "eigenvalue of an indefinite tridiagonal matrix not returned."
+            test_solve_tridiagonal_subproblem = .false.
+        end if
+
+        ! solve the subproblem of a reducible tridiagonal matrix whose lowest
+        ! eigenvector is nearly orthogonal to the linear term, so that the solution of
+        ! the shifted system stays inside a large trust region, and check that the hard
+        ! case is reported with the negative lowest eigenvalue as multiplier, the
+        ! normalized eigenvector and the step size along it which completes the
+        ! solution to the trust region boundary, whose sign matters since the solution
+        ! is not orthogonal to the eigenvector
+        diagonal = [-1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
+        off_diagonal = 0.0_rp
+        linear = [1e-16_rp, 1.0_rp, 1.0_rp, 1.0_rp]
+        call run_subproblem(10.0_rp, .false., 0.0_rp)
+        call check_solution("in the hard case", solution + hard_case_step_size * &
+                            eigenvec, tridiag_eigvec_tol)
+        if (.not. hard_case .or. abs(lambda - 1.0_rp) > tridiag_eigval_tol .or. &
+            abs(abs(eigenvec(1)) - 1.0_rp) > tridiag_eigvec_tol .or. &
+            abs(norm2(solution + hard_case_step_size * eigenvec) - trust_radius) > &
+            tol) then
+            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Hard case "// &
+                "not completed to the trust region boundary along the lowest "// &
+                "eigenvector."
+            test_solve_tridiagonal_subproblem = .false.
+        end if
+
+    contains
+
+        subroutine run_subproblem(radius, warm_start, start_lambda)
+            !
+            ! this subroutine solves the subproblem of the current tridiagonal matrix
+            ! and linear term for a trust radius, allowing an interior solution, with
+            ! or without a warm start at a multiplier
+            !
+            real(rp), intent(in) :: radius, start_lambda
+            logical, intent(in) :: warm_start
+
+            trust_radius = radius
+            interior = .true.
+            lambda = start_lambda
+            lowest_eigenval = 0.0_rp
+            call solve_tridiagonal_subproblem( &
+                n_elem, diagonal, off_diagonal, linear, trust_radius, interior, &
+                warm_start, .false., lowest_eigenval, lambda, func, solution, &
+                eigenvec, hard_case, hard_case_step_size)
+
+        end subroutine run_subproblem
+
+        subroutine check_solution(case_name, step, func_tol)
+            !
+            ! this subroutine checks that the solution solves the system of the
+            ! tridiagonal matrix shifted by the multiplier and that the returned
+            ! function value is that of the model at the step to a tolerance
+            !
+            character(len=*), intent(in) :: case_name
+            real(rp), intent(in) :: step(:), func_tol
+
+            real(rp) :: tridiag(n_elem, n_elem)
+
+            tridiag = tridiagonal_matrix(diagonal, off_diagonal)
+            if (norm2(matmul(tridiag, solution) + lambda * solution + linear) > tol) &
+                then
+                write(stderr, *) "test_solve_tridiagonal_subproblem failed: "// &
+                    "Solution does not solve the shifted system "//case_name//"."
+                test_solve_tridiagonal_subproblem = .false.
+            end if
+            if (abs(func - (0.5_rp * dot_product(step, matmul(tridiag, step)) + &
+                            dot_product(linear, step))) > func_tol) then
+                write(stderr, *) "test_solve_tridiagonal_subproblem failed: "// &
+                    "Function value is not that of the model "//case_name//"."
+                test_solve_tridiagonal_subproblem = .false.
+            end if
+
+        end subroutine check_solution
+
+    end function test_solve_tridiagonal_subproblem
+
+    logical(c_bool) function test_get_tridiagonal_lowest_eigenvalue() bind(C)
+        !
+        ! this function tests the function which computes the lowest eigenvalue of a
+        ! symmetric tridiagonal matrix
+        !
+        use opentrustregion, only: get_tridiagonal_lowest_eigenvalue
+
+        real(rp), parameter :: rel_tol = 1e-12_rp
+        real(rp) :: diagonal(n_param), off_diagonal(n_param - 1), &
+                    ref_eigvals(n_param), ref_eigvecs(n_param, n_param), &
+                    ref_block_eigvals(n_param - 1), &
+                    ref_block_eigvecs(n_param - 1, n_param - 1)
+        integer(ip) :: i_case
+
+        ! assume tests pass
+        test_get_tridiagonal_lowest_eigenvalue = .true.
+
+        ! check that the lowest eigenvalue of a single element is the element
+        call random_number(diagonal)
+        if (abs(get_tridiagonal_lowest_eigenvalue( &
+            1_ip, diagonal(:1), off_diagonal(:0), rel_tol, .false., 0.0_rp) - &
+            diagonal(1)) > 0.0_rp) then
+            write(stderr, *) "test_get_tridiagonal_lowest_eigenvalue failed: "// &
+                "Lowest eigenvalue of a single element is not the element."
+            test_get_tridiagonal_lowest_eigenvalue = .false.
+        end if
+
+        ! generate a random tridiagonal matrix and determine its lowest eigenvalue and
+        ! that of its leading block independently
+        diagonal = 2.0_rp * diagonal - 1.0_rp
+        call random_number(off_diagonal)
+        off_diagonal = off_diagonal - 0.5_rp
+        call ref_symm_mat_diag(tridiagonal_matrix(diagonal, off_diagonal), &
+                               ref_eigvals, ref_eigvecs)
+        call ref_symm_mat_diag( &
+            tridiagonal_matrix(diagonal(:n_param - 1), off_diagonal(:n_param - 2)), &
+            ref_block_eigvals, ref_block_eigvecs)
+
+        ! check that the lowest eigenvalue is found from the bounds and from the
+        ! lowest eigenvalue of the leading block
+        do i_case = 1, 2
+            if (abs(get_tridiagonal_lowest_eigenvalue( &
+                n_param, diagonal, off_diagonal, rel_tol, i_case == 2, &
+                ref_block_eigvals(1)) - ref_eigvals(1)) > tridiag_eigval_tol) then
+                write(stderr, *) "test_get_tridiagonal_lowest_eigenvalue failed: "// &
+                    "Lowest eigenvalue wrong "// &
+                    trim(merge("without", "with   ", i_case == 1))// &
+                    " the lowest eigenvalue of the leading block."
+                test_get_tridiagonal_lowest_eigenvalue = .false.
+            end if
+        end do
+
+        ! check that the lowest eigenvalue is found for reducible tridiagonal matrices
+        ! whose lowest diagonal element, the lower bound of the eigenvalues, comes
+        ! first or later, so that the pivot vanishes at the first or a later element
+        do i_case = 1, 2
+            if (i_case == 1) then
+                diagonal(:3) = [-1.0_rp, 2.0_rp, 3.0_rp]
+            else
+                diagonal(:3) = [2.0_rp, -1.0_rp, 3.0_rp]
+            end if
+            if (abs(get_tridiagonal_lowest_eigenvalue( &
+                3_ip, diagonal(:3), [0.0_rp, 0.0_rp], rel_tol, .false., 0.0_rp) + &
+                1.0_rp) > tridiag_eigval_tol) then
+                write(stderr, *) "test_get_tridiagonal_lowest_eigenvalue failed: "// &
+                    "Lowest eigenvalue wrong for reducible matrix with the lowest "// &
+                    "element "//trim(merge("first", "later", i_case == 1))//"."
+                test_get_tridiagonal_lowest_eigenvalue = .false.
+            end if
+        end do
+
+    end function test_get_tridiagonal_lowest_eigenvalue
+
+    logical(c_bool) function test_get_tridiagonal_lowest_eigenvector() bind(C)
+        !
+        ! this function tests the subroutine which computes an eigenvector of the lowest
+        ! eigenvalue of a symmetric tridiagonal matrix
+        !
+        use opentrustregion, only: get_tridiagonal_lowest_eigenvector
+
+        real(rp) :: diagonal(n_param), off_diagonal(n_param - 1), eigenvec(n_param), &
+                    ref_eigvals(n_param), ref_eigvecs(n_param, n_param)
+
+        ! assume tests pass
+        test_get_tridiagonal_lowest_eigenvector = .true.
+
+        ! generate a random tridiagonal matrix whose lowest eigenvalue is well
+        ! separated and determine this eigenvalue independently
+        call random_number(diagonal)
+        diagonal = diagonal + 1.0_rp
+        diagonal(1) = -2.0_rp
+        call random_number(off_diagonal)
+        off_diagonal = 0.5_rp * off_diagonal
+        call ref_symm_mat_diag(tridiagonal_matrix(diagonal, off_diagonal), &
+                               ref_eigvals, ref_eigvecs)
+
+        ! check that a normalized eigenvector of the lowest eigenvalue is returned
+        call get_tridiagonal_lowest_eigenvector(n_param, ref_eigvals(1), diagonal, &
+                                                off_diagonal, eigenvec)
+        if (abs(norm2(eigenvec) - 1.0_rp) > tol .or. &
+            norm2(matmul(tridiagonal_matrix(diagonal, off_diagonal), eigenvec) - &
+                  ref_eigvals(1) * eigenvec) > tridiag_eigvec_tol) then
+            write(stderr, *) "test_get_tridiagonal_lowest_eigenvector failed: "// &
+                "Returned vector is not a normalized eigenvector of the lowest "// &
+                "eigenvalue."
+            test_get_tridiagonal_lowest_eigenvector = .false.
+        end if
+
+    end function test_get_tridiagonal_lowest_eigenvector
+
+    logical(c_bool) function test_solve_tridiagonal() bind(C)
+        !
+        ! this function tests the subroutine which solves a shifted tridiagonal system
+        ! with one step of iterative refinement given its factorization
+        !
+        use opentrustregion, only: solve_tridiagonal
+
+        real(rp), parameter :: lambda = 0.3_rp, fact_error = 1e-7_rp
+        real(rp) :: diagonal_fact(n_param), off_diagonal_fact(n_param - 1), &
+                    perturbation(n_param), shifted_tridiag(n_param, n_param), &
+                    rhs(n_param), solution(n_param), rhs_solution_dot
+        integer(ip) :: i, i_case
+
+        ! assume tests pass
+        test_solve_tridiagonal = .true.
+
+        ! generate a random factorization L D L^T, the shifted tridiagonal matrix it
+        ! factorizes and a right hand side
+        call random_number(diagonal_fact)
+        diagonal_fact = diagonal_fact + 0.5_rp
+        call random_number(off_diagonal_fact)
+        off_diagonal_fact = off_diagonal_fact - 0.5_rp
+        shifted_tridiag = matmul( &
+            unit_lower_bidiagonal_matrix(off_diagonal_fact) * &
+            spread(diagonal_fact, 1, n_param), &
+            transpose(unit_lower_bidiagonal_matrix(off_diagonal_fact)))
+        call random_number(rhs)
+        call random_number(perturbation)
+
+        ! solve the system of the tridiagonal matrix, the shifted one minus the shift,
+        ! with its factorization and with the factorization of a slightly perturbed
+        ! matrix, which a single step of iterative refinement corrects, and check that
+        ! the system is solved, and with the exact factorization that the dot product
+        ! of the right hand side and the solution is returned
+        do i_case = 1, 2
+            call solve_tridiagonal( &
+                n_param, [(shifted_tridiag(i, i) - lambda, i=1, n_param)], &
+                [(shifted_tridiag(i + 1, i), i=1, n_param - 1)], lambda, &
+                diagonal_fact * &
+                (1.0_rp + merge(0.0_rp, fact_error, i_case == 1) * perturbation), &
+                off_diagonal_fact, rhs, solution, rhs_solution_dot)
+            if (norm2(matmul(shifted_tridiag, solution) - rhs) > tol) then
+                write(stderr, *) "test_solve_tridiagonal failed: System not solved "// &
+                    "with "//trim(merge("exact    ", "perturbed", i_case == 1))// &
+                    " factorization."
+                test_solve_tridiagonal = .false.
+            end if
+            if (i_case == 1 .and. &
+                abs(rhs_solution_dot - dot_product(rhs, solution)) > tol) then
+                write(stderr, *) "test_solve_tridiagonal failed: Dot product of "// &
+                    "the right hand side and the solution not returned."
+                test_solve_tridiagonal = .false.
+            end if
+        end do
+
+    end function test_solve_tridiagonal
+
+    logical(c_bool) function test_solve_factorized_tridiagonal() bind(C)
+        !
+        ! this function tests the subroutine which solves a tridiagonal system in place
+        ! given its LDL^T factorization
+        !
+        use opentrustregion, only: solve_factorized_tridiagonal
+
+        real(rp) :: diagonal_fact(n_param), off_diagonal_fact(n_param - 1), &
+                    rhs(n_param), solution(n_param)
+
+        ! assume tests pass
+        test_solve_factorized_tridiagonal = .true.
+
+        ! generate a random factorization L D L^T and right hand side
+        call random_number(diagonal_fact)
+        diagonal_fact = diagonal_fact + 0.5_rp
+        call random_number(off_diagonal_fact)
+        off_diagonal_fact = off_diagonal_fact - 0.5_rp
+        call random_number(rhs)
+
+        ! check that the system of the factorized matrix is solved
+        solution = rhs
+        call solve_factorized_tridiagonal(n_param, diagonal_fact, off_diagonal_fact, &
+                                          solution)
+        if (norm2( &
+            matmul(matmul(unit_lower_bidiagonal_matrix(off_diagonal_fact) * &
+                          spread(diagonal_fact, 1, n_param), &
+                          transpose(unit_lower_bidiagonal_matrix(off_diagonal_fact))), &
+                   solution) - rhs) > tol) then
+            write(stderr, *) "test_solve_factorized_tridiagonal failed: System of "// &
+                "the factorized matrix not solved."
+            test_solve_factorized_tridiagonal = .false.
+        end if
+
+    end function test_solve_factorized_tridiagonal
+
+    logical(c_bool) function test_forward_substitution() bind(C)
+        !
+        ! this function tests the subroutine which performs forward substitution for a
+        ! unit lower bidiagonal matrix
+        !
+        use opentrustregion, only: forward_substitution
+
+        real(rp) :: off_diagonal(n_param - 1), rhs(n_param), solution(n_param)
+
+        ! assume tests pass
+        test_forward_substitution = .true.
+
+        ! generate a random unit lower bidiagonal matrix and right hand side
+        call random_number(off_diagonal)
+        off_diagonal = off_diagonal - 0.5_rp
+        call random_number(rhs)
+
+        ! check that the system of the matrix is solved
+        solution = rhs
+        call forward_substitution(n_param, off_diagonal, solution)
+        if (norm2(matmul(unit_lower_bidiagonal_matrix(off_diagonal), solution) - &
+                  rhs) > tol) then
+            write(stderr, *) "test_forward_substitution failed: System of the unit "// &
+                "lower bidiagonal matrix not solved."
+            test_forward_substitution = .false.
+        end if
+
+    end function test_forward_substitution
+
+    logical(c_bool) function test_backward_substitution() bind(C)
+        !
+        ! this function tests the subroutine which performs backward substitution for
+        ! the transpose of a unit lower bidiagonal matrix
+        !
+        use opentrustregion, only: backward_substitution
+
+        real(rp) :: off_diagonal(n_param - 1), rhs(n_param), solution(n_param)
+
+        ! assume tests pass
+        test_backward_substitution = .true.
+
+        ! generate a random unit lower bidiagonal matrix and right hand side
+        call random_number(off_diagonal)
+        off_diagonal = off_diagonal - 0.5_rp
+        call random_number(rhs)
+
+        ! check that the system of the transposed matrix is solved
+        solution = rhs
+        call backward_substitution(n_param, off_diagonal, solution)
+        if (norm2(matmul(transpose(unit_lower_bidiagonal_matrix(off_diagonal)), &
+                         solution) - rhs) > tol) then
+            write(stderr, *) "test_backward_substitution failed: System of the "// &
+                "transposed unit lower bidiagonal matrix not solved."
+            test_backward_substitution = .false.
+        end if
+
+    end function test_backward_substitution
+
+    logical(c_bool) function test_quadratic_roots() bind(C)
+        !
+        ! this function tests the subroutine which finds the real roots of a quadratic
+        ! equation
+        !
+        use opentrustregion, only: quadratic_roots
+
+        ! cases with the coefficients of the constant, linear and quadratic terms and
+        ! the expected roots in ascending order, zero where there is no root, which
+        ! are found to rounding relative to their size
+        real(rp), parameter :: root_tol = 1e-14_rp
+        character(len=*), parameter :: case_names(10) = &
+            [character(len=50) :: "distinct roots with negative linear coefficient", &
+             "distinct roots with positive linear coefficient", "distinct roots of "// &
+             "very different size", "double root", "complex roots", "linear function", &
+             "constant function", "vanishing function", "ill-conditioned quadratic "// &
+             "with positive roots", "ill-conditioned quadratic with negative roots"]
+        real(rp), parameter :: &
+            case_a0(10) = [3.0_rp, 3.0_rp, 1.0_rp, 4.0_rp, 1.0_rp, -4.0_rp, 1.0_rp, &
+                           0.0_rp, 1e-20_rp, 1e-20_rp], &
+            case_a1(10) = [-4.0_rp, 4.0_rp, -(1e5_rp + 1e-5_rp), -4.0_rp, 0.0_rp, &
+                           2.0_rp, 0.0_rp, 0.0_rp, -1.0_rp, 1.0_rp], &
+            case_a2(10) = [1.0_rp, 1.0_rp, 1.0_rp, 1.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, &
+                           0.0_rp, 1.0_rp, 1.0_rp], &
+            case_root1(10) = [1.0_rp, -3.0_rp, 1e-5_rp, 2.0_rp, 0.0_rp, 2.0_rp, &
+                              0.0_rp, 0.0_rp, 1e-20_rp, -1.0_rp], &
+            case_root2(10) = [3.0_rp, -1.0_rp, 1e5_rp, 2.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, &
+                              0.0_rp, 1.0_rp, -1e-20_rp]
+        real(rp) :: root1, root2
+        integer(ip) :: i
+
+        ! assume tests pass
+        test_quadratic_roots = .true.
+
+        ! check the roots of every case
+        do i = 1, size(case_names)
+            call quadratic_roots(case_a0(i), case_a1(i), case_a2(i), 1e-12_rp, root1, &
+                                 root2)
+            if (abs(root1 - case_root1(i)) > root_tol * abs(case_root1(i)) .or. &
+                abs(root2 - case_root2(i)) > root_tol * abs(case_root2(i))) then
+                write(stderr, *) "test_quadratic_roots failed: Roots wrong for "// &
+                    trim(case_names(i))//"."
+                test_quadratic_roots = .false.
+            end if
+        end do
+
+    end function test_quadratic_roots
 
     logical(c_bool) function test_add_error_origin() bind(C)
         !
