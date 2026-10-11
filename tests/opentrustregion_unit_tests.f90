@@ -4325,11 +4325,14 @@ contains
                                    lin_dep_trial_vector_warning_msg, error_project, &
                                    error_get_extra_trial_vectors
 
-        character(len=*), parameter :: case_names(4) = &
-            [character(len=48) :: "Hessian with only positive diagonal elements", &
-             "Hessian with a negative diagonal element", "supplied extra trial "// &
-             "vectors", "gradient along negative Hessian diagonal element"]
-        integer(ip), parameter :: n_extra_ref(4) = [0_ip, 1_ip, n_param - 1, 0_ip]
+        character(len=*), parameter :: case_names(5) = [ &
+            character(len=48) :: "Hessian with only positive diagonal elements", &
+            "Hessian with a negative diagonal element", "more supplied extra trial "// &
+            "vectors than fit", "extra and random trial vectors beyond the space", &
+            "gradient along negative Hessian diagonal element"]
+        integer(ip), parameter :: &
+            n_extra_ref(5) = [0_ip, 1_ip, n_param - 1, n_param - 2, 0_ip], &
+            n_trial_ref(5) = [3_ip, 4_ip, n_param, n_param, 3_ip]
 
         type(solver_settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
@@ -4370,10 +4373,15 @@ contains
                 settings%n_random_trial_vectors = 0
                 settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
             case (4)
+                ! request fewer extra trial vectors than fit alongside the gradient
+                ! direction, but more random ones than fit alongside these, so that the
+                ! random trial vectors give way rather than the extra ones
+                settings%n_extra_trial_vectors = n_param - 2
+                settings%n_random_trial_vectors = 2
+            case (5)
                 ! let the gradient point along the negative element, so that the unit
                 ! vector along it is linearly dependent on the gradient direction
                 settings%n_extra_trial_vectors = 1
-                settings%n_random_trial_vectors = 2
                 settings%get_extra_trial_vectors => null()
                 grad = 0.0_rp
                 call random_number(grad(1))
@@ -4383,8 +4391,8 @@ contains
 
             ! generate trial vectors and determine whether function returns an
             ! orthonormal space of the normalized gradient, followed by the vectors
-            ! which together with it span the expected extra trial vectors and by the
-            ! requested number of random trial vectors
+            ! which together with it span the expected extra trial vectors and by as
+            ! many of the requested random trial vectors as fit alongside them
             n_leading = 1 + n_extra_ref(i_case)
             context%log_message = ""
             red_space_basis = &
@@ -4394,8 +4402,7 @@ contains
                     "error for "//trim(case_names(i_case))//"."
                 test_generate_trial_vectors = .false.
             end if
-            if (size(red_space_basis, 2) /= &
-                n_leading + settings%n_random_trial_vectors) then
+            if (size(red_space_basis, 2) /= n_trial_ref(i_case)) then
                 write(stderr, *) "test_generate_trial_vectors failed: Incorrect "// &
                     "number of vectors for "//trim(case_names(i_case))//"."
                 test_generate_trial_vectors = .false.

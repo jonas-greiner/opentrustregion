@@ -1867,7 +1867,7 @@ contains
         real(rp), allocatable :: red_space_basis(:, :)
 
         real(rp), allocatable :: leading_block(:, :)
-        integer(ip) :: n_param, n_extra, n_leading
+        integer(ip) :: n_param, n_extra, n_leading, n_total
 
         ! initialize error flag
         error = 0
@@ -1907,14 +1907,17 @@ contains
             return
         end if
 
-        ! fill the trailing columns with random vectors
+        ! the trial space holds the leading vectors that survived plus the requested
+        ! random ones, as many as fit alongside them
         n_leading = size(leading_block, 2)
-        allocate(red_space_basis(n_param, n_leading + settings%n_random_trial_vectors))
+        n_total = min(n_leading + settings%n_random_trial_vectors, n_param)
+
+        ! fill the trailing columns with random vectors
+        allocate(red_space_basis(n_param, n_total))
         red_space_basis(:, :n_leading) = leading_block
         deallocate(leading_block)
-
-        call generate_random_trial_vectors( &
-            red_space_basis, settings%n_random_trial_vectors, settings, error)
+        call generate_random_trial_vectors(red_space_basis, n_total - n_leading, &
+                                           settings, error)
 
     end function generate_trial_vectors
 
