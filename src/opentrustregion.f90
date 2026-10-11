@@ -279,7 +279,7 @@ module opentrustregion
     ! derived type for solver settings
     type, abstract :: settings_type
         logical :: initialized = .false.
-        integer(ip) :: verbose
+        integer(ip) :: verbose = verbosity_error
         class(*), pointer :: context => null()
         procedure(logger_type), pointer, nopass :: logger => null()
     contains
@@ -820,7 +820,6 @@ contains
         call stability_check(h_diag, stability_hess_x_funptr, stable, error, &
                              settings%stability_settings, state=state%stability_state, &
                              kappa=kappa, min_eigval=min_eigval)
-        call add_error_origin(error, error_stability_check, settings)
         state%n_hess_x = state%n_hess_x + state%stability_state%n_hess_x
         if (error /= 0) return
         if (stable) return

@@ -194,10 +194,6 @@ module opentrustregion_unit_tests
     ! residuals up to about 1e-8
     real(rp), parameter :: tridiag_eigval_tol = 1e-8_rp, tridiag_eigvec_tol = 1e-6_rp
 
-    ! module state of the sanity check tests that have not been moved onto host
-    ! contexts yet, the global log message of their mock logging function below
-    character(len=:), allocatable :: log_message
-
 contains
 
     function hartmann6d_func(vars) result(f)
@@ -2426,27 +2422,6 @@ contains
 
     end subroutine mock_scaled_precond_pd
 
-    subroutine legacy_mock_project(vector, error, context)
-        !
-        ! this subroutine is a test projection subroutine that projects onto the
-        ! subspace where the first two components are equal
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector(1) = 0.5_rp * (vector(1) + vector(2))
-        vector(2) = vector(1)
-
-        error = 0
-
-    end subroutine legacy_mock_project
-
     subroutine mock_get_extra_trial_vectors(trial_vectors, error, context)
         !
         ! this subroutine is a test subroutine for the extra trial vector subroutine
@@ -2491,9 +2466,9 @@ contains
 
     end subroutine mock_vanishing_extra_trial_vectors
 
-    subroutine legacy_logger(message, context)
+    subroutine discarding_logger(message, context)
         !
-        ! this subroutine is a mock logging subroutine
+        ! this subroutine is a mock logging subroutine which discards the messages
         !
         use test_reference, only: check_host_context
 
@@ -2503,25 +2478,10 @@ contains
         ! check host context
         call check_host_context(context)
 
-        log_message = log_message//trim(message)
+        ! discard the message
+        if (len(message) > 0) return
 
-    end subroutine legacy_logger
-
-    subroutine legacy_setup_settings(settings)
-        !
-        ! this subroutine sets up a settings object for tests
-        !
-        use opentrustregion, only: settings_type
-
-        class(settings_type), intent(inout) :: settings
-        integer(ip) :: error
-
-        call settings%init(error)
-        settings%verbose = 3
-        settings%logger => legacy_logger
-        log_message = ""
-
-    end subroutine legacy_setup_settings
+    end subroutine discarding_logger
 
     logical(c_bool) function test_solver() bind(C)
         !
@@ -3788,7 +3748,8 @@ contains
         !
         use opentrustregion, only: &
             solver_settings_type, hess_x_type, check_stationary_point, error_hess_x, &
-            started_at_saddle_point_warning_msg, reached_saddle_point_warning_msg, &
+            error_stability_check, started_at_saddle_point_warning_msg, &
+            reached_saddle_point_warning_msg, &
             reached_saddle_point_no_grad_noise_warning_msg, &
             reached_saddle_point_stability_hess_x_warning_msg
         use test_reference, only: arm_host_context, host_context_reached
@@ -3993,6 +3954,29 @@ contains
         if (error /= error_hess_x + 1) then
             write(stderr, *) "test_check_stationary_point failed: Error of failing "// &
                 "Hessian linear transformation not reported with its origin."
+            test_check_stationary_point = .false.
+        end if
+
+        ! check that nested stability check settings which its sanity check rejects,
+        ! here an empty trial space, are reported with the origin of the stability
+        ! check and an error message
+        call setup_settings(settings, context)
+        call setup_error_logging(settings%stability_settings, context)
+        settings%stability_settings%n_extra_trial_vectors = 0
+        settings%stability_settings%n_random_trial_vectors = 0
+        hess_x_funptr => double_well_hess_x
+        call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
+                                    hess_x_funptr, 2_ip, settings, state, stable, &
+                                    kappa, kappa_norm, error)
+        if (error /= error_stability_check + 1) then
+            write(stderr, *) "test_check_stationary_point failed: Error of "// &
+                "rejected nested stability check settings not reported with the "// &
+                "origin of the stability check."
+            test_check_stationary_point = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_check_stationary_point failed: No error message "// &
+                "printed for rejected nested stability check settings."
             test_check_stationary_point = .false.
         end if
 
@@ -6027,157 +6011,141 @@ contains
         ! solver
         !
         use opentrustregion, only: solver_settings_type, solver_sanity_check, &
-                                   project_warning_msg, subsystem_solver_options, &
-                                   trust_region_shape_options
+                                   project_warning_msg, &
+                                   random_trial_vector_warning_msg, &
+                                   subsystem_solver_options, trust_region_shape_options
 
+        ! settings which the sanity check rejects
+        character(len=*), parameter :: error_case_names(8) = [ &
+            character(len=61) :: "vanishing number of parameters", &
+            "negative number of parameters", "vanishing number of micro iterations", &
+            "extra trial vector function without extra trial vectors", "gradient "// &
+            "of wrong size", "unknown subsystem solver", "unknown trust region shape", &
+            "ellipsoidal trust region with Davidson-based subsystem solver"]
         type(solver_settings_type) :: settings
-        real(rp) :: grad(3)
-        integer(ip) :: error, i
+        real(rp) :: grad(4)
+        integer(ip) :: n_param, grad_size, error, i_solver, i_shape, i_case
+        logical :: davidson
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_solver_sanity_check = .true.
 
-        ! setup settings object
-        call legacy_setup_settings(settings)
+        ! check that every subsystem solver passes with every trust region shape it
+        ! supports, and that the number of random trial vectors is reduced to half the
+        ! number of parameters with a warning for the Davidson-based subsystem solvers,
+        ! which use them, and left unchanged without any message for the others
+        call random_number(grad)
+        do i_solver = 1, size(subsystem_solver_options)
+            davidson = index(subsystem_solver_options(i_solver), "davidson") > 0
+            do i_shape = 1, size(trust_region_shape_options)
+                if (davidson .and. &
+                    trust_region_shape_options(i_shape) == "ellipsoidal") cycle
+                call setup_settings(settings, context)
+                settings%subsystem_solver = subsystem_solver_options(i_solver)
+                settings%trust_region_shape = trust_region_shape_options(i_shape)
+                settings%n_random_trial_vectors = 3
+                call solver_sanity_check(settings, 4_ip, grad, error)
+                if (error /= 0) then
+                    write(stderr, *) "test_solver_sanity_check failed: Error "// &
+                        "returned for "//trim(subsystem_solver_options(i_solver))// &
+                        " subsystem solver with "// &
+                        trim(trust_region_shape_options(i_shape))//" trust region."
+                    test_solver_sanity_check = .false.
+                end if
+                if (settings%n_random_trial_vectors /= merge(2_ip, 3_ip, davidson)) then
+                    write(stderr, *) "test_solver_sanity_check failed: Number of "// &
+                        "random trial vectors wrong for "// &
+                        trim(subsystem_solver_options(i_solver))//" subsystem solver."
+                    test_solver_sanity_check = .false.
+                end if
+                if ((davidson .and. index(context%log_message, " "// &
+                                          random_trial_vector_warning_msg) == 0) .or. &
+                    (.not. davidson .and. len_trim(context%log_message) > 0)) then
+                    write(stderr, *) "test_solver_sanity_check failed: Warning for "// &
+                        "the number of random trial vectors wrong for "// &
+                        trim(subsystem_solver_options(i_solver))//" subsystem solver."
+                    test_solver_sanity_check = .false.
+                end if
+            end do
+        end do
 
-        ! set trust region shape to a valid value so that the checks below do not
-        ! trip over the unresolved default; the trust region shape checks themselves
-        ! are further down
+        ! check that every rejected setting returns an error and prints an error
+        ! message, with a gradient of the size of the number of parameters also when
+        ! this vanishes, so that the gradient size is not what is rejected there
+        do i_case = 1, size(error_case_names)
+            call setup_settings(settings, context)
+            call setup_error_logging(settings, context)
+            settings%trust_region_shape = "spherical"
+            n_param = 4
+            grad_size = 4
+            select case (i_case)
+            case (1)
+                n_param = 0
+                grad_size = 0
+            case (2)
+                n_param = -1
+            case (3)
+                settings%n_micro = 0
+            case (4)
+                settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+                settings%n_extra_trial_vectors = 0
+            case (5)
+                n_param = 3
+            case (6)
+                settings%subsystem_solver = "unknown"
+            case (7)
+                settings%trust_region_shape = "unknown"
+            case (8)
+                settings%subsystem_solver = "davidson_ls"
+                settings%trust_region_shape = "ellipsoidal"
+            end select
+            call solver_sanity_check(settings, n_param, grad(:grad_size), error)
+            if (error /= 1) then
+                write(stderr, *) "test_solver_sanity_check failed: No error "// &
+                    "returned for "//trim(error_case_names(i_case))//"."
+                test_solver_sanity_check = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_solver_sanity_check failed: No error "// &
+                    "message printed for "//trim(error_case_names(i_case))//"."
+                test_solver_sanity_check = .false.
+            end if
+        end do
+
+        ! check that a non-symmetric Hessian is accepted by the level-shifted Davidson
+        ! subsystem solver and rejected with an error message by every other
+        do i_solver = 1, size(subsystem_solver_options)
+            call setup_settings(settings, context)
+            call setup_error_logging(settings, context)
+            settings%subsystem_solver = subsystem_solver_options(i_solver)
+            settings%trust_region_shape = "spherical"
+            settings%hess_symm = .false.
+            call solver_sanity_check(settings, 4_ip, grad, error)
+            if (subsystem_solver_options(i_solver) == "davidson_ls") then
+                if (error /= 0) then
+                    write(stderr, *) "test_solver_sanity_check failed: "// &
+                        "Non-symmetric Hessian rejected for davidson_ls subsystem "// &
+                        "solver."
+                    test_solver_sanity_check = .false.
+                end if
+            else if (error /= 1 .or. len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_solver_sanity_check failed: Non-symmetric "// &
+                    "Hessian not rejected with an error message for "// &
+                    trim(subsystem_solver_options(i_solver))//" subsystem solver."
+                test_solver_sanity_check = .false.
+            end if
+        end do
+
+        ! check that a warning is printed when a projection is passed
+        call setup_settings(settings, context)
         settings%trust_region_shape = "spherical"
-
-        ! check if error is incorrectly thrown for finite and non-negative number of
-        ! parameters
-        settings%n_random_trial_vectors = 0
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error /= 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
-                "non-negative and non-vanishing number of parameters."
-            test_solver_sanity_check = .false.
-        end if
-
-        ! check if error is correctly thrown for vanishing number of parameters
-        call solver_sanity_check(settings, 0_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for vanishing number of parameters."
-            test_solver_sanity_check = .false.
-        end if
-
-        ! check if error is correctly thrown for negative number of parameters
-        call solver_sanity_check(settings, -1_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for negative number of parameters."
-            test_solver_sanity_check = .false.
-        end if
-
-        ! check if error is correctly thrown for vanishing number of microiterations
-        settings%n_micro = 0
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for vanishing number of microiterations."
-            test_solver_sanity_check = .false.
-        end if
-        settings%n_micro = 50
-
-        ! check if number of random trial vectors is reduced correctly
-        settings%n_random_trial_vectors = 3
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (settings%n_random_trial_vectors /= 1) then
-            write(stderr, *) "test_solver_sanity_check failed: Number of random "// &
-                "trial vectors not correctly set."
-            test_solver_sanity_check = .false.
-        end if
-
-        ! check if gradient size is treated correctly
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error /= 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error thrown for "// &
-                "gradient size."
-            test_solver_sanity_check = .false.
-        end if
+        settings%project => mock_project_out_pair
         call solver_sanity_check(settings, 4_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for correct incorrect gradient size."
-            test_solver_sanity_check = .false.
-        end if
-
-        ! check if subsystem solver is correctly checked
-        do i = 1, size(subsystem_solver_options)
-            settings%subsystem_solver = subsystem_solver_options(i)
-            call solver_sanity_check(settings, 3_ip, grad, error)
-            if (error /= 0) then
-                write(stderr, *) "test_solver_sanity_check failed: Error thrown "// &
-                    "for "//trim(subsystem_solver_options(i))//" subsystem solver."
-                test_solver_sanity_check = .false.
-            end if
-        end do
-        settings%subsystem_solver = "unknown"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for unknown subsystem solver."
-            test_solver_sanity_check = .false.
-        end if
-        ! check if trust region shape is correctly checked; use a subsystem solver that
-        ! supports both shapes so this loop is not confounded by the shape/subsystem
-        ! solver compatibility check tested further below
-        settings%subsystem_solver = "tcg"
-        do i = 1, size(trust_region_shape_options)
-            settings%trust_region_shape = trust_region_shape_options(i)
-            call solver_sanity_check(settings, 3_ip, grad, error)
-            if (error /= 0) then
-                write(stderr, *) "test_solver_sanity_check failed: Error thrown "// &
-                    "for "//trim(trust_region_shape_options(i))//" trust region shape."
-                test_solver_sanity_check = .false.
-            end if
-        end do
-        settings%trust_region_shape = "unknown"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for unknown trust region shape."
-            test_solver_sanity_check = .false.
-        end if
-
-        ! check that an ellipsoidal trust region is correctly rejected for a
-        ! Davidson-based subsystem solver, which does not support it
-        settings%subsystem_solver = "davidson_ls"
-        settings%trust_region_shape = "ellipsoidal"
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (error == 0) then
-            write(stderr, *) "test_solver_sanity_check failed: Error not thrown "// &
-                "for ellipsoidal trust region with Davidson-based subsystem solver."
-            test_solver_sanity_check = .false.
-        end if
-        settings%trust_region_shape = "spherical"
-
-        ! check if Hessian symmetry is correctly handled
-        settings%hess_symm = .false.
-        do i = 1, size(subsystem_solver_options)
-            if (index(subsystem_solver_options(i), "ls") > 0) cycle
-            settings%subsystem_solver = subsystem_solver_options(i)
-            call solver_sanity_check(settings, 3_ip, grad, error)
-            if (error == 0) then
-                write(stderr, *) "test_solver_sanity_check failed: Error not "// &
-                    "thrown for non-symmetric Hessian with "// &
-                    trim(subsystem_solver_options(i))//" solver."
-                test_solver_sanity_check = .false.
-            end if
-        end do
-
-        ! reset log message
-        log_message = ""
-
-        ! check if preconditioner and projector are correctly checked
-        settings%subsystem_solver = "davidson_ls"
-        settings%project => legacy_mock_project
-        call solver_sanity_check(settings, 3_ip, grad, error)
-        if (adjustl(log_message) /= project_warning_msg) then
-            write(stderr, *) "test_solver_sanity_check failed: Warning message not "// &
-                "correctly printed when custom projecting function is set."
+        if (error /= 0 .or. index(context%log_message, " "//project_warning_msg) == 0) &
+            then
+            write(stderr, *) "test_solver_sanity_check failed: Warning not printed "// &
+                "or error returned when a projection is passed."
             test_solver_sanity_check = .false.
         end if
 
@@ -6188,83 +6156,114 @@ contains
         ! this function tests the subroutine which performs a sanity check for the
         ! stability check
         !
-        use opentrustregion, only: stability_settings_type, stability_sanity_check, &
-                                   project_warning_msg, &
-                                   standalone_n_random_trial_vectors
+        use opentrustregion, only: &
+            stability_settings_type, stability_sanity_check, project_warning_msg, &
+            random_trial_vector_warning_msg, diag_solver_options, &
+            standalone_n_random_trial_vectors
 
+        ! the diagonalization solvers in mixed case and settings which the sanity check
+        ! rejects
+        character(len=*), parameter :: mixed_case_diag_solvers(2) = &
+            [character(len=15) :: "Davidson", "Jacobi-Davidson"]
+        character(len=*), parameter :: error_case_names(4) = &
+            [character(len=55) :: "extra trial vector function without extra trial "// &
+             "vectors", "vanishing number of trial vectors", &
+             "unknown diagonalization solver", &
+             "non-symmetric Hessian with Jacobi-Davidson solver"]
         type(stability_settings_type) :: settings
-        integer(ip) :: error
+        integer(ip) :: error, i_solver, i_case
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_stability_sanity_check = .true.
 
-        ! setup settings object
-        call legacy_setup_settings(settings)
+        ! check that every diagonalization solver passes when given in mixed case, which
+        ! is converted to lowercase, and that an unset number of random trial vectors
+        ! resolves to the default of a stability check outside the solver without any
+        ! message
+        do i_solver = 1, size(diag_solver_options)
+            call setup_settings(settings, context)
+            settings%diag_solver = mixed_case_diag_solvers(i_solver)
+            call stability_sanity_check(settings, &
+                                        4_ip * standalone_n_random_trial_vectors, error)
+            if (error /= 0 .or. settings%diag_solver /= diag_solver_options(i_solver)) &
+                then
+                write(stderr, *) "test_stability_sanity_check failed: Error "// &
+                    "returned or not converted to lowercase for "// &
+                    trim(diag_solver_options(i_solver))//" diagonalization solver."
+                test_stability_sanity_check = .false.
+            end if
+            if (settings%n_random_trial_vectors /= &
+                standalone_n_random_trial_vectors .or. &
+                len_trim(context%log_message) > 0) then
+                write(stderr, *) "test_stability_sanity_check failed: Unset number "// &
+                    "of random trial vectors not resolved or message printed for "// &
+                    trim(diag_solver_options(i_solver))//" diagonalization solver."
+                test_stability_sanity_check = .false.
+            end if
+        end do
 
-        ! check if number of random trial vectors is reduced correctly
+        ! check that the number of random trial vectors is reduced to half the number of
+        ! parameters with a warning
+        call setup_settings(settings, context)
         settings%n_random_trial_vectors = 3
-        call stability_sanity_check(settings, 3_ip, error)
-        if (settings%n_random_trial_vectors /= 1) then
+        call stability_sanity_check(settings, 4_ip, error)
+        if (error /= 0 .or. settings%n_random_trial_vectors /= 2 .or. &
+            index(context%log_message, " "//random_trial_vector_warning_msg) == 0) then
             write(stderr, *) "test_stability_sanity_check failed: Number of random "// &
-                "trial not correctly set."
+                "trial vectors not reduced with a warning."
             test_stability_sanity_check = .false.
         end if
 
-        ! check if negative number of trial vectors leads to automatic choice
-        settings%n_random_trial_vectors = -1
-        call stability_sanity_check(settings, &
-                                    4_ip * standalone_n_random_trial_vectors, error)
-        if (settings%n_random_trial_vectors /= standalone_n_random_trial_vectors) then
-            write(stderr, *) "test_stability_sanity_check failed: Automatic number "// &
-                "of random trial vectors not resolved."
-            test_stability_sanity_check = .false.
-        end if
+        ! check that every rejected setting returns an error and prints an error
+        ! message
+        do i_case = 1, size(error_case_names)
+            call setup_settings(settings, context)
+            call setup_error_logging(settings, context)
+            select case (i_case)
+            case (1)
+                settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+                settings%n_extra_trial_vectors = 0
+            case (2)
+                settings%n_extra_trial_vectors = 0
+                settings%n_random_trial_vectors = 0
+            case (3)
+                settings%diag_solver = "unknown"
+            case (4)
+                settings%diag_solver = "jacobi-davidson"
+                settings%hess_symm = .false.
+            end select
+            call stability_sanity_check(settings, 4_ip, error)
+            if (error /= 1) then
+                write(stderr, *) "test_stability_sanity_check failed: No error "// &
+                    "returned for "//trim(error_case_names(i_case))//"."
+                test_stability_sanity_check = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_stability_sanity_check failed: No error "// &
+                    "message printed for "//trim(error_case_names(i_case))//"."
+                test_stability_sanity_check = .false.
+            end if
+        end do
 
-        ! check that an empty trial space is rejected
-        settings%n_extra_trial_vectors = 0
-        settings%n_random_trial_vectors = 0
-        call stability_sanity_check(settings, 3_ip, error)
-        if (error == 0) then
-            write(stderr, *) "test_stability_sanity_check failed: Error not thrown "// &
-                "for vanishing number of trial vectors."
-            test_stability_sanity_check = .false.
-        end if
-        settings%n_extra_trial_vectors = 1
-        settings%n_random_trial_vectors = 1
-
-        ! check if subsystem solver is correctly checked
-        settings%diag_solver = "davidson"
-        call stability_sanity_check(settings, 3_ip, error)
+        ! check that a non-symmetric Hessian is accepted by the Davidson solver
+        call setup_settings(settings, context)
+        settings%hess_symm = .false.
+        call stability_sanity_check(settings, 4_ip, error)
         if (error /= 0) then
-            write(stderr, *) "test_stability_sanity_check failed: Error thrown for "// &
-                "davidson diagonalization solver."
-            test_stability_sanity_check = .false.
-        end if
-        settings%diag_solver = "jacobi-davidson"
-        call stability_sanity_check(settings, 3_ip, error)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_sanity_check failed: Error thrown for "// &
-                "jacobi-davidson diagonalization solver."
-            test_stability_sanity_check = .false.
-        end if
-        settings%diag_solver = "unknown"
-        call stability_sanity_check(settings, 3_ip, error)
-        if (error == 0) then
-            write(stderr, *) "test_stability_sanity_check failed: Error not thrown "// &
-                "for unknown diagonalization solver."
+            write(stderr, *) "test_stability_sanity_check failed: Non-symmetric "// &
+                "Hessian rejected for Davidson solver."
             test_stability_sanity_check = .false.
         end if
 
-        ! reset log message
-        log_message = ""
-
-        ! check if preconditioner and projector are correctly checked
-        settings%diag_solver = "davidson"
-        settings%project => legacy_mock_project
-        call stability_sanity_check(settings, 3_ip, error)
-        if (adjustl(log_message) /= project_warning_msg) then
-            write(stderr, *) "test_stability_sanity_check failed: Warning message "// &
-                "not correctly printed when custom projecting function is set."
+        ! check that a warning is printed when a projection is passed
+        call setup_settings(settings, context)
+        settings%project => mock_project_out_pair
+        call stability_sanity_check(settings, 4_ip, error)
+        if (error /= 0 .or. index(context%log_message, " "//project_warning_msg) == 0) &
+            then
+            write(stderr, *) "test_stability_sanity_check failed: Warning not "// &
+                "printed or error returned when a projection is passed."
             test_stability_sanity_check = .false.
         end if
 
@@ -10029,7 +10028,7 @@ contains
         settings%verbose = verbosity_info
         settings%stability_settings%precond => identity_precond
         settings%stability_settings%project => identity_project
-        settings%stability_settings%logger => legacy_logger
+        settings%stability_settings%logger => discarding_logger
         settings%stability_settings%context => stability_context
         settings%stability_settings%conv_check => mock_conv_check_stability
         settings%stability_settings%verbose = verbosity_debug
@@ -10040,7 +10039,8 @@ contains
                              identity_precond) .or. &
             .not. associated(settings%stability_settings%project, &
                              identity_project) .or. &
-            .not. associated(settings%stability_settings%logger, legacy_logger)) then
+            .not. associated(settings%stability_settings%logger, discarding_logger)) &
+            then
             write(stderr, *) "test_init_defaults failed: Callback functions of "// &
                 "nested stability check settings replaced."
             test_init_defaults = .false.
