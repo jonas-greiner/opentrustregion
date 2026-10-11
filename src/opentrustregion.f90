@@ -149,6 +149,25 @@ module opentrustregion
         type(stability_state_type) :: stability_state
     end type
 
+    ! derived type for the Lanczos process of the generalized Lanczos trust region
+    ! method: the tridiagonal matrix of the reduced problem with its factorization
+    ! and right hand side, the solution and the eigenvector of the lowest eigenvalue
+    ! of the reduced problem with its size, whether it is interior, whether the hard
+    ! case occurred, the hard case step size, the multiplier and the lowest
+    ! eigenvalue, a work array, and the step sizes, residual dot products and
+    ! preconditioned residuals of the Lanczos iterations, from which the solution is
+    ! assembled
+    type :: gltr_lanczos_type
+        real(rp), allocatable :: diag(:), off_diag(:), diag_fact(:), off_diag_fact(:), &
+                                 rhs(:), red_space_solution(:), red_space_eigenvec(:), &
+                                 work(:), stepsize_list(:), residual_dot_list(:), &
+                                 precond_residuals(:, :)
+        integer(ip) :: n_red_space = 0
+        logical :: interior = .true., hard_case = .false.
+        real(rp) :: hard_case_step_size = 0.0_rp, lambda = 0.0_rp, &
+                    lowest_eigval = 0.0_rp
+    end type
+
     ! interfaces for callback functions
     abstract interface
         subroutine hess_x_type(x, hess_x, error, context)
@@ -3591,16 +3610,10 @@ contains
         real(rp), intent(out) :: solution(:), solution_norm, lambda
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: &
-            residual(:), lanczos_diag(:), lanczos_off_diag(:), lanczos_diag_fact(:), &
-            lanczos_off_diag_fact(:), red_space_rhs(:), red_space_solution(:), &
-            red_space_eigenvec(:), work(:), stepsize_list(:), residual_dot_list(:), &
-            precond_residuals(:, :), perturbed_grad(:)
-        real(rp) :: new_func, func_diff, lowest_eigval, hard_case_step_size, &
-                    pred_func, conv_tol
-        integer(ip) :: n_red_space
-        logical :: restart_lanczos, accept_step, micro_converged, hard_case, interior
-        real(rp), external :: ddot, dnrm2
+        real(rp), allocatable :: residual(:), perturbed_grad(:)
+        real(rp) :: new_func, func_diff, pred_func, conv_tol, red_space_residual_norm
+        logical :: restart_lanczos, accept_step, micro_converged
+        type(gltr_lanczos_type) :: lanczos
 
         ! initialize error flag
         error = 0
@@ -3613,30 +3626,25 @@ contains
 
         ! set restart Lanczos boolean, there is no Lanczos factorization yet
         restart_lanczos = .false.
-        n_red_space = 0
 
         ! allocate space for residual
         allocate(residual(n_param))
 
-        ! allocate space for Lanczos tridiagonal
-        allocate(lanczos_diag(settings%n_micro + 1), &
-                 lanczos_off_diag(settings%n_micro), &
-                 lanczos_diag_fact(settings%n_micro + 1), &
-                 lanczos_off_diag_fact(settings%n_micro))
-
-        ! allocate space for reduced space RHS, solution and eigenvector
-        allocate(red_space_rhs(settings%n_micro + 1), &
-                 red_space_solution(settings%n_micro + 1), &
-                 red_space_eigenvec(settings%n_micro + 1))
-
-        ! allocate work array for solving Lanczos subproblem
-        allocate(work(settings%n_micro + 1))
-
-        ! allocate space to store the step sizes, residual dot products and
-        ! preconditioned residuals of the Lanczos process, from which the solution is
-        ! assembled
-        allocate(stepsize_list(settings%n_micro), residual_dot_list(settings%n_micro), &
-                 precond_residuals(n_param, settings%n_micro))
+        ! allocate space for the Lanczos tridiagonal with its factorization, the right
+        ! hand side, solution and eigenvector of the reduced problem, a work array
+        ! for solving it, and the step sizes, residual dot products and preconditioned
+        ! residuals of the Lanczos iterations, from which the solution is assembled
+        allocate(lanczos%diag(settings%n_micro + 1), &
+                 lanczos%off_diag(settings%n_micro), &
+                 lanczos%diag_fact(settings%n_micro + 1), &
+                 lanczos%off_diag_fact(settings%n_micro), &
+                 lanczos%rhs(settings%n_micro + 1), &
+                 lanczos%red_space_solution(settings%n_micro + 1), &
+                 lanczos%red_space_eigenvec(settings%n_micro + 1), &
+                 lanczos%work(settings%n_micro + 1), &
+                 lanczos%stepsize_list(settings%n_micro), &
+                 lanczos%residual_dot_list(settings%n_micro), &
+                 lanczos%precond_residuals(n_param, settings%n_micro))
 
         ! perturb the gradient once for the whole subproblem, so that every Lanczos
         ! process started for it, after a rejected step or when a smaller trust radius
@@ -3661,27 +3669,15 @@ contains
             ! run the Lanczos process, which assembles the solution itself, unless its
             ! stored factorization can be reused for the smaller trust radius after a
             ! rejected step
-            if (.not. restart_lanczos .or. n_red_space <= 0) then
+            if (.not. restart_lanczos .or. lanczos%n_red_space <= 0) then
                 call gltr_lanczos_process( &
-                    func, h_diag, hess_x_funptr, residual, solution, lanczos_diag, &
-                    lanczos_off_diag, lanczos_diag_fact, lanczos_off_diag_fact, &
-                    red_space_rhs, red_space_solution, red_space_eigenvec, work, &
-                    stepsize_list, residual_dot_list, precond_residuals, pred_func, &
-                    lambda, solution_norm, lowest_eigval, micro_converged, interior, &
-                    hard_case, hard_case_step_size, n_red_space, &
+                    func, h_diag, hess_x_funptr, residual, solution, lanczos, &
+                    pred_func, solution_norm, micro_converged, &
                     noise_level(settings, local_region), settings, state, error)
             else
                 ! find the solution to the Lanczos TR subproblem with this radius
-                call solve_tridiagonal_subproblem( &
-                    n_red_space, lanczos_diag(:n_red_space), &
-                    lanczos_off_diag(:n_red_space - 1), &
-                    lanczos_diag_fact(:n_red_space), &
-                    lanczos_off_diag_fact(:n_red_space - 1), &
-                    red_space_rhs(:n_red_space), state%trust_radius, interior, .true., &
-                    .false., lowest_eigval, lambda, func_diff, &
-                    red_space_solution(:n_red_space), &
-                    red_space_eigenvec(:n_red_space), work(:n_red_space), hard_case, &
-                    hard_case_step_size)
+                call solve_lanczos_subproblem(lanczos%n_red_space, state%trust_radius, &
+                                              .true., .false., lanczos, func_diff)
 
                 ! record the optimal objective function value
                 pred_func = func + func_diff
@@ -3690,16 +3686,17 @@ contains
                 ! Lanczos process which is measured in the same preconditioner
                 ! metric as the residuals it is compared against, this makes the
                 ! stopping test invariant to a rescaling of the preconditioner
-                conv_tol = micro_conv_tol(lambda, noise_level(settings, local_region), &
-                                          red_space_rhs(1), settings)
+                conv_tol = micro_conv_tol(lanczos%lambda, noise_level( &
+                    settings, local_region), lanczos%rhs(1), settings)
 
-                ! check whether solution satisfies convergence criteria, otherwise
-                ! start a new Lanczos process for this trust radius
-                state%relative_residual = abs(lanczos_off_diag(n_red_space) * &
-                                              red_space_solution(n_red_space)) / &
-                                          red_space_rhs(1)
-                if (abs(lanczos_off_diag(n_red_space) * &
-                        red_space_solution(n_red_space)) > conv_tol) then
+                ! check whether the residual of the solution of the reduced problem
+                ! satisfies the convergence criteria, otherwise start a new Lanczos
+                ! process for this trust radius
+                red_space_residual_norm = abs( &
+                    lanczos%off_diag(lanczos%n_red_space) * &
+                    lanczos%red_space_solution(lanczos%n_red_space))
+                state%relative_residual = red_space_residual_norm / lanczos%rhs(1)
+                if (red_space_residual_norm > conv_tol) then
                     restart_lanczos = .false.
                     cycle
                 end if
@@ -3707,11 +3704,8 @@ contains
                 ! solution reaches trust radius, assemble it from the stored Lanczos
                 ! process
                 solution_norm = state%trust_radius
-                call gltr_assemble_solution( &
-                    n_red_space, red_space_solution, red_space_eigenvec, &
-                    residual_dot_list, stepsize_list, precond_residuals, hard_case, &
-                    lambda, hard_case_step_size, hess_x_funptr, solution, settings, &
-                    state%n_hess_x, error)
+                call gltr_assemble_solution(lanczos, hess_x_funptr, solution, &
+                                            settings, state%n_hess_x, error)
                 micro_converged = .true.
             end if
             if (error /= 0) exit
@@ -3735,11 +3729,11 @@ contains
             restart_lanczos = .not. accept_step .and. .not. settings%refresh_hess
         end do
 
+        ! return the multiplier of the trust region constraint
+        lambda = lanczos%lambda
+
         ! deallocate arrays
-        deallocate(residual, lanczos_diag, lanczos_off_diag, lanczos_diag_fact, &
-                   lanczos_off_diag_fact, red_space_rhs, red_space_solution, &
-                   red_space_eigenvec, work, stepsize_list, residual_dot_list, &
-                   precond_residuals, perturbed_grad)
+        deallocate(residual, perturbed_grad)
 
     end subroutine generalized_lanczos_trust_region
 
@@ -4081,13 +4075,9 @@ contains
 
     end function string_in
 
-    subroutine gltr_lanczos_process( &
-        func, h_diag, hess_x_funptr, residual, solution, lanczos_diag, &
-        lanczos_off_diag, lanczos_diag_fact, lanczos_off_diag_fact, red_space_rhs, &
-        red_space_solution, red_space_eigenvec, work, stepsize_list, &
-        residual_dot_list, precond_residuals, pred_func, lambda, solution_norm, &
-        lowest_eigval, micro_converged, interior, hard_case, hard_case_step_size, &
-        n_red_space, noise, settings, state, error)
+    subroutine gltr_lanczos_process(func, h_diag, hess_x_funptr, residual, solution, &
+                                    lanczos, pred_func, solution_norm, &
+                                    micro_converged, noise, settings, state, error)
         !
         ! this subroutine runs the Lanczos process, which builds the tridiagonal matrix
         ! and the right hand side of the reduced problem together with the step sizes,
@@ -4099,14 +4089,9 @@ contains
         real(rp), intent(in) :: func, h_diag(:), noise
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(inout) :: residual(:), solution(:)
-        real(rp), intent(out) :: &
-            lanczos_diag(:), lanczos_off_diag(:), lanczos_diag_fact(:), &
-            lanczos_off_diag_fact(:), red_space_rhs(:), red_space_solution(:), &
-            red_space_eigenvec(:), work(:), stepsize_list(:), residual_dot_list(:), &
-            precond_residuals(:, :), pred_func, lambda, solution_norm, lowest_eigval, &
-            hard_case_step_size
-        logical, intent(out) :: micro_converged, interior, hard_case
-        integer(ip), intent(out) :: n_red_space
+        type(gltr_lanczos_type), intent(inout) :: lanczos
+        real(rp), intent(out) :: pred_func, solution_norm
+        logical, intent(out) :: micro_converged
         type(solver_settings_type), intent(in) :: settings
         type(solver_state_type), intent(inout), target :: state
         integer(ip), intent(out) :: error
@@ -4138,14 +4123,14 @@ contains
         micro_converged = .false.
 
         ! start interior to trust region
-        interior = .true.
+        lanczos%interior = .true.
 
         ! no initial guess for Lagrange multiplier
-        lambda = 0.0_rp
+        lanczos%lambda = 0.0_rp
 
         ! initialize reduced space RHS
-        red_space_rhs = 0.0_rp
-        red_space_rhs(1) = 1.0_rp
+        lanczos%rhs = 0.0_rp
+        lanczos%rhs(1) = 1.0_rp
 
         ! initialize coefficient for last basis vector
         last_red_space_solution = 0.0_rp
@@ -4154,7 +4139,7 @@ contains
         imicro = 0
 
         ! initialize hard case boolean
-        hard_case = .false.
+        lanczos%hard_case = .false.
 
         ! initialize negative curvature boolean
         negative_curvature = .false.
@@ -4202,41 +4187,46 @@ contains
 
             ! save preconditioned residual, from which the solution on the trust region
             ! boundary is assembled
-            if (imicro < settings%n_micro) precond_residuals(:, imicro + 1) = vector
+            if (imicro < settings%n_micro) &
+                lanczos%precond_residuals(:, imicro + 1) = vector
 
-            ! get coupling coefficient and Lanczos tridiagonal elements
+            ! get coupling coefficient and Lanczos tridiagonal elements, storing the
+            ! off-diagonal element right away, since a restart with a smaller trust
+            ! radius reads it also after an exit inside the trust region
             if (imicro > 0) then
                 beta = residual_dot / residual_dot_old
                 lanczos_diag_elem = beta / step_size
                 lanczos_off_diag_elem = sqrt(beta) / abs(step_size)
+                lanczos%off_diag(imicro) = lanczos_off_diag_elem
             ! set reduced space RHS for first iteration
             else
-                red_space_rhs(1) = residual_norm
+                lanczos%rhs(1) = residual_norm
             end if
 
             ! relative residual of an interior solution
-            if (interior) state%relative_residual = residual_norm / red_space_rhs(1)
+            if (lanczos%interior) &
+                state%relative_residual = residual_norm / lanczos%rhs(1)
 
             ! compute the stopping tolerance from the initial residual which is
             ! measured in the same preconditioner metric as the residuals it is
             ! compared against, this makes the stopping test invariant to a rescaling
             ! of the preconditioner
-            conv_tol = micro_conv_tol(lambda, noise, red_space_rhs(1), settings)
+            conv_tol = micro_conv_tol(lanczos%lambda, noise, lanczos%rhs(1), settings)
 
             ! test for an interior approximate solution
-            if (interior .and. residual_norm <= conv_tol) then
+            if (lanczos%interior .and. residual_norm <= conv_tol) then
                 solution_norm = sqrt(solution_dot)
-                n_red_space = imicro
-                if (n_red_space > 0) lambda = 0.0_rp
+                lanczos%n_red_space = imicro
+                if (lanczos%n_red_space > 0) lanczos%lambda = 0.0_rp
                 micro_converged = .true.
                 exit
             end if
 
             if (imicro > 0) then
                 ! test to see if iteration limit has been exceeded
-                if (imicro >= settings%n_micro .and. interior) then
+                if (imicro >= settings%n_micro .and. lanczos%interior) then
                     solution_norm = sqrt(solution_dot)
-                    n_red_space = imicro
+                    lanczos%n_red_space = imicro
                     exit
                 end if
 
@@ -4247,25 +4237,24 @@ contains
                 basis_vec_dot = residual_dot + basis_vec_dot * beta * beta
 
                 ! continue accumulating the Lanczos tridiagonal
-                lanczos_diag(imicro + 1) = lanczos_diag_elem
-                lanczos_off_diag(imicro) = lanczos_off_diag_elem
+                lanczos%diag(imicro + 1) = lanczos_diag_elem
 
                 ! relative residual of a solution on the trust region boundary
-                if (.not. interior) state%relative_residual = &
+                if (.not. lanczos%interior) state%relative_residual = &
                     abs(lanczos_off_diag_elem * last_red_space_solution) / &
-                    red_space_rhs(1)
+                    lanczos%rhs(1)
 
                 ! check whether convergence on the trust region boundary has been
                 ! achieved or the iteration limit is reached
                 if (imicro >= settings%n_micro .or. ( &
-                    .not. interior .and. &
+                    .not. lanczos%interior .and. &
                     abs(lanczos_off_diag_elem * last_red_space_solution) <= conv_tol)) &
                     then
                     ! the reduced space holds every Lanczos vector so far
-                    n_red_space = imicro
+                    lanczos%n_red_space = imicro
 
                     ! the optimal solution was achieved by an interior point
-                    if (n_red_space <= switch_iteration) then
+                    if (lanczos%n_red_space <= switch_iteration) then
                         solution_norm = sqrt(solution_dot)
                         micro_converged = .true.
                         exit
@@ -4274,30 +4263,20 @@ contains
                     ! restore the solution to the Lanczos TR subproblem for this
                     ! iteration
                     use_old = .false.
-                    if (n_red_space <= 1 + switch_iteration) then
-                        lambda = 0.0_rp
+                    if (lanczos%n_red_space <= 1 + switch_iteration) then
+                        lanczos%lambda = 0.0_rp
                         try_warm = .false.
                     end if
 
-                    call solve_tridiagonal_subproblem( &
-                        n_red_space, lanczos_diag(:n_red_space), &
-                        lanczos_off_diag(:n_red_space - 1), &
-                        lanczos_diag_fact(:n_red_space), &
-                        lanczos_off_diag_fact(:n_red_space - 1), &
-                        red_space_rhs(:n_red_space), state%trust_radius, interior, &
-                        try_warm, use_old, lowest_eigval, lambda, min_func_diff, &
-                        red_space_solution(:n_red_space), &
-                        red_space_eigenvec(:n_red_space), work(:n_red_space), &
-                        hard_case, hard_case_step_size)
+                    call solve_lanczos_subproblem(lanczos%n_red_space, &
+                                                  state%trust_radius, try_warm, &
+                                                  use_old, lanczos, min_func_diff)
 
                     ! record the optimal objective function value and assemble the
                     ! solution
                     pred_func = func + min_func_diff
-                    call gltr_assemble_solution( &
-                        n_red_space, red_space_solution, red_space_eigenvec, &
-                        residual_dot_list, stepsize_list, precond_residuals, &
-                        hard_case, lambda, hard_case_step_size, hess_x_funptr, &
-                        solution, settings, state%n_hess_x, error)
+                    call gltr_assemble_solution(lanczos, hess_x_funptr, solution, &
+                                                settings, state%n_hess_x, error)
                     if (error /= 0) exit
                     micro_converged = .true.
                     exit
@@ -4306,16 +4285,16 @@ contains
                 ! obtain the search direction and dot products
                 basis_vec = -vector
                 basis_vec_dot = residual_dot
-                lanczos_diag(1) = lanczos_diag_elem
+                lanczos%diag(1) = lanczos_diag_elem
             end if
-            residual_dot_list(imicro + 1) = residual_dot
+            lanczos%residual_dot_list(imicro + 1) = residual_dot
             residual_dot_old = residual_dot
 
             ! test for convergence
-            if (interior .and. &
+            if (lanczos%interior .and. &
                 dnrm2(n_param, basis_vec, 1_ip) <= 2.0_rp * epsilon(1.0_rp)) then
                 solution_norm = sqrt(solution_dot)
-                n_red_space = imicro
+                lanczos%n_red_space = imicro
                 micro_converged = .true.
                 exit
             end if
@@ -4356,7 +4335,7 @@ contains
             end if
 
             ! the matrix is indefinite
-            if (interior .and. negative_curvature) then
+            if (lanczos%interior .and. negative_curvature) then
                 ! find the appropriate point on the boundary
                 call find_point_on_boundary(basis_vec, state%trust_radius, &
                                             solution_basis_vec_dot, basis_vec_dot, &
@@ -4368,21 +4347,21 @@ contains
                 ! boundary and stop
                 if (abs(curvature) < numerical_zero) then
                     step_size = alpha
-                    n_red_space = imicro
-                    lambda = 0.0_rp
+                    lanczos%n_red_space = imicro
+                    lanczos%lambda = 0.0_rp
                     residual = residual + step_size * vector
                     micro_converged = .true.
                     exit
                 ! if a more accurate solution is required, switch modes
                 else
-                    interior = .false.
+                    lanczos%interior = .false.
                     switch_iteration = imicro - 1
                 end if
             end if
 
             ! if the current estimate of the solution is interior, see if the new point
             ! is also interior
-            if (interior) then
+            if (lanczos%interior) then
                 trial_solution_dot = solution_dot + step_size * ( &
                     solution_basis_vec_dot + solution_basis_vec_dot + &
                     step_size * basis_vec_dot)
@@ -4402,30 +4381,25 @@ contains
                                                 solution, pred_func, alpha)
 
                     ! switch modes
-                    interior = .false.
+                    lanczos%interior = .false.
                     switch_iteration = imicro - 1
                 end if
             end if
 
             ! complete the new diagonal of the Lanczos tridiagonal matrix
-            lanczos_diag(imicro) = lanczos_diag_elem
-            stepsize_list(imicro) = step_size
+            lanczos%diag(imicro) = lanczos_diag_elem
+            lanczos%stepsize_list(imicro) = step_size
 
             ! solve the subproblem if new point is not interior
-            if (.not. interior) then
-                call solve_tridiagonal_subproblem( &
-                    imicro, lanczos_diag(:imicro), lanczos_off_diag(:imicro - 1), &
-                    lanczos_diag_fact(:imicro), lanczos_off_diag_fact(:imicro - 1), &
-                    red_space_rhs(:imicro), state%trust_radius, interior, try_warm, &
-                    use_old, lowest_eigval, lambda, min_func_diff, &
-                    red_space_solution(:imicro), red_space_eigenvec(:imicro), &
-                    work(:imicro), hard_case, hard_case_step_size)
+            if (.not. lanczos%interior) then
+                call solve_lanczos_subproblem(imicro, state%trust_radius, try_warm, &
+                                              use_old, lanczos, min_func_diff)
 
                 ! do a warm start next since we have a guess for the Lagrange multiplier
                 try_warm = .true.
 
-                use_old = lowest_eigval < 0.0_rp
-                last_red_space_solution = red_space_solution(imicro)
+                use_old = lanczos%lowest_eigval < 0.0_rp
+                last_red_space_solution = lanczos%red_space_solution(imicro)
 
             end if
 
@@ -4438,22 +4412,16 @@ contains
 
     end subroutine gltr_lanczos_process
 
-    subroutine gltr_assemble_solution( &
-        n_red_space, red_space_solution, red_space_eigenvec, residual_dot_list, &
-        stepsize_list, precond_residuals, hard_case, lambda, hard_case_step_size, &
-        hess_x_funptr, solution, settings, n_hess_x, error)
+    subroutine gltr_assemble_solution(lanczos, hess_x_funptr, solution, settings, &
+                                      n_hess_x, error)
         !
-        ! this subroutine assembles the solution of the trust region subproblem from
-        ! the solution of the reduced problem and the preconditioned residuals of the
+        ! this subroutine assembles the solution of the trust region subproblem from the
+        ! solution of the reduced problem and the preconditioned residuals of the
         ! Lanczos process, whose Lanczos vectors are these residuals normalized and
         ! alternating in sign with the step sizes, and completes it in the hard case
         ! along the eigenvector of the lowest eigenvalue assembled in the same way
         !
-        integer(ip), intent(in) :: n_red_space
-        real(rp), intent(in) :: red_space_solution(:), red_space_eigenvec(:), &
-                                residual_dot_list(:), stepsize_list(:), &
-                                precond_residuals(:, :), lambda, hard_case_step_size
-        logical, intent(in) :: hard_case
+        type(gltr_lanczos_type), intent(in) :: lanczos
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(out) :: solution(:)
         type(solver_settings_type), intent(in) :: settings
@@ -4470,34 +4438,63 @@ contains
         error = 0
 
         ! coefficients of the preconditioned residuals
-        allocate(solution_coeffs(n_red_space), eigenvec_coeffs(n_red_space))
+        allocate(solution_coeffs(lanczos%n_red_space), &
+                 eigenvec_coeffs(lanczos%n_red_space))
         tau = 1.0_rp
-        do i = 1, n_red_space
-            solution_coeffs(i) = tau * &
-                                 (red_space_solution(i) / sqrt(residual_dot_list(i)))
-            if (hard_case) eigenvec_coeffs(i) = tau * (red_space_eigenvec(i) / &
-                                                       sqrt(residual_dot_list(i)))
-            tau = -sign(1.0_rp, stepsize_list(i)) * tau
+        do i = 1, lanczos%n_red_space
+            solution_coeffs(i) = tau * (lanczos%red_space_solution(i) / &
+                                        sqrt(lanczos%residual_dot_list(i)))
+            if (lanczos%hard_case) &
+                eigenvec_coeffs(i) = tau * (lanczos%red_space_eigenvec(i) / &
+                                            sqrt(lanczos%residual_dot_list(i)))
+            tau = -sign(1.0_rp, lanczos%stepsize_list(i)) * tau
         end do
 
         ! assemble the solution
-        solution = matmul(precond_residuals(:, :n_red_space), solution_coeffs)
+        solution = matmul(lanczos%precond_residuals(:, :lanczos%n_red_space), &
+                          solution_coeffs)
 
         ! in the hard case, assemble the eigenvector, scale it to unit norm and
         ! complete the solution along it to the trust region boundary
-        if (hard_case) then
-            eigenvec = matmul(precond_residuals(:, :n_red_space), eigenvec_coeffs)
+        if (lanczos%hard_case) then
+            eigenvec = matmul(lanczos%precond_residuals(:, :lanczos%n_red_space), &
+                              eigenvec_coeffs)
             allocate(hess_eigenvec(size(eigenvec)))
             call hess_x_funptr(eigenvec, hess_eigenvec, error, settings%context)
             n_hess_x = n_hess_x + 1
             call add_error_origin(error, error_hess_x, settings)
             if (error /= 0) return
             u_norm = sqrt(-ddot(size(eigenvec, kind=ip), hess_eigenvec, 1_ip, &
-                                eigenvec, 1_ip) / lambda)
-            solution = solution + (hard_case_step_size / u_norm) * eigenvec
+                                eigenvec, 1_ip) / lanczos%lambda)
+            solution = solution + (lanczos%hard_case_step_size / u_norm) * eigenvec
         end if
 
     end subroutine gltr_assemble_solution
+
+    subroutine solve_lanczos_subproblem(n_red_space, trust_radius, try_warm, use_old, &
+                                        lanczos, func_diff)
+        !
+        ! this subroutine solves the trust region subproblem of the leading part of the
+        ! Lanczos tridiagonal matrix of the given size, which updates the solution and
+        ! eigenvector of the reduced problem, the multiplier, the lowest eigenvalue,
+        ! whether the solution is interior and whether the hard case occurred
+        !
+        integer(ip), intent(in) :: n_red_space
+        real(rp), intent(in) :: trust_radius
+        logical, intent(in) :: try_warm, use_old
+        type(gltr_lanczos_type), intent(inout) :: lanczos
+        real(rp), intent(out) :: func_diff
+
+        call solve_tridiagonal_subproblem( &
+            n_red_space, lanczos%diag(:n_red_space), &
+            lanczos%off_diag(:n_red_space - 1), lanczos%diag_fact(:n_red_space), &
+            lanczos%off_diag_fact(:n_red_space - 1), lanczos%rhs(:n_red_space), &
+            trust_radius, lanczos%interior, try_warm, use_old, lanczos%lowest_eigval, &
+            lanczos%lambda, func_diff, lanczos%red_space_solution(:n_red_space), &
+            lanczos%red_space_eigenvec(:n_red_space), lanczos%work(:n_red_space), &
+            lanczos%hard_case, lanczos%hard_case_step_size)
+
+    end subroutine solve_lanczos_subproblem
 
     subroutine perturb_vector(vector, noise, settings, error)
         !
