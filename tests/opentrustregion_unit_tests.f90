@@ -164,6 +164,10 @@ module opentrustregion_unit_tests
         integer(ip) :: func_case = 0, fail_call = 0
     end type
 
+    ! Hartmann 6D context of the mock callback functions of a solver called without
+    ! settings, which hands them no host context, so that they reach it here instead
+    type(hartmann6d_context_type), target :: settingless_context
+
     ! error code returned by mock callback functions reached without their context,
     ! chosen so that it cannot be mistaken for an expected error code
     integer(ip), parameter :: missing_context_error = 42
@@ -532,6 +536,71 @@ contains
         if (state%n_update_orbs_calls > 1) hess_x_funptr => received_hess_x_funptr
 
     end subroutine update_orbs_hess_x_once
+
+    subroutine settingless_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                       error, context)
+        !
+        ! this subroutine describes the orbital update for the Hartmann 6D function of
+        ! a solver called without settings, which reaches the variables through the
+        ! module context since it receives no host context, and returns a Hessian
+        ! linear transformation that does the same
+        !
+        use opentrustregion, only: hess_x_type
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(*), pointer :: module_context
+
+        ! update the orbitals with the module context
+        module_context => settingless_context
+        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, &
+                         module_context)
+        hess_x_funptr => settingless_hess_x
+
+    end subroutine settingless_update_orbs
+
+    subroutine settingless_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes the Hessian linear transformation for the Hartmann
+        ! 6D function of a solver called without settings, which reaches the variables
+        ! through the module context since it receives no host context
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(*), pointer :: module_context
+
+        ! apply the Hessian with the module context
+        module_context => settingless_context
+        call hess_x_fun(x, hess_x, error, module_context)
+
+    end subroutine settingless_hess_x
+
+    function settingless_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes the objective function evaluation for the Hartmann
+        ! 6D function of a solver called without settings, which reaches the variables
+        ! through the module context since it receives no host context
+        !
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        class(*), pointer :: module_context
+
+        ! evaluate the function with the module context
+        module_context => settingless_context
+        func = obj_func(delta_vars, error, module_context)
+
+    end function settingless_obj_func
 
     logical function inject_fault(context, callback)
         !
@@ -2069,27 +2138,6 @@ contains
 
     end subroutine legacy_update_orbs
 
-    subroutine update_orbs_no_hess_x(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                     error, context)
-        !
-        ! this function describes an orbital update which reports success but does
-        ! not provide a Hessian linear transformation
-        !
-        use opentrustregion, only: hess_x_type
-
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call legacy_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, &
-                                context)
-        hess_x_funptr => null()
-
-    end subroutine update_orbs_no_hess_x
-
     subroutine legacy_mock_precond(residual, mu, precond_residual, error, context)
         !
         ! this subroutine is a test subroutine for the preconditioner subroutine, which
@@ -2315,67 +2363,6 @@ contains
 
     end subroutine refresh_mock_hess_x
 
-    function legacy_mock_conv_check(error, context) result(converged)
-        !
-        ! this function describes a convergence check which always passes
-        !
-        use test_reference, only: check_host_context
-
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        logical :: converged
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize error flag
-        error = 0
-
-        converged = .true.
-
-    end function legacy_mock_conv_check
-
-    function mock_conv_check_failing(error, context) result(converged)
-        !
-        ! this function describes a convergence check which always fails
-        !
-        use test_reference, only: check_host_context
-
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        logical :: converged
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 1
-        converged = .false.
-
-    end function mock_conv_check_failing
-
-    function legacy_mock_conv_check_without_update(error, context) result(converged)
-        !
-        ! this function describes a convergence check which only passes in a macro
-        ! iteration without an orbital update, which is the case once the maximum
-        ! precision is reached
-        !
-        use test_reference, only: check_host_context
-
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        logical :: converged
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize error flag
-        error = 0
-
-        converged = n_update_orbs_calls == n_update_orbs_at_conv_check
-        n_update_orbs_at_conv_check = n_update_orbs_calls
-
-    end function legacy_mock_conv_check_without_update
-
     subroutine legacy_logger(message, context)
         !
         ! this subroutine is a mock logging subroutine
@@ -2530,22 +2517,23 @@ contains
         !
         ! this function tests the solver subroutine
         !
-        use test_reference, only: arm_host_context, host_context_reached
         use opentrustregion, only: &
             update_orbs_type, obj_func_type, solver_settings_type, solver, &
             default_settings => default_solver_settings, error_solver, &
             error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
             error_precond, error_project, error_conv_check, error_precond_pd, &
-            error_get_extra_trial_vectors, subsystem_solver_options
+            error_get_extra_trial_vectors, verbosity_silent, subsystem_solver_options, &
+            settings_uninitialized_warning_msg, &
+            stability_settings_uninitialized_warning_msg
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error
-        real(rp), allocatable :: final_grad(:)
+        real(rp) :: final_grad(n_param), start_vars(2), final_vars(n_param)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
-        type(solver_settings_type) :: settings
-        real(rp) :: start_vars(n_param)
-        type(host_context_type), target :: stability_host_context
+        type(solver_settings_type) :: settings, uninitialized_settings
+        type(hartmann6d_recording_context_type), target :: context
+        type(half_step_context_type), target :: half_step_context
         type(double_well_state_context_type), target :: state_context
         type(solver_state_type), target :: state
         type(solver_state_type) :: explicit_state
@@ -2565,175 +2553,84 @@ contains
         ! assume tests pass
         test_solver = .true.
 
-        ! start in quadratic region near minimum
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        update_orbs_funptr => legacy_update_orbs
-        obj_func_funptr => legacy_obj_func
-
         ! initialize settings
         call settings%init(error)
 
-        ! allocate space for the final gradient
-        allocate(final_grad(n_param))
+        ! start at saddle point
+        context%vars = saddle_point
+        update_orbs_funptr => update_orbs
+        obj_func_funptr => obj_func
 
-        ! run solver, check if error has occured and check whether gradient is zero and
-        ! agrees with correct minimum, that the reported number of orbital updates
-        ! agrees with the orbital update calls and that convergence is not flagged as
-        ! reaching maximum precision
-        n_update_orbs_calls = 0
+        ! hand the callback functions the host context, which they need to evaluate
+        ! the function, so that the internal stability check has to inherit it
+        settings%context => context
+
+        ! run solver, check if error has occurred and check whether gradient is zero and
+        ! agrees with correct minimum and that convergence is not flagged as reaching
+        ! maximum precision
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
                     state)
         if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error."
+            write(stderr, *) "test_solver failed: Produced error from saddle point."
             test_solver = .false.
         end if
-        call hartmann6d_gradient(curr_vars, final_grad)
+        call hartmann6d_gradient(context%vars, final_grad)
         if (norm2(final_grad) / sqrt(real(n_param, kind=rp)) > &
             default_settings%conv_tol) then
-            write(stderr, *) "test_solver failed: Solver did not find stationary point."
+            write(stderr, *) "test_solver failed: Solver did not find stationary "// &
+                "point from saddle point."
             test_solver = .false.
         end if
-        if (any(abs(curr_vars - minimum1) > var_thres)) then
-            write(stderr, *) "test_solver failed: Solver did not find correct minimum."
+        if (any(abs(context%vars - minimum1) > var_thres) .and. &
+            any(abs(context%vars - minimum2) > var_thres)) then
+            write(stderr, *) "test_solver failed: Solver did not find minimum from "// &
+                "saddle point."
             test_solver = .false.
         end if
-        test_solver = test_solver .and. logical(call_counts_match( &
-            "solver", "near minimum", n_update_orbs=state%n_update_orbs), kind=c_bool)
         if (state%max_precision_reached) then
             write(stderr, *) "test_solver failed: Flagged that maximum precision "// &
-                "was reached when convergence tolerance was met."
+                "was reached when convergence tolerance was met from saddle point."
             test_solver = .false.
         end if
-
-        ! run solver again from the same point without settings, so that it uses the
-        ! default settings the first run was given, with the same seed, and has to take
-        ! exactly the same steps
-        explicit_state = state
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, state=state)
-        if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error without settings."
-            test_solver = .false.
-        end if
-        if (state%n_update_orbs /= explicit_state%n_update_orbs .or. &
-            state%n_hess_x /= explicit_state%n_hess_x .or. &
-            abs(state%func - explicit_state%func) > 0.0_rp .or. &
-            abs(state%grad_rms - explicit_state%grad_rms) > 0.0_rp .or. &
-            abs(state%step_size - explicit_state%step_size) > 0.0_rp) then
-            write(stderr, *) "test_solver failed: Did not use the default settings "// &
-                "without settings."
-            test_solver = .false.
-        end if
-
-        ! start near saddle point with the stability check
-        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
-        update_orbs_funptr => legacy_update_orbs
-        obj_func_funptr => legacy_obj_func
-        call settings%init(error)
-        settings%stability = .true.
-
-        ! run solver, check if error has occured and check whether gradient is zero and
-        ! agrees with correct minimum, the state record of the first call is reused so
-        ! the reported number of orbital updates must not include that call
-        n_update_orbs_calls = 0
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
-                    state)
-        if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error."
-            test_solver = .false.
-        end if
-        call hartmann6d_gradient(curr_vars, final_grad)
-        if (norm2(final_grad) / sqrt(real(n_param, kind=rp)) > &
-            default_settings%conv_tol) then
-            write(stderr, *) "test_solver failed: Solver did not find stationary point."
-            test_solver = .false.
-        end if
-        if (any(abs(curr_vars - minimum1) > var_thres) .and. &
-            any(abs(curr_vars - minimum2) > var_thres)) then
-            write(stderr, *) "test_solver failed: Solver did not find correct minimum."
-            test_solver = .false.
-        end if
-        test_solver = test_solver .and. logical(call_counts_match( &
-            "solver", "near saddle point", n_update_orbs=state%n_update_orbs), &
-            kind=c_bool)
-
-        ! start at saddle point
-        curr_vars = saddle_point
-        update_orbs_funptr => legacy_update_orbs
-        obj_func_funptr => legacy_obj_func
-
-        ! hand the callback functions a host context, the internal stability check,
-        ! which starting exactly at a stationary point always triggers on the first
-        ! iteration, has to inherit it since it calls back into the same host
-        call arm_host_context(settings)
-
-        ! run solver, check if error has occured and check whether gradient is zero and
-        ! agrees with correct minimum
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
-        if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error."
-            test_solver = .false.
-        end if
-        call hartmann6d_gradient(curr_vars, final_grad)
-        if (norm2(final_grad) / sqrt(real(n_param, kind=rp)) > &
-            default_settings%conv_tol) then
-            write(stderr, *) "test_solver failed: Solver did not find stationary point."
-            test_solver = .false.
-        end if
-        if (any(abs(curr_vars - minimum1) > var_thres) .and. &
-            any(abs(curr_vars - minimum2) > var_thres)) then
-            write(stderr, *) "test_solver failed: Solver did not find minimum."
-            test_solver = .false.
-        end if
-        test_solver = test_solver .and. &
-                      logical(host_context_reached("solver"), kind=c_bool)
-
-        ! start at saddle point again but give the nested stability check settings a
-        ! context of their own, the internal stability check hands it to the Hessian
-        ! linear transformation instead of the solver's
-        curr_vars = saddle_point
-        call arm_host_context(settings)
-        settings%stability_settings%context => stability_host_context
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
-        if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error when nested "// &
-                "stability check settings have a context of their own."
-            test_solver = .false.
-        end if
-        test_solver = test_solver .and. &
-                      logical(host_context_reached("solver"), kind=c_bool)
-        if (stability_host_context%n_calls == 0) then
-            write(stderr, *) "test_solver failed: Hessian linear transformation "// &
-                "did not receive the context of the nested stability check settings."
+        if (context%obj_func_zero_step) then
+            write(stderr, *) "test_solver failed: Line search performed although "// &
+                "it was not requested from saddle point."
             test_solver = .false.
         end if
 
         ! start at saddle point again with nested stability check settings that were
         ! not initialized, the solver initializes them before handing down its context,
         ! so the internal stability check still calls the Hessian linear transformation
-        ! with the solver's context
-        curr_vars = saddle_point
-        call arm_host_context(settings)
+        ! with the solver's context, and prints a warning even when the solver is silent
+        context%vars = saddle_point
         settings%stability_settings%initialized = .false.
-        settings%stability_settings%context => null()
+        settings%logger => logger
+        settings%verbose = verbosity_silent
+        context%log_message = ""
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_solver failed: Produced error when nested "// &
                 "stability check settings were not initialized."
             test_solver = .false.
         end if
-        test_solver = test_solver .and. &
-                      logical(host_context_reached("solver"), kind=c_bool)
+        if (index(context%log_message, &
+                  " "//stability_settings_uninitialized_warning_msg) == 0) then
+            write(stderr, *) "test_solver failed: Warning not printed when nested "// &
+                "stability check settings were not initialized."
+            test_solver = .false.
+        end if
 
         ! start at saddle point but allow only a single macro iteration, the internal
         ! stability check finds the saddle point unstable and the solver stops before
-        ! solving a trust region subproblem, so all Hessian linear transformations are
-        ! the internal stability check's and have to be added to the solver's counter,
-        ! a stale counter has to be reset first
-        curr_vars = saddle_point
+        ! solving a trust region subproblem, so that all Hessian linear transformations
+        ! are the internal stability check's, whose addition to the solver's counter
+        ! test_check_stationary_point covers, and check that a stale counter in the
+        ! state record is reset so that it equals the internal stability check's
+        context%vars = saddle_point
         call settings%init(error)
         settings%n_macro = 1
         state%n_hess_x = 1000
+        call setup_error_logging(settings, context)
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
                     state)
         if (error /= error_solver_max_iter) then
@@ -2741,30 +2638,38 @@ contains
                 "error code when only the internal stability check runs."
             test_solver = .false.
         end if
-        if (state%stability_state%n_hess_x <= 0) then
-            write(stderr, *) "test_solver failed: Internal stability check "// &
-                "performed no Hessian linear transformations."
-            test_solver = .false.
-        end if
         if (state%n_hess_x /= state%stability_state%n_hess_x) then
-            write(stderr, *) "test_solver failed: Hessian linear transformations "// &
-                "of the internal stability check not added to the solver's counter."
+            write(stderr, *) "test_solver failed: Stale counter of Hessian linear "// &
+                "transformations not reset."
             test_solver = .false.
         end if
 
-        ! force non-convergence by allowing only a single macro iteration from a
-        ! generic starting point and check that the specific maximum iteration error
-        ! code is returned
-        curr_vars = [0.9_rp, 0.1_rp, 0.7_rp, 0.2_rp, 0.6_rp, 0.4_rp]
-        update_orbs_funptr => legacy_update_orbs
-        obj_func_funptr => legacy_obj_func
+        ! run solver with settings which the sanity check rejects and check that its
+        ! error is returned with the solver's origin
+        context%vars = near_minimum
         call settings%init(error)
-        settings%n_macro = 1
-        n_update_orbs_calls = 0
+        settings%n_micro = 0
+        call setup_error_logging(settings, context)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        if (error /= error_solver + 1) then
+            write(stderr, *) "test_solver failed: Did not return error of sanity check."
+            test_solver = .false.
+        end if
 
-        ! leave a stale internal stability check counter as a previous call would, no
-        ! internal stability check is performed here so it has to be reset
+        ! force non-convergence by allowing only two macro iterations from a generic
+        ! starting point with a start trust radius below the default and check that the
+        ! specific maximum iteration error code is returned and that the step taken
+        ! after the first macro iteration stays within the start trust radius
+        context%vars = distant_point
+        call settings%init(error)
+        settings%n_macro = 2
+        settings%start_trust_radius = 0.1_rp
+
+        ! leave a stale internal stability check counter in the state record as a
+        ! previous call would, no internal stability check is performed here so it has
+        ! to be reset
         state%stability_state%n_hess_x = 1
+        call setup_error_logging(settings, context)
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
                     state)
         if (error /= error_solver_max_iter) then
@@ -2772,27 +2677,37 @@ contains
                 "error code when exceeding n_macro."
             test_solver = .false.
         end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_solver failed: No error message printed when "// &
+                "exceeding n_macro."
+            test_solver = .false.
+        end if
+        if (norm2(context%last_delta_vars) > settings%start_trust_radius + tol) then
+            write(stderr, *) "test_solver failed: First step exceeds start trust "// &
+                "radius."
+            test_solver = .false.
+        end if
         if (state%stability_state%n_hess_x /= 0) then
             write(stderr, *) "test_solver failed: Internal stability check counter "// &
                 "of a previous call was not reset."
             test_solver = .false.
         end if
-        test_solver = test_solver .and. logical(call_counts_match( &
-            "solver", "when exceeding n_macro", n_update_orbs=state%n_update_orbs), &
-            kind=c_bool)
 
         ! force the maximum precision heuristic to trigger by requesting a convergence
-        ! tolerance that floating-point noise in the gradient can never satisfy
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        update_orbs_funptr => legacy_update_orbs
-        obj_func_funptr => legacy_obj_func
+        ! tolerance that floating-point noise in the gradient can never satisfy, with
+        ! the line search, which has to be skipped for the step that is not taken once
+        ! maximum precision is reached
+        context%vars = near_minimum
         call settings%init(error)
+        settings%context => context
         settings%conv_tol = 0.0_rp
         settings%subsystem_solver = "tcg"
+        settings%line_search = .true.
 
         ! run solver, check that it still returns without error while flagging this in
-        ! the state, the final macro iteration does not update the orbitals
-        n_update_orbs_calls = 0
+        ! the state, that the step that is not taken has no size and that the reported
+        ! number of orbital updates agrees with the calls
+        context%n_update_orbs_calls = 0
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
                     state)
         if (error /= 0) then
@@ -2805,15 +2720,26 @@ contains
                 "precision was reached when convergence tolerance could not be met."
             test_solver = .false.
         end if
-        test_solver = test_solver .and. logical( &
-            call_counts_match("solver", "when maximum precision is reached", &
-                              n_update_orbs=state%n_update_orbs), kind=c_bool)
+        if (abs(state%step_size) > 0.0_rp) then
+            write(stderr, *) "test_solver failed: Line search performed for the "// &
+                "step not taken once maximum precision is reached."
+            test_solver = .false.
+        end if
+        if (.not. check_call_counts( &
+            context, "solver", "when maximum precision is reached", &
+            n_update_orbs=state%n_update_orbs)) test_solver = .false.
 
         ! run solver again on the same state record but stop it before convergence and
-        ! check that the maximum precision flag is reset
-        curr_vars = [0.9_rp, 0.1_rp, 0.7_rp, 0.2_rp, 0.6_rp, 0.4_rp]
+        ! check that the maximum precision flag is reset, that the reported number of
+        ! orbital updates does not include those of the previous call and that no
+        ! trust region subproblem is solved in the only macro iteration, whose step
+        ! would never be evaluated
+        context%vars = distant_point
         settings%conv_tol = default_settings%conv_tol
         settings%n_macro = 1
+        context%n_update_orbs_calls = 0
+        context%n_hess_x_calls = 0
+        call setup_error_logging(settings, context)
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
                     state)
         if (error /= error_solver_max_iter) then
@@ -2826,16 +2752,24 @@ contains
                 "reached was not reset by the next call."
             test_solver = .false.
         end if
+        if (.not. check_call_counts( &
+            context, "solver", "on reused state record", n_hess_x=state%n_hess_x, &
+            n_update_orbs=state%n_update_orbs)) test_solver = .false.
+        if (state%n_hess_x /= 0) then
+            write(stderr, *) "test_solver failed: Trust region subproblem solved "// &
+                "in the last macro iteration."
+            test_solver = .false.
+        end if
 
         ! force the maximum precision heuristic to trigger again but let the
         ! convergence check pass in that same macro iteration, convergence then takes
         ! precedence and maximum precision is not flagged
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+        context%vars = near_minimum
         call settings%init(error)
+        settings%context => context
         settings%conv_tol = 0.0_rp
         settings%subsystem_solver = "tcg"
-        settings%conv_check => legacy_mock_conv_check_without_update
-        n_update_orbs_at_conv_check = -1
+        settings%conv_check => mock_conv_check_without_update
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
                     state)
         if (error /= 0) then
@@ -2851,54 +2785,197 @@ contains
 
         ! run solver with a convergence check which always passes, the solver stops at
         ! the first check without taking a step
-        start_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        curr_vars = start_vars
-        update_orbs_funptr => legacy_update_orbs
-        obj_func_funptr => legacy_obj_func
+        context%vars = near_minimum
         call settings%init(error)
-        settings%conv_check => legacy_mock_conv_check
+        settings%context => context
+        settings%conv_check => mock_conv_check
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_solver failed: Produced error when convergence "// &
                 "check passes."
             test_solver = .false.
         end if
-        if (any(abs(curr_vars - start_vars) > tol)) then
+        if (any(abs(context%vars - near_minimum) > tol)) then
             write(stderr, *) "test_solver failed: Solver did not stop when "// &
                 "convergence check passed."
             test_solver = .false.
         end if
 
-        ! run solver with a convergence check which fails and check that its error is
-        ! reported with the convergence check as origin
-        curr_vars = start_vars
+        ! run solver with an orbital update which succeeds but only provides a Hessian
+        ! linear transformation in the first macro iteration and leaves the argument as
+        ! it received it afterwards, which violates the interface, and check that the
+        ! solver, which disassociates the argument before every orbital update, reports
+        ! this as its own error in the second macro iteration
+        context%vars = distant_point
+        context%n_update_orbs_calls = 0
+        update_orbs_funptr => update_orbs_hess_x_once
         call settings%init(error)
-        settings%conv_check => mock_conv_check_failing
+        call setup_error_logging(settings, context)
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
-        if (error /= error_conv_check + 1) then
-            write(stderr, *) "test_solver failed: Did not report a failing "// &
-                "convergence check."
-            test_solver = .false.
-        end if
-
-        ! run solver, an orbital update which succeeds without providing a Hessian
-        ! linear transformation is reported as a solver error, the orbital update is
-        ! still counted
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        update_orbs_funptr => update_orbs_no_hess_x
-        obj_func_funptr => legacy_obj_func
-        call settings%init(error)
-        n_update_orbs_calls = 0
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
-                    state)
         if (error /= error_solver + 1) then
             write(stderr, *) "test_solver failed: Did not report a missing Hessian "// &
                 "linear transformation."
             test_solver = .false.
         end if
-        test_solver = test_solver .and. logical( &
-            call_counts_match("solver", "for missing Hessian linear transformation", &
-                              n_update_orbs=state%n_update_orbs), kind=c_bool)
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_solver failed: No error message printed for "// &
+                "missing Hessian linear transformation."
+            test_solver = .false.
+        end if
+        if (context%n_update_orbs_calls /= 2) then
+            write(stderr, *) "test_solver failed: Missing Hessian linear "// &
+                "transformation not reported in the second macro iteration."
+            test_solver = .false.
+        end if
+
+        ! run solver with settings that were not initialized but carry a logging
+        ! function and check that a warning is printed through the logging function and
+        ! that the solver initializes a copy of them, which leaves the caller's settings
+        ! as they are, the initialization also resets the host context of the copy, so
+        ! the callback functions are ones that need no test context
+        update_orbs_funptr => stationary_update_orbs
+        obj_func_funptr => constant_obj_func
+        uninitialized_settings%logger => logger
+        uninitialized_settings%context => context
+        context%log_message = ""
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, &
+                    uninitialized_settings)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error for settings that "// &
+                "were not initialized."
+            test_solver = .false.
+        end if
+        if (uninitialized_settings%initialized .or. &
+            .not. associated(uninitialized_settings%logger, logger)) then
+            write(stderr, *) "test_solver failed: Settings of the caller changed."
+            test_solver = .false.
+        end if
+        if (index(context%log_message, " "//settings_uninitialized_warning_msg) == 0) &
+            then
+            write(stderr, *) "test_solver failed: Warning not printed for settings "// &
+                "that were not initialized."
+            test_solver = .false.
+        end if
+
+        ! run solver from the saddle point of the Hartmann 6D function, whose path
+        ! depends on the settings, with the default settings and without settings and
+        ! check that both take exactly the same steps to the same point, the callback
+        ! functions reach the variables through the module context since the solver
+        ! hands them no host context without settings
+        update_orbs_funptr => settingless_update_orbs
+        obj_func_funptr => settingless_obj_func
+        settingless_context%vars = saddle_point
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, &
+                    default_settings, explicit_state)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error with default settings."
+            test_solver = .false.
+        end if
+        final_vars = settingless_context%vars
+        settingless_context%vars = saddle_point
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, state=state)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error without settings."
+            test_solver = .false.
+        end if
+        if (any(abs(settingless_context%vars - final_vars) > 0.0_rp) .or. &
+            state%n_update_orbs /= explicit_state%n_update_orbs .or. &
+            state%n_obj_func /= explicit_state%n_obj_func .or. &
+            state%n_hess_x /= explicit_state%n_hess_x .or. &
+            state%stability_state%n_hess_x /= explicit_state%stability_state%n_hess_x) &
+            then
+            write(stderr, *) "test_solver failed: Did not use the default settings "// &
+                "without settings."
+            test_solver = .false.
+        end if
+        update_orbs_funptr => update_orbs
+        obj_func_funptr => obj_func
+
+        ! check that the line search brackets the step starting from a vanishing step
+        context%vars = near_minimum
+        call settings%init(error)
+        settings%context => context
+        settings%line_search = .true.
+        context%obj_func_zero_step = .false.
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error with line search."
+            test_solver = .false.
+        end if
+        if (.not. context%obj_func_zero_step) then
+            write(stderr, *) "test_solver failed: Line search was not performed."
+            test_solver = .false.
+        end if
+
+        ! switch to Jacobi-Davidson from the first micro iteration and check that the
+        ! printed iterations split the micro iterations into Davidson and
+        ! Jacobi-Davidson ones, which shows as zero Davidson micro iterations
+        context%vars = near_minimum
+        call setup_settings(settings, context)
+        settings%subsystem_solver = "jacobi-davidson_ls"
+        settings%jacobi_davidson_start = 0
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error with Jacobi-Davidson."
+            test_solver = .false.
+        end if
+        if (index(context%log_message, "|   0  |") == 0) then
+            write(stderr, *) "test_solver failed: Printed iterations do not split "// &
+                "micro iterations with Jacobi-Davidson."
+            test_solver = .false.
+        end if
+
+        ! check that the truncated conjugate gradient solver is used instead of the
+        ! Davidson solvers, whose first trial vector is the normalized gradient, which
+        ! the gradient perturbation would hide
+        context%vars = near_minimum
+        call settings%init(error)
+        settings%context => context
+        settings%subsystem_solver = "tcg"
+        settings%grad_noise = .false.
+        context%hess_x_normalized_grad = .false.
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error with truncated "// &
+                "conjugate gradient."
+            test_solver = .false.
+        end if
+        if (context%hess_x_normalized_grad) then
+            write(stderr, *) "test_solver failed: Davidson solver used instead of "// &
+                "truncated conjugate gradient."
+            test_solver = .false.
+        end if
+
+        ! perform a line search for an objective function whose minimum along the step
+        ! lies at twice the Newton step of the model, which the gradient perturbation
+        ! would move, and check that the step and its size in the state are scaled by
+        ! the multiplier the bracketing returns, the solver is stopped by the maximum
+        ! number of macro iterations once the first step is taken
+        call setup_settings(settings, half_step_context)
+        settings%line_search = .true.
+        settings%grad_noise = .false.
+        settings%n_macro = 2
+        call random_number(start_vars)
+        start_vars = 2.0_rp * start_vars - 1.0_rp
+        half_step_context%vars = start_vars
+        update_orbs_funptr => half_step_update_orbs
+        obj_func_funptr => half_step_obj_func
+        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings, state)
+        if (error /= error_solver_max_iter) then
+            write(stderr, *) "test_solver failed: Did not stop at maximum number "// &
+                "of macro iterations for line search."
+            test_solver = .false.
+        end if
+        if (any(abs(half_step_context%first_step + 2.0_rp * start_vars) > tol)) then
+            write(stderr, *) "test_solver failed: Step not scaled by multiplier of "// &
+                "line search."
+            test_solver = .false.
+        end if
+        if (abs(state%step_size - norm2(half_step_context%first_step)) > tol) then
+            write(stderr, *) "test_solver failed: Step size in the state not "// &
+                "scaled by multiplier of line search."
+            test_solver = .false.
+        end if
 
         ! minimize the double well function x^2 - y^2 + y^4 from (0.5, 0) with every
         ! subsystem solver, without and with the line search, and with a state record,
@@ -3137,9 +3214,6 @@ contains
                 end do
             end do
         end do
-
-        ! deallocate space for the gradient
-        deallocate(final_grad)
 
     contains
 
