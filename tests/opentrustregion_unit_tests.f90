@@ -74,11 +74,12 @@ module opentrustregion_unit_tests
         ! current variables and Hessian
         real(rp) :: vars(n_param) = 0.0_rp, hess(n_param, n_param) = 0.0_rp
 
-        ! number of calls to the orbital update and the Hessian linear transformation,
-        ! so that the counters reported by the library can be checked, and number of
-        ! orbital updates at the previous convergence check
-        integer(ip) :: n_update_orbs_calls = 0, n_hess_x_calls = 0, &
-                       n_update_orbs_at_conv_check = -1
+        ! number of calls to the orbital update, the objective function and the
+        ! Hessian linear transformation, so that the counters reported by the library
+        ! can be checked, and number of orbital updates at the previous convergence
+        ! check
+        integer(ip) :: n_update_orbs_calls = 0, n_obj_func_calls = 0, &
+                       n_hess_x_calls = 0, n_update_orbs_at_conv_check = -1
     end type
 
     ! define type for the host context of the Hartmann 6D function which additionally
@@ -96,10 +97,16 @@ module opentrustregion_unit_tests
     ! injected, with their names for failure messages
     integer(ip), parameter :: fault_update_orbs = 1, fault_obj_func = 2, &
                               fault_hess_x = 3, fault_precond = 4, fault_project = 5, &
-                              fault_conv_check = 6, n_fault_callbacks = 6
+                              fault_conv_check = 6, fault_precond_pd = 7, &
+                              fault_get_extra_trial_vectors = 8, &
+                              fault_stability_hess_x = 9, fault_approx_hess_x = 10, &
+                              fault_conv_check_stability = 11, n_fault_callbacks = 11
     character(len=*), parameter :: fault_callback_names(n_fault_callbacks) = &
-        [character(len=29) :: "orbital update", "objective function", "Hessian "// &
-         "linear transformation", "preconditioner", "projection", "convergence check"]
+        [character(len=45) :: "orbital update", "objective function", "Hessian "// &
+         "linear transformation", "preconditioner", "projection", "convergence check", &
+         "positive-definite preconditioner", "extra trial vector function", &
+         "stability check Hessian linear transformation", "approximate Hessian "// &
+         "linear transformation", "stability check convergence check"]
 
     ! define type for the host context of the Hartmann 6D function which counts the
     ! calls of every callback function and lets the call fault_call of the callback
@@ -415,6 +422,9 @@ contains
         state => resolve_hartmann6d_context(context, error)
         if (error /= 0) return
 
+        ! count call
+        state%n_obj_func_calls = state%n_obj_func_calls + 1
+
         ! record whether function is evaluated without displacement
         select type (state)
         class is (hartmann6d_recording_context_type)
@@ -676,11 +686,145 @@ contains
 
     function faulty_conv_check(error, context) result(converged)
         !
-        ! this function describes a convergence check which never reports convergence
-        ! and into which a fault can be injected
+        ! this function describes a convergence check of the Hartmann 6D function which
+        ! reports convergence once the RMS gradient at the current variables drops
+        ! below the default convergence threshold, since it replaces the gradient
+        ! criterion, and into which a fault can be injected
+        !
+        use opentrustregion, only: default_solver_settings
+        use test_reference, only: check_host_context
+
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        logical :: converged
+
+        class(hartmann6d_context_type), pointer :: state
+        real(rp) :: grad(n_param)
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get Hartmann 6D state
+        converged = .false.
+        state => resolve_hartmann6d_context(context, error)
+        if (error /= 0) return
+
+        ! check the gradient and inject fault
+        call hartmann6d_gradient(state%vars, grad)
+        converged = norm2(grad) / sqrt(real(n_param, kind=rp)) < &
+                    default_solver_settings%conv_tol
+        if (inject_fault(context, fault_conv_check)) error = 1
+
+    end function faulty_conv_check
+
+    subroutine faulty_precond_pd(residual, precond_residual, error, context)
+        !
+        ! this subroutine describes an identity positive-definite preconditioner into
+        ! which a fault can be injected
         !
         use test_reference, only: check_host_context
 
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        ! apply preconditioner and inject fault
+        precond_residual = residual
+        error = 0
+        if (inject_fault(context, fault_precond_pd)) error = 1
+
+    end subroutine faulty_precond_pd
+
+    subroutine faulty_get_extra_trial_vectors(trial_vectors, error, context)
+        !
+        ! this subroutine describes an extra trial vector function, which returns
+        ! scaled unit vectors, into which a fault can be injected
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        integer(ip) :: i
+
+        ! check host context
+        call check_host_context(context)
+
+        ! return scaled unit vectors and inject fault
+        trial_vectors = 0.0_rp
+        do i = 1, size(trial_vectors, 2)
+            trial_vectors(i, i) = real(i, kind=rp)
+        end do
+        error = 0
+        if (inject_fault(context, fault_get_extra_trial_vectors)) error = 1
+
+    end subroutine faulty_get_extra_trial_vectors
+
+    subroutine faulty_stability_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes the separate Hessian linear transformation of the
+        ! stability check for the Hartmann 6D function, which is counted like the one
+        ! of the solver, into which a fault can be injected
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! perform Hessian linear transformation
+        call hess_x_fun(x, hess_x, error, context)
+        if (error /= 0) return
+
+        ! inject fault
+        if (inject_fault(context, fault_stability_hess_x)) error = 1
+
+    end subroutine faulty_stability_hess_x
+
+    subroutine faulty_approx_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes an approximate Hessian linear transformation for
+        ! the Hartmann 6D function, which is not counted as a Hessian linear
+        ! transformation, into which a fault can be injected
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(hartmann6d_context_type), pointer :: state
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get Hartmann 6D state
+        hess_x = 0.0_rp
+        state => resolve_hartmann6d_context(context, error)
+        if (error /= 0) return
+
+        ! apply the exact Hessian without counting it and inject fault
+        hess_x = matmul(state%hess, x)
+        if (inject_fault(context, fault_approx_hess_x)) error = 1
+
+    end subroutine faulty_approx_hess_x
+
+    function faulty_conv_check_stability(residual, eigval, error, context) &
+        result(converged)
+        !
+        ! this function describes a convergence check of the stability check, which
+        ! accepts a residual that vanishes relative to the eigenvalue, into which a
+        ! fault can be injected
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: eigval
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
         logical :: converged
@@ -688,12 +832,12 @@ contains
         ! check host context
         call check_host_context(context)
 
-        ! report no convergence and inject fault
-        converged = .false.
+        ! check the residual and inject fault
+        converged = norm2(residual) < tol * abs(eigval)
         error = 0
-        if (inject_fault(context, fault_conv_check)) error = 1
+        if (inject_fault(context, fault_conv_check_stability)) error = 1
 
-    end function faulty_conv_check
+    end function faulty_conv_check_stability
 
     subroutine step_recording_precond(residual, mu, precond_residual, error, context)
         !
@@ -1640,14 +1784,14 @@ contains
     end function ref_step_trust_radius
 
     logical function check_call_counts(context, test_name, case_name, n_hess_x, &
-                                       n_update_orbs)
+                                       n_update_orbs, n_obj_func)
         !
         ! this function checks that the counters reported by the library agree with
         ! the number of times the callback functions were actually called
         !
         class(hartmann6d_context_type), intent(in) :: context
         character(len=*), intent(in) :: test_name, case_name
-        integer(ip), intent(in), optional :: n_hess_x, n_update_orbs
+        integer(ip), intent(in), optional :: n_hess_x, n_update_orbs, n_obj_func
 
         ! assume tests pass
         check_call_counts = .true.
@@ -1663,6 +1807,13 @@ contains
             if (n_update_orbs /= context%n_update_orbs_calls) then
                 write(stderr, *) "test_"//test_name// &
                     " failed: Reported number of orbital updates wrong "//case_name//"."
+                check_call_counts = .false.
+            end if
+        end if
+        if (present(n_obj_func)) then
+            if (n_obj_func /= context%n_obj_func_calls) then
+                write(stderr, *) "test_"//test_name//" failed: Reported number of "// &
+                    "objective function evaluations wrong "//case_name//"."
                 check_call_counts = .false.
             end if
         end if
@@ -2383,7 +2534,9 @@ contains
         use opentrustregion, only: &
             update_orbs_type, obj_func_type, solver_settings_type, solver, &
             default_settings => default_solver_settings, error_solver, &
-            error_solver_max_iter, error_conv_check, subsystem_solver_options
+            error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
+            error_precond, error_project, error_conv_check, error_precond_pd, &
+            error_get_extra_trial_vectors, subsystem_solver_options
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error
@@ -2399,6 +2552,15 @@ contains
         integer(ip) :: n_updates, i_update, i_solver, i_line_search
         real(rp), allocatable :: step_norms(:)
         character(len=60) :: case_name
+        integer(ip) :: i_config, callback, i_call, n_calls(n_fault_callbacks)
+        integer(ip), parameter :: fault_origins(n_fault_callbacks) = [ &
+            error_update_orbs, error_obj_func, error_hess_x, error_precond, &
+            error_project, error_conv_check, error_precond_pd, &
+            error_get_extra_trial_vectors, error_hess_x, error_hess_x, error_conv_check]
+        logical :: expected_calls(n_fault_callbacks)
+        character(len=20) :: call_number
+        character(len=100) :: sweep_case
+        type(hartmann6d_fault_context_type), target :: fault_context
 
         ! assume tests pass
         test_solver = .true.
@@ -2898,8 +3060,135 @@ contains
             end do
         end do
 
+        ! inject faults by running the solver from the saddle point, where it performs
+        ! the internal stability check, with a stability check at convergence, a line
+        ! search and every optional callback function, for every subsystem solver and
+        ! once with extra trial vectors of the nested settings and once with the
+        ! approximate Hessian linear transformation they take precedence over, once
+        ! without a fault to count the calls of every callback function and then
+        ! letting every one of these calls fail in turn, and check that the unfaulted
+        ! run reaches exactly the callback functions the case uses, that the error is
+        ! reported with the origin of the failing callback function and that the
+        ! reported counters still agree with the calls
+        do i_solver = 1, size(subsystem_solver_options)
+            do i_config = 1, 2
+                if (i_config == 1) then
+                    sweep_case = trim(subsystem_solver_options(i_solver))// &
+                                 " subsystem solver and nested extra trial vectors"
+                else
+                    sweep_case = trim(subsystem_solver_options(i_solver))// &
+                                 " subsystem solver and nested approximate Hessian "// &
+                                 "linear transformation"
+                end if
+                call run_with_fault(0_ip, 0_ip)
+                if (error /= 0) then
+                    write(stderr, *) "test_solver failed: Produced error without "// &
+                        "fault for "//trim(sweep_case)//"."
+                    test_solver = .false.
+                    cycle
+                end if
+                n_calls = fault_context%n_callback_calls
+
+                ! the unfaulted run reaches every callback function but the
+                ! positive-definite preconditioner, which only the ellipsoidal trust
+                ! region of truncated conjugate gradient and generalized Lanczos uses,
+                ! the extra trial vector function, which the solver only calls for
+                ! (Jacobi-)Davidson and the stability check for the nested settings of
+                ! the first case, and the approximate Hessian linear transformation,
+                ! which the stability check only calls in the second case
+                expected_calls = .true.
+                expected_calls(fault_precond_pd) = &
+                    index(subsystem_solver_options(i_solver), "davidson") == 0
+                expected_calls(fault_get_extra_trial_vectors) = &
+                    i_config == 1 .or. &
+                    index(subsystem_solver_options(i_solver), "davidson") > 0
+                expected_calls(fault_approx_hess_x) = i_config == 2
+                do callback = 1, n_fault_callbacks
+                    if ((n_calls(callback) > 0) .neqv. expected_calls(callback)) then
+                        write(stderr, *) "test_solver failed: Unfaulted run "// &
+                            trim(merge("did not call", "called      ", &
+                                       expected_calls(callback)))//" "// &
+                            trim(fault_callback_names(callback))//" for "// &
+                            trim(sweep_case)//"."
+                        test_solver = .false.
+                    end if
+                end do
+
+                ! let every call fail in turn
+                do callback = 1, n_fault_callbacks
+                    do i_call = 1, n_calls(callback)
+                        call run_with_fault(callback, i_call)
+                        write(call_number, '(I0)') i_call
+                        if (error /= fault_origins(callback) + 1) then
+                            write(stderr, *) "test_solver failed: Error of failing "// &
+                                trim(fault_callback_names(callback))//" at call "// &
+                                trim(call_number)//" not reported with its origin "// &
+                                "for "//trim(sweep_case)//"."
+                            test_solver = .false.
+                        end if
+                        if (.not. check_call_counts( &
+                            fault_context, "solver", &
+                            "for failing "//trim(fault_callback_names(callback))// &
+                            " at call "//trim(call_number)//" for "//trim(sweep_case), &
+                            n_hess_x=state%n_hess_x, &
+                            n_update_orbs=state%n_update_orbs, &
+                            n_obj_func=state%n_obj_func)) test_solver = .false.
+                    end do
+                end do
+            end do
+        end do
+
         ! deallocate space for the gradient
         deallocate(final_grad)
+
+    contains
+
+        subroutine run_with_fault(fault_callback, fault_call)
+            !
+            ! this subroutine runs the solver from the saddle point with the subsystem
+            ! solver and the nested settings of the current case and lets the given
+            ! call of the given callback function fail
+            !
+            integer(ip), intent(in) :: fault_callback, fault_call
+
+            procedure(update_orbs_type), pointer :: faulty_update_orbs_funptr
+            procedure(obj_func_type), pointer :: faulty_obj_func_funptr
+
+            ! set up fault injection context
+            fault_context%vars = saddle_point
+            fault_context%n_callback_calls = 0
+            fault_context%n_update_orbs_calls = 0
+            fault_context%n_obj_func_calls = 0
+            fault_context%n_hess_x_calls = 0
+            fault_context%fault_callback = fault_callback
+            fault_context%fault_call = fault_call
+
+            ! set up settings with every optional callback function, the extra trial
+            ! vectors of the nested settings only in the first case
+            call settings%init(error)
+            settings%context => fault_context
+            settings%subsystem_solver = subsystem_solver_options(i_solver)
+            settings%jacobi_davidson_start = 0
+            settings%line_search = .true.
+            settings%stability = .true.
+            settings%precond => faulty_precond
+            settings%precond_pd => faulty_precond_pd
+            settings%project => faulty_project
+            settings%conv_check => faulty_conv_check
+            settings%get_extra_trial_vectors => faulty_get_extra_trial_vectors
+            settings%stability_hess_x => faulty_stability_hess_x
+            settings%stability_settings%conv_check => faulty_conv_check_stability
+            settings%stability_settings%approx_hess_x => faulty_approx_hess_x
+            if (i_config == 1) settings%stability_settings%get_extra_trial_vectors => &
+                faulty_get_extra_trial_vectors
+
+            ! run solver
+            faulty_update_orbs_funptr => faulty_update_orbs
+            faulty_obj_func_funptr => faulty_obj_func
+            call solver(faulty_update_orbs_funptr, faulty_obj_func_funptr, n_param, &
+                        error, settings, state)
+
+        end subroutine run_with_fault
 
     end function test_solver
 
