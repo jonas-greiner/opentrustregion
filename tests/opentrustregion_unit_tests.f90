@@ -48,13 +48,19 @@ module opentrustregion_unit_tests
          0.32397158_rp]
 
     ! points of 6D Hartmann function in the quadratic regions near the first minimum
-    ! and near the saddle point and a point far from both
+    ! and near the saddle point, a point far from both and a point with strong
+    ! negative curvature
     real(rp), parameter :: near_minimum(n_param) = &
         [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
     real(rp), parameter :: near_saddle_point(n_param) = &
         [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
     real(rp), parameter :: distant_point(n_param) = &
         [0.9_rp, 0.1_rp, 0.7_rp, 0.2_rp, 0.6_rp, 0.4_rp]
+    real(rp), parameter :: negative_curvature_point(n_param) = &
+        [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
+
+    ! dimension of the reduced space of subproblems
+    integer(ip), parameter :: n_trial = 3
 
     real(c_rp), bind(C, name="hartmann6d_minimum1") :: minimum1_c(n_param) = minimum1
     real(c_rp), bind(C, name="hartmann6d_saddle_point") :: saddle_point_c(n_param) = &
@@ -194,6 +200,499 @@ module opentrustregion_unit_tests
 
 contains
 
+    function ref_trust_region_metric(h_diag) result(metric)
+        !
+        ! this function returns the diagonal of the metric of an ellipsoidal trust
+        ! region, the absolute Hessian diagonal floored absolutely and relative to its
+        ! largest element
+        !
+        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+
+        real(rp), intent(in) :: h_diag(:)
+        real(rp) :: metric(size(h_diag))
+
+        metric = max(abs(h_diag), precond_floor, &
+                     precond_rel_floor_factor * maxval(abs(h_diag)))
+
+    end function ref_trust_region_metric
+
+    function metric_norm(vector, metric) result(norm)
+        !
+        ! this function returns the norm of a vector in a diagonal metric
+        !
+        real(rp), intent(in) :: vector(:), metric(:)
+        real(rp) :: norm
+
+        norm = sqrt(dot_product(vector, vector * metric))
+
+    end function metric_norm
+
+    subroutine identity_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes an identity Hessian linear transformation which
+        ! needs no test context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        error = 0
+        hess_x = x
+
+    end subroutine identity_hess_x
+
+    function constant_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes an objective function evaluation that does not depend
+        ! on the displacement
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        ! check host context
+        call check_host_context(context)
+
+        error = 0
+        func = 1.0_rp + 0.0_rp * sum(delta_vars)
+
+    end function constant_obj_func
+
+    subroutine stationary_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                      error, context)
+        !
+        ! this subroutine describes an orbital update at the minimum of a quadratic
+        ! function with identity Hessian which needs no test context, since the
+        ! gradient vanishes for every displacement passed to it here
+        !
+        use opentrustregion, only: hess_x_type
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        error = 0
+        func = 0.5_rp * dot_product(delta_vars, delta_vars)
+        grad = 0.0_rp
+        h_diag = 1.0_rp
+        hess_x_funptr => identity_hess_x
+
+    end subroutine stationary_update_orbs
+
+    subroutine mock_precond(residual, mu, precond_residual, error, context)
+        !
+        ! this subroutine is a test subroutine for the preconditioner subroutine
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = mu * residual
+
+        error = 0
+
+    end subroutine mock_precond
+
+    subroutine identity_precond(residual, mu, precond_residual, error, context)
+        !
+        ! this subroutine describes an identity preconditioner which needs no test
+        ! context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = residual + 0.0_rp * mu
+
+        error = 0
+
+    end subroutine identity_precond
+
+    subroutine mock_precond_first_unit_vector(residual, mu, precond_residual, error, &
+                                              context)
+        !
+        ! this subroutine is a test subroutine for the preconditioner subroutine which
+        ! always returns the first unit vector
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = 0.0_rp * residual + 0.0_rp * mu
+        precond_residual(1) = 1.0_rp
+
+        error = 0
+
+    end subroutine mock_precond_first_unit_vector
+
+    subroutine mock_precond_error(residual, mu, precond_residual, error, context)
+        !
+        ! this subroutine is a test subroutine for a preconditioner subroutine which
+        ! produces an error
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = mu * residual
+
+        error = 1
+
+    end subroutine mock_precond_error
+
+    subroutine mock_precond_pd(residual, precond_residual, error, context)
+        !
+        ! this subroutine is a test subroutine for the positive-definite preconditioner
+        ! subroutine
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = 3.0_rp * residual
+
+        error = 0
+
+    end subroutine mock_precond_pd
+
+    subroutine mock_scaled_precond_pd(residual, precond_residual, error, context)
+        !
+        ! this subroutine is a test subroutine for the positive-definite preconditioner
+        ! subroutine scaled by a large constant factor
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = 300.0_rp * residual
+
+        error = 0
+
+    end subroutine mock_scaled_precond_pd
+
+    subroutine shrinking_precond_pd(residual, precond_residual, error, context)
+        !
+        ! this subroutine is a test subroutine for a positive-definite preconditioner
+        ! which shrinks the residual so far that the dot product of a residual of order
+        ! one and its preconditioned residual lies far below the numerical zero
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = 1e-20_rp * residual
+
+        error = 0
+
+    end subroutine shrinking_precond_pd
+
+    subroutine mock_project(vector, error, context)
+        !
+        ! this subroutine is a test subroutine for the projection subroutine
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector = 2 * vector
+
+        error = 0
+
+    end subroutine mock_project
+
+    subroutine identity_project(vector, error, context)
+        !
+        ! this subroutine describes an identity projection which needs no test context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector = vector + 0.0_rp
+
+        error = 0
+
+    end subroutine identity_project
+
+    subroutine vanishing_project(vector, error, context)
+        !
+        ! this subroutine describes a projection which removes every vector and needs
+        ! no test context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector = 0.0_rp
+
+        error = 0
+
+    end subroutine vanishing_project
+
+    subroutine mock_project_error(vector, error, context)
+        !
+        ! this subroutine is a test subroutine for a projection subroutine which
+        ! produces an error
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector = 2 * vector
+
+        error = 1
+
+    end subroutine mock_project_error
+
+    subroutine mock_project_out_pair(vector, error, context)
+        !
+        ! this subroutine is a test subroutine for the projection subroutine which
+        ! removes the component along the symmetric combination of the first two unit
+        ! vectors
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector(1:2) = vector(1:2) - 0.5_rp * sum(vector(1:2))
+
+        error = 0
+
+    end subroutine mock_project_out_pair
+
+    subroutine mock_project_first_component(vector, error, context)
+        !
+        ! this subroutine is a test subroutine for the projection subroutine which
+        ! keeps only the first component
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector(2:) = 0.0_rp
+
+        error = 0
+
+    end subroutine mock_project_first_component
+
+    function mock_conv_check(error, context) result(converged)
+        !
+        ! this function describes a convergence check which always passes
+        !
+        use test_reference, only: check_host_context
+
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        logical :: converged
+
+        ! check host context
+        call check_host_context(context)
+
+        ! initialize error flag
+        error = 0
+
+        converged = .true.
+
+    end function mock_conv_check
+
+    function mock_conv_check_stability(residual, eigval, error, context) &
+        result(converged)
+        !
+        ! this function describes a convergence check of the stability check which
+        ! accepts a residual that vanishes relative to the eigenvalue
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: eigval
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        logical :: converged
+
+        ! check host context
+        call check_host_context(context)
+
+        error = 0
+        converged = norm2(residual) < tol * abs(eigval)
+
+    end function mock_conv_check_stability
+
+    subroutine mock_get_extra_trial_vectors(trial_vectors, error, context)
+        !
+        ! this subroutine is a test subroutine for the extra trial vector subroutine
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        integer(ip) :: i
+
+        ! check host context
+        call check_host_context(context)
+
+        trial_vectors = 0.0_rp
+        do i = 1, size(trial_vectors, 2)
+            trial_vectors(i, i) = real(i, kind=rp)
+        end do
+
+        error = 0
+
+    end subroutine mock_get_extra_trial_vectors
+
+    subroutine mock_vanishing_extra_trial_vectors(trial_vectors, error, context)
+        !
+        ! this subroutine is a test subroutine for an extra trial vector subroutine
+        ! which has no direction to contribute
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        trial_vectors = 0.0_rp
+
+        error = 0
+
+    end subroutine mock_vanishing_extra_trial_vectors
+
+    subroutine logger(message, context)
+        !
+        ! this subroutine is a mock logging subroutine
+        !
+        use test_reference, only: check_host_context
+
+        character(len=*), intent(in) :: message
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        ! append message to the log of the test context
+        if (associated(context)) then
+            select type (context)
+            class is (test_context_type)
+                if (.not. allocated(context%log_message)) context%log_message = ""
+                context%log_message = context%log_message//trim(message)
+            end select
+        end if
+
+    end subroutine logger
+
+    subroutine discarding_logger(message, context)
+        !
+        ! this subroutine is a mock logging subroutine which discards the messages
+        !
+        use test_reference, only: check_host_context
+
+        character(len=*), intent(in) :: message
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        ! discard the message
+        if (len(message) > 0) return
+
+    end subroutine discarding_logger
+
     function hartmann6d_func(vars) result(f)
         !
         ! this function defines the Hartmann 6D function
@@ -256,33 +755,6 @@ contains
         end do
 
     end function hartmann6d_hessian
-
-    function ref_trust_region_metric(h_diag) result(metric)
-        !
-        ! this function returns the diagonal of the metric of an ellipsoidal trust
-        ! region, the absolute Hessian diagonal floored absolutely and relative to its
-        ! largest element
-        !
-        use opentrustregion, only: precond_floor, precond_rel_floor_factor
-
-        real(rp), intent(in) :: h_diag(:)
-        real(rp) :: metric(size(h_diag))
-
-        metric = max(abs(h_diag), precond_floor, &
-                     precond_rel_floor_factor * maxval(abs(h_diag)))
-
-    end function ref_trust_region_metric
-
-    function metric_norm(vector, metric) result(norm)
-        !
-        ! this function returns the norm of a vector in a diagonal metric
-        !
-        real(rp), intent(in) :: vector(:), metric(:)
-        real(rp) :: norm
-
-        norm = sqrt(dot_product(vector, vector * metric))
-
-    end function metric_norm
 
     function resolve_hartmann6d_context(context, error) result(state)
         !
@@ -528,32 +1000,34 @@ contains
 
     end subroutine update_orbs_hess_x_once
 
-    subroutine settingless_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                       error, context)
+    function mock_conv_check_without_update(error, context) result(converged)
         !
-        ! this subroutine describes the orbital update for the Hartmann 6D function of
-        ! a solver called without settings, which reaches the variables through the
-        ! module context since it receives no host context, and returns a Hessian
-        ! linear transformation that does the same
+        ! this function describes a convergence check which only passes in a macro
+        ! iteration without an orbital update, which is the case once the maximum
+        ! precision is reached
         !
-        use opentrustregion, only: hess_x_type
+        use test_reference, only: check_host_context
 
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        class(*), pointer :: module_context
+        class(hartmann6d_context_type), pointer :: state
+        logical :: converged
 
-        ! update the orbitals with the module context
-        module_context => settingless_context
-        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, &
-                         module_context)
-        hess_x_funptr => settingless_hess_x
+        ! check host context
+        call check_host_context(context)
 
-    end subroutine settingless_update_orbs
+        ! initialize result in case the test problem state is missing
+        converged = .false.
+
+        ! get Hartmann 6D state
+        state => resolve_hartmann6d_context(context, error)
+        if (error /= 0) return
+
+        converged = state%n_update_orbs_calls == state%n_update_orbs_at_conv_check
+        state%n_update_orbs_at_conv_check = state%n_update_orbs_calls
+
+    end function mock_conv_check_without_update
 
     subroutine settingless_hess_x(x, hess_x, error, context)
         !
@@ -593,6 +1067,33 @@ contains
 
     end function settingless_obj_func
 
+    subroutine settingless_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                       error, context)
+        !
+        ! this subroutine describes the orbital update for the Hartmann 6D function of
+        ! a solver called without settings, which reaches the variables through the
+        ! module context since it receives no host context, and returns a Hessian
+        ! linear transformation that does the same
+        !
+        use opentrustregion, only: hess_x_type
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(*), pointer :: module_context
+
+        ! update the orbitals with the module context
+        module_context => settingless_context
+        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, &
+                         module_context)
+        hess_x_funptr => settingless_hess_x
+
+    end subroutine settingless_update_orbs
+
     logical function inject_fault(context, callback)
         !
         ! this function counts a call of a callback function in a fault injection
@@ -613,31 +1114,24 @@ contains
 
     end function inject_fault
 
-    subroutine faulty_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                  error, context)
+    subroutine faulty_hess_x(x, hess_x, error, context)
         !
-        ! this subroutine describes the orbital update of the Hartmann 6D function into
-        ! which a fault can be injected, and which returns the Hessian linear
-        ! transformation into which a fault can be injected
+        ! this subroutine describes the Hessian linear transformation of the Hartmann 6D
+        ! function into which a fault can be injected
         !
-        use opentrustregion, only: hess_x_type
-
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! perform orbital update
-        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, context)
+        ! perform Hessian linear transformation
+        call hess_x_fun(x, hess_x, error, context)
         if (error /= 0) return
-        hess_x_funptr => faulty_hess_x
 
         ! inject fault
-        if (inject_fault(context, fault_update_orbs)) error = 1
+        if (inject_fault(context, fault_hess_x)) error = 1
 
-    end subroutine faulty_update_orbs
+    end subroutine faulty_hess_x
 
     function faulty_obj_func(delta_vars, error, context) result(func)
         !
@@ -681,65 +1175,66 @@ contains
 
     end function first_step_rejecting_obj_func
 
-    subroutine faulty_hess_x(x, hess_x, error, context)
+    subroutine faulty_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                  error, context)
         !
-        ! this subroutine describes the Hessian linear transformation of the Hartmann 6D
-        ! function into which a fault can be injected
+        ! this subroutine describes the orbital update of the Hartmann 6D function into
+        ! which a fault can be injected, and which returns the Hessian linear
+        ! transformation into which a fault can be injected
         !
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
+        use opentrustregion, only: hess_x_type
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! perform Hessian linear transformation
-        call hess_x_fun(x, hess_x, error, context)
+        ! perform orbital update
+        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, context)
         if (error /= 0) return
+        hess_x_funptr => faulty_hess_x
 
         ! inject fault
-        if (inject_fault(context, fault_hess_x)) error = 1
+        if (inject_fault(context, fault_update_orbs)) error = 1
 
-    end subroutine faulty_hess_x
+    end subroutine faulty_update_orbs
 
     subroutine faulty_precond(residual, mu, precond_residual, error, context)
         !
-        ! this subroutine describes an identity preconditioner into which a fault can be
-        ! injected
+        ! this subroutine describes the identity preconditioner into which a fault can
+        ! be injected
         !
-        use test_reference, only: check_host_context
-
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context
-        call check_host_context(context)
+        ! apply preconditioner
+        call identity_precond(residual, mu, precond_residual, error, context)
+        if (error /= 0) return
 
-        ! apply preconditioner and inject fault
-        precond_residual = residual + 0.0_rp * mu
-        error = 0
+        ! inject fault
         if (inject_fault(context, fault_precond)) error = 1
 
     end subroutine faulty_precond
 
     subroutine faulty_project(vector, error, context)
         !
-        ! this subroutine describes an identity projection into which a fault can be
+        ! this subroutine describes the identity projection into which a fault can be
         ! injected
         !
-        use test_reference, only: check_host_context
-
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context
-        call check_host_context(context)
+        ! apply projection
+        call identity_project(vector, error, context)
+        if (error /= 0) return
 
-        ! keep vector and inject fault
-        vector = vector + 0.0_rp
-        error = 0
+        ! inject fault
         if (inject_fault(context, fault_project)) error = 1
 
     end subroutine faulty_project
@@ -801,26 +1296,18 @@ contains
 
     subroutine faulty_get_extra_trial_vectors(trial_vectors, error, context)
         !
-        ! this subroutine describes an extra trial vector function, which returns
-        ! scaled unit vectors, into which a fault can be injected
+        ! this subroutine describes the extra trial vector function which returns
+        ! scaled unit vectors into which a fault can be injected
         !
-        use test_reference, only: check_host_context
-
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        integer(ip) :: i
+        ! return extra trial vectors
+        call mock_get_extra_trial_vectors(trial_vectors, error, context)
+        if (error /= 0) return
 
-        ! check host context
-        call check_host_context(context)
-
-        ! return scaled unit vectors and inject fault
-        trial_vectors = 0.0_rp
-        do i = 1, size(trial_vectors, 2)
-            trial_vectors(i, i) = real(i, kind=rp)
-        end do
-        error = 0
+        ! inject fault
         if (inject_fault(context, fault_get_extra_trial_vectors)) error = 1
 
     end subroutine faulty_get_extra_trial_vectors
@@ -877,56 +1364,24 @@ contains
     function faulty_conv_check_stability(residual, eigval, error, context) &
         result(converged)
         !
-        ! this function describes a convergence check of the stability check, which
-        ! accepts a residual that vanishes relative to the eigenvalue, into which a
+        ! this function describes the convergence check of the stability check which
+        ! accepts a residual that vanishes relative to the eigenvalue into which a
         ! fault can be injected
         !
-        use test_reference, only: check_host_context
-
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: eigval
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
         logical :: converged
 
-        ! check host context
-        call check_host_context(context)
+        ! check the residual
+        converged = mock_conv_check_stability(residual, eigval, error, context)
+        if (error /= 0) return
 
-        ! check the residual and inject fault
-        converged = norm2(residual) < tol * abs(eigval)
-        error = 0
+        ! inject fault
         if (inject_fault(context, fault_conv_check_stability)) error = 1
 
     end function faulty_conv_check_stability
-
-    function mock_conv_check_without_update(error, context) result(converged)
-        !
-        ! this function describes a convergence check which only passes in a macro
-        ! iteration without an orbital update, which is the case once the maximum
-        ! precision is reached
-        !
-        use test_reference, only: check_host_context
-
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        class(hartmann6d_context_type), pointer :: state
-        logical :: converged
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize result in case the test problem state is missing
-        converged = .false.
-
-        ! get Hartmann 6D state
-        state => resolve_hartmann6d_context(context, error)
-        if (error /= 0) return
-
-        converged = state%n_update_orbs_calls == state%n_update_orbs_at_conv_check
-        state%n_update_orbs_at_conv_check = state%n_update_orbs_calls
-
-    end function mock_conv_check_without_update
 
     function resolve_quadratic_context(context, error) result(state)
         !
@@ -1037,6 +1492,38 @@ contains
 
     end subroutine mu_recording_precond
 
+    subroutine mock_precond_next_unit_vector(residual, mu, precond_residual, error, &
+                                             context)
+        !
+        ! this subroutine is a test subroutine for the preconditioner subroutine which
+        ! returns the next unit vector of the quadratic model on every call and the
+        ! last one once all have been returned
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(quadratic_context_type), pointer :: state
+
+        ! check host context
+        call check_host_context(context)
+
+        ! initialize result in case the quadratic model state is missing
+        precond_residual = 0.0_rp * residual + 0.0_rp * mu
+
+        ! get quadratic model state
+        state => resolve_quadratic_context(context, error)
+        if (error /= 0) return
+
+        state%next_unit_vector = min(state%next_unit_vector + 1, size(residual))
+        precond_residual(state%next_unit_vector) = 1.0_rp
+
+    end subroutine mock_precond_next_unit_vector
+
     function resolve_refresh_context(context, error) result(state)
         !
         ! this function returns the refresh model context handed to a mock callback
@@ -1062,39 +1549,6 @@ contains
         if (.not. associated(state)) error = missing_context_error
 
     end function resolve_refresh_context
-
-    function refresh_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes the objective function evaluation for the quadratic
-        ! model used to test the Hessian refresh after rejected steps, which marks the
-        ! Hessian model stale
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        class(refresh_context_type), pointer :: state
-
-        ! initialize result in case the refresh model state is missing
-        func = 0.0_rp
-
-        ! check host context
-        call check_host_context(context)
-
-        ! get refresh model state
-        state => resolve_refresh_context(context, error)
-        if (error /= 0) return
-
-        ! count call, mark the model stale and evaluate the true model
-        state%n_obj_func_calls = state%n_obj_func_calls + 1
-        state%model_stale = .true.
-        func = dot_product(state%grad, delta_vars) + &
-               0.5_rp * dot_product(delta_vars, matmul(state%hess, delta_vars))
-
-    end function refresh_obj_func
 
     subroutine refresh_hess_x(x, hess_x, error, context)
         !
@@ -1138,119 +1592,11 @@ contains
 
     end subroutine refresh_hess_x
 
-    subroutine identity_hess_x(x, hess_x, error, context)
+    function refresh_obj_func(delta_vars, error, context) result(func)
         !
-        ! this subroutine describes an identity Hessian linear transformation which
-        ! needs no test context
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        hess_x = x
-
-    end subroutine identity_hess_x
-
-    subroutine identity_precond(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine describes an identity preconditioner which needs no test
-        ! context
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = residual + 0.0_rp * mu
-
-        error = 0
-
-    end subroutine identity_precond
-
-    subroutine identity_project(vector, error, context)
-        !
-        ! this subroutine describes an identity projection which needs no test context
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector = vector + 0.0_rp
-
-        error = 0
-
-    end subroutine identity_project
-
-    subroutine vanishing_project(vector, error, context)
-        !
-        ! this subroutine describes a projection which removes every vector and needs
-        ! no test context
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector = 0.0_rp
-
-        error = 0
-
-    end subroutine vanishing_project
-
-    subroutine stationary_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                      error, context)
-        !
-        ! this subroutine describes an orbital update at the minimum of a quadratic
-        ! function with identity Hessian which needs no test context, since the
-        ! gradient vanishes for every displacement passed to it here
-        !
-        use opentrustregion, only: hess_x_type
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        func = 0.5_rp * dot_product(delta_vars, delta_vars)
-        grad = 0.0_rp
-        h_diag = 1.0_rp
-        hess_x_funptr => identity_hess_x
-
-    end subroutine stationary_update_orbs
-
-    function constant_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes an objective function evaluation that does not depend
-        ! on the displacement
+        ! this function describes the objective function evaluation for the quadratic
+        ! model used to test the Hessian refresh after rejected steps, which marks the
+        ! Hessian model stale
         !
         use test_reference, only: check_host_context
 
@@ -1259,13 +1605,25 @@ contains
         class(*), intent(in), pointer :: context
         real(rp) :: func
 
+        class(refresh_context_type), pointer :: state
+
+        ! initialize result in case the refresh model state is missing
+        func = 0.0_rp
+
         ! check host context
         call check_host_context(context)
 
-        error = 0
-        func = 1.0_rp + 0.0_rp * sum(delta_vars)
+        ! get refresh model state
+        state => resolve_refresh_context(context, error)
+        if (error /= 0) return
 
-    end function constant_obj_func
+        ! count call, mark the model stale and evaluate the true model
+        state%n_obj_func_calls = state%n_obj_func_calls + 1
+        state%model_stale = .true.
+        func = dot_product(state%grad, delta_vars) + &
+               0.5_rp * dot_product(delta_vars, matmul(state%hess, delta_vars))
+
+    end function refresh_obj_func
 
     function double_well_func(vars) result(f)
         !
@@ -1330,6 +1688,26 @@ contains
 
     end subroutine double_well_hess_x
 
+    subroutine failing_double_well_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes a Hessian linear transformation for the double well
+        ! function which always fails
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        hess_x = x
+        error = 1
+
+    end subroutine failing_double_well_hess_x
+
     function double_well_obj_func(delta_vars, error, context) result(func)
         !
         ! this function describes the objective function evaluation for the double
@@ -1358,26 +1736,6 @@ contains
         func = double_well_func(state%vars + delta_vars)
 
     end function double_well_obj_func
-
-    subroutine failing_double_well_hess_x(x, hess_x, error, context)
-        !
-        ! this subroutine describes a Hessian linear transformation for the double well
-        ! function which always fails
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        hess_x = x
-        error = 1
-
-    end subroutine failing_double_well_hess_x
 
     subroutine double_well_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
                                        error, context)
@@ -1416,45 +1774,6 @@ contains
         hess_x_funptr => double_well_hess_x
 
     end subroutine double_well_update_orbs
-
-    subroutine state_reading_update_orbs(delta_vars, func, grad, h_diag, &
-                                         hess_x_funptr, error, context)
-        !
-        ! this subroutine describes the orbital update of the double well function,
-        ! which also records the solver state it reads through the pointer in its
-        ! context and the size of the step it receives in the Euclidean norm and in the
-        ! norm of the absolute Hessian diagonal of the previous point floored relative
-        ! to its largest element
-        !
-        use opentrustregion, only: hess_x_type
-
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! update the orbitals of the double well function
-        call double_well_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                     error, context)
-        if (error /= 0) return
-
-        ! record the state and the size of the step in both norms and keep the
-        ! Hessian diagonal for the norm of the next step
-        select type (context)
-        class is (double_well_state_context_type)
-            if (.not. allocated(context%seen_states)) &
-                allocate(context%seen_states(0), context%step_norms(0), &
-                         context%precond_step_norms(0))
-            context%seen_states = [context%seen_states, context%state]
-            context%step_norms = [context%step_norms, norm2(delta_vars)]
-            context%precond_step_norms = [context%precond_step_norms, metric_norm( &
-                delta_vars, ref_trust_region_metric(context%h_diag))]
-            context%h_diag = h_diag
-        end select
-
-    end subroutine state_reading_update_orbs
 
     subroutine state_reading_hess_x(x, hess_x, error, context)
         !
@@ -1513,6 +1832,45 @@ contains
 
     end subroutine state_reading_precond_pd
 
+    subroutine state_reading_update_orbs(delta_vars, func, grad, h_diag, &
+                                         hess_x_funptr, error, context)
+        !
+        ! this subroutine describes the orbital update of the double well function,
+        ! which also records the solver state it reads through the pointer in its
+        ! context and the size of the step it receives in the Euclidean norm and in the
+        ! norm of the absolute Hessian diagonal of the previous point floored relative
+        ! to its largest element
+        !
+        use opentrustregion, only: hess_x_type
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! update the orbitals of the double well function
+        call double_well_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                     error, context)
+        if (error /= 0) return
+
+        ! record the state and the size of the step in both norms and keep the
+        ! Hessian diagonal for the norm of the next step
+        select type (context)
+        class is (double_well_state_context_type)
+            if (.not. allocated(context%seen_states)) &
+                allocate(context%seen_states(0), context%step_norms(0), &
+                         context%precond_step_norms(0))
+            context%seen_states = [context%seen_states, context%state]
+            context%step_norms = [context%step_norms, norm2(delta_vars)]
+            context%precond_step_norms = [context%precond_step_norms, metric_norm( &
+                delta_vars, ref_trust_region_metric(context%h_diag))]
+            context%h_diag = h_diag
+        end select
+
+    end subroutine state_reading_update_orbs
+
     function resolve_half_step_context(context, error) result(state)
         !
         ! this function returns the context of the half step model handed to a mock
@@ -1538,6 +1896,35 @@ contains
         if (.not. associated(state)) error = missing_context_error
 
     end function resolve_half_step_context
+
+    function half_step_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes an objective function which evaluates the quadratic
+        ! model 1/2 |x|^2 at half the displacement, so that its minimum along a step
+        ! lies at twice the Newton step of the model
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        class(half_step_context_type), pointer :: state
+
+        ! initialize result in case the half step model state is missing
+        func = 0.0_rp
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get half step model state
+        state => resolve_half_step_context(context, error)
+        if (error /= 0) return
+
+        func = 0.5_rp * sum((state%vars + 0.5_rp * delta_vars)**2)
+
+    end function half_step_obj_func
 
     subroutine half_step_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
                                      error, context)
@@ -1577,35 +1964,6 @@ contains
         hess_x_funptr => identity_hess_x
 
     end subroutine half_step_update_orbs
-
-    function half_step_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes an objective function which evaluates the quadratic
-        ! model 1/2 |x|^2 at half the displacement, so that its minimum along a step
-        ! lies at twice the Newton step of the model
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        class(half_step_context_type), pointer :: state
-
-        ! initialize result in case the half step model state is missing
-        func = 0.0_rp
-
-        ! check host context
-        call check_host_context(context)
-
-        ! get half step model state
-        state => resolve_half_step_context(context, error)
-        if (error /= 0) return
-
-        func = 0.5_rp * sum((state%vars + 0.5_rp * delta_vars)**2)
-
-    end function half_step_obj_func
 
     function bracket_obj_func(delta_vars, error, context) result(func)
         !
@@ -1670,375 +2028,6 @@ contains
 
     end function bracket_obj_func
 
-    subroutine mock_precond(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine is a test subroutine for the preconditioner subroutine
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = mu * residual
-
-        error = 0
-
-    end subroutine mock_precond
-
-    subroutine mock_precond_first_unit_vector(residual, mu, precond_residual, error, &
-                                              context)
-        !
-        ! this subroutine is a test subroutine for the preconditioner subroutine which
-        ! always returns the first unit vector
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = 0.0_rp * residual + 0.0_rp * mu
-        precond_residual(1) = 1.0_rp
-
-        error = 0
-
-    end subroutine mock_precond_first_unit_vector
-
-    subroutine mock_precond_next_unit_vector(residual, mu, precond_residual, error, &
-                                             context)
-        !
-        ! this subroutine is a test subroutine for the preconditioner subroutine which
-        ! returns the next unit vector of the quadratic model on every call and the
-        ! last one once all have been returned
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        class(quadratic_context_type), pointer :: state
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize result in case the quadratic model state is missing
-        precond_residual = 0.0_rp * residual + 0.0_rp * mu
-
-        ! get quadratic model state
-        state => resolve_quadratic_context(context, error)
-        if (error /= 0) return
-
-        state%next_unit_vector = min(state%next_unit_vector + 1, size(residual))
-        precond_residual(state%next_unit_vector) = 1.0_rp
-
-    end subroutine mock_precond_next_unit_vector
-
-    subroutine mock_precond_error(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine is a test subroutine for a preconditioner subroutine which
-        ! produces an error
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = mu * residual
-
-        error = 1
-
-    end subroutine mock_precond_error
-
-    subroutine mock_precond_pd(residual, precond_residual, error, context)
-        !
-        ! this subroutine is a test subroutine for the positive-definite preconditioner
-        ! subroutine
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = 3.0_rp * residual
-
-        error = 0
-
-    end subroutine mock_precond_pd
-
-    subroutine mock_scaled_precond_pd(residual, precond_residual, error, context)
-        !
-        ! this subroutine is a test subroutine for the positive-definite preconditioner
-        ! subroutine scaled by a large constant factor
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = 300.0_rp * residual
-
-        error = 0
-
-    end subroutine mock_scaled_precond_pd
-
-    subroutine shrinking_precond_pd(residual, precond_residual, error, context)
-        !
-        ! this subroutine is a test subroutine for a positive-definite preconditioner
-        ! which shrinks the residual so far that the dot product of a residual of order
-        ! one and its preconditioned residual lies far below the numerical zero
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = 1e-20_rp * residual
-
-        error = 0
-
-    end subroutine shrinking_precond_pd
-
-    subroutine mock_project(vector, error, context)
-        !
-        ! this subroutine is a test subroutine for the projection subroutine
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector = 2 * vector
-
-        error = 0
-
-    end subroutine mock_project
-
-    subroutine mock_project_error(vector, error, context)
-        !
-        ! this subroutine is a test subroutine for a projection subroutine which
-        ! produces an error
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector = 2 * vector
-
-        error = 1
-
-    end subroutine mock_project_error
-
-    subroutine mock_project_out_pair(vector, error, context)
-        !
-        ! this subroutine is a test subroutine for the projection subroutine which
-        ! removes the component along the symmetric combination of the first two unit
-        ! vectors
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector(1:2) = vector(1:2) - 0.5_rp * sum(vector(1:2))
-
-        error = 0
-
-    end subroutine mock_project_out_pair
-
-    subroutine mock_project_first_component(vector, error, context)
-        !
-        ! this subroutine is a test subroutine for the projection subroutine which
-        ! keeps only the first component
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector(2:) = 0.0_rp
-
-        error = 0
-
-    end subroutine mock_project_first_component
-
-    function mock_conv_check(error, context) result(converged)
-        !
-        ! this function describes a convergence check which always passes
-        !
-        use test_reference, only: check_host_context
-
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        logical :: converged
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize error flag
-        error = 0
-
-        converged = .true.
-
-    end function mock_conv_check
-
-    function mock_conv_check_stability(residual, eigval, error, context) &
-        result(converged)
-        !
-        ! this function describes a convergence check of the stability check which
-        ! accepts a residual that vanishes relative to the eigenvalue
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: eigval
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        logical :: converged
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        converged = norm2(residual) < tol * abs(eigval)
-
-    end function mock_conv_check_stability
-
-    subroutine mock_get_extra_trial_vectors(trial_vectors, error, context)
-        !
-        ! this subroutine is a test subroutine for the extra trial vector subroutine
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(out), target :: trial_vectors(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        integer(ip) :: i
-
-        ! check host context
-        call check_host_context(context)
-
-        trial_vectors = 0.0_rp
-        do i = 1, size(trial_vectors, 2)
-            trial_vectors(i, i) = real(i, kind=rp)
-        end do
-
-        error = 0
-
-    end subroutine mock_get_extra_trial_vectors
-
-    subroutine mock_vanishing_extra_trial_vectors(trial_vectors, error, context)
-        !
-        ! this subroutine is a test subroutine for an extra trial vector subroutine
-        ! which has no direction to contribute
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(out), target :: trial_vectors(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        trial_vectors = 0.0_rp
-
-        error = 0
-
-    end subroutine mock_vanishing_extra_trial_vectors
-
-    subroutine logger(message, context)
-        !
-        ! this subroutine is a mock logging subroutine
-        !
-        use test_reference, only: check_host_context
-
-        character(len=*), intent(in) :: message
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        ! append message to the log of the test context
-        if (associated(context)) then
-            select type (context)
-            class is (test_context_type)
-                if (.not. allocated(context%log_message)) context%log_message = ""
-                context%log_message = context%log_message//trim(message)
-            end select
-        end if
-
-    end subroutine logger
-
-    subroutine discarding_logger(message, context)
-        !
-        ! this subroutine is a mock logging subroutine which discards the messages
-        !
-        use test_reference, only: check_host_context
-
-        character(len=*), intent(in) :: message
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        ! discard the message
-        if (len(message) > 0) return
-
-    end subroutine discarding_logger
-
     function identity_matrix(n) result(matrix)
         !
         ! this function returns an identity matrix
@@ -2091,6 +2080,22 @@ contains
         end do
 
     end function unit_lower_bidiagonal_matrix
+
+    function factorized_tridiagonal_matrix(diagonal_fact, off_diagonal_fact) &
+        result(matrix)
+        !
+        ! this function returns the symmetric tridiagonal matrix L D L^T of the
+        ! diagonal of D and the off-diagonal of the unit lower bidiagonal matrix L of
+        ! its factorization
+        !
+        real(rp), intent(in) :: diagonal_fact(:), off_diagonal_fact(:)
+        real(rp) :: matrix(size(diagonal_fact), size(diagonal_fact))
+
+        matrix = matmul(unit_lower_bidiagonal_matrix(off_diagonal_fact) * &
+                        spread(diagonal_fact, 1, size(diagonal_fact)), &
+                        transpose(unit_lower_bidiagonal_matrix(off_diagonal_fact)))
+
+    end function factorized_tridiagonal_matrix
 
     function generate_random_symm_matrix(n) result(matrix)
         !
@@ -2224,6 +2229,34 @@ contains
 
     end function hartmann6d_ratio
 
+    subroutine setup_double_well_state_context(context, state, func, grad, h_diag)
+        !
+        ! this subroutine moves a double well context, whose callback functions read
+        ! the solver state, to a point of negative curvature, evaluates the function,
+        ! its gradient and its Hessian diagonal there and points the context to a
+        ! state holding the values of an earlier subproblem, which a subsystem solver
+        ! has to reset before it calls the callback functions
+        !
+        type(double_well_state_context_type), intent(inout) :: context
+        type(solver_state_type), intent(inout), target :: state
+        real(rp), intent(out) :: func, grad(2), h_diag(2)
+
+        ! move to the point and evaluate the function there
+        context%vars = [0.5_rp, 0.1_rp]
+        func = double_well_func(context%vars)
+        grad = [2.0_rp * context%vars(1), &
+                -2.0_rp * context%vars(2) + 4.0_rp * context%vars(2)**3]
+        h_diag = [2.0_rp, -2.0_rp + 12.0_rp * context%vars(2)**2]
+
+        ! point to a state of an earlier subproblem
+        context%state => state
+        state%trust_radius = 0.4_rp
+        state%micro_iteration = 7
+        state%jacobi_davidson_iteration = 3
+        state%relative_residual = 0.3_rp
+
+    end subroutine setup_double_well_state_context
+
     subroutine setup_reduced_space(vars, grad, grad_norm, red_space_basis, &
                                    red_space_hess)
         !
@@ -2260,6 +2293,29 @@ contains
                                 matmul(hartmann6d_hessian(vars), red_space_basis))
 
     end subroutine setup_reduced_space
+
+    subroutine setup_hard_case(hess_diag, red_space_basis, grad_norm, red_space_hess)
+        !
+        ! this subroutine sets up the reduced space of a hard case of the subproblem,
+        ! a basis of the leading unit vectors, since the hard case step assumes an
+        ! orthonormal basis, a unit gradient norm and a diagonal Hessian, whose lowest
+        ! eigenvalue is negative and has no eigenvector along the gradient direction,
+        ! the first basis vector
+        !
+        real(rp), intent(in) :: hess_diag(:)
+        real(rp), intent(out) :: red_space_basis(:, :), grad_norm, red_space_hess(:, :)
+
+        integer(ip) :: i
+
+        red_space_basis = 0.0_rp
+        red_space_hess = 0.0_rp
+        do i = 1, size(hess_diag)
+            red_space_basis(i, i) = 1.0_rp
+            red_space_hess(i, i) = hess_diag(i)
+        end do
+        grad_norm = 1.0_rp
+
+    end subroutine setup_hard_case
 
     subroutine setup_gltr_lanczos(lanczos, n_param, n_micro)
         !
@@ -2423,6 +2479,33 @@ contains
         end if
 
     end function check_call_counts
+
+    logical function check_reset_state_seen(context, test_name, callback_name)
+        !
+        ! this function checks that the first call of a callback function which reads
+        ! the solver state through the pointer of a double well context saw the state
+        ! reset by the subsystem solver, without micro iterations and with the
+        ! relative residual of the vanishing solution, which is the gradient
+        !
+        type(double_well_state_context_type), intent(in) :: context
+        character(len=*), intent(in) :: test_name, callback_name
+
+        ! assume tests pass
+        check_reset_state_seen = .true.
+
+        if (.not. allocated(context%seen_states)) then
+            write(stderr, *) "test_"//test_name//" failed: State not read by the "// &
+                callback_name//"."
+            check_reset_state_seen = .false.
+        else if (context%seen_states(1)%micro_iteration /= 0 .or. &
+                 context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
+                 abs(context%seen_states(1)%relative_residual - 1.0_rp) > tol) then
+            write(stderr, *) "test_"//test_name//" failed: State of an earlier "// &
+                "subproblem seen by the first call of the "//callback_name//"."
+            check_reset_state_seen = .false.
+        end if
+
+    end function check_reset_state_seen
 
     logical(c_bool) function test_solver() bind(C)
         !
@@ -4016,7 +4099,6 @@ contains
         !
         use opentrustregion, only: newton_step
 
-        integer(ip), parameter :: n_trial = 3
         character(len=*), parameter :: case_names(2) = &
             [character(len=10) :: "symmetric", "asymmetric"]
         real(rp) :: red_space_basis(n_param, n_trial), grad(n_param), grad_norm, &
@@ -4072,9 +4154,6 @@ contains
         use opentrustregion, only: solver_settings_type, bisection_ah
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
-        integer(ip), parameter :: n_trial = 3
-        real(rp), parameter :: negative_curvature_point(n_param) = &
-            [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
         type(solver_settings_type) :: settings
         real(rp) :: red_space_basis(n_param, n_trial), grad(n_param), grad_norm, &
                     red_space_hess(n_trial, n_trial), red_space_hess_eigvals(n_trial), &
@@ -4167,18 +4246,10 @@ contains
             test_bisection_ah = .false.
         end if
 
-        ! set up hard case by using an orthonormal basis as this is what the hard case
-        ! step assumes
-        red_space_basis = 0.0_rp
-        red_space_basis(1, 1) = 1.0_rp
-        red_space_basis(2, 2) = 1.0_rp
-        red_space_basis(3, 3) = 1.0_rp
-        grad_norm = 1.0_rp
+        ! set up hard case
+        call setup_hard_case([5.0_rp, -2.0_rp, 3.0_rp], red_space_basis, grad_norm, &
+                             red_space_hess)
         trust_radius = 0.6_rp
-        red_space_hess = 0.0_rp
-        red_space_hess(1, 1) = 5.0_rp
-        red_space_hess(2, 2) = -2.0_rp
-        red_space_hess(3, 3) = 3.0_rp
         call ref_symm_mat_diag(red_space_hess, red_space_hess_eigvals, &
                                red_space_hess_right_eigvecs)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
@@ -4255,11 +4326,9 @@ contains
         end if
 
         ! set up hard case with degenerate lowest eigenvalues
+        call setup_hard_case([5.0_rp, -2.0_rp, -2.0_rp], red_space_basis, grad_norm, &
+                             red_space_hess)
         trust_radius = 0.5_rp
-        red_space_hess = 0.0_rp
-        red_space_hess(1, 1) = 5.0_rp
-        red_space_hess(2, 2) = -2.0_rp
-        red_space_hess(3, 3) = -2.0_rp
         call ref_symm_mat_diag(red_space_hess, red_space_hess_eigvals, &
                                red_space_hess_right_eigvecs)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
@@ -4321,9 +4390,6 @@ contains
                                    bisection_imaginary_eigval_warning_msg
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
-        integer(ip), parameter :: n_trial = 3
-        real(rp), parameter :: negative_curvature_point(n_param) = &
-            [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
         character(len=*), parameter :: case_names(4) = &
             [character(len=29) :: "symmetric, indefinite", "asymmetric, indefinite", &
              "symmetric, positive-definite", "asymmetric, positive-definite"]
@@ -4401,18 +4467,10 @@ contains
             end if
         end do
 
-        ! set up hard case by using an orthonormal basis as this is what the hard case
-        ! step assumes
-        red_space_basis = 0.0_rp
-        red_space_basis(1, 1) = 1.0_rp
-        red_space_basis(2, 2) = 1.0_rp
-        red_space_basis(3, 3) = 1.0_rp
-        grad_norm = 1.0_rp
+        ! set up hard case
+        call setup_hard_case([5.0_rp, -2.0_rp, 3.0_rp], red_space_basis, grad_norm, &
+                             red_space_hess)
         trust_radius = 0.6_rp
-        red_space_hess = 0.0_rp
-        red_space_hess(1, 1) = 5.0_rp
-        red_space_hess(2, 2) = -2.0_rp
-        red_space_hess(3, 3) = 3.0_rp
 
         ! test hard case: lowest reduced space Hessian eigenvalue is negative and its
         ! eigenvector has no component along the gradient direction, so no level shift
@@ -4519,11 +4577,9 @@ contains
         end if
 
         ! set up hard case with degenerate lowest eigenvalues
+        call setup_hard_case([5.0_rp, -2.0_rp, -2.0_rp], red_space_basis, grad_norm, &
+                             red_space_hess)
         trust_radius = 0.5_rp
-        red_space_hess = 0.0_rp
-        red_space_hess(1, 1) = 5.0_rp
-        red_space_hess(2, 2) = -2.0_rp
-        red_space_hess(3, 3) = -2.0_rp
         call diagonalize(.true.)
 
         ! test hard case with a degenerate lowest eigenvalue: the eigenvector spanning
@@ -8107,19 +8163,11 @@ contains
         ! residual of the vanishing solution, which is the gradient
         call setup_settings(settings, state_context)
         settings%grad_noise = .false.
-        state_context%vars = [0.5_rp, 0.1_rp]
-        state_context%state => state
-        double_well_grad = [2.0_rp * state_context%vars(1), -2.0_rp * &
-                            state_context%vars(2) + 4.0_rp * state_context%vars(2)**3]
-        double_well_h_diag = [2.0_rp, -2.0_rp + 12.0_rp * state_context%vars(2)**2]
+        call setup_double_well_state_context(state_context, state, func, &
+                                             double_well_grad, double_well_h_diag)
         obj_func_funptr => double_well_obj_func
         hess_x_funptr => state_reading_hess_x
-        state%trust_radius = 0.4_rp
-        state%micro_iteration = 7
-        state%jacobi_davidson_iteration = 3
-        state%relative_residual = 0.3_rp
-        call level_shifted_davidson(double_well_func(state_context%vars), &
-                                    double_well_grad, norm2(double_well_grad), &
+        call level_shifted_davidson(func, double_well_grad, norm2(double_well_grad), &
                                     double_well_h_diag, 2_ip, obj_func_funptr, &
                                     hess_x_funptr, settings, .false., state, &
                                     double_well_solution, solution_norm, mu, error)
@@ -8128,18 +8176,9 @@ contains
                 "with a state of an earlier subproblem."
             test_level_shifted_davidson = .false.
         end if
-        if (.not. allocated(state_context%seen_states)) then
-            write(stderr, *) "test_level_shifted_davidson failed: Hessian linear "// &
-                "transformation did not read the state."
+        if (.not. check_reset_state_seen(state_context, "level_shifted_davidson", &
+                                         "Hessian linear transformation")) &
             test_level_shifted_davidson = .false.
-        else if (state_context%seen_states(1)%micro_iteration /= 0 .or. &
-                 state_context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
-                 abs(state_context%seen_states(1)%relative_residual - 1.0_rp) > tol) &
-            then
-            write(stderr, *) "test_level_shifted_davidson failed: State of an "// &
-                "earlier subproblem seen by the initial Hessian linear transformations."
-            test_level_shifted_davidson = .false.
-        end if
 
     contains
 
@@ -8302,10 +8341,8 @@ contains
         !
         use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
                                    truncated_conjugate_gradient, error_hess_x, &
-                                   error_obj_func
+                                   error_obj_func, trust_region_shape_options
 
-        character(len=*), parameter :: shape_names(2) = &
-            [character(len=11) :: "ellipsoidal", "spherical"]
         type(solver_settings_type) :: settings
         type(solver_state_type), target :: state
         real(rp) :: func, ratio, solution_norm, noise, shape_norm, &
@@ -8432,8 +8469,8 @@ contains
         ! the preconditioner metric, which both trust regions use, below the reduction
         ! factor
         settings%local_red_factor = 1e-3_rp
-        do i_case = 1, size(shape_names)
-            settings%trust_region_shape = shape_names(i_case)
+        do i_case = 1, size(trust_region_shape_options)
+            settings%trust_region_shape = trust_region_shape_options(i_case)
             state%trust_radius = 10.0_rp
             call truncated_conjugate_gradient( &
                 func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
@@ -8441,10 +8478,10 @@ contains
             if (error /= 0) then
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
                     "Produced error near minimum for interior solution in "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
-            if (i_case == 1) then
+            if (settings%trust_region_shape == "ellipsoidal") then
                 shape_norm = metric_norm(solution, metric)
             else
                 shape_norm = norm2(solution)
@@ -8453,7 +8490,7 @@ contains
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
                     "Returned solution norm is not the norm of the trust region "// &
                     "near minimum for interior solution in "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
             residual = grad + matmul(context%hess, solution)
@@ -8462,7 +8499,7 @@ contains
                 state%relative_residual > settings%local_red_factor) then
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
                     "Relative residual wrong near minimum for interior solution in "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
         end do
@@ -8475,8 +8512,8 @@ contains
         ! and reduces the function value
         call setup_hartmann6d_point(context, near_saddle_point, func, grad, h_diag)
         metric = ref_trust_region_metric(h_diag)
-        do i_case = 1, size(shape_names)
-            settings%trust_region_shape = shape_names(i_case)
+        do i_case = 1, size(trust_region_shape_options)
+            settings%trust_region_shape = trust_region_shape_options(i_case)
             state%trust_radius = 0.4_rp
             call truncated_conjugate_gradient( &
                 func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
@@ -8484,10 +8521,10 @@ contains
             if (error /= 0) then
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
                     "Produced error near saddle point for "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
-            if (i_case == 1) then
+            if (settings%trust_region_shape == "ellipsoidal") then
                 shape_norm = metric_norm(solution, metric)
             else
                 shape_norm = norm2(solution)
@@ -8495,8 +8532,8 @@ contains
             if (abs(solution_norm - shape_norm) > tol) then
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
                     "Returned solution norm is not the norm of the trust region "// &
-                    "near saddle point for "//trim(shape_names(i_case))// &
-                    " trust region."
+                    "near saddle point for "// &
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
             ratio = hartmann6d_ratio(context, solution)
@@ -8505,7 +8542,7 @@ contains
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
                     "Solution does not reduce function value or does not lie at "// &
                     "trust region boundary near saddle point for "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
         end do
@@ -8718,38 +8755,21 @@ contains
         call setup_settings(settings, state_context)
         settings%grad_noise = .false.
         settings%precond_pd => state_reading_precond_pd
-        state_context%vars = [0.5_rp, 0.1_rp]
-        state_context%state => state
-        double_well_grad = [2.0_rp * state_context%vars(1), -2.0_rp * &
-                            state_context%vars(2) + 4.0_rp * state_context%vars(2)**3]
-        double_well_h_diag = [2.0_rp, -2.0_rp + 12.0_rp * state_context%vars(2)**2]
+        call setup_double_well_state_context(state_context, state, func, &
+                                             double_well_grad, double_well_h_diag)
         obj_func_funptr => double_well_obj_func
         hess_x_funptr => double_well_hess_x
-        state%trust_radius = 0.4_rp
-        state%micro_iteration = 7
-        state%jacobi_davidson_iteration = 3
-        state%relative_residual = 0.3_rp
         call truncated_conjugate_gradient( &
-            double_well_func(state_context%vars), double_well_grad, &
-            double_well_h_diag, 2_ip, obj_func_funptr, hess_x_funptr, settings, state, &
-            double_well_solution, solution_norm, error)
+            func, double_well_grad, double_well_h_diag, 2_ip, obj_func_funptr, &
+            hess_x_funptr, settings, state, double_well_solution, solution_norm, error)
         if (error /= 0) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
                 "error with a state of an earlier subproblem."
             test_truncated_conjugate_gradient = .false.
         end if
-        if (.not. allocated(state_context%seen_states)) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
-                "Preconditioner did not read the state."
-            test_truncated_conjugate_gradient = .false.
-        else if (state_context%seen_states(1)%micro_iteration /= 0 .or. &
-                 state_context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
-                 abs(state_context%seen_states(1)%relative_residual - 1.0_rp) > tol) &
-            then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: State of "// &
-                "an earlier subproblem seen by the first preconditioned residual."
-            test_truncated_conjugate_gradient = .false.
-        end if
+        if (.not. check_reset_state_seen( &
+            state_context, "truncated_conjugate_gradient", "positive-definite "// &
+            "preconditioner")) test_truncated_conjugate_gradient = .false.
 
     end function test_truncated_conjugate_gradient
 
@@ -8758,10 +8778,9 @@ contains
         ! this function tests the generalized Lanczos trust region subroutine
         !
         use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
-                                   generalized_lanczos_trust_region, error_obj_func
+                                   generalized_lanczos_trust_region, error_obj_func, &
+                                   trust_region_shape_options
 
-        character(len=*), parameter :: shape_names(2) = &
-            [character(len=11) :: "ellipsoidal", "spherical"]
         character(len=*), parameter :: restart_case_names(3) = &
             [character(len=28) :: "inside the trust region", &
              "on the trust region boundary", "without curvature"]
@@ -8935,9 +8954,9 @@ contains
         ! below the reduction factor of the global region, and whether the reported
         ! number of Hessian linear transformations agrees with the calls
         call setup_hartmann6d_point(context, near_saddle_point, func, grad, h_diag)
-        do i_case = 1, size(shape_names)
-            settings%trust_region_shape = shape_names(i_case)
-            if (i_case == 1) then
+        do i_case = 1, size(trust_region_shape_options)
+            settings%trust_region_shape = trust_region_shape_options(i_case)
+            if (settings%trust_region_shape == "ellipsoidal") then
                 metric = ref_trust_region_metric(h_diag)
             else
                 metric = 1.0_rp
@@ -8951,18 +8970,18 @@ contains
             if (error /= 0) then
                 write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                     "Produced error near saddle point for "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_generalized_lanczos_trust_region = .false.
             end if
             if (.not. check_call_counts( &
                 context, "generalized_lanczos_trust_region", &
-                "near saddle point for "//trim(shape_names(i_case))//" trust region", &
-                n_hess_x=state%n_hess_x)) &
+                "near saddle point for "//trim(trust_region_shape_options(i_case))// &
+                " trust region", n_hess_x=state%n_hess_x)) &
                 test_generalized_lanczos_trust_region = .false.
             if (lambda <= 0.0_rp) then
                 write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                     "Multiplier is not positive near saddle point for "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_generalized_lanczos_trust_region = .false.
             end if
             ratio = hartmann6d_ratio(context, solution)
@@ -8972,7 +8991,7 @@ contains
                 write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                     "Solution does not reduce function value or does not lie at "// &
                     "trust region boundary in the returned norm near saddle point "// &
-                    "for "//trim(shape_names(i_case))//" trust region."
+                    "for "//trim(trust_region_shape_options(i_case))//" trust region."
                 test_generalized_lanczos_trust_region = .false.
             end if
             residual = grad + matmul(context%hess, solution) + &
@@ -8982,7 +9001,7 @@ contains
                 state%relative_residual > settings%global_red_factor) then
                 write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                     "Relative residual wrong near saddle point for "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_generalized_lanczos_trust_region = .false.
             end if
         end do
@@ -9280,38 +9299,22 @@ contains
         call setup_settings(settings, state_context)
         settings%grad_noise = .false.
         settings%precond_pd => state_reading_precond_pd
-        state_context%vars = [0.5_rp, 0.1_rp]
-        state_context%state => state
-        double_well_grad = [2.0_rp * state_context%vars(1), -2.0_rp * &
-                            state_context%vars(2) + 4.0_rp * state_context%vars(2)**3]
-        double_well_h_diag = [2.0_rp, -2.0_rp + 12.0_rp * state_context%vars(2)**2]
+        call setup_double_well_state_context(state_context, state, func, &
+                                             double_well_grad, double_well_h_diag)
         obj_func_funptr => double_well_obj_func
         hess_x_funptr => double_well_hess_x
-        state%trust_radius = 0.4_rp
-        state%micro_iteration = 7
-        state%jacobi_davidson_iteration = 3
-        state%relative_residual = 0.3_rp
         call generalized_lanczos_trust_region( &
-            double_well_func(state_context%vars), double_well_grad, &
-            double_well_h_diag, 2_ip, obj_func_funptr, hess_x_funptr, settings, &
-            .false., state, double_well_solution, solution_norm, lambda, error)
+            func, double_well_grad, double_well_h_diag, 2_ip, obj_func_funptr, &
+            hess_x_funptr, settings, .false., state, double_well_solution, &
+            solution_norm, lambda, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Produced error with a state of an earlier subproblem."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (.not. allocated(state_context%seen_states)) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Preconditioner did not read the state."
-            test_generalized_lanczos_trust_region = .false.
-        else if (state_context%seen_states(1)%micro_iteration /= 0 .or. &
-                 state_context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
-                 abs(state_context%seen_states(1)%relative_residual - 1.0_rp) > tol) &
-            then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: State "// &
-                "of an earlier subproblem seen by the first preconditioned residual."
-            test_generalized_lanczos_trust_region = .false.
-        end if
+        if (.not. check_reset_state_seen( &
+            state_context, "generalized_lanczos_trust_region", "positive-definite "// &
+            "preconditioner")) test_generalized_lanczos_trust_region = .false.
 
     end function test_generalized_lanczos_trust_region
 
@@ -10405,10 +10408,9 @@ contains
         ! this function tests the subroutine which returns the preconditioned residual
         ! of generalized Lanczos trust region and its dot product with the residual
         !
-        use opentrustregion, only: solver_settings_type, gltr_precondition_residual
+        use opentrustregion, only: solver_settings_type, gltr_precondition_residual, &
+                                   trust_region_shape_options
 
-        character(len=*), parameter :: shape_names(2) = &
-            [character(len=11) :: "ellipsoidal", "spherical"]
         type(solver_settings_type) :: settings
         real(rp), dimension(n_param) :: residual, h_diag, precond_residual, &
                                         ref_precond_residual
@@ -10431,9 +10433,9 @@ contains
         ! check that the residual is divided by the metric of the ellipsoidal trust
         ! region and left unpreconditioned for the spherical one, and that the dot
         ! product with the residual is returned
-        do i_case = 1, size(shape_names)
-            settings%trust_region_shape = shape_names(i_case)
-            if (i_case == 1) then
+        do i_case = 1, size(trust_region_shape_options)
+            settings%trust_region_shape = trust_region_shape_options(i_case)
+            if (settings%trust_region_shape == "ellipsoidal") then
                 ref_precond_residual = residual / ref_trust_region_metric(h_diag)
             else
                 ref_precond_residual = residual
@@ -10442,7 +10444,8 @@ contains
                                             residual_dot, settings, error)
             if (error /= 0) then
                 write(stderr, *) "test_gltr_precondition_residual failed: Produced "// &
-                    "error for "//trim(shape_names(i_case))//" trust region."
+                    "error for "//trim(trust_region_shape_options(i_case))// &
+                    " trust region."
                 test_gltr_precondition_residual = .false.
             end if
             if (norm2(precond_residual - ref_precond_residual) > tol .or. &
@@ -10450,7 +10453,7 @@ contains
                 then
                 write(stderr, *) "test_gltr_precondition_residual failed: "// &
                     "Preconditioned residual or its dot product wrong for "// &
-                    trim(shape_names(i_case))//" trust region."
+                    trim(trust_region_shape_options(i_case))//" trust region."
                 test_gltr_precondition_residual = .false.
             end if
         end do
@@ -11299,10 +11302,8 @@ contains
         diagonal_fact = diagonal_fact + 0.5_rp
         call random_number(off_diagonal_fact)
         off_diagonal_fact = off_diagonal_fact - 0.5_rp
-        shifted_tridiag = matmul( &
-            unit_lower_bidiagonal_matrix(off_diagonal_fact) * &
-            spread(diagonal_fact, 1, n_param), &
-            transpose(unit_lower_bidiagonal_matrix(off_diagonal_fact)))
+        shifted_tridiag = &
+            factorized_tridiagonal_matrix(diagonal_fact, off_diagonal_fact)
         call random_number(rhs)
         call random_number(perturbation)
 
@@ -11358,11 +11359,8 @@ contains
         solution = rhs
         call solve_factorized_tridiagonal(n_param, diagonal_fact, off_diagonal_fact, &
                                           solution)
-        if (norm2( &
-            matmul(matmul(unit_lower_bidiagonal_matrix(off_diagonal_fact) * &
-                          spread(diagonal_fact, 1, n_param), &
-                          transpose(unit_lower_bidiagonal_matrix(off_diagonal_fact))), &
-                   solution) - rhs) > tol) then
+        if (norm2(matmul(factorized_tridiagonal_matrix( &
+            diagonal_fact, off_diagonal_fact), solution) - rhs) > tol) then
             write(stderr, *) "test_solve_factorized_tridiagonal failed: System of "// &
                 "the factorized matrix not solved."
             test_solve_factorized_tridiagonal = .false.
