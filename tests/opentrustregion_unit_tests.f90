@@ -117,11 +117,13 @@ module opentrustregion_unit_tests
     end type
 
     ! define type for the host context handed to the mock callback functions of a
-    ! quadratic model of any dimension, which holds its gradient and Hessian and the
-    ! index of the next unit vector a preconditioner returns
+    ! quadratic model of any dimension, which holds its gradient and Hessian, the
+    ! index of the next unit vector a preconditioner returns and the level shift a
+    ! preconditioner was last called with
     type, extends(test_context_type) :: quadratic_context_type
         real(rp), allocatable :: grad(:), hess(:, :)
         integer(ip) :: next_unit_vector = 0
+        real(rp) :: recorded_mu = 0.0_rp
     end type
 
     ! define type for the host context handed to the mock callback functions of the
@@ -174,19 +176,14 @@ module opentrustregion_unit_tests
 
     ! module state of the approx_hess tests that have not been moved onto host
     ! contexts yet, together with their mocks below
-    ! define global current variable and Hessian for 6D Hartmann model and larger mock
-    ! Hessian so that these can be accessed by procedure pointers
-    integer(ip), parameter :: n_param_mock_hess = 12
-    real(rp) :: curr_vars(n_param), hess(n_param, n_param), &
-                mock_hess_mat(n_param_mock_hess, n_param_mock_hess)
+    ! define global current variable and Hessian for 6D Hartmann model so that these
+    ! can be accessed by procedure pointers
+    real(rp) :: curr_vars(n_param), hess(n_param, n_param)
 
     ! quadratic models used to test the guard that triggers when the reduced space
     ! reaches the full space size, the micro iteration limit and the projection
     real(rp) :: overflow_hess(n_param, n_param), overflow_grad(n_param)
     integer(ip) :: n_overflow_empty_steps = 0
-
-    ! level shift the mock preconditioner was last called with
-    real(rp) :: recorded_mu
 
     ! quadratic model whose Hessian model carries spurious negative curvature along
     ! the first coordinate until an objective function evaluation marks it stale, after
@@ -1079,6 +1076,35 @@ contains
                0.5_rp * dot_product(delta_vars, matmul(state%hess, delta_vars))
 
     end function quadratic_obj_func
+
+    subroutine mu_recording_precond(residual, mu, precond_residual, error, context)
+        !
+        ! this subroutine describes a preconditioner for the quadratic model which
+        ! scales the residual by the level shift it is called with and records it
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(quadratic_context_type), pointer :: state
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get quadratic model state
+        precond_residual = 0.0_rp
+        state => resolve_quadratic_context(context, error)
+        if (error /= 0) return
+
+        ! record the level shift and scale the residual by it
+        state%recorded_mu = mu
+        precond_residual = mu * residual
+
+    end subroutine mu_recording_precond
 
     subroutine identity_hess_x(x, hess_x, error, context)
         !
@@ -2079,28 +2105,6 @@ contains
 
     end function overflow_obj_func
 
-    subroutine mock_hess_x_fun(x, hess_x, error, context)
-        !
-        ! this subroutine describes the Hessian linear transformation for a larger
-        ! mock Hessian
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize error flag
-        error = 0
-
-        hess_x = matmul(mock_hess_mat, x)
-
-    end subroutine mock_hess_x_fun
-
     function legacy_obj_func(delta_vars, error, context) result(func)
         !
         ! this function describes the objective function evaluation for the Hartmann 6D
@@ -2165,29 +2169,6 @@ contains
         hess_x_funptr => legacy_hess_x_fun
 
     end subroutine legacy_update_orbs
-
-    subroutine legacy_mock_precond(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine is a test subroutine for the preconditioner subroutine, which
-        ! records the level shift it is called with
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        recorded_mu = mu
-        precond_residual = mu * residual
-
-        error = 0
-
-    end subroutine legacy_mock_precond
 
     subroutine mock_precond_pd(residual, precond_residual, error, context)
         !
@@ -3301,10 +3282,10 @@ contains
         use opentrustregion, only: &
             hess_x_type, stability_settings_type, stability_state_type, &
             stability_check, error_stability_check, error_stability_check_max_iter, &
-            verbosity_debug, verbosity_warning, error_hess_x, error_precond, &
-            error_project, error_conv_check, error_get_extra_trial_vectors, &
-            diag_solver_options, unstable_warning_msg, &
-            settings_uninitialized_warning_msg, default_stability_settings
+            verbosity_warning, error_hess_x, error_precond, error_project, &
+            error_conv_check, error_get_extra_trial_vectors, diag_solver_options, &
+            unstable_warning_msg, settings_uninitialized_warning_msg, &
+            default_stability_settings
         use test_reference, only: arm_host_context, host_context_reached, &
                                   n_extra_trial_vectors
 
@@ -3506,64 +3487,29 @@ contains
             test_stability_check = .false.
         end if
 
-        ! run stability check at saddle point with the Jacobi-Davidson method switched
-        ! on after the first iteration and check that the correction equations are
-        ! solved, which is logged at debug verbosity
-        call setup_settings(settings, context)
-        settings%verbose = verbosity_debug
-        settings%diag_solver = "jacobi-davidson"
-        settings%jacobi_davidson_start = 1
+        ! force the reduced space to grow until it spans the full parameter space by
+        ! setting an unreachable convergence tolerance and check that its exact
+        ! eigenpair is returned without error
+        call settings%init(error)
+        settings%context => context
+        settings%conv_tol = 0.0_rp
         call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
                              kappa=direction)
         if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error with "// &
-                "Jacobi-Davidson method."
-            test_stability_check = .false.
-        end if
-        if (index(context%log_message, "MINRES") == 0) then
-            write(stderr, *) "test_stability_check failed: Jacobi-Davidson "// &
-                "correction equations not solved."
+            write(stderr, *) "test_stability_check failed: Produced error when "// &
+                "reduced space grows to dimension of full parameter space."
             test_stability_check = .false.
         end if
         if (stable) then
             write(stderr, *) "test_stability_check failed: Stability check "// &
-                "incorrectly classifies stability of saddle point with "// &
-                "Jacobi-Davidson method."
+                "incorrectly classifies stability of saddle point when reduced "// &
+                "space grows to dimension of full parameter space."
             test_stability_check = .false.
         end if
-
-        ! check that the Jacobi-Davidson method is used neither by the Davidson method
-        ! nor before the iteration at which it is requested to start, which the
-        ! stability check never reaches for a problem of this size
-        call setup_settings(settings, context)
-        settings%verbose = verbosity_debug
-        settings%jacobi_davidson_start = 0
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error for "// &
-                "Davidson method with Jacobi-Davidson start at first iteration."
-            test_stability_check = .false.
-        end if
-        if (index(context%log_message, "MINRES") /= 0) then
-            write(stderr, *) "test_stability_check failed: Jacobi-Davidson "// &
-                "correction equations solved with Davidson method."
-            test_stability_check = .false.
-        end if
-        call setup_settings(settings, context)
-        settings%verbose = verbosity_debug
-        settings%diag_solver = "jacobi-davidson"
-        settings%jacobi_davidson_start = settings%n_iter
-        call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                             kappa=direction)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error for "// &
-                "Jacobi-Davidson method started after last iteration."
-            test_stability_check = .false.
-        end if
-        if (index(context%log_message, "MINRES") /= 0) then
-            write(stderr, *) "test_stability_check failed: Jacobi-Davidson "// &
-                "correction equations solved before Jacobi-Davidson method is started."
+        if (abs(abs(dot_product(direction, hess_eigvecs(:, 1))) - 1.0_rp) > tol) then
+            write(stderr, *) "test_stability_check failed: Stability check does "// &
+                "not return correct direction for saddle point when reduced space "// &
+                "grows to dimension of full parameter space."
             test_stability_check = .false.
         end if
 
@@ -3654,6 +3600,34 @@ contains
             abs(state%residual_rms - explicit_state%residual_rms) > 0.0_rp) then
             write(stderr, *) "test_stability_check failed: Did not use the default "// &
                 "settings without settings."
+            test_stability_check = .false.
+        end if
+
+        ! start at saddle point with a preconditioner which always returns the first
+        ! unit vector and a Hessian diagonal whose minimum lies at the first element,
+        ! so that no new trial vector can be added before the eigenpair converges, and
+        ! check that the maximum iteration error code is returned before the
+        ! iterations are used up and that an error message is printed
+        h_diag = 1.0_rp
+        h_diag(1) = 0.0_rp
+        hess_x_funptr => hess_x_fun
+        call settings%init(error)
+        settings%precond => mock_precond_first_unit_vector
+        call setup_error_logging(settings, context)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings, state)
+        if (error /= error_stability_check_max_iter) then
+            write(stderr, *) "test_stability_check failed: Did not return maximum "// &
+                "iteration error code when trial space can not be expanded."
+            test_stability_check = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_stability_check failed: No error message "// &
+                "printed when trial space can not be expanded."
+            test_stability_check = .false.
+        end if
+        if (state%iteration >= settings%n_iter) then
+            write(stderr, *) "test_stability_check failed: Iterations used up when "// &
+                "trial space can not be expanded."
             test_stability_check = .false.
         end if
 
@@ -7133,35 +7107,39 @@ contains
         !
         use opentrustregion, only: hess_x_type, stability_settings_type, &
                                    stability_state_type, block_davidson, &
-                                   stability_thresh
+                                   stability_thresh, verbosity_debug, error_hess_x, &
+                                   error_conv_check
 
-        integer(ip), parameter :: n_param = n_param_mock_hess, n_block = 3, &
-                                  lwork = 3 * n_param
+        integer(ip), parameter :: n_param = 12, n_block = 3, lwork = 3 * n_param
         real(rp), parameter :: res_tol = 1e-8_rp, asymm_perturb = 0.1_rp
         real(rp) :: ref_mat(n_param, n_param), ref_eigvals(n_param), work(lwork), &
-                    eigvals(n_block), eigvecs(n_param, n_block), &
+                    eigvals(n_block), eigvecs(n_param, n_block), h_diag(n_param), &
                     ref_eigvals_im(n_param), dummy_vecs(1, 1), swap
         real(rp), allocatable :: trial_space(:, :)
-        integer(ip) :: error, i, j, k, min_idx, info
+        integer(ip) :: error, i, j, k, min_idx, info, i_case
         logical :: converged
         procedure(hess_x_type), pointer :: hess_x_funptr
         type(stability_settings_type) :: settings
         type(stability_state_type) :: state
+        type(quadratic_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
         external :: dsyev, dgeev
 
         ! assume tests pass
         test_block_davidson = .true.
 
         ! construct symmetric matrix with well separated eigenvalues
+        allocate(context%hess(n_param, n_param))
         do i = 1, n_param
             do j = 1, n_param
-                mock_hess_mat(i, j) = 1.0_rp / real(i + j, kind=rp)
+                context%hess(i, j) = 1.0_rp / real(i + j, kind=rp)
             end do
-            mock_hess_mat(i, i) = mock_hess_mat(i, i) + real(i, kind=rp)
+            context%hess(i, i) = context%hess(i, i) + real(i, kind=rp)
         end do
+        h_diag = [(context%hess(i, i), i=1, n_param)]
 
         ! obtain reference eigenvalues
-        ref_mat = mock_hess_mat
+        ref_mat = context%hess
         call dsyev("N", "U", n_param, ref_mat, n_param, ref_eigvals, work, lwork, info)
         if (info /= 0) then
             write(stderr, *) "test_block_davidson failed: Reference "// &
@@ -7171,20 +7149,16 @@ contains
         end if
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! set Hessian linear transformation function pointer
-        hess_x_funptr => mock_hess_x_fun
+        hess_x_funptr => quadratic_hess_x
 
         ! check block of eigenpairs
-        allocate(trial_space(n_param, n_block))
-        trial_space = 0.0_rp
-        do i = 1, n_block
-            trial_space(i, i) = 1.0_rp
-        end do
-        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., n_block, 200_ip, eigvals, eigvecs, &
-                            converged, settings, state, error, res_tol=res_tol)
+        trial_space = unit_vectors(n_block)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., n_block, &
+                            200_ip, eigvals, eigvecs, converged, settings, state, &
+                            error, res_tol=res_tol)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error for block "// &
                 "of eigenpairs."
@@ -7202,7 +7176,7 @@ contains
                     "does not return the lowest eigenvalues."
                 test_block_davidson = .false.
             end if
-            if (norm2(matmul(mock_hess_mat, eigvecs(:, i)) - &
+            if (norm2(matmul(context%hess, eigvecs(:, i)) - &
                       eigvals(i) * eigvecs(:, i)) > res_tol) then
                 write(stderr, *) "test_block_davidson failed: Block of eigenpairs "// &
                     "does not return converged eigenvectors."
@@ -7214,20 +7188,17 @@ contains
                 test_block_davidson = .false.
             end if
         end do
-        deallocate(trial_space)
 
         ! check single eigenpair, with a preconditioner which has to be level-shifted to
         ! the stability threshold
         settings%conv_tol = res_tol
-        settings%precond => legacy_mock_precond
-        recorded_mu = huge(1.0_rp)
-        allocate(trial_space(n_param, 1))
-        trial_space = 0.0_rp
-        trial_space(1, 1) = 1.0_rp
-        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., 1_ip, 200_ip, eigvals(:1), &
-                            eigvecs(:, :1), converged, settings, state, error)
-        if (abs(recorded_mu - stability_thresh) > tol) then
+        settings%precond => mu_recording_precond
+        context%recorded_mu = huge(1.0_rp)
+        trial_space = unit_vectors(1_ip)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
+        if (abs(context%recorded_mu - stability_thresh) > tol) then
             write(stderr, *) "test_block_davidson failed: Preconditioner not "// &
                 "level-shifted to the stability threshold."
             test_block_davidson = .false.
@@ -7259,34 +7230,144 @@ contains
         end if
         if (abs(state%min_eigval - eigvals(1)) > tol .or. abs( &
             state%residual_rms - &
-            norm2(matmul(mock_hess_mat, eigvecs(:, 1)) - eigvals(1) * eigvecs(:, 1)) / &
+            norm2(matmul(context%hess, eigvecs(:, 1)) - eigvals(1) * eigvecs(:, 1)) / &
             sqrt(real(n_param, kind=rp))) > tol) then
             write(stderr, *) "test_block_davidson failed: Lowest eigenvalue or the "// &
                 "RMS of its residual of single eigenpair not in the state."
             test_block_davidson = .false.
         end if
-        nullify(settings%precond)
-        deallocate(trial_space)
+
+        ! check that a convergence check takes the place of the convergence threshold,
+        ! which every residual satisfies here, so that only the convergence check
+        ! demands further iterations until the eigenpair is converged
+        call setup_settings(settings, context)
+        settings%conv_tol = huge(1.0_rp)
+        settings%conv_check => mock_conv_check_stability
+        trial_space = unit_vectors(1_ip)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
+        if (error /= 0) then
+            write(stderr, *) "test_block_davidson failed: Produced error with "// &
+                "convergence check."
+            test_block_davidson = .false.
+        end if
+        if (.not. converged .or. state%iteration < 2 .or. &
+            norm2(matmul(context%hess, eigvecs(:, 1)) - eigvals(1) * eigvecs(:, 1)) >= &
+            tol * abs(eigvals(1))) then
+            write(stderr, *) "test_block_davidson failed: Convergence check not "// &
+                "used instead of the convergence threshold."
+            test_block_davidson = .false.
+        end if
+
+        ! check that a trial space which grows to span the full space with a
+        ! convergence threshold that no residual satisfies converges, since its
+        ! eigenpair is exact
+        call setup_settings(settings, context)
+        settings%conv_tol = 0.0_rp
+        trial_space = unit_vectors(1_ip)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
+        if (error /= 0) then
+            write(stderr, *) "test_block_davidson failed: Produced error when "// &
+                "trial space spans the full space."
+            test_block_davidson = .false.
+        end if
+        if (.not. converged .or. size(trial_space, 2) /= n_param) then
+            write(stderr, *) "test_block_davidson failed: Did not converge once "// &
+                "the trial space spans the full space."
+            test_block_davidson = .false.
+        end if
+        if (abs(eigvals(1) - ref_eigvals(1)) > tol) then
+            write(stderr, *) "test_block_davidson failed: Lowest eigenvalue not "// &
+                "returned when trial space spans the full space."
+            test_block_davidson = .false.
+        end if
+
+        ! check that a preconditioner which only returns the vector already spanning
+        ! the trial space leaves nothing to expand it by, which ends the iterations
+        ! unconverged without an error and without adding the linearly dependent vector
+        call setup_settings(settings, context)
+        settings%conv_tol = 1e-8_rp
+        settings%precond => mock_precond_first_unit_vector
+        trial_space = unit_vectors(1_ip)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
+        if (error /= 0) then
+            write(stderr, *) "test_block_davidson failed: Produced error for "// &
+                "linearly dependent trial vector."
+            test_block_davidson = .false.
+        end if
+        if (converged) then
+            write(stderr, *) "test_block_davidson failed: Converged although the "// &
+                "trial space cannot be expanded."
+            test_block_davidson = .false.
+        end if
+        if (size(trial_space, 2) /= 1) then
+            write(stderr, *) "test_block_davidson failed: Expanded trial space by "// &
+                "linearly dependent trial vector."
+            test_block_davidson = .false.
+        end if
+
+        ! check that the Jacobi-Davidson method, switched on after the first iteration,
+        ! solves the correction equations for a single tracked eigenpair, which is
+        ! logged at debug verbosity, and that it is used neither for a block of
+        ! eigenpairs, nor with a residual tolerance, nor by the Davidson method, nor
+        ! before the iteration at which it is requested to start
+        do i_case = 1, 5
+            call setup_settings(settings, context)
+            settings%verbose = verbosity_debug
+            settings%conv_tol = res_tol
+            settings%diag_solver = "jacobi-davidson"
+            settings%jacobi_davidson_start = 1
+            if (i_case == 4) settings%diag_solver = "davidson"
+            if (i_case == 5) settings%jacobi_davidson_start = 200
+            if (i_case == 2) then
+                trial_space = unit_vectors(n_block)
+                call block_davidson(hess_x_funptr, h_diag, trial_space, .true., &
+                                    n_block, 200_ip, eigvals, eigvecs, converged, &
+                                    settings, state, error)
+            else if (i_case == 3) then
+                trial_space = unit_vectors(1_ip)
+                call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, &
+                                    200_ip, eigvals(:1), eigvecs(:, :1), converged, &
+                                    settings, state, error, res_tol=res_tol)
+            else
+                trial_space = unit_vectors(1_ip)
+                call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, &
+                                    200_ip, eigvals(:1), eigvecs(:, :1), converged, &
+                                    settings, state, error)
+            end if
+            if (error /= 0 .or. .not. converged) then
+                write(stderr, *) "test_block_davidson failed: Produced error or "// &
+                    "did not converge with Jacobi-Davidson settings."
+                test_block_davidson = .false.
+            end if
+            if ((index(context%log_message, "MINRES") /= 0) .neqv. i_case == 1) then
+                write(stderr, *) "test_block_davidson failed: Jacobi-Davidson "// &
+                    "correction equations "// &
+                    trim(merge("not solved for a single ", "solved without a single ", &
+                               i_case == 1))// &
+                    " eigenpair with the Jacobi-Davidson method started."
+                test_block_davidson = .false.
+            end if
+        end do
 
         ! construct non-symmetric transformation
         do i = 1, n_param
-            do j = 1, n_param
-                mock_hess_mat(i, j) = 1.0_rp / real(i + j, kind=rp)
-            end do
-            mock_hess_mat(i, i) = mock_hess_mat(i, i) + real(i, kind=rp)
-        end do
-        do i = 1, n_param
             do j = i + 1, n_param
-                mock_hess_mat(i, j) = mock_hess_mat(i, j) + &
-                                      asymm_perturb / real(i + j, kind=rp)
-                mock_hess_mat(j, i) = mock_hess_mat(j, i) - &
-                                      asymm_perturb / real(i + j, kind=rp)
+                context%hess(i, j) = context%hess(i, j) + &
+                                     asymm_perturb / real(i + j, kind=rp)
+                context%hess(j, i) = context%hess(j, i) - &
+                                     asymm_perturb / real(i + j, kind=rp)
             end do
         end do
 
         ! obtain reference eigenvalues which are then sorted by real part with a
         ! selection sort since DGEEV returns them in no particular order
-        ref_mat = mock_hess_mat
+        ref_mat = context%hess
         call dgeev("N", "N", n_param, ref_mat, n_param, ref_eigvals, ref_eigvals_im, &
                    dummy_vecs, 1_ip, dummy_vecs, 1_ip, work, lwork, info)
         do i = 1, n_param - 1
@@ -7300,14 +7381,11 @@ contains
         end do
 
         ! check block of eigenpairs
-        allocate(trial_space(n_param, n_block))
-        trial_space = 0.0_rp
-        do i = 1, n_block
-            trial_space(i, i) = 1.0_rp
-        end do
-        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .false., n_block, 200_ip, eigvals, eigvecs, &
-                            converged, settings, state, error, res_tol=res_tol)
+        call setup_settings(settings, context)
+        trial_space = unit_vectors(n_block)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .false., n_block, &
+                            200_ip, eigvals, eigvecs, converged, settings, state, &
+                            error, res_tol=res_tol)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error for "// &
                 "non-symmetric block of eigenpairs."
@@ -7326,14 +7404,13 @@ contains
                     "real parts."
                 test_block_davidson = .false.
             end if
-            if (norm2(matmul(mock_hess_mat, eigvecs(:, i)) - &
+            if (norm2(matmul(context%hess, eigvecs(:, i)) - &
                       eigvals(i) * eigvecs(:, i)) > res_tol) then
                 write(stderr, *) "test_block_davidson failed: Non-symmetric block "// &
                     "of eigenpairs does not return converged eigenvectors."
                 test_block_davidson = .false.
             end if
         end do
-        deallocate(trial_space)
 
         ! test behavior when stopping at instability by building the well-separated
         ! symmetric matrix and forcing its first diagonal entry to be clearly unstable,
@@ -7341,24 +7418,22 @@ contains
         ! two settings unambiguously
         do i = 1, n_param
             do j = 1, n_param
-                mock_hess_mat(i, j) = 1.0_rp / real(i + j, kind=rp)
+                context%hess(i, j) = 1.0_rp / real(i + j, kind=rp)
             end do
-            mock_hess_mat(i, i) = mock_hess_mat(i, i) + real(i, kind=rp)
+            context%hess(i, i) = context%hess(i, i) + real(i, kind=rp)
         end do
-        mock_hess_mat(1, 1) = -1.0_rp
-
-        call legacy_setup_settings(settings)
+        context%hess(1, 1) = -1.0_rp
+        h_diag = [(context%hess(i, i), i=1, n_param)]
+        call setup_settings(settings, context)
         settings%conv_tol = 1e-8_rp
-        allocate(trial_space(n_param, 1))
-        trial_space = 0.0_rp
-        trial_space(1, 1) = 1.0_rp
 
         ! when not stopping at instability, a single iteration must not report
         ! convergence, since the residual is far from the tight tolerance and the
         ! eigenvalue is not consulted on its own
-        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., 1_ip, 1_ip, eigvals(:1), &
-                            eigvecs(:, :1), converged, settings, state, error)
+        trial_space = unit_vectors(1_ip)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 1_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error when not "// &
                 "stopping at instability."
@@ -7371,18 +7446,15 @@ contains
                 "instability."
             test_block_davidson = .false.
         end if
-        deallocate(trial_space)
 
         ! when stopping at instability, the same single iteration must instead report
         ! convergence immediately, since the (exactly known) eigenvalue is already
         ! below the instability threshold
         settings%stop_on_instability = .true.
-        allocate(trial_space(n_param, 1))
-        trial_space = 0.0_rp
-        trial_space(1, 1) = 1.0_rp
-        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., 1_ip, 1_ip, eigvals(:1), &
-                            eigvecs(:, :1), converged, settings, state, error)
+        trial_space = unit_vectors(1_ip)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 1_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
         if (error /= 0) then
             write(stderr, *) "test_block_davidson failed: Produced error when "// &
                 "stopping at instability."
@@ -7399,37 +7471,56 @@ contains
                 "when stopping at instability."
             test_block_davidson = .false.
         end if
-        deallocate(trial_space)
 
-        ! check that a preconditioner which only returns the vector already spanning
-        ! the trial space leaves nothing to expand it by, which ends the iterations
-        ! unconverged without an error and without adding the linearly dependent vector
-        call legacy_setup_settings(settings)
-        settings%conv_tol = 1e-8_rp
-        settings%stop_on_instability = .false.
-        settings%precond => mock_precond_first_unit_vector
-        allocate(trial_space(n_param, 1))
-        trial_space = 0.0_rp
-        trial_space(1, 1) = 1.0_rp
-        call block_davidson(hess_x_funptr, [(mock_hess_mat(i, i), i=1, n_param)], &
-                            trial_space, .true., 1_ip, 200_ip, eigvals(:1), &
-                            eigvecs(:, :1), converged, settings, state, error)
-        if (error /= 0) then
-            write(stderr, *) "test_block_davidson failed: Produced error for "// &
-                "linearly dependent trial vector."
-            test_block_davidson = .false.
-        end if
-        if (converged) then
-            write(stderr, *) "test_block_davidson failed: Converged although the "// &
-                "trial space cannot be expanded."
-            test_block_davidson = .false.
-        end if
-        if (size(trial_space, 2) /= 1) then
-            write(stderr, *) "test_block_davidson failed: Expanded trial space by "// &
-                "linearly dependent trial vector."
-            test_block_davidson = .false.
-        end if
-        deallocate(trial_space)
+        ! check that the errors of a failing Hessian linear transformation and a
+        ! failing convergence check are reported with their origins
+        fault_context%hess = hartmann6d_hessian(saddle_point)
+        hess_x_funptr => faulty_hess_x
+        do i_case = 1, 2
+            call setup_settings(settings, fault_context)
+            settings%conv_check => faulty_conv_check_stability
+            fault_context%n_callback_calls = 0
+            fault_context%fault_callback = &
+                merge(fault_hess_x, fault_conv_check_stability, i_case == 1)
+            fault_context%fault_call = 1
+            trial_space = unit_vectors(1_ip, size(saddle_point, kind=ip))
+            call block_davidson( &
+                hess_x_funptr, [(fault_context%hess(i, i), i=1, size(saddle_point))], &
+                trial_space, .true., 1_ip, 200_ip, eigvals(:1), &
+                eigvecs(:size(saddle_point), :1), converged, settings, state, error)
+            if (error /= merge(error_hess_x, error_conv_check, i_case == 1) + 1) then
+                write(stderr, *) "test_block_davidson failed: Error of failing "// &
+                    trim(merge("Hessian linear transformation", &
+                               "convergence check            ", i_case == 1))// &
+                    " not reported with its origin."
+                test_block_davidson = .false.
+            end if
+        end do
+
+    contains
+
+        function unit_vectors(n_vectors, n_dim) result(vectors)
+            !
+            ! this function returns the first unit vectors of the given number, in the
+            ! dimension of the matrix of this test unless another one is given
+            !
+            integer(ip), intent(in) :: n_vectors
+            integer(ip), intent(in), optional :: n_dim
+            real(rp), allocatable :: vectors(:, :)
+
+            integer(ip) :: i_vector
+
+            if (present(n_dim)) then
+                allocate(vectors(n_dim, n_vectors))
+            else
+                allocate(vectors(n_param, n_vectors))
+            end if
+            vectors = 0.0_rp
+            do i_vector = 1, n_vectors
+                vectors(i_vector, i_vector) = 1.0_rp
+            end do
+
+        end function unit_vectors
 
     end function test_block_davidson
 

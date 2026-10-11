@@ -499,7 +499,7 @@ The error field (`EE`) is `01` for a general, unspecified error. Some origins de
 | `0101`     | General error in `solver` |
 | `0102`     | Orbital optimization did not converge within the maximum number of macro iterations (`n_macro`) |
 | `0201`     | General error in `stability_check` |
-| `0202`     | Stability check did not converge within the maximum number of iterations (`n_iter`) |
+| `0202`     | Stability check did not converge, within the maximum number of iterations (`n_iter`) or because its trial space could not be expanded any further |
 
 Future versions may define more specific codes for other actionable failure modes.
 

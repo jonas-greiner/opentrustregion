@@ -724,11 +724,19 @@ contains
         if (error /= 0) return
         eigval = eigvals(1)
 
-        ! check if stability check has converged
+        ! check if stability check has converged, which it fails to do either within
+        ! the given number of iterations or, before these are used up, once its trial
+        ! space can not be expanded any further
         if (.not. stability_converged) then
-            call local_settings%log("Stability check has not converged in the "// &
-                                    "given number of iterations.", verbosity_error, &
-                                    .true.)
+            if (current_state%iteration < local_settings%n_iter) then
+                call local_settings%log("Stability check has not converged since "// &
+                                        "its trial space can not be expanded any "// &
+                                        "further.", verbosity_error, .true.)
+            else
+                call local_settings%log("Stability check has not converged in the "// &
+                                        "given number of iterations.", &
+                                        verbosity_error, .true.)
+            end if
             error = error_stability_check_max_iter
             return
         end if
@@ -2121,9 +2129,12 @@ contains
             end do
             deallocate(red_eigvals, red_eigvecs, solution, h_solution, residual)
 
-            ! Ritz pairs remain unconverged but the space can not be expanded any
-            ! further
-            if (n_added == 0) exit
+            ! the space can not be expanded any further, which leaves the Ritz pairs
+            ! unconverged unless it spans the full space, where they are exact
+            if (n_added == 0) then
+                converged = n_trial >= n_param
+                exit
+            end if
         end do
 
         deallocate(h_basis)
