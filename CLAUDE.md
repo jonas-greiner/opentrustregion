@@ -129,7 +129,7 @@ A `logical(c_bool) function test_<routine>() bind(C)` is only reachable once wir
 3. An `@add_tests class <Ext>Tests` in that file, whose `tests` attribute is that list.
 4. The class import in `pyopentrustregion/testsuite.py`.
 
-A name in the Python list with no matching Fortran symbol fails at import with `AttributeError: dlsym(...): symbol not found`.
+A name in the Python list with no matching Fortran symbol fails as that test with `AttributeError: dlsym(...): symbol not found` when it runs.
 
 System tests and C integration tests are wired the same way: their source files are in the same CMake list, and their names go into `fortran_tests["opentrustregion_system_tests"]` and `fortran_tests["c_integration_tests"]` in `pyopentrustregion/tests.py`.
 
@@ -196,7 +196,7 @@ The check prints every BLAS/LAPACK symbol referenced without the `_64` suffix. O
   ln -sfn <repo>/build_manual build
   python3 -m pyopentrustregion.testsuite
   ```
-- **The core test name list in `pyopentrustregion/tests.py` has no import-time guard.** `testsuite` wraps each extension's test import in `try/except AttributeError`, so a disabled extension is silently skipped — but the core list does `getattr(lib, f"test_{name}")` unguarded at module import time. A drifted list (a Fortran test renamed/removed without updating it) raises `AttributeError: dlsym(...): symbol not found` and aborts the *entire* run, including unrelated extension tests. Keep the name list and the Fortran `test_*` functions in exact sync.
+- **A drifted test name list fails only where it is looked up.** `add_tests` looks up each `test_*` function when its test runs, so a name in a list whose Fortran test was renamed or removed fails that test with `AttributeError: dlsym(...): symbol not found`. Each extension's test module, however, probes the first name of its list at import to detect a disabled extension, and `testsuite` wraps each extension's test import in `try/except AttributeError`, so a stale *first* name silently skips that extension's tests. Keep the name lists and the Fortran `test_*` functions in exact sync.
 
 ## Core library
 

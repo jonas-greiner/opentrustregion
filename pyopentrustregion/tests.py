@@ -291,17 +291,16 @@ def add_tests(cls):
 
     def create_test(func_name):
         def test(self):
-            result = getattr(lib, func_name)()
+            func = getattr(lib, func_name)
+            func.restype = c_bool
+            result = func()
             if result:
                 print(f" {func_name} PASSED")
             self.assertTrue(result, f"{func_name} failed")
 
         return test
 
-    # the test functions return a C bool, whose upper bytes ctypes would otherwise read
-    # as part of an int
     for func_name in cls.tests:
-        getattr(lib, f"test_{func_name}").restype = c_bool
         setattr(cls, f"test_{func_name}", create_test(f"test_{func_name}"))
 
     return cls

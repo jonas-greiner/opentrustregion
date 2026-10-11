@@ -1858,6 +1858,28 @@ contains
 
     end subroutine mock_scaled_precond_pd
 
+    subroutine shrinking_precond_pd(residual, precond_residual, error, context)
+        !
+        ! this subroutine is a test subroutine for a positive-definite preconditioner
+        ! which shrinks the residual so far that the dot product of a residual of order
+        ! one and its preconditioned residual lies far below the numerical zero
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        precond_residual = 1e-20_rp * residual
+
+        error = 0
+
+    end subroutine shrinking_precond_pd
+
     subroutine mock_project(vector, error, context)
         !
         ! this subroutine is a test subroutine for the projection subroutine
@@ -8516,6 +8538,32 @@ contains
             test_truncated_conjugate_gradient = .false.
         end if
 
+        ! run truncated conjugate gradient on a quadratic model whose Hessian a
+        ! preconditioner inverts up to a factor and shrinks the residual so far that the
+        ! dot product of the residual and its preconditioned residual and the first
+        ! basis vector lie far below the numerical zero, and check that the scale of the
+        ! preconditioner does not stop the micro iterations before the Newton step,
+        ! which the first one reaches
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        settings%precond_pd => shrinking_precond_pd
+        quadratic_context%hess = 2.0_rp * identity_matrix(n_param)
+        call random_number(grad)
+        grad = grad + 0.5_rp
+        quadratic_context%grad = grad
+        h_diag = 2.0_rp
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 1e15_rp
+        call truncated_conjugate_gradient(0.0_rp, grad, h_diag, n_param, &
+                                          obj_func_funptr, hess_x_funptr, settings, &
+                                          state, solution, solution_norm, error)
+        if (error /= 0 .or. norm2(solution + 0.5_rp * grad) > tol) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Newton "// &
+                "step not reached with a strongly shrinking preconditioner."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
         ! solve the subproblem of the double well function with a state holding the
         ! values of an earlier subproblem and a positive-definite preconditioner which
         ! reads the state through the pointer in its context, and check that the first
@@ -9056,6 +9104,32 @@ contains
             state%relative_residual <= settings%local_red_factor) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: Micro "// &
                 "iterations do not stop at the perturbation of the global region."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! run generalized Lanczos trust region on a quadratic model whose Hessian a
+        ! preconditioner inverts up to a factor and shrinks the residual so far that the
+        ! dot product of the residual and its preconditioned residual and the first
+        ! basis vector lie far below the numerical zero, and check that the scale of the
+        ! preconditioner does not stop the micro iterations before the Newton step,
+        ! which the first one reaches
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        settings%precond_pd => shrinking_precond_pd
+        quadratic_context%hess = 2.0_rp * identity_matrix(n_param)
+        call random_number(grad)
+        grad = grad + 0.5_rp
+        quadratic_context%grad = grad
+        h_diag = 2.0_rp
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 1e15_rp
+        call generalized_lanczos_trust_region( &
+            0.0_rp, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+            .false., state, solution, solution_norm, lambda, error)
+        if (error /= 0 .or. norm2(solution + 0.5_rp * grad) > tol) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: Newton "// &
+                "step not reached with a strongly shrinking preconditioner."
             test_generalized_lanczos_trust_region = .false.
         end if
 
@@ -10009,6 +10083,20 @@ contains
                 "one not stored."
             test_gltr_lanczos_process = .false.
         end if
+
+        ! run the Lanczos process in a spherical trust region with a gradient so small
+        ! that its first basis vector is short, along a direction of negative curvature
+        ! whose curvature lies below the numerical zero only because of this length,
+        ! and check that it is not taken as a direction without curvature but that the
+        ! process converges on the boundary of a trust region small enough that the
+        ! multiplier differs from the negative eigenvalue by more than its rounding
+        fault_context%hess = identity_matrix(n_param)
+        fault_context%hess(1, 1) = -1.0_rp
+        h_diag = [(fault_context%hess(i, i), i=1, n_param)]
+        grad = 0.0_rp
+        grad(1) = 5e-8_rp
+        call run_lanczos_process(1e-3_rp, 0.0_rp)
+        call check_boundary("for a short basis vector of negative curvature")
         settings%trust_region_shape = "ellipsoidal"
         grad = ref_grad
 
@@ -10570,9 +10658,16 @@ contains
         !
         use opentrustregion, only: solver_settings_type, get_preconditioned_residual_dot
 
+        ! scales of a positive-definite and of a negative-definite preconditioner, at
+        ! the order of the residual and shrinking it so far that the dot product lies
+        ! below the numerical zero
+        character(len=*), parameter :: case_names(2) = &
+            [character(len=28) :: "at the scale of the residual", "shrinking it"]
+        real(rp), parameter :: case_scales(2) = [3.0_rp, 1e-20_rp]
         type(solver_settings_type) :: settings
-        real(rp) :: residual(n_param), residual_dot
-        integer(ip) :: error
+        real(rp) :: residual(n_param), orthogonal_residual(n_param), residual_dot, &
+                    ref_residual_dot
+        integer(ip) :: error, i_case
         type(test_context_type), target :: context
 
         ! assume tests pass
@@ -10585,51 +10680,60 @@ contains
         call random_number(residual)
         residual = residual + 0.5_rp
 
-        ! check that a positive-definite preconditioner gives the dot product
-        residual_dot = get_preconditioned_residual_dot(residual, 3.0_rp * residual, &
-                                                       settings, error)
-        if (error /= 0 .or. &
-            abs(residual_dot - 3.0_rp * dot_product(residual, residual)) > tol) then
-            write(stderr, *) "test_get_preconditioned_residual_dot failed: Dot "// &
-                "product not returned for positive-definite preconditioner."
-            test_get_preconditioned_residual_dot = .false.
-        end if
+        ! check that a positive-definite preconditioner of either scale gives the dot
+        ! product and resets the error flag, which starts set
+        do i_case = 1, size(case_scales)
+            ref_residual_dot = case_scales(i_case) * dot_product(residual, residual)
+            error = 1
+            residual_dot = get_preconditioned_residual_dot( &
+                residual, case_scales(i_case) * residual, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_get_preconditioned_residual_dot failed: "// &
+                    "Error flag not reset for positive-definite preconditioner "// &
+                    trim(case_names(i_case))//"."
+                test_get_preconditioned_residual_dot = .false.
+            end if
+            if (abs(residual_dot - ref_residual_dot) > tol * ref_residual_dot) then
+                write(stderr, *) "test_get_preconditioned_residual_dot failed: Dot "// &
+                    "product not returned for positive-definite preconditioner "// &
+                    trim(case_names(i_case))//"."
+                test_get_preconditioned_residual_dot = .false.
+            end if
+        end do
 
-        ! check that a negative dot product below numerical zero of a small residual
-        ! and a preconditioned residual which does not vanish relative to it and a
-        ! negative dot product of a preconditioned residual which vanishes relative to
-        ! the residual are taken as vanishing without an error
+        ! check that a negative dot product within the rounding error relative to the
+        ! norms of the residual and a preconditioned residual nearly orthogonal to it
+        ! is taken as vanishing without an error
+        call random_number(orthogonal_residual)
+        orthogonal_residual = orthogonal_residual - dot_product( &
+            orthogonal_residual, residual) / dot_product(residual, residual) * residual
         residual_dot = get_preconditioned_residual_dot( &
-            1e-8_rp * residual, -1e-16_rp * residual, settings, error)
+            residual, orthogonal_residual - 1e-20_rp * residual, settings, error)
         if (error /= 0 .or. abs(residual_dot) > 0.0_rp) then
             write(stderr, *) "test_get_preconditioned_residual_dot failed: Dot "// &
-                "product below numerical zero not taken as vanishing."
-            test_get_preconditioned_residual_dot = .false.
-        end if
-        residual_dot = get_preconditioned_residual_dot( &
-            1e10_rp * residual, -1e-7_rp * residual, settings, error)
-        if (error /= 0 .or. abs(residual_dot) > 0.0_rp) then
-            write(stderr, *) "test_get_preconditioned_residual_dot failed: Dot "// &
-                "product of vanishing preconditioned residual not taken as vanishing."
+                "product within the rounding error not taken as vanishing."
             test_get_preconditioned_residual_dot = .false.
         end if
 
         ! check that a preconditioner which is not positive definite returns an error
-        ! and prints an error message
-        call setup_error_logging(settings, context)
-        residual_dot = &
-            get_preconditioned_residual_dot(residual, -residual, settings, error)
-        if (error /= 1) then
-            write(stderr, *) "test_get_preconditioned_residual_dot failed: No "// &
-                "error returned for preconditioner which is not positive definite."
-            test_get_preconditioned_residual_dot = .false.
-        end if
-        if (len_trim(context%log_message) == 0) then
-            write(stderr, *) "test_get_preconditioned_residual_dot failed: No "// &
-                "error message printed for preconditioner which is not positive "// &
-                "definite."
-            test_get_preconditioned_residual_dot = .false.
-        end if
+        ! and prints an error message at either scale
+        do i_case = 1, size(case_scales)
+            call setup_error_logging(settings, context)
+            residual_dot = get_preconditioned_residual_dot( &
+                residual, -case_scales(i_case) * residual, settings, error)
+            if (error /= 1) then
+                write(stderr, *) "test_get_preconditioned_residual_dot failed: No "// &
+                    "error returned for preconditioner which is not positive "// &
+                    "definite "//trim(case_names(i_case))//"."
+                test_get_preconditioned_residual_dot = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_get_preconditioned_residual_dot failed: No "// &
+                    "error message printed for preconditioner which is not "// &
+                    "positive definite "//trim(case_names(i_case))//"."
+                test_get_preconditioned_residual_dot = .false.
+            end if
+        end do
 
     end function test_get_preconditioned_residual_dot
 

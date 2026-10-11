@@ -3495,13 +3495,6 @@ contains
                 end if
                 residual_dot_old = residual_dot
 
-                ! test for convergence
-                if (dnrm2(n_param, basis_vec, 1_ip) <= 2.0_rp * epsilon(1.0_rp)) then
-                    solution_norm = sqrt(solution_dot)
-                    micro_converged = .true.
-                    exit
-                end if
-
                 ! increment number of microiterations
                 imicro = imicro + 1
                 state%micro_iteration = state%micro_iteration + 1
@@ -4101,7 +4094,7 @@ contains
 
         real(rp), allocatable :: vector(:), basis_vec(:), next_residual(:), &
                                  next_precond_residual(:)
-        integer(ip) :: n_param, switch_iteration, imicro
+        integer(ip) :: n_param, imicro
         real(rp) :: step_size, alpha, trial_solution_dot, basis_vec_dot, solution_dot, &
                     solution_basis_vec_dot, residual_dot, residual_dot_old, beta, &
                     lanczos_diag_elem, lanczos_off_diag_elem, residual_norm, conv_tol, &
@@ -4206,7 +4199,6 @@ contains
             if (lanczos%interior .and. residual_norm <= conv_tol) then
                 solution_norm = sqrt(solution_dot)
                 lanczos%n_red_space = imicro
-                if (lanczos%n_red_space > 0) lanczos%lambda = 0.0_rp
                 micro_converged = .true.
                 exit
             end if
@@ -4239,27 +4231,9 @@ contains
                     .not. lanczos%interior .and. &
                     abs(lanczos_off_diag_elem * last_red_space_solution) <= conv_tol)) &
                     then
-                    ! the reduced space holds every Lanczos vector so far
+                    ! the reduced space holds every Lanczos vector so far, whose
+                    ! subproblem the previous iteration solved
                     lanczos%n_red_space = imicro
-
-                    ! the optimal solution was achieved by an interior point
-                    if (lanczos%n_red_space <= switch_iteration) then
-                        solution_norm = sqrt(solution_dot)
-                        micro_converged = .true.
-                        exit
-                    end if
-
-                    ! restore the solution to the Lanczos TR subproblem for this
-                    ! iteration
-                    use_old = .false.
-                    if (lanczos%n_red_space <= 1 + switch_iteration) then
-                        lanczos%lambda = 0.0_rp
-                        try_warm = .false.
-                    end if
-
-                    call solve_lanczos_subproblem(lanczos%n_red_space, &
-                                                  state%trust_radius, try_warm, &
-                                                  use_old, lanczos, min_func_diff)
 
                     ! record the optimal objective function value and assemble the
                     ! solution
@@ -4278,15 +4252,6 @@ contains
             end if
             lanczos%residual_dot_list(imicro + 1) = residual_dot
             residual_dot_old = residual_dot
-
-            ! test for convergence
-            if (lanczos%interior .and. &
-                dnrm2(n_param, basis_vec, 1_ip) <= 2.0_rp * epsilon(1.0_rp)) then
-                solution_norm = sqrt(solution_dot)
-                lanczos%n_red_space = imicro
-                micro_converged = .true.
-                exit
-            end if
 
             ! increment number of microiterations
             imicro = imicro + 1
@@ -4332,12 +4297,13 @@ contains
                                             solution, pred_func, alpha)
 
                 ! when the model has no curvature in the new basis vector direction
-                ! find the appropriate point and the gradient (residual) on the
-                ! boundary and stop, after storing the off-diagonal element coupling
-                ! this Lanczos vector to the next one, from the residual the conjugate
-                ! gradient step reaches, which a restart with a smaller trust radius
-                ! reads to reuse the Lanczos process
-                if (abs(curvature) < numerical_zero) then
+                ! relative to its length in the trust region metric, find the
+                ! appropriate point and the gradient (residual) on the boundary and
+                ! stop, after storing the off-diagonal element coupling this Lanczos
+                ! vector to the next one, from the residual the conjugate gradient
+                ! step reaches, which a restart with a smaller trust radius reads to
+                ! reuse the Lanczos process
+                if (abs(curvature) < numerical_zero * basis_vec_dot) then
                     next_residual = residual + step_size * vector
                     allocate(next_precond_residual(n_param))
                     call gltr_precondition_residual(next_residual, h_diag, &
@@ -4348,14 +4314,12 @@ contains
                         sqrt(next_residual_dot / residual_dot) / abs(step_size)
                     step_size = alpha
                     lanczos%n_red_space = imicro
-                    lanczos%lambda = 0.0_rp
                     residual = residual + step_size * vector
                     micro_converged = .true.
                     exit
                 ! if a more accurate solution is required, switch modes
                 else
                     lanczos%interior = .false.
-                    switch_iteration = imicro - 1
                 end if
             end if
 
@@ -4382,7 +4346,6 @@ contains
 
                     ! switch modes
                     lanczos%interior = .false.
-                    switch_iteration = imicro - 1
                 end if
             end if
 
@@ -4625,26 +4588,34 @@ contains
                                              error) result(residual_dot)
         !
         ! this function returns the dot product of the residual and the preconditioned
-        ! residual, throws an error if the preconditioner is not positive definite
+        ! residual, which vanishes where it lies within the rounding error relative to
+        ! the norms of both, so that it is independent of the scale of the
+        ! preconditioner, and throws an error if the preconditioner is not positive
+        ! definite
         !
         real(rp), intent(in) :: residual(:), precond_residual(:)
         type(solver_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         real(rp) :: residual_dot
-        real(rp), external :: ddot
+        real(rp), external :: ddot, dnrm2
 
+        ! initialize error flag
+        error = 0
+
+        ! compute the dot product and take it as vanishing within the rounding error
         residual_dot = ddot(size(residual, kind=ip), residual, 1_ip, precond_residual, &
                             1_ip)
-        if (abs(residual_dot) < numerical_zero) residual_dot = 0.0_rp
+        if (abs(residual_dot) <= &
+            numerical_zero * dnrm2(size(residual, kind=ip), residual, 1_ip) * &
+            dnrm2(size(precond_residual, kind=ip), precond_residual, 1_ip)) &
+            residual_dot = 0.0_rp
+
+        ! a negative dot product beyond the rounding error shows that the
+        ! preconditioner is not positive definite
         if (residual_dot < 0.0_rp) then
-            if (maxval(abs(precond_residual)) < &
-                epsilon(1.0_rp) * maxval(abs(residual))) then
-                residual_dot = 0.0_rp
-            else
-                call settings%log("The passed preconditioner function is not "// &
-                                  "positive definite.", verbosity_error, .true.)
-                error = 1
-            end if
+            call settings%log("The passed preconditioner function is not positive "// &
+                              "definite.", verbosity_error, .true.)
+            error = 1
         end if
 
     end function get_preconditioned_residual_dot
