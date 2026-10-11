@@ -6,9 +6,10 @@
 
 module test_reference
 
-    use opentrustregion, only: rp, ip, kw_len, stderr, solver_settings_type, &
-                               stability_settings_type, solver_state_type, &
-                               stability_state_type
+    use opentrustregion, only: &
+        rp, ip, kw_len, stderr, solver_settings_type, stability_settings_type, &
+        solver_state_type, stability_state_type, settings_uninitialized_warning_msg, &
+        stability_settings_uninitialized_warning_msg
     use c_interface, only: c_rp, c_ip, solver_state_type_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_null_char, c_funptr, &
                                            c_null_funptr, c_f_procpointer, &
@@ -29,6 +30,23 @@ module test_reference
     integer(ip), parameter :: n_extra_trial_vectors = 2_ip
     integer(c_ip), protected, bind(C, name="test_n_extra_trial_vectors") :: &
         n_extra_trial_vectors_c = int(n_extra_trial_vectors, kind=c_ip)
+
+    ! warnings the C entry points print for settings and nested stability check
+    ! settings that were not initialized, as null-terminated strings for the C
+    ! integration tests
+    integer(ip), parameter :: &
+        settings_warning_len = len(settings_uninitialized_warning_msg) + 1, &
+        stability_settings_warning_len = &
+            len(stability_settings_uninitialized_warning_msg) + 1
+    character(kind=c_char), protected, &
+        bind(C, name="test_settings_uninitialized_warning") :: &
+        settings_uninitialized_warning_c(settings_warning_len) = transfer( &
+            settings_uninitialized_warning_msg//c_null_char, "a", settings_warning_len)
+    character(kind=c_char), protected, &
+        bind(C, name="test_stability_settings_uninitialized_warning") :: &
+        stability_settings_uninitialized_warning_c(stability_settings_warning_len) = &
+        transfer(stability_settings_uninitialized_warning_msg//c_null_char, "a", &
+                 stability_settings_warning_len)
 
     ! reference settings, every field other than the logicals has a value distinct
     ! from every other field of the same kind and from its default value, so that a

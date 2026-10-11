@@ -1253,6 +1253,51 @@ contains
 
     end function test_hess_x_f_wrapper
 
+    logical(c_bool) function test_hess_x_f_wrapper_impl() bind(C)
+        !
+        ! this function tests the subroutine which calls a given C Hessian linear
+        ! transformation for Fortran variables with a given host context
+        !
+        use c_interface, only: hess_x_f_wrapper_impl
+        use test_reference, only: host_context, arm_host_context_c, host_context_reached
+
+        procedure(hess_x_c_type), pointer :: hess_x_c_funptr
+        type(c_ptr) :: host_context_c
+        real(rp) :: x(n_param), hess_x(n_param)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_hess_x_f_wrapper_impl = .true.
+
+        ! point to the mock C function and arm the host context
+        hess_x_c_funptr => mock_hess_x
+        call arm_host_context_c(host_context_c)
+
+        ! check that the C function receives the vector and that its result is returned
+        call random_number(x)
+        call hess_x_f_wrapper_impl(hess_x_c_funptr, x, hess_x, error, host_context_c)
+        if (error /= 0 .or. any(abs(hess_x - 4.0_rp * x) > tol_c)) then
+            write(stderr, *) "test_hess_x_f_wrapper_impl failed: Result of the C "// &
+                "function not returned."
+            test_hess_x_f_wrapper_impl = .false.
+        end if
+
+        ! check that the host context reached the C function
+        if (.not. host_context_reached("hess_x_f_wrapper_impl")) &
+            test_hess_x_f_wrapper_impl = .false.
+
+        ! check that an error of the C function is passed on
+        host_context%mock_error = 2
+        call hess_x_f_wrapper_impl(hess_x_c_funptr, x, hess_x, error, host_context_c)
+        if (error /= 2) then
+            write(stderr, *) "test_hess_x_f_wrapper_impl failed: Did not pass on "// &
+                "the error of the C function."
+            test_hess_x_f_wrapper_impl = .false.
+        end if
+        host_context%mock_error = 0
+
+    end function test_hess_x_f_wrapper_impl
+
     logical(c_bool) function test_obj_func_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the objective function

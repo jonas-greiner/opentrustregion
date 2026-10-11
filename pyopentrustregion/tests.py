@@ -196,6 +196,7 @@ fortran_tests = {
         "copy_state_to_c",
         "get_extra_trial_vectors_f_wrapper",
         "hess_x_f_wrapper",
+        "hess_x_f_wrapper_impl",
         "init_solver_settings_c",
         "init_stability_settings_c",
         "logger_f_wrapper",
