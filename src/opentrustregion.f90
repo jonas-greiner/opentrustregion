@@ -4652,24 +4652,34 @@ contains
         use_old, lowest_eigenval, lambda, func, solution, eigenvec, hard_case, &
         hard_case_step_size)
         !
-        ! this subroutine determines a vector x which approximately minimizes the
-        ! quadratic function
+        ! this subroutine determines an approximate minimizer of the quadratic function
         !
-        !   func(solution) = 1/2 <solution, tridiagonal solution> + <linear, solution>
+        !   func(solution) = 1/2 <solution, T solution> + <linear, solution>
         !
-        ! subject to the Euclidean norm constraint ||solution|| <= trust_radius.
-
-        ! - computes an approximate solution and a Lagrange multiplier lambda such that
-        !   either lambda is zero and ||solution|| <= (1+rtol)*trust_radius, or lambda
-        !   is positive and | ||solution|| - trust_radius | <= rtol * trust_radius
-        ! - if solution_sol is the solution to the problem, the approximate solution
-        !   satisfies func(solution) <= func(solution_sol) * (1 - rtol) ** 2
-        ! - diagonal and off_diagonal: tridiagonal matrix
-        ! - try_warm is true: an initial estimate of lambda should be provided
-        ! - use_old is true: the lowest eigenvalue of the leading n-1 by n-1 block
-        !   should be provided
-        ! - interior is true: an interior solution is possible (interior will be set to
-        !   true if an interior solution was found)
+        ! of the symmetric tridiagonal matrix T of diagonal and off_diagonal subject to
+        ! the Euclidean norm constraint ||solution|| <= trust_radius, together with the
+        ! Lagrange multiplier lambda >= 0 for which (T + lambda I) solution = -linear
+        !
+        ! - the solution either lies inside the trust region with a vanishing lambda,
+        !   which requires a positive definite T, or on its boundary, where the Newton
+        !   iterations for lambda stop once ||solution|| - trust_radius <= rel_tol *
+        !   trust_radius, once the correction of lambda falls below its rounding error
+        !   or after iter_max iterations
+        ! - interior: true on entry while an interior solution is still possible, set
+        !   to false once T turns out to be indefinite
+        ! - try_warm: lambda holds an estimate of the multiplier on entry, whose
+        !   solution is returned if it lies on the boundary to rel_tol and from which
+        !   the Newton iterations start if it lies outside the trust region
+        ! - use_old: lowest_eigenval holds the lowest eigenvalue of the leading n-1 by
+        !   n-1 block on entry, which bounds that of T from above, on return
+        !   lowest_eigenval holds the lowest eigenvalue of T if T was found to be
+        !   indefinite and zero if it was found to be positive definite without an
+        !   interior solution
+        ! - hard_case: the solution of the shifted system stays inside the trust region
+        !   even as lambda approaches the negative lowest eigenvalue, to which lambda is
+        !   then set, so that the solution has to be completed to the boundary by
+        !   hard_case_step_size times the returned eigenvector of the lowest eigenvalue,
+        !   at which func is evaluated
         !
         integer(ip), intent(in) :: n_red_space
         real(rp), intent(in) :: diagonal(n_red_space), off_diagonal(n_red_space - 1), &
