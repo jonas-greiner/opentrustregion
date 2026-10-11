@@ -3124,6 +3124,39 @@ contains
             end do
         end do
 
+        ! minimize the double well function from (0.5, 0) as above, but without the
+        ! stability check and with a vanishing convergence threshold, so that the
+        ! solver reaches the saddle point at an exactly vanishing gradient, which it
+        ! takes as a point at maximum precision whose stability it checks nevertheless,
+        ! then continues along the unstable mode with the flag reset and finally stops
+        ! at a minimum, which can not pass the convergence check either
+        update_orbs_funptr => double_well_update_orbs
+        call settings%init(error)
+        settings%grad_noise = .false.
+        settings%n_random_trial_vectors = 0
+        settings%n_extra_trial_vectors = 0
+        settings%start_trust_radius = 0.3_rp
+        settings%conv_tol = 0.0_rp
+        settings%context => state_context
+        state_context%vars = [0.5_rp, 0.0_rp]
+        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings, state)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error at exactly "// &
+                "vanishing gradient."
+            test_solver = .false.
+        end if
+        if (abs(abs(state_context%vars(2)) - 1.0_rp / sqrt(2.0_rp)) > var_thres) then
+            write(stderr, *) "test_solver failed: Did not continue from the saddle "// &
+                "point of the double well function at an exactly vanishing "// &
+                "gradient to a minimum."
+            test_solver = .false.
+        end if
+        if (.not. state%max_precision_reached) then
+            write(stderr, *) "test_solver failed: Maximum precision not flagged at "// &
+                "a minimum that can not pass the convergence check."
+            test_solver = .false.
+        end if
+
         ! inject faults by running the solver from the saddle point, where it performs
         ! the internal stability check, with a stability check at convergence, a line
         ! search and every optional callback function, for every subsystem solver and
@@ -3840,18 +3873,28 @@ contains
         end if
 
         ! check the saddle point in a later macro iteration without the gradient
-        ! perturbation and check that the warning for reaching a saddle point advises
-        ! enabling it
+        ! perturbation and with a vanishing convergence threshold, as the solver reaches
+        ! it at an exactly vanishing gradient, and check that the step along the
+        ! unstable mode reaches the trust radius of the state and that the warning for
+        ! reaching a saddle point advises enabling the perturbation
         call setup_settings(settings, context)
         context%vars = [0.0_rp, 0.0_rp]
         settings%grad_noise = .false.
+        settings%conv_tol = 0.0_rp
         settings%stability_settings%context => context
+        state%trust_radius = 0.7_rp
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
                                     kappa, kappa_norm, error)
         if (error /= 0) then
             write(stderr, *) "test_check_stationary_point failed: Produced error "// &
                 "at saddle point without gradient perturbation."
+            test_check_stationary_point = .false.
+        end if
+        if (abs(kappa_norm - state%trust_radius) > tol) then
+            write(stderr, *) "test_check_stationary_point failed: Step along "// &
+                "unstable mode does not reach trust radius of the state at "// &
+                "vanishing gradient and convergence threshold."
             test_check_stationary_point = .false.
         end if
         if (index(context%log_message, &
@@ -7681,12 +7724,16 @@ contains
 
         real(rp) :: grad_dir(n_param), kappa_dir(n_param), grad(n_param), &
                     kappa(n_param), kappa_norm, min_eigval, grad_rms, target_grad_rms, &
-                    predicted_grad_rms
+                    predicted_grad_rms, trust_radius
         integer(ip) :: error, i
         type(solver_settings_type) :: settings
 
         ! assume tests pass
         test_saddle_point_step = .true.
+
+        ! generate a trust radius, which only a vanishing target uses
+        call random_number(trust_radius)
+        trust_radius = trust_radius + 0.1_rp
 
         ! initialize settings and set convergence threshold
         call settings%init(error)
@@ -7718,8 +7765,8 @@ contains
             target_grad_rms = 10.0_rp * max(settings%conv_tol, grad_rms)
 
             kappa = kappa_dir
-            call saddle_point_step(grad, grad_rms, min_eigval, settings, kappa, &
-                                   kappa_norm)
+            call saddle_point_step(grad, grad_rms, min_eigval, trust_radius, settings, &
+                                   kappa, kappa_norm)
 
             ! the linearized gradient after taking the step should have exactly the
             ! targeted gradient RMS
@@ -7737,6 +7784,21 @@ contains
                 test_saddle_point_step = .false.
             end if
         end do
+
+        ! with a vanishing gradient and convergence threshold no gradient RMS can be
+        ! targeted, and the step along the direction of negative curvature has to reach
+        ! the trust radius instead
+        settings%conv_tol = 0.0_rp
+        grad = 0.0_rp
+        kappa = kappa_dir
+        call saddle_point_step(grad, 0.0_rp, min_eigval, trust_radius, settings, &
+                               kappa, kappa_norm)
+        if (norm2(kappa - trust_radius * kappa_dir) > tol .or. &
+            abs(kappa_norm - trust_radius) > tol) then
+            write(stderr, *) "test_saddle_point_step failed: Step does not reach "// &
+                "trust radius at vanishing gradient and convergence threshold."
+            test_saddle_point_step = .false.
+        end if
 
     end function test_saddle_point_step
 

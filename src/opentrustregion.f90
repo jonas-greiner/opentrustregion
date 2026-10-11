@@ -143,7 +143,7 @@ module opentrustregion
         ! transformations, the latter including those of the internal stability checks
         integer(ip) :: n_update_orbs = 0, n_obj_func = 0, n_hess_x = 0
         ! whether neither the actual nor the predicted function change of the last
-        ! trust-region step could be resolved
+        ! trust-region step could be resolved or the gradient vanishes exactly
         logical :: max_precision_reached = .false.
         ! state of the most recent internal stability check
         type(stability_state_type) :: stability_state
@@ -481,6 +481,11 @@ contains
                 ! calculate RMS gradient
                 grad_rms = grad_norm / sqrt(real(n_param, kind=rp))
 
+                ! an exactly vanishing gradient, which a symmetric problem can reach,
+                ! leaves the subsystem solvers no subproblem they can solve, so the
+                ! point is taken as one at maximum precision
+                if (grad_norm <= 0.0_rp) current_state%max_precision_reached = .true.
+
                 ! update the state with the current point, whose row is printed below
                 current_state%macro_iteration = imacro - 1
                 current_state%func = func
@@ -519,9 +524,11 @@ contains
                 conv_check_passed = grad_rms < local_settings%conv_tol
             end if
             if (conv_check_passed .or. current_state%max_precision_reached) then
-                ! always perform stability check if starting at stationary point and
-                ! continue along the unstable mode if the stationary point is unstable
-                if (local_settings%stability .or. imacro == 1) then
+                ! always perform stability check if starting at stationary point or at
+                ! an exactly vanishing gradient and continue along the unstable mode if
+                ! the stationary point is unstable
+                if (local_settings%stability .or. imacro == 1 .or. &
+                    grad_norm <= 0.0_rp) then
                     call check_stationary_point(grad, grad_rms, h_diag, hess_x_funptr, &
                                                 imacro, local_settings, current_state, &
                                                 stable, kappa, kappa_norm, error)
@@ -803,7 +810,8 @@ contains
 
         ! move far enough along the unstable mode so that gradient is increased by one
         ! order of magnitude
-        call saddle_point_step(grad, grad_rms, min_eigval, settings, kappa, kappa_norm)
+        call saddle_point_step(grad, grad_rms, min_eigval, state%trust_radius, &
+                               settings, kappa, kappa_norm)
         if (imacro == 1) then
             call settings%log(started_at_saddle_point_warning_msg, verbosity_warning)
         else if (associated(settings%stability_hess_x)) then
@@ -818,15 +826,15 @@ contains
 
     end subroutine check_stationary_point
 
-    subroutine saddle_point_step(grad, grad_rms, min_eigval, settings, kappa, &
-                                 kappa_norm)
+    subroutine saddle_point_step(grad, grad_rms, min_eigval, trust_radius, settings, &
+                                 kappa, kappa_norm)
         !
         ! this subroutine determines the step along the direction of negative curvature
         ! such that the (linearized) gradient RMS increases to one order of magnitude
         ! above its current value, or above the convergence threshold if the gradient
-        ! is already converged
+        ! is already converged, or, if both vanish, the step to the trust radius
         !
-        real(rp), intent(in) :: grad(:), grad_rms, min_eigval
+        real(rp), intent(in) :: grad(:), grad_rms, min_eigval, trust_radius
         type(solver_settings_type), intent(in) :: settings
         real(rp), intent(inout) :: kappa(:)
         real(rp), intent(out) :: kappa_norm
@@ -846,10 +854,18 @@ contains
         ! ensure the step is always large enough to escape the stationary point
         target_grad_rms = 10 * max(settings%conv_tol, grad_rms)
 
-        ! determine step length that reaches the target gradient RMS in the linearized
-        ! model along the direction of negative curvature
-        n_kappa = (-grad_kappa + sign(1.0_rp, grad_kappa) * sqrt(grad_kappa**2 + real( &
-            n_param, kind=rp) * (target_grad_rms**2 - grad_rms**2))) / min_eigval
+        if (target_grad_rms > 0.0_rp) then
+            ! determine step length that reaches the target gradient RMS in the
+            ! linearized model along the direction of negative curvature
+            n_kappa = (-grad_kappa + sign(1.0_rp, grad_kappa) * sqrt( &
+                grad_kappa**2 + real(n_param, kind=rp) * &
+                (target_grad_rms**2 - grad_rms**2))) / min_eigval
+        else
+            ! an exactly vanishing gradient with a vanishing convergence threshold
+            ! leaves no target, so the step reaches the trust radius instead, as a
+            ! trust region step along the direction of negative curvature would
+            n_kappa = trust_radius
+        end if
 
         ! scale step
         kappa = n_kappa * kappa
