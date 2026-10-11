@@ -3064,8 +3064,7 @@ contains
         complex(rp), allocatable :: red_space_hess_eigvals(:)
         integer(ip) :: n_trial, i, imicro, initial_imicro, min_idx, jacobi_davidson_iter
         logical :: accept_step, micro_converged, newton
-        real(rp) :: perturbed_grad_norm, residual_norm, red_factor, &
-                    initial_residual_norm, new_func
+        real(rp) :: perturbed_grad_norm, residual_norm, initial_residual_norm, new_func
         real(rp), parameter :: solution_overlap_thresh = 0.5_rp, &
                                residual_norm_max_red_factor = 0.8_rp
         real(rp), external :: dnrm2, ddot
@@ -3199,15 +3198,6 @@ contains
                 residual_norm = dnrm2(n_param, residual, 1_ip)
                 state%relative_residual = residual_norm / perturbed_grad_norm
 
-                ! determine reduction factor depending on whether local region is
-                ! reached, never below the gradient perturbation
-                if (abs(mu) < level_shift_local_thres) then
-                    red_factor = settings%local_red_factor
-                else
-                    red_factor = settings%global_red_factor
-                end if
-                red_factor = max(red_factor, noise_level(settings, local_region))
-
                 ! get normalized solution vector
                 solution_normalized = solution / dnrm2(n_param, solution, 1_ip)
 
@@ -3219,8 +3209,8 @@ contains
                 end if
 
                 ! check if micro iterations have converged
-                if (residual_norm < &
-                    max(red_factor * perturbed_grad_norm, residual_norm_floor)) then
+                if (residual_norm < micro_conv_tol(mu, noise_level( &
+                    settings, local_region), perturbed_grad_norm, settings)) then
                     micro_converged = .true.
                     exit
                 ! check if Jacobi-Davidson is used and has not been started
@@ -3430,7 +3420,6 @@ contains
             do
                 ! obtain the preconditioned residual
                 call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
-                call add_error_origin(error, error_precond_pd, settings)
                 if (error /= 0) exit
 
                 ! obtain the preconditioned residual dot product
@@ -3449,8 +3438,8 @@ contains
                 ! rescaling of the preconditioner
                 else
                     initial_residual_norm = sqrt(residual_dot)
-                    conv_tol = max(settings%local_red_factor * initial_residual_norm, &
-                                   residual_norm_floor)
+                    conv_tol = micro_conv_tol(0.0_rp, noise_level(settings, .true.), &
+                                              initial_residual_norm, settings)
                 end if
                 state%relative_residual = sqrt(residual_dot) / initial_residual_norm
 
@@ -3607,9 +3596,9 @@ contains
             lanczos_diag_fact(:), lanczos_off_diag_fact(:), red_space_rhs(:), &
             red_space_solution(:), red_space_eigenvec(:), work(:), stepsize_list(:), &
             residual_dot_list(:), perturbed_grad(:)
-        real(rp) :: new_func, func_diff, lowest_eigval, hard_case_step_size, tau, &
-                    pred_func, red_factor, conv_tol
-        integer(ip) :: n_first_pass, n_second_pass, n_saved, n_red_space
+        real(rp) :: new_func, func_diff, lowest_eigval, hard_case_step_size, &
+                    pred_func, conv_tol
+        integer(ip) :: n_red_space
         logical :: restart_lanczos, accept_step, micro_converged, hard_case, interior, &
                    new_lanczos
         real(rp), external :: ddot, dnrm2
@@ -3623,8 +3612,9 @@ contains
         state%jacobi_davidson_iteration = 0
         state%relative_residual = 1.0_rp
 
-        ! set restart Lanczos boolean
+        ! set restart Lanczos boolean, there is no Lanczos factorization yet
         restart_lanczos = .false.
+        n_red_space = 0
 
         ! allocate space for residual and for lowest eigenvector
         allocate(residual(n_param), eigenvec(n_param))
@@ -3671,38 +3661,23 @@ contains
 
             ! GLTR minimizer block
             gltr_minimizer: block
-                ! check whether Lanczos is being run for the first time
+                ! check whether Lanczos is being run for the first time, the first
+                ! pass then also recovers the solution
                 if (.not. restart_lanczos .or. n_red_space <= 0) then
-                    ! perform first pass
                     call gltr_first_pass( &
                         func, h_diag, hess_x_funptr, residual, solution, eigenvec, &
                         lanczos_diag, lanczos_off_diag, lanczos_diag_fact, &
                         lanczos_off_diag_fact, red_space_rhs, red_space_solution, &
                         red_space_eigenvec, work, stepsize_list, residual_dot_list, &
-                        pred_func, lambda, solution_norm, lowest_eigval, tau, &
+                        pred_func, lambda, solution_norm, lowest_eigval, &
                         micro_converged, interior, hard_case, hard_case_step_size, &
-                        n_first_pass, n_red_space, n_saved, &
-                        noise_level(settings, local_region), settings, state, error)
-                    if (error /= 0) exit gltr_minimizer
+                        n_red_space, noise_level(settings, local_region), settings, &
+                        state, error)
+                    exit gltr_minimizer
 
-                    ! check if number of micro iterations has exceeded limit or if
-                    ! interior solution has been found
-                    if ((n_first_pass >= settings%n_micro .and. interior) .or. &
-                        micro_converged) then
-                        n_second_pass = 0
-                        exit gltr_minimizer
-                    end if
-
-                ! repeated Lanczos solution with smaller trust-region radius
+                ! repeated Lanczos solution with smaller trust-region radius, which
+                ! reuses the Lanczos factorization from the first run
                 else
-                    ! no first pass necessary as we can reuse Lanczos factorization
-                    ! from first run for new trust radius
-                    n_first_pass = 0
-
-                    ! no vectors saved for this trust radius so full second pass
-                    ! necessary
-                    n_saved = 0
-
                     ! find the solution to the Lanczos TR subproblem with this radius
                     call solve_tridiagonal_subproblem( &
                         n_red_space, lanczos_diag(:n_red_space), &
@@ -3718,20 +3693,12 @@ contains
                     ! record the optimal objective function value
                     pred_func = func + func_diff
 
-                    ! determine reduction factor depending on whether local region is
-                    ! reached, never below the gradient perturbation
-                    if (abs(lambda) < level_shift_local_thres) then
-                        red_factor = settings%local_red_factor
-                    else
-                        red_factor = settings%global_red_factor
-                    end if
-                    red_factor = max(red_factor, noise_level(settings, local_region))
-
                     ! compute the stopping tolerance from the initial residual of the
                     ! first pass which is measured in the same preconditioner metric as
                     ! the residuals it is compared against, this makes the stopping
                     ! test invariant to a rescaling of the preconditioner
-                    conv_tol = max(red_factor * red_space_rhs(1), residual_norm_floor)
+                    conv_tol = micro_conv_tol(lambda, noise_level( &
+                        settings, local_region), red_space_rhs(1), settings)
 
                     ! check whether solution satisfies convergence criteria, otherwise
                     ! start a new Lanczos process for this trust radius
@@ -3744,9 +3711,6 @@ contains
                         exit gltr_minimizer
                     end if
 
-                    ! intialize tau for second pass
-                    tau = 1.0_rp
-
                     ! solution reaches trust radius
                     solution_norm = state%trust_radius
 
@@ -3754,14 +3718,11 @@ contains
 
                 ! second pass to obtain solution
                 call gltr_second_pass( &
-                    residual, tau, red_space_solution, red_space_eigenvec, &
+                    residual, red_space_solution, red_space_eigenvec, &
                     residual_dot_list, stepsize_list, h_diag, hess_x_funptr, &
-                    n_red_space, n_saved, lambda, hard_case, hard_case_step_size, &
-                    solution, eigenvec, n_second_pass, settings, state%n_hess_x, error)
+                    n_red_space, lambda, hard_case, hard_case_step_size, solution, &
+                    eigenvec, settings, state%n_hess_x, error)
                 if (error /= 0) exit gltr_minimizer
-
-                ! check if number of micro iterations has exceeded limit
-                if (n_first_pass >= settings%n_micro) exit gltr_minimizer
 
                 ! successful return
                 micro_converged = .true.
@@ -4145,9 +4106,9 @@ contains
         func, h_diag, hess_x_funptr, residual, solution, eigenvec, lanczos_diag, &
         lanczos_off_diag, lanczos_diag_fact, lanczos_off_diag_fact, red_space_rhs, &
         red_space_solution, red_space_eigenvec, work, stepsize_list, &
-        residual_dot_list, pred_func, lambda, solution_norm, lowest_eigval, tau, &
-        micro_converged, interior, hard_case, hard_case_step_size, imicro, &
-        n_red_space, n_saved, noise, settings, state, error)
+        residual_dot_list, pred_func, lambda, solution_norm, lowest_eigval, &
+        micro_converged, interior, hard_case, hard_case_step_size, n_red_space, noise, &
+        settings, state, error)
         !
         ! this subroutine performs the first Lanczos pass to compute the tridiagonal
         ! matrix and the right hand side of the reduced problem
@@ -4159,27 +4120,20 @@ contains
             lanczos_diag(:), lanczos_off_diag(:), lanczos_diag_fact(:), &
             lanczos_off_diag_fact(:), red_space_rhs(:), red_space_solution(:), &
             red_space_eigenvec(:), work(:), stepsize_list(:), residual_dot_list(:), &
-            pred_func, lambda, solution_norm, lowest_eigval, tau, hard_case_step_size
+            pred_func, lambda, solution_norm, lowest_eigval, hard_case_step_size
         logical, intent(out) :: micro_converged, interior, hard_case
-        integer(ip), intent(out) :: imicro, n_red_space, n_saved
+        integer(ip), intent(out) :: n_red_space
         type(solver_settings_type), intent(in) :: settings
         type(solver_state_type), intent(inout), target :: state
         integer(ip), intent(out) :: error
 
-        ! an estimate of the solution that gives at least fraction_opt times the
-        ! optimal objective value will be found, only saves computation time if second
-        ! pass is necessary
-        real(rp), parameter :: fraction_opt = 1.0_rp
-
-        real(rp), allocatable :: vector(:), basis_vec(:), min_func_list(:), &
-                                 residual_start(:), residual_save(:), &
-                                 basis_vec_save(:), precond_residuals_save(:, :)
-        integer(ip) :: n_param, it, switch_iteration, extra_vectors, istat
-        real(rp) :: step_size, f_tol, alpha, trial_solution_dot, u_norm, &
-                    basis_vec_dot, solution_dot, solution_basis_vec_dot, residual_dot, &
+        real(rp), allocatable :: vector(:), basis_vec(:), precond_residuals_save(:, :)
+        integer(ip) :: n_param, it, switch_iteration, imicro
+        real(rp) :: step_size, alpha, trial_solution_dot, u_norm, basis_vec_dot, &
+                    solution_dot, solution_basis_vec_dot, residual_dot, &
                     residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
-                    residual_norm, red_factor, conv_tol, last_red_space_solution, &
-                    curvature, lanczos_tridiag_chol_pivot
+                    residual_norm, conv_tol, last_red_space_solution, curvature, &
+                    lanczos_tridiag_chol_pivot, min_func_diff, tau
         logical :: negative_curvature, try_warm, use_old, spherical
         real(rp), external :: dnrm2, ddot
 
@@ -4192,9 +4146,6 @@ contains
         ! preconditioner's acceleration of the Krylov search in exchange for a
         ! genuinely spherical trust region
         spherical = settings%trust_region_shape == "spherical"
-
-        ! save starting residual for use in second pass
-        residual_start = residual
 
         ! number of parameters
         n_param = size(residual)
@@ -4217,9 +4168,6 @@ contains
 
         ! initialize iteration counter
         imicro = 0
-
-        ! initialize number of saved vectors
-        n_saved = 0
 
         ! initialize hard case boolean
         hard_case = .false.
@@ -4252,25 +4200,9 @@ contains
         ! product and basis vector
         allocate(vector(n_param), basis_vec(n_param))
 
-        ! allocate workspace for the sequence of smallest function values
-        allocate(min_func_list(settings%n_micro + 1))
-
-        ! check whether we can afford to store extra vectors to avoid recomputation in
-        ! the second pass
-        extra_vectors = 0
-        allocate(residual_save(n_param), basis_vec_save(n_param), stat=istat)
-        if (istat == 0) then
-            extra_vectors = settings%n_micro
-            do
-                allocate(precond_residuals_save(n_param, extra_vectors), stat=istat)
-                if (istat == 0) exit
-                extra_vectors = extra_vectors / 2
-                if (extra_vectors == 0) then
-                    deallocate(residual_save, basis_vec_save)
-                    exit
-                end if
-            end do
-        end if
+        ! allocate space to save the preconditioned residuals, from which the solution
+        ! on the trust region boundary is assembled
+        allocate(precond_residuals_save(n_param, settings%n_micro))
 
         ! start of microiterations
         do
@@ -4279,7 +4211,6 @@ contains
                 vector = residual
             else
                 call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
-                call add_error_origin(error, error_precond_pd, settings)
                 if (error /= 0) exit
             end if
 
@@ -4289,16 +4220,9 @@ contains
             if (error /= 0) exit
             residual_norm = sqrt(residual_dot)
 
-            ! if the user has asked to save vectors, save preconditioned residual,
-            ! residual, and basis vector
-            if (extra_vectors > 0) then
-                if (imicro < extra_vectors) &
-                    precond_residuals_save(:, imicro + 1) = vector
-                if (imicro == extra_vectors) then
-                    residual_save = residual
-                    basis_vec_save = basis_vec
-                end if
-            end if
+            ! save preconditioned residual
+            if (imicro < settings%n_micro) &
+                precond_residuals_save(:, imicro + 1) = vector
 
             ! get coupling coefficient and Lanczos tridiagonal elements
             if (imicro > 0) then
@@ -4313,20 +4237,11 @@ contains
             ! relative residual of an interior solution
             if (interior) state%relative_residual = residual_norm / red_space_rhs(1)
 
-            ! determine reduction factor depending on whether local region is reached,
-            ! never below the gradient perturbation
-            if (abs(lambda) < level_shift_local_thres) then
-                red_factor = settings%local_red_factor
-            else
-                red_factor = settings%global_red_factor
-            end if
-            red_factor = max(red_factor, noise)
-
             ! compute the stopping tolerance from the initial residual which is
             ! measured in the same preconditioner metric as the residuals it is
             ! compared against, this makes the stopping test invariant to a rescaling
             ! of the preconditioner
-            conv_tol = max(red_factor * red_space_rhs(1), residual_norm_floor)
+            conv_tol = micro_conv_tol(lambda, noise, red_space_rhs(1), settings)
 
             ! test for an interior approximate solution
             if (interior .and. residual_norm <= conv_tol) then
@@ -4366,20 +4281,10 @@ contains
                     .not. interior .and. &
                     abs(lanczos_off_diag_elem * last_red_space_solution) <= conv_tol)) &
                     then
-                    ! check whether any earlier point produces fraction_opt of the
-                    ! optimal solution and if yes, use this point to avoid iterations
-                    ! in second Lanczos pass
-                    if (fraction_opt < 1.0_rp) then
-                        f_tol = min_func_list(imicro) * fraction_opt
-                        do n_red_space = 1, imicro
-                            if (min_func_list(n_red_space) <= f_tol) exit
-                        end do
-                    else
-                        n_red_space = imicro
-                    end if
+                    ! the reduced space holds every Lanczos vector so far
+                    n_red_space = imicro
 
-                    ! the required fraction of the optimal solution was achieved by an
-                    ! interior point, second pass is not needed
+                    ! the optimal solution was achieved by an interior point
                     if (n_red_space <= switch_iteration) then
                         solution_norm = sqrt(solution_dot)
                         micro_converged = .true.
@@ -4400,72 +4305,49 @@ contains
                         lanczos_diag_fact(:n_red_space), &
                         lanczos_off_diag_fact(:n_red_space - 1), &
                         red_space_rhs(:n_red_space), state%trust_radius, interior, &
-                        try_warm, use_old, lowest_eigval, lambda, &
-                        min_func_list(n_red_space), red_space_solution(:n_red_space), &
+                        try_warm, use_old, lowest_eigval, lambda, min_func_diff, &
+                        red_space_solution(:n_red_space), &
                         red_space_eigenvec(:n_red_space), work(:n_red_space), &
                         hard_case, hard_case_step_size)
 
                     ! record the optimal objective function value and prepare to
                     ! recover the approximate solution
-                    pred_func = func + min_func_list(n_red_space)
+                    pred_func = func + min_func_diff
                     tau = 1.0_rp
 
-                    ! use saved vectors to start second pass
-                    if (extra_vectors > 0) then
-                        n_saved = min(n_red_space, extra_vectors)
-                        do it = 1, n_saved
-                            red_space_solution(it) = tau * (red_space_solution(it) / &
-                                                            sqrt(residual_dot_list(it)))
-                            if (hard_case) red_space_eigenvec(it) = &
-                                tau * (red_space_eigenvec(it) / &
-                                       sqrt(residual_dot_list(it)))
-                            tau = -sign(1.0_rp, stepsize_list(it)) * tau
-                        end do
+                    ! assemble the solution from the saved preconditioned residuals
+                    do it = 1, n_red_space
+                        red_space_solution(it) = &
+                            tau * (red_space_solution(it) / sqrt(residual_dot_list(it)))
+                        if (hard_case) red_space_eigenvec(it) = &
+                            tau * (red_space_eigenvec(it) / sqrt(residual_dot_list(it)))
+                        tau = -sign(1.0_rp, stepsize_list(it)) * tau
+                    end do
+                    solution = MATMUL(precond_residuals_save(:, :n_red_space), &
+                                      red_space_solution(1:n_red_space))
+                    if (hard_case) &
+                        eigenvec = MATMUL(precond_residuals_save(:, :n_red_space), &
+                                          red_space_eigenvec(1:n_red_space))
 
-                        ! update the solution estimate using the saved vectors
-                        solution = MATMUL(precond_residuals_save(:, :n_saved), &
-                                          red_space_solution(1:n_saved))
-                        if (hard_case) &
-                            eigenvec = MATMUL(precond_residuals_save(:, :n_saved), &
-                                              red_space_eigenvec(1:n_saved))
-
-                        ! second pass not needed because number of saved vectors is
-                        ! sufficient to recover the solution
-                        if (n_saved == n_red_space) then
-                            ! if the hard case has occured, ensure that the recovered
-                            ! eigenvector has unit norm and compute the complete
-                            ! solution
-                            if (hard_case) then
-                                call hess_x_funptr(eigenvec, vector, error, &
-                                                   settings%context)
-                                state%n_hess_x = state%n_hess_x + 1
-                                call add_error_origin(error, error_hess_x, settings)
-                                if (error /= 0) exit
-                                u_norm = sqrt(-ddot(n_param, vector, 1_ip, eigenvec, &
-                                                    1_ip) / lambda)
-                                solution = solution + &
-                                           (hard_case_step_size / u_norm) * eigenvec
-                            end if
-                            if (spherical) then
-                                vector = residual
-                            else
-                                call rel_floor_diag_precond(residual, h_diag, vector, &
-                                                            settings, error)
-                                call add_error_origin(error, error_precond_pd, settings)
-                                if (error /= 0) return
-                            end if
-                            micro_converged = .true.
-                            exit
-                        end if
-                        residual = residual_save
-                        basis_vec = basis_vec_save
-                        residual_dot_old = residual_dot_list(n_saved)
-                    ! start second pass without any saved vectors, need to recompute
-                    ! the Lanczos factorization
-                    else
-                        residual = residual_start
+                    ! if the hard case has occured, ensure that the recovered
+                    ! eigenvector has unit norm and compute the complete solution
+                    if (hard_case) then
+                        call hess_x_funptr(eigenvec, vector, error, settings%context)
+                        state%n_hess_x = state%n_hess_x + 1
+                        call add_error_origin(error, error_hess_x, settings)
+                        if (error /= 0) exit
+                        u_norm = sqrt(-ddot(n_param, vector, 1_ip, eigenvec, 1_ip) / &
+                                      lambda)
+                        solution = solution + (hard_case_step_size / u_norm) * eigenvec
                     end if
-                    ! solution on boundary found
+                    if (spherical) then
+                        vector = residual
+                    else
+                        call rel_floor_diag_precond(residual, h_diag, vector, &
+                                                    settings, error)
+                        if (error /= 0) return
+                    end if
+                    micro_converged = .true.
                     exit
                 end if
             else
@@ -4558,7 +4440,7 @@ contains
                     solution = solution + step_size * basis_vec
                     solution_dot = trial_solution_dot
                     pred_func = pred_func - 0.5_rp * step_size * step_size * curvature
-                    min_func_list(imicro) = pred_func - func
+                    min_func_diff = pred_func - func
                 ! the new point is outside the trust region
                 else
                     ! find the appropriate point on the boundary
@@ -4583,7 +4465,7 @@ contains
                     imicro, lanczos_diag(:imicro), lanczos_off_diag(:imicro - 1), &
                     lanczos_diag_fact(:imicro), lanczos_off_diag_fact(:imicro - 1), &
                     red_space_rhs(:imicro), state%trust_radius, interior, try_warm, &
-                    use_old, lowest_eigval, lambda, min_func_list(imicro), &
+                    use_old, lowest_eigval, lambda, min_func_diff, &
                     red_space_solution(:imicro), red_space_eigenvec(:imicro), &
                     work(:imicro), hard_case, hard_case_step_size)
 
@@ -4600,33 +4482,27 @@ contains
         end do
 
         ! deallocate vectors
-        deallocate(residual_start, vector, basis_vec, min_func_list)
-        if (extra_vectors > 0) &
-            deallocate(residual_save, basis_vec_save, precond_residuals_save)
+        deallocate(vector, basis_vec, precond_residuals_save)
 
     end subroutine gltr_first_pass
 
-    subroutine gltr_second_pass(residual_start, tau_start, red_space_solution, &
-                                red_space_eigenvec, residual_dot_list, stepsize_list, &
-                                h_diag, hess_x_funptr, n_red_space, istart, lambda, &
-                                hard_case, hard_case_step_size, solution, eigenvec, &
-                                n_second_pass, settings, n_hess_x, error)
+    subroutine gltr_second_pass( &
+        residual_start, red_space_solution, red_space_eigenvec, residual_dot_list, &
+        stepsize_list, h_diag, hess_x_funptr, n_red_space, lambda, hard_case, &
+        hard_case_step_size, solution, eigenvec, settings, n_hess_x, error)
         !
         ! this subroutine performs the second Lanczos pass to compute the approximate
-        ! solution and eigenvector if the hard case has occured, the starting point are
-        ! these vectors after the boundary point has been reached or after saved
-        ! vectors have been added if requested
+        ! solution and eigenvector if the hard case has occured from the starting
+        ! residual of a stored Lanczos factorization
         !
-        real(rp), intent(in) :: residual_start(:), tau_start, red_space_solution(:), &
+        real(rp), intent(in) :: residual_start(:), red_space_solution(:), &
                                 red_space_eigenvec(:), residual_dot_list(:), &
                                 stepsize_list(:), h_diag(:)
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         integer(ip), intent(in) :: n_red_space
-        integer(ip), intent(in) :: istart
         real(rp), intent(in) :: lambda, hard_case_step_size
         logical, intent(in) :: hard_case
         real(rp), intent(inout) :: solution(:), eigenvec(:)
-        integer(ip), intent(out) :: n_second_pass
         type(solver_settings_type), intent(in) :: settings
         integer(ip), intent(inout), target :: n_hess_x
         integer(ip), intent(out) :: error
@@ -4649,11 +4525,9 @@ contains
         ! number of parameters
         n_param = size(residual_start)
 
-        ! initialize tau in case of saved vectors
-        tau = tau_start
-
-        ! initialize iteration counter in case of saved vectors
-        imicro = istart
+        ! initialize sign and iteration counter
+        tau = 1.0_rp
+        imicro = 0
 
         ! allocate vector for the preconditioned residual and the Hessian vector product
         allocate(vector(n_param), basis_vec(n_param))
@@ -4665,7 +4539,6 @@ contains
                 vector = residual
             else
                 call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
-                call add_error_origin(error, error_precond_pd, settings)
                 if (error /= 0) exit
             end if
 
@@ -4688,8 +4561,6 @@ contains
 
             ! if the approximate minimizer is complete, exit
             if (imicro + 1 == n_red_space) then
-                n_second_pass = imicro - istart
-
                 ! if the hard case has occured, ensure that the recovered eigenvector
                 ! has unit norm and compute the complete solution
                 if (hard_case) then
@@ -4713,7 +4584,7 @@ contains
             end if
             residual_dot_old = residual_dot
 
-            ! incremenet interation
+            ! increment iteration
             imicro = imicro + 1
 
             ! obtain the linear transformation of new basis vector
@@ -4722,7 +4593,7 @@ contains
             call add_error_origin(error, error_hess_x, settings)
             if (error /= 0) exit
 
-            ! retreive the stepsize
+            ! retrieve the stepsize
             step_size = stepsize_list(imicro)
 
             ! update the residual
@@ -4803,6 +4674,30 @@ contains
         end if
 
     end function noise_level
+
+    function micro_conv_tol(level_shift, noise, initial_residual_norm, settings) &
+        result(conv_tol)
+        !
+        ! this function returns the residual norm at which the micro iterations stop,
+        ! the reduction factor of the local region, where the level shift vanishes, or
+        ! of the global region, never below the gradient perturbation, relative to the
+        ! initial residual norm and never below the residual norm floor
+        !
+        real(rp), intent(in) :: level_shift, noise, initial_residual_norm
+        type(solver_settings_type), intent(in) :: settings
+        real(rp) :: conv_tol
+
+        real(rp) :: red_factor
+
+        if (abs(level_shift) < level_shift_local_thres) then
+            red_factor = settings%local_red_factor
+        else
+            red_factor = settings%global_red_factor
+        end if
+        conv_tol = max(max(red_factor, noise) * initial_residual_norm, &
+                       residual_norm_floor)
+
+    end function micro_conv_tol
 
     function get_preconditioned_residual_dot(residual, precond_residual, settings, &
                                              error) result(residual_dot)
