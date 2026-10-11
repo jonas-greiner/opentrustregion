@@ -3454,11 +3454,12 @@ contains
                 ! compute the stopping tolerance from the initial residual which is
                 ! measured in the same preconditioner metric as the residuals it is
                 ! compared against, this makes the stopping test invariant to a
-                ! rescaling of the preconditioner
+                ! rescaling of the preconditioner, the gradient perturbation is the
+                ! reduction factor of the local region and cannot raise it
                 else
                     initial_residual_norm = sqrt(residual_dot)
-                    conv_tol = micro_conv_tol(0.0_rp, noise_level(settings, .true.), &
-                                              initial_residual_norm, settings)
+                    conv_tol = &
+                        micro_conv_tol(0.0_rp, 0.0_rp, initial_residual_norm, settings)
                 end if
                 state%relative_residual = sqrt(residual_dot) / initial_residual_norm
 
@@ -3614,6 +3615,7 @@ contains
         real(rp) :: new_func, func_diff, pred_func, conv_tol, red_space_residual_norm
         logical :: restart_lanczos, accept_step, micro_converged
         type(gltr_lanczos_type) :: lanczos
+        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
@@ -3701,9 +3703,16 @@ contains
                     cycle
                 end if
 
-                ! solution reaches trust radius, assemble it from the stored Lanczos
-                ! process
-                solution_norm = state%trust_radius
+                ! assemble the solution from the stored Lanczos process, whose norm is
+                ! the trust radius on the trust region boundary and that of the
+                ! solution of the reduced problem inside, since the Lanczos vectors are
+                ! orthonormal in the trust region metric
+                if (lanczos%lambda > 0.0_rp) then
+                    solution_norm = state%trust_radius
+                else
+                    solution_norm = &
+                        dnrm2(lanczos%n_red_space, lanczos%red_space_solution, 1_ip)
+                end if
                 call gltr_assemble_solution(lanczos, hess_x_funptr, solution, &
                                             settings, state%n_hess_x, error)
                 micro_converged = .true.
@@ -4096,25 +4105,19 @@ contains
         type(solver_state_type), intent(inout), target :: state
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: vector(:), basis_vec(:)
+        real(rp), allocatable :: vector(:), basis_vec(:), next_residual(:), &
+                                 next_precond_residual(:)
         integer(ip) :: n_param, switch_iteration, imicro
         real(rp) :: step_size, alpha, trial_solution_dot, basis_vec_dot, solution_dot, &
                     solution_basis_vec_dot, residual_dot, residual_dot_old, beta, &
                     lanczos_diag_elem, lanczos_off_diag_elem, residual_norm, conv_tol, &
                     last_red_space_solution, curvature, lanczos_tridiag_chol_pivot, &
-                    min_func_diff
-        logical :: negative_curvature, try_warm, use_old, spherical
+                    min_func_diff, next_residual_dot
+        logical :: negative_curvature, try_warm, use_old
         real(rp), external :: dnrm2, ddot
 
         ! initialize error flag
         error = 0
-
-        ! for a spherical trust region, GLTR falls back to no preconditioning at all,
-        ! which keeps the Lanczos basis Euclidean-orthonormal so the existing
-        ! tridiagonal subproblem solve remains exact; this trades away the
-        ! preconditioner's acceleration of the Krylov search in exchange for a
-        ! genuinely spherical trust region
-        spherical = settings%trust_region_shape == "spherical"
 
         ! number of parameters
         n_param = size(residual)
@@ -4171,17 +4174,9 @@ contains
 
         ! start of microiterations
         do
-            ! obtain the preconditioned residual
-            if (spherical) then
-                vector = residual
-            else
-                call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
-                if (error /= 0) exit
-            end if
-
-            ! obtain the preconditioned residual dot product
-            residual_dot = &
-                get_preconditioned_residual_dot(residual, vector, settings, error)
+            ! obtain the preconditioned residual and its dot product with the residual
+            call gltr_precondition_residual(residual, h_diag, vector, residual_dot, &
+                                            settings, error)
             if (error /= 0) exit
             residual_norm = sqrt(residual_dot)
 
@@ -4344,8 +4339,19 @@ contains
 
                 ! when the model has no curvature in the new basis vector direction
                 ! find the appropriate point and the gradient (residual) on the
-                ! boundary and stop
+                ! boundary and stop, after storing the off-diagonal element coupling
+                ! this Lanczos vector to the next one, from the residual the conjugate
+                ! gradient step reaches, which a restart with a smaller trust radius
+                ! reads to reuse the Lanczos process
                 if (abs(curvature) < numerical_zero) then
+                    next_residual = residual + step_size * vector
+                    allocate(next_precond_residual(n_param))
+                    call gltr_precondition_residual(next_residual, h_diag, &
+                                                    next_precond_residual, &
+                                                    next_residual_dot, settings, error)
+                    if (error /= 0) exit
+                    lanczos%off_diag(imicro) = &
+                        sqrt(next_residual_dot / residual_dot) / abs(step_size)
                     step_size = alpha
                     lanczos%n_red_space = imicro
                     lanczos%lambda = 0.0_rp
@@ -4411,6 +4417,39 @@ contains
         deallocate(vector, basis_vec)
 
     end subroutine gltr_lanczos_process
+
+    subroutine gltr_precondition_residual(residual, h_diag, precond_residual, &
+                                          residual_dot, settings, error)
+        !
+        ! this subroutine returns the preconditioned residual of generalized Lanczos
+        ! trust region and its dot product with the residual, for a spherical trust
+        ! region without preconditioning at all, which keeps the Lanczos basis
+        ! Euclidean-orthonormal so the existing tridiagonal subproblem solve remains
+        ! exact; this trades away the preconditioner's acceleration of the Krylov
+        ! search in exchange for a genuinely spherical trust region
+        !
+        real(rp), intent(in) :: residual(:), h_diag(:)
+        real(rp), intent(out) :: precond_residual(:), residual_dot
+        type(solver_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! obtain the preconditioned residual
+        if (settings%trust_region_shape == "spherical") then
+            precond_residual = residual
+        else
+            call rel_floor_diag_precond(residual, h_diag, precond_residual, settings, &
+                                        error)
+            if (error /= 0) return
+        end if
+
+        ! obtain the preconditioned residual dot product
+        residual_dot = &
+            get_preconditioned_residual_dot(residual, precond_residual, settings, error)
+
+    end subroutine gltr_precondition_residual
 
     subroutine gltr_assemble_solution(lanczos, hess_x_funptr, solution, settings, &
                                       n_hess_x, error)

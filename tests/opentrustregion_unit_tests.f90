@@ -187,31 +187,13 @@ module opentrustregion_unit_tests
     ! chosen so that it cannot be mistaken for an expected error code
     integer(ip), parameter :: missing_context_error = 42
 
-    ! module state of the approx_hess tests that have not been moved onto host
-    ! contexts yet, together with their mocks below
-    ! define global current variable and Hessian for 6D Hartmann model so that these
-    ! can be accessed by procedure pointers
-    real(rp) :: curr_vars(n_param), hess(n_param, n_param)
-
-    ! quadratic models used to test the guard that triggers when the reduced space
-    ! reaches the full space size, the micro iteration limit and the projection
-    real(rp) :: overflow_hess(n_param, n_param), overflow_grad(n_param)
-    integer(ip) :: n_overflow_empty_steps = 0
-
     ! spurious negative curvature of the Hessian model of a refresh context along the
     ! first coordinate before the model is corrected
     real(rp), parameter :: refresh_hess_error = 7.0_rp
 
-    ! global log message
+    ! module state of the sanity check tests that have not been moved onto host
+    ! contexts yet, the global log message of their mock logging function below
     character(len=:), allocatable :: log_message
-
-    ! global number of calls to the orbital update, the objective function and the
-    ! Hessian linear transformation, so that the counters reported by the library
-    ! can be checked
-    integer(ip) :: n_update_orbs_calls = 0, n_obj_func_calls = 0, n_hess_x_calls = 0
-
-    ! global number of orbital updates at the previous convergence check
-    integer(ip) :: n_update_orbs_at_conv_check = -1
 
 contains
 
@@ -277,6 +259,33 @@ contains
         end do
 
     end function hartmann6d_hessian
+
+    function ref_trust_region_metric(h_diag) result(metric)
+        !
+        ! this function returns the diagonal of the metric of an ellipsoidal trust
+        ! region, the absolute Hessian diagonal floored absolutely and relative to its
+        ! largest element
+        !
+        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+
+        real(rp), intent(in) :: h_diag(:)
+        real(rp) :: metric(size(h_diag))
+
+        metric = max(abs(h_diag), precond_floor, &
+                     precond_rel_floor_factor * maxval(abs(h_diag)))
+
+    end function ref_trust_region_metric
+
+    function metric_norm(vector, metric) result(norm)
+        !
+        ! this function returns the norm of a vector in a diagonal metric
+        !
+        real(rp), intent(in) :: vector(:), metric(:)
+        real(rp) :: norm
+
+        norm = sqrt(dot_product(vector, vector * metric))
+
+    end function metric_norm
 
     function resolve_hartmann6d_context(context, error) result(state)
         !
@@ -1498,7 +1507,7 @@ contains
         ! norm of the absolute Hessian diagonal of the previous point floored relative
         ! to its largest element
         !
-        use opentrustregion, only: hess_x_type, precond_floor, precond_rel_floor_factor
+        use opentrustregion, only: hess_x_type
 
         real(rp), intent(in), target :: delta_vars(:)
         real(rp), intent(out) :: func
@@ -1521,10 +1530,8 @@ contains
                          context%precond_step_norms(0))
             context%seen_states = [context%seen_states, context%state]
             context%step_norms = [context%step_norms, norm2(delta_vars)]
-            context%precond_step_norms = [context%precond_step_norms, sqrt(sum( &
-                delta_vars**2 * &
-                max(abs(context%h_diag), precond_floor, &
-                    precond_rel_floor_factor * maxval(abs(context%h_diag)))))]
+            context%precond_step_norms = [context%precond_step_norms, metric_norm( &
+                delta_vars, ref_trust_region_metric(context%h_diag))]
             context%h_diag = h_diag
         end select
 
@@ -2004,6 +2011,27 @@ contains
 
     end function identity_matrix
 
+    function tridiagonal_matrix(diag, off_diag) result(matrix)
+        !
+        ! this function returns the symmetric tridiagonal matrix of a diagonal and an
+        ! off-diagonal
+        !
+        real(rp), intent(in) :: diag(:), off_diag(:)
+        real(rp) :: matrix(size(diag), size(diag))
+
+        integer(ip) :: i
+
+        matrix = 0.0_rp
+        do i = 1, size(diag)
+            matrix(i, i) = diag(i)
+        end do
+        do i = 1, size(off_diag)
+            matrix(i + 1, i) = off_diag(i)
+            matrix(i, i + 1) = off_diag(i)
+        end do
+
+    end function tridiagonal_matrix
+
     function generate_random_symm_matrix(n) result(matrix)
         !
         ! this function generates a random symmetric matrix
@@ -2099,6 +2127,43 @@ contains
 
     end subroutine setup_refresh_context
 
+    subroutine setup_hartmann6d_point(context, vars, func, grad, h_diag)
+        !
+        ! this subroutine moves a Hartmann 6D context to a point and evaluates the
+        ! function, its gradient and Hessian and the Hessian diagonal there
+        !
+        class(hartmann6d_context_type), intent(inout) :: context
+        real(rp), intent(in) :: vars(:)
+        real(rp), intent(out) :: func, grad(:), h_diag(:)
+
+        integer(ip) :: i
+
+        context%vars = vars
+        func = hartmann6d_func(vars)
+        call hartmann6d_gradient(vars, grad)
+        context%hess = hartmann6d_hessian(vars)
+        h_diag = [(context%hess(i, i), i=1, n_param)]
+
+    end subroutine setup_hartmann6d_point
+
+    function hartmann6d_ratio(context, step) result(ratio)
+        !
+        ! this function returns the ratio of the actual to the predicted change of the
+        ! Hartmann 6D function for a step from the point of a Hartmann 6D context
+        !
+        class(hartmann6d_context_type), intent(in) :: context
+        real(rp), intent(in) :: step(:)
+        real(rp) :: ratio
+
+        real(rp) :: grad(n_param)
+
+        call hartmann6d_gradient(context%vars, grad)
+        ratio = &
+            (hartmann6d_func(context%vars + step) - hartmann6d_func(context%vars)) / &
+            dot_product(step, grad + 0.5_rp * matmul(context%hess, step))
+
+    end function hartmann6d_ratio
+
     subroutine setup_reduced_space(vars, grad, grad_norm, red_space_basis, &
                                    red_space_hess)
         !
@@ -2135,6 +2200,39 @@ contains
                                 matmul(hartmann6d_hessian(vars), red_space_basis))
 
     end subroutine setup_reduced_space
+
+    subroutine setup_gltr_lanczos(lanczos, n_param, n_micro)
+        !
+        ! this subroutine allocates the Lanczos factorization of generalized Lanczos
+        ! trust region for a number of parameters and micro iterations as the
+        ! subroutine does and fills it with a sentinel, which no Lanczos process leaves
+        ! in an off-diagonal element or a residual dot product, so that elements which
+        ! are read or left without having been set are detected
+        !
+        use opentrustregion, only: gltr_lanczos_type
+
+        type(gltr_lanczos_type), intent(out) :: lanczos
+        integer(ip), intent(in) :: n_param, n_micro
+
+        allocate(lanczos%diag(n_micro + 1), lanczos%off_diag(n_micro), &
+                 lanczos%diag_fact(n_micro + 1), lanczos%off_diag_fact(n_micro), &
+                 lanczos%rhs(n_micro + 1), lanczos%red_space_solution(n_micro + 1), &
+                 lanczos%red_space_eigenvec(n_micro + 1), lanczos%work(n_micro + 1), &
+                 lanczos%stepsize_list(n_micro), lanczos%residual_dot_list(n_micro), &
+                 lanczos%precond_residuals(n_param, n_micro))
+        lanczos%diag = -1.0_rp
+        lanczos%off_diag = -1.0_rp
+        lanczos%diag_fact = -1.0_rp
+        lanczos%off_diag_fact = -1.0_rp
+        lanczos%rhs = -1.0_rp
+        lanczos%red_space_solution = -1.0_rp
+        lanczos%red_space_eigenvec = -1.0_rp
+        lanczos%work = -1.0_rp
+        lanczos%stepsize_list = -1.0_rp
+        lanczos%residual_dot_list = -1.0_rp
+        lanczos%precond_residuals = -1.0_rp
+
+    end subroutine setup_gltr_lanczos
 
     subroutine ref_symm_mat_diag(matrix, eigvals, eigvecs)
         !
@@ -2266,139 +2364,6 @@ contains
     end function check_call_counts
 
     ! mocks of the approx_hess tests that have not been moved onto host contexts yet
-
-    subroutine legacy_hartmann6d_hessian(vars)
-        !
-        ! this subroutine defines the Hartmann 6D function's Hessian
-        !
-        real(rp), intent(in) :: vars(:)
-        real(rp) :: exp_term(n_terms)
-        integer(ip) :: i, j
-
-        do i = 1, n_terms
-            exp_term(i) = exp(-sum(A(i, :) * (vars - P(i, :))**2))
-        end do
-
-        do i = 1, n_param
-            hess(i, i) = 2.0_rp * &
-                         sum(alpha * A(:, i) * exp_term * &
-                             (1.0_rp - 2.0_rp * A(:, i) * (vars(i) - P(:, i))**2))
-            do j = 1, i - 1
-                hess(i, j) = -4.0_rp * &
-                             sum(alpha * A(:, i) * A(:, j) * (vars(i) - P(:, i)) * &
-                                 (vars(j) - P(:, j)) * exp_term)
-                hess(j, i) = hess(i, j)
-            end do
-        end do
-
-    end subroutine legacy_hartmann6d_hessian
-
-    function hartmann6d_hess_x(x)
-        !
-        ! this function defines the Hessian linear transformation operation for the
-        ! Hartmann 6D function
-        !
-        real(rp), intent(in) :: x(:)
-        real(rp) :: hartmann6d_hess_x(size(x))
-
-        hartmann6d_hess_x = matmul(hess, x)
-
-    end function hartmann6d_hess_x
-
-    subroutine legacy_hess_x_fun(x, hess_x, error, context)
-        !
-        ! this function describes the Hessian linear transformation operation for the
-        ! Hartmann 6D function
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        ! count call
-        n_hess_x_calls = n_hess_x_calls + 1
-
-        ! initialize error flag
-        error = 0
-
-        hess_x = hartmann6d_hess_x(x)
-
-    end subroutine legacy_hess_x_fun
-
-    subroutine overflow_hess_x(x, hess_x, error, context)
-        !
-        ! this function describes the Hessian linear transformation operation for the
-        ! ill-conditioned quadratic model used to test the guard that triggers when the
-        ! reduced space reaches the full space size
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        hess_x = matmul(overflow_hess, x)
-
-    end subroutine overflow_hess_x
-
-    function overflow_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes the objective function evaluation for the
-        ! ill-conditioned quadratic model used to test the guard that triggers when the
-        ! reduced space reaches the full space size
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        if (maxval(abs(delta_vars)) <= 0.0_rp) &
-            n_overflow_empty_steps = n_overflow_empty_steps + 1
-        func = dot_product(overflow_grad, delta_vars) + &
-               0.5_rp * dot_product(delta_vars, matmul(overflow_hess, delta_vars))
-
-    end function overflow_obj_func
-
-    function legacy_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes the objective function evaluation for the Hartmann 6D
-        ! function
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize error flag
-        error = 0
-
-        ! increment number of objective function evaluations
-        n_obj_func_calls = n_obj_func_calls + 1
-
-        func = hartmann6d_func(curr_vars + delta_vars)
-
-    end function legacy_obj_func
 
     subroutine mock_precond_pd(residual, precond_residual, error, context)
         !
@@ -2538,70 +2503,6 @@ contains
         log_message = ""
 
     end subroutine legacy_setup_settings
-
-    subroutine setup_truncation_model(coupled, func, h_diag)
-        !
-        ! this subroutine sets up the quadratic model used to test the micro iteration
-        ! limit and the projection: a coupled Hessian cannot be inverted by the
-        ! diagonal preconditioner, so that the micro iterations cannot converge within
-        ! a small limit, while a diagonal Hessian preserves the subspace of mock_project
-        !
-        logical, intent(in) :: coupled
-        real(rp), intent(out) :: func, h_diag(:)
-
-        integer(ip) :: i, j
-
-        overflow_hess = 0.0_rp
-        do j = 1, n_param
-            if (coupled) then
-                do i = 1, n_param
-                    overflow_hess(i, j) = 1.0_rp / real(1 + abs(i - j), kind=rp)
-                end do
-            end if
-            overflow_hess(j, j) = overflow_hess(j, j) + real(max(j, 2), kind=rp)
-        end do
-        overflow_grad = 1.0_rp
-        func = 0.0_rp
-        h_diag = [(overflow_hess(i, i), i=1, n_param)]
-        n_overflow_empty_steps = 0
-
-    end subroutine setup_truncation_model
-
-    logical function call_counts_match(test_name, case_name, n_hess_x, n_update_orbs, &
-                                       n_obj_func)
-        !
-        ! this function checks that the counters reported by the library agree with
-        ! the number of times the callback functions were actually called
-        !
-        character(len=*), intent(in) :: test_name, case_name
-        integer(ip), intent(in), optional :: n_hess_x, n_update_orbs, n_obj_func
-
-        ! assume test passes
-        call_counts_match = .true.
-
-        if (present(n_hess_x)) then
-            if (n_hess_x /= n_hess_x_calls) then
-                write(stderr, *) "test_"//test_name//" failed: Reported number of "// &
-                    "Hessian linear transformations wrong "//case_name//"."
-                call_counts_match = .false.
-            end if
-        end if
-        if (present(n_update_orbs)) then
-            if (n_update_orbs /= n_update_orbs_calls) then
-                write(stderr, *) "test_"//test_name// &
-                    " failed: Reported number of orbital updates wrong "//case_name//"."
-                call_counts_match = .false.
-            end if
-        end if
-        if (present(n_obj_func)) then
-            if (n_obj_func /= n_obj_func_calls) then
-                write(stderr, *) "test_"//test_name//" failed: Reported number of "// &
-                    "objective function evaluations wrong "//case_name//"."
-                call_counts_match = .false.
-            end if
-        end if
-
-    end function call_counts_match
 
     logical(c_bool) function test_solver() bind(C)
         !
@@ -6399,7 +6300,8 @@ contains
         settings%grad_noise = .false.
         settings%subsystem_solver = "jacobi-davidson_ls"
         settings%jacobi_davidson_start = 1
-        call set_hartmann6d_point(near_saddle_point)
+        call setup_hartmann6d_point(context, near_saddle_point, func, grad, h_diag)
+        grad_norm = norm2(grad)
         obj_func_funptr => obj_func
         hess_x_funptr => hess_x_fun_asymmetric
         state%trust_radius = 0.4_rp
@@ -6777,24 +6679,6 @@ contains
 
     contains
 
-        subroutine set_hartmann6d_point(vars)
-            !
-            ! this subroutine moves the Hartmann 6D context to a point and evaluates the
-            ! function, its gradient and Hessian and the Hessian diagonal there
-            !
-            real(rp), intent(in) :: vars(:)
-
-            integer(ip) :: i_param
-
-            context%vars = vars
-            func = hartmann6d_func(vars)
-            call hartmann6d_gradient(vars, grad)
-            grad_norm = norm2(grad)
-            context%hess = hartmann6d_hessian(vars)
-            h_diag = [(context%hess(i_param, i_param), i_param=1, n_param)]
-
-        end subroutine set_hartmann6d_point
-
         subroutine check_region(region)
             !
             ! this subroutine solves the subproblem in a region with the current
@@ -6825,8 +6709,10 @@ contains
                 hess_x_funptr => refresh_hess_x
             else
                 call setup_settings(settings, context)
-                call set_hartmann6d_point( &
-                    merge(near_minimum, near_saddle_point, region == "near minimum"))
+                call setup_hartmann6d_point(context, merge( &
+                    near_minimum, near_saddle_point, region == "near minimum"), func, &
+                                            grad, h_diag)
+                grad_norm = norm2(grad)
                 obj_func_funptr => obj_func
                 hess_x_funptr => hess_x_fun
             end if
@@ -6920,8 +6806,7 @@ contains
 
             ! the step stays within the trust region near the minimum and lies at its
             ! boundary near the saddle point
-            ratio = (hartmann6d_func(context%vars + solution) - func) / dot_product( &
-                solution, grad + 0.5_rp * matmul(context%hess, solution))
+            ratio = hartmann6d_ratio(context, solution)
             if (region == "near minimum" .and. norm2(solution) > &
                 ref_step_trust_radius(state%trust_radius, ratio) + tol) then
                 write(stderr, *) "test_level_shifted_davidson failed: Solution "// &
@@ -6951,8 +6836,7 @@ contains
         ! this function tests the truncated conjugate gradient subroutine
         !
         use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
-                                   truncated_conjugate_gradient, precond_floor, &
-                                   precond_rel_floor_factor, error_hess_x, &
+                                   truncated_conjugate_gradient, error_hess_x, &
                                    error_obj_func, function_unchanged_warning_msg
 
         character(len=*), parameter :: shape_names(2) = &
@@ -6961,7 +6845,7 @@ contains
         type(solver_state_type), target :: state
         real(rp) :: func, ratio, solution_norm, noise, shape_norm, &
                     double_well_grad(2), double_well_h_diag(2), double_well_solution(2)
-        real(rp), dimension(n_param) :: grad, h_diag, newton_solution, solution, &
+        real(rp), dimension(n_param) :: grad, h_diag, metric, solution, &
                                         scaled_solution, residual
         integer(ip) :: i, i_case, error
         procedure(obj_func_type), pointer :: obj_func_funptr
@@ -6979,7 +6863,8 @@ contains
         settings%grad_noise = .false.
 
         ! start in quadratic region near minimum
-        call set_hartmann6d_point(near_minimum)
+        call setup_hartmann6d_point(context, near_minimum, func, grad, h_diag)
+        metric = ref_trust_region_metric(h_diag)
         obj_func_funptr => obj_func
         hess_x_funptr => hess_x_fun
 
@@ -7013,8 +6898,8 @@ contains
                 "number of micro iterations wrong near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
-        ratio = model_ratio(solution)
-        if (ratio <= 0.0_rp .or. metric_norm(solution) > &
+        ratio = hartmann6d_ratio(context, solution)
+        if (ratio <= 0.0_rp .or. metric_norm(solution, metric) > &
             ref_step_trust_radius(state%trust_radius, ratio) + tol) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not reduce function value or leaves the trust region near "// &
@@ -7026,7 +6911,7 @@ contains
         ! solution, so that the step reaches the trust region boundary although the
         ! curvature is positive, and check whether the solution lies at the trust
         ! region boundary and reduces the function value
-        state%trust_radius = 0.5_rp * metric_norm(solution)
+        state%trust_radius = 0.5_rp * metric_norm(solution, metric)
         call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           state, solution, solution_norm, error)
@@ -7035,9 +6920,10 @@ contains
                 "error near minimum with trust radius shorter than step."
             test_truncated_conjugate_gradient = .false.
         end if
-        ratio = model_ratio(solution)
-        if (ratio <= 0.0_rp .or. abs(metric_norm(solution) - ref_step_trust_radius( &
-            state%trust_radius, ratio)) > tol) then
+        ratio = hartmann6d_ratio(context, solution)
+        if (ratio <= 0.0_rp .or. &
+            abs(metric_norm(solution, metric) - &
+                ref_step_trust_radius(state%trust_radius, ratio)) > tol) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not reduce function value or does not lie at trust region "// &
                 "boundary near minimum with trust radius shorter than step."
@@ -7087,8 +6973,8 @@ contains
             test_truncated_conjugate_gradient = .false.
         end if
         residual = grad + matmul(context%hess, solution)
-        if (abs(state%relative_residual - metric_norm(residual, inverse=.true.) / &
-                metric_norm(grad, inverse=.true.)) > tol .or. &
+        if (abs(state%relative_residual - metric_norm(residual, 1.0_rp / metric) / &
+                metric_norm(grad, 1.0_rp / metric)) > tol .or. &
             state%relative_residual > settings%local_red_factor) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Relative "// &
                 "residual wrong near minimum for interior solution."
@@ -7101,7 +6987,8 @@ contains
         ! ellipsoidal and the spherical trust region, check whether the solution lies
         ! at the boundary of the trust region in its norm, which is the returned norm,
         ! and reduces the function value
-        call set_hartmann6d_point(near_saddle_point)
+        call setup_hartmann6d_point(context, near_saddle_point, func, grad, h_diag)
+        metric = ref_trust_region_metric(h_diag)
         do i_case = 1, size(shape_names)
             settings%trust_region_shape = shape_names(i_case)
             state%trust_radius = 0.4_rp
@@ -7115,7 +7002,7 @@ contains
                 test_truncated_conjugate_gradient = .false.
             end if
             if (i_case == 1) then
-                shape_norm = metric_norm(solution)
+                shape_norm = metric_norm(solution, metric)
             else
                 shape_norm = norm2(solution)
             end if
@@ -7126,7 +7013,7 @@ contains
                     " trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
-            ratio = model_ratio(solution)
+            ratio = hartmann6d_ratio(context, solution)
             if (ratio <= 0.0_rp .or. abs(solution_norm - ref_step_trust_radius( &
                 state%trust_radius, ratio)) > tol) then
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
@@ -7177,11 +7064,7 @@ contains
         ! that the error of this evaluation is reported with its origin when it fails
         call setup_settings(settings, fault_context)
         settings%grad_noise = .false.
-        fault_context%vars = near_minimum
-        fault_context%hess = hartmann6d_hessian(near_minimum)
-        func = hartmann6d_func(near_minimum)
-        call hartmann6d_gradient(near_minimum, grad)
-        h_diag = [(fault_context%hess(i, i), i=1, n_param)]
+        call setup_hartmann6d_point(fault_context, near_minimum, func, grad, h_diag)
         obj_func_funptr => first_step_rejecting_obj_func
         do i_case = 1, 2
             fault_context%n_callback_calls = 0
@@ -7264,25 +7147,22 @@ contains
         end if
 
         ! run truncated conjugate gradient with a random perturbation of the gradient
-        ! in the range of a projection and a preconditioner which does not project, on
-        ! a diagonal Hessian which the projection preserves, and determine if the
-        ! solution stays in the range of the projection and deviates from the Newton
-        ! step by roughly the relative size of the perturbation, the local reduction
+        ! in the range of a projection and a preconditioner which does not project but
+        ! inverts the Hessian up to a factor, so that the first micro iteration solves
+        ! the perturbed system exactly, and determine if the solution stays in the
+        ! range of the projection and deviates from the Newton step by the
+        ! perturbation, whose size relative to the gradient is the local reduction
         ! factor truncated conjugate gradient always solves to
         call setup_settings(settings, quadratic_context)
         noise = settings%local_red_factor
         settings%precond_pd => mock_precond_pd
         settings%project => mock_project_out_pair
-        quadratic_context%hess = identity_matrix(n_param)
-        do i = 1, n_param
-            quadratic_context%hess(i, i) = real(max(i, 2), kind=rp)
-        end do
+        quadratic_context%hess = 2.0_rp * identity_matrix(n_param)
         call random_number(grad)
         grad = grad + 0.5_rp
         grad(1:2) = grad(1:2) - 0.5_rp * sum(grad(1:2))
         quadratic_context%grad = grad
-        h_diag = [(quadratic_context%hess(i, i), i=1, n_param)]
-        newton_solution = -grad / h_diag
+        h_diag = 2.0_rp
         state%trust_radius = 10.0_rp
         call truncated_conjugate_gradient(0.0_rp, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
@@ -7297,9 +7177,8 @@ contains
                 "leaves the range of the projection for perturbed gradient."
             test_truncated_conjugate_gradient = .false.
         end if
-        if (norm2(solution - newton_solution) < 0.1_rp * noise * norm2(grad) / &
-            maxval(h_diag) .or. norm2(solution - newton_solution) > 10.0_rp * noise * &
-            norm2(grad) / minval(h_diag)) then
+        if (abs(norm2(solution + 0.5_rp * grad) - 0.5_rp * noise * norm2(grad)) > tol) &
+            then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "does not deviate from the Newton step by the perturbation for "// &
                 "perturbed gradient."
@@ -7346,68 +7225,6 @@ contains
                 "an earlier subproblem seen by the first preconditioned residual."
             test_truncated_conjugate_gradient = .false.
         end if
-
-    contains
-
-        subroutine set_hartmann6d_point(vars)
-            !
-            ! this subroutine moves the Hartmann 6D context to a point and evaluates the
-            ! function, its gradient and Hessian and the Hessian diagonal there
-            !
-            real(rp), intent(in) :: vars(:)
-
-            integer(ip) :: i_param
-
-            context%vars = vars
-            func = hartmann6d_func(vars)
-            call hartmann6d_gradient(vars, grad)
-            context%hess = hartmann6d_hessian(vars)
-            h_diag = [(context%hess(i_param, i_param), i_param=1, n_param)]
-
-        end subroutine set_hartmann6d_point
-
-        function metric() result(diag)
-            !
-            ! this function returns the diagonal of the ellipsoidal trust region
-            ! metric, the absolute Hessian diagonal floored relative to its largest
-            ! element
-            !
-            real(rp) :: diag(n_param)
-
-            diag = max(abs(h_diag), precond_floor, &
-                       precond_rel_floor_factor * maxval(abs(h_diag)))
-
-        end function metric
-
-        function metric_norm(vector, inverse) result(norm)
-            !
-            ! this function returns the norm of a vector in the ellipsoidal trust
-            ! region metric or in its inverse
-            !
-            real(rp), intent(in) :: vector(:)
-            logical, intent(in), optional :: inverse
-            real(rp) :: norm
-
-            if (present(inverse)) then
-                norm = sqrt(dot_product(vector, vector / metric()))
-            else
-                norm = sqrt(dot_product(vector, vector * metric()))
-            end if
-
-        end function metric_norm
-
-        function model_ratio(step) result(ratio)
-            !
-            ! this function returns the ratio of the actual to the predicted change of
-            ! the Hartmann 6D function for a step from the current point
-            !
-            real(rp), intent(in) :: step(:)
-            real(rp) :: ratio
-
-            ratio = (hartmann6d_func(context%vars + step) - func) / &
-                    dot_product(step, grad + 0.5_rp * matmul(context%hess, step))
-
-        end function model_ratio
 
     end function test_truncated_conjugate_gradient
 
@@ -7520,6 +7337,55 @@ contains
         end if
 
     end function test_noise_level
+
+    logical(c_bool) function test_micro_conv_tol() bind(C)
+        !
+        ! this function tests the function which returns the residual norm at which the
+        ! micro iterations stop
+        !
+        use opentrustregion, only: solver_settings_type, micro_conv_tol, &
+                                   level_shift_local_thres, residual_norm_floor
+
+        ! cases with the level shift, the gradient perturbation and the initial
+        ! residual norm
+        character(len=*), parameter :: case_names(5) = &
+            [character(len=48) :: "vanishing level shift", "level shift at the "// &
+             "threshold of the local region", "large negative level shift", &
+             "gradient perturbation above the reduction factor", &
+             "vanishing initial residual norm"]
+        real(rp), parameter :: &
+            case_level_shifts(5) = &
+                [0.0_rp, level_shift_local_thres, -1.0_rp, 0.0_rp, 0.0_rp], &
+            case_noises(5) = [0.0_rp, 0.0_rp, 0.0_rp, 0.5_rp, 0.0_rp], &
+            case_residual_norms(5) = [2.0_rp, 2.0_rp, 2.0_rp, 2.0_rp, 1e-20_rp]
+        type(solver_settings_type) :: settings
+        real(rp) :: ref_conv_tols(5)
+        integer(ip) :: error, i
+
+        ! assume tests pass
+        test_micro_conv_tol = .true.
+
+        ! initialize settings, whose local and global reduction factors differ
+        call settings%init(error)
+
+        ! the stopping tolerance is the reduction factor of the local region inside
+        ! the threshold of the level shift and that of the global region outside, the
+        ! gradient perturbation where it is larger, relative to the initial residual
+        ! norm and never below the residual norm floor
+        ref_conv_tols = [ &
+            2.0_rp * settings%local_red_factor, 2.0_rp * settings%global_red_factor, &
+            2.0_rp * settings%global_red_factor, 1.0_rp, residual_norm_floor]
+        do i = 1, size(case_names)
+            if (abs(micro_conv_tol(case_level_shifts(i), case_noises(i), &
+                                   case_residual_norms(i), settings) - &
+                    ref_conv_tols(i)) > 0.0_rp) then
+                write(stderr, *) "test_micro_conv_tol failed: Stopping tolerance "// &
+                    "wrong for "//trim(case_names(i))//"."
+                test_micro_conv_tol = .false.
+            end if
+        end do
+
+    end function test_micro_conv_tol
 
     logical(c_bool) function test_get_preconditioned_residual_dot() bind(C)
         !
@@ -9721,55 +9587,64 @@ contains
         !
         ! this function tests the generalized Lanczos trust region subroutine
         !
-        use opentrustregion, only: &
-            obj_func_type, hess_x_type, solver_settings_type, &
-            generalized_lanczos_trust_region, trust_radius_shrink_ratio, &
-            trust_radius_expand_ratio, trust_radius_shrink_factor, &
-            trust_radius_expand_factor, precond_rel_floor_factor, &
-            default_settings => default_solver_settings
+        use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
+                                   generalized_lanczos_trust_region, error_obj_func, &
+                                   function_unchanged_warning_msg
 
-        type(solver_state_type) :: state
-        real(rp) :: func, lambda, ratio, solution_norm, noise
-        real(rp), dimension(n_param) :: grad, h_diag, newton_solution, solution, &
-                                        scaled_solution, residual, precond
-        integer(ip) :: i, error
+        character(len=*), parameter :: shape_names(2) = &
+            [character(len=11) :: "ellipsoidal", "spherical"]
+        character(len=*), parameter :: restart_case_names(3) = &
+            [character(len=28) :: "inside the trust region", &
+             "on the trust region boundary", "without curvature"]
+        type(solver_settings_type) :: settings
+        type(solver_state_type), target :: state
+        real(rp) :: func, lambda, ratio, solution_norm, noise, trust_radius, &
+                    double_well_grad(2), double_well_h_diag(2), double_well_solution(2)
+        real(rp), dimension(n_param) :: grad, h_diag, metric, solution, &
+                                        scaled_solution, accepted_solution, residual
+        integer(ip) :: i_case, i_region, i_restart, n_hess_x_ref, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
-        type(solver_settings_type) :: settings
         logical :: local_region
-        character(len=6) :: region_str
+        character(len=6) :: region_name
+        type(hartmann6d_context_type), target :: context
+        type(hartmann6d_recording_context_type), target :: recording_context
+        type(hartmann6d_fault_context_type), target :: fault_context
+        type(quadratic_context_type), target :: quadratic_context
         type(refresh_context_type), target :: refresh_context
+        type(double_well_state_context_type), target :: state_context
 
         ! assume tests pass
         test_generalized_lanczos_trust_region = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
         settings%grad_noise = .false.
 
-        ! initialize variables
-        state%trust_radius = 0.4_rp
-        obj_func_funptr => legacy_obj_func
-        hess_x_funptr => legacy_hess_x_fun
-
         ! start in quadratic region near minimum
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        call legacy_hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
+        call setup_hartmann6d_point(context, near_minimum, func, grad, h_diag)
+        metric = ref_trust_region_metric(h_diag)
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x_fun
 
-        ! run generalized Lanczos trust region without perturbation, check if error has
-        ! occured, whether the Lagrange multiplier shift vanishes, whether the solution
-        ! stays within trust region and describes the Newton step, whether the
-        ! reported numbers of Hessian linear transformations and objective function
-        ! evaluations agree with the calls and that of the micro iterations with the
-        ! Hessian linear transformations, one of which each micro iteration of the
-        ! single Lanczos pass of an interior solution performs
+        ! run generalized Lanczos trust region with micro iterations left in the state
+        ! by a previous subproblem and a reduction factor it reaches before the
+        ! preconditioned residual vanishes numerically, check whether the multiplier
+        ! vanishes, whether the solution stays within the trust region in the returned
+        ! norm, which is its norm in the trust region metric, and reduces the function
+        ! value, whether the reported relative residual is that of the Newton step in
+        ! the inverse metric, below the reduction factor, and whether the reported
+        ! numbers of Hessian linear transformations and objective function evaluations
+        ! agree with the calls and that of the micro iterations with the Hessian
+        ! linear transformations, one of which each micro iteration of the single
+        ! Lanczos process of an interior solution performs, none of them being a
+        ! Jacobi-Davidson iteration
+        settings%local_red_factor = 1e-3_rp
+        state%trust_radius = 0.4_rp
+        state%micro_iteration = 100
+        state%jacobi_davidson_iteration = 100
         state%n_hess_x = 0
         state%n_obj_func = 0
-        n_hess_x_calls = 0
-        n_obj_func_calls = 0
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
             .false., state, solution, solution_norm, lambda, error)
@@ -9778,281 +9653,326 @@ contains
                 "Produced error near minimum."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (.not. call_counts_match("generalized_lanczos_trust_region", &
+        if (.not. check_call_counts(context, "generalized_lanczos_trust_region", &
                                     "near minimum", n_hess_x=state%n_hess_x, &
                                     n_obj_func=state%n_obj_func)) &
             test_generalized_lanczos_trust_region = .false.
-        if (state%micro_iteration /= n_hess_x_calls) then
+        if (state%micro_iteration /= context%n_hess_x_calls .or. &
+            state%jacobi_davidson_iteration /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Reported number of micro iterations wrong near minimum."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (abs(lambda) > tol) then
+        if (abs(lambda) > 0.0_rp) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Lagrange multiplier is not zero near minimum."
+                "Multiplier does not vanish near minimum."
             test_generalized_lanczos_trust_region = .false.
         end if
-        residual = grad + hartmann6d_hess_x(solution)
-        precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
-        if (sqrt(dot_product(residual, residual / precond)) > &
-            settings%local_red_factor * sqrt(dot_product(grad, grad / precond))) then
+        ratio = hartmann6d_ratio(context, solution)
+        if (abs(solution_norm - metric_norm(solution, metric)) > tol .or. &
+            ratio <= 0.0_rp .or. &
+            solution_norm > ref_step_trust_radius(state%trust_radius, ratio) + tol) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not describe Newton step near minimum."
+                "Solution does not reduce function value or leaves the trust "// &
+                "region in the returned norm near minimum."
             test_generalized_lanczos_trust_region = .false.
         end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if ((ratio < trust_radius_shrink_ratio .and. &
-             solution_norm > state%trust_radius / trust_radius_shrink_factor) .or. &
-            (ratio > trust_radius_expand_ratio .and. &
-             solution_norm > state%trust_radius / trust_radius_expand_factor)) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not stay within trust region near minimum."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-
-        ! run generalized Lanczos trust region again with a reduction factor it
-        ! reaches before the preconditioned residual vanishes numerically and check
-        ! that the reported relative residual is that of the returned solution in the
-        ! preconditioner metric, below the reduction factor
-        settings%local_red_factor = 1e-3_rp
-        state%trust_radius = 0.4_rp
-        call generalized_lanczos_trust_region( &
-            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            .false., state, solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near minimum for larger reduction factor."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        residual = grad + hartmann6d_hess_x(solution)
-        if (abs(state%relative_residual - sqrt(dot_product( &
-            residual, residual / precond) / dot_product(grad, grad / precond))) > &
-            tol .or. state%relative_residual > settings%local_red_factor) then
+        residual = grad + matmul(context%hess, solution)
+        if (abs(state%relative_residual - metric_norm(residual, 1.0_rp / metric) / &
+                metric_norm(grad, 1.0_rp / metric)) > tol .or. &
+            state%relative_residual > settings%local_red_factor) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Relative residual wrong near minimum."
             test_generalized_lanczos_trust_region = .false.
         end if
-        settings%local_red_factor = default_settings%local_red_factor
 
-        ! run generalized Lanczos trust region with perturbation, check if error has
-        ! occured, whether the Lagrange multiplier shift vanishes and whether the
-        ! solution stays within trust region and reduces the function value
-        settings%grad_noise = .true.
+        ! run generalized Lanczos trust region with a trust radius half as long as this
+        ! solution, so that the step reaches the trust region boundary although the
+        ! curvature is positive, and check whether the multiplier is positive, whether
+        ! the solution lies at the trust region boundary in the returned norm and
+        ! reduces the function value and whether the reported relative residual is
+        ! that of the level-shifted Newton step in the inverse metric, below the
+        ! reduction factor of the global region
+        state%trust_radius = 0.5_rp * metric_norm(solution, metric)
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
             .false., state, solution, solution_norm, lambda, error)
         if (error /= 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near minimum for perturbed system."
+                "Produced error near minimum with trust radius shorter than step."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (abs(lambda) > tol) then
+        if (lambda <= 0.0_rp) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Lagrange multiplier is not zero near minimum for perturbed system."
+                "Multiplier is not positive near minimum with trust radius shorter "// &
+                "than step."
             test_generalized_lanczos_trust_region = .false.
         end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if (ratio <= 0.0_rp) then
+        ratio = hartmann6d_ratio(context, solution)
+        if (abs(solution_norm - metric_norm(solution, metric)) > tol .or. &
+            ratio <= 0.0_rp .or. abs(solution_norm - ref_step_trust_radius( &
+                state%trust_radius, ratio)) > tol) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not reduce function value near minimum for "// &
-                "perturbed system."
+                "Solution does not reduce function value or does not lie at trust "// &
+                "region boundary in the returned norm near minimum with trust "// &
+                "radius shorter than step."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if ((ratio < trust_radius_shrink_ratio .and. &
-             solution_norm > state%trust_radius / trust_radius_shrink_factor) .or. &
-            (ratio > trust_radius_expand_ratio .and. &
-             solution_norm > state%trust_radius / trust_radius_expand_factor)) then
+        residual = grad + matmul(context%hess, solution) + lambda * metric * solution
+        if (abs(state%relative_residual - metric_norm(residual, 1.0_rp / metric) / &
+                metric_norm(grad, 1.0_rp / metric)) > tol .or. &
+            state%relative_residual > settings%global_red_factor) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not stay within trust region near minimum for "// &
-                "perturbed system."
+                "Relative residual wrong near minimum with trust radius shorter "// &
+                "than step."
             test_generalized_lanczos_trust_region = .false.
         end if
-
-        ! run generalized Lanczos trust region with a spherical trust region and check
-        ! that the returned solution norm equals the true Euclidean norm of the
-        ! solution, unlike the default ellipsoidal trust region whose norm is measured
-        ! in the preconditioner metric; GLTR falls back to no preconditioning to
-        ! achieve this, so this also implicitly checks that this fallback still
-        ! produces a valid, converged solution
-        settings%trust_region_shape = "spherical"
-        settings%grad_noise = .false.
-        call generalized_lanczos_trust_region( &
-            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            .false., state, solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near minimum for spherical trust region."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        if (abs(norm2(solution) - solution_norm) > tol) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Returned solution norm does not match Euclidean solution norm for "// &
-                "spherical trust region."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        settings%trust_region_shape = "ellipsoidal"
 
         ! run generalized Lanczos trust region with two preconditioners which only
         ! differ by a constant factor and check that both produce the same solution
         settings%local_red_factor = 1e-1_rp
         settings%global_red_factor = 1e-1_rp
-        settings%precond_pd => mock_precond_pd
-        state%trust_radius = 0.4_rp
-        call generalized_lanczos_trust_region( &
-            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            .false., state, solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near minimum for user-defined preconditioner."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        settings%precond_pd => mock_scaled_precond_pd
-        state%trust_radius = 0.4_rp
-        call generalized_lanczos_trust_region( &
-            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            .false., state, scaled_solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near minimum for scaled user-defined preconditioner."
-            test_generalized_lanczos_trust_region = .false.
-        end if
+        do i_case = 1, 2
+            if (i_case == 1) then
+                settings%precond_pd => mock_precond_pd
+            else
+                settings%precond_pd => mock_scaled_precond_pd
+            end if
+            state%trust_radius = 0.4_rp
+            call generalized_lanczos_trust_region( &
+                func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+                .false., state, scaled_solution, solution_norm, lambda, error)
+            if (error /= 0) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Produced error near minimum for user-defined preconditioner."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+            if (i_case == 1) solution = scaled_solution
+        end do
         if (any(abs(solution - scaled_solution) > tol)) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution depends on the scale of the preconditioner near minimum."
             test_generalized_lanczos_trust_region = .false.
         end if
-        nullify(settings%precond_pd)
-        settings%local_red_factor = default_settings%local_red_factor
-        settings%global_red_factor = default_settings%global_red_factor
+        call setup_settings(settings, context)
+        settings%grad_noise = .false.
 
-        ! start near saddle point
-        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        call legacy_hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
-        state%trust_radius = 0.4_rp
-
-        ! run generalized Lanczos trust region without perturbation, check if error has
-        ! occured, whether the Lagrange multiplier is positive, whether the solution
-        ! lies at the trust region boundary and describes a level-shifted Newton step
-        ! and whether the reported number of Hessian linear transformations agrees
-        ! with the calls
-        state%n_hess_x = 0
-        n_hess_x_calls = 0
-        call generalized_lanczos_trust_region( &
-            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            .false., state, solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near saddle point."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        if (.not. call_counts_match("generalized_lanczos_trust_region", &
-                                    "near saddle point", n_hess_x=state%n_hess_x)) &
-            test_generalized_lanczos_trust_region = .false.
-        if (lambda <= 0.0_rp) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Lagrange multiplier is not positive near saddle point."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
-        residual = grad + hartmann6d_hess_x(solution) + lambda * solution * precond
-        if (sqrt(dot_product(residual, residual / precond)) > &
-            settings%global_red_factor * sqrt(dot_product(grad, grad / precond))) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not describe level-shifted Newton step near saddle "// &
-                "point."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        if (abs(state%relative_residual - &
-                sqrt(dot_product(residual, residual / precond) / &
-                     dot_product(grad, grad / precond))) > tol) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Relative residual wrong near saddle point."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - state%trust_radius / trust_radius_shrink_factor) > &
-             tol) .or. (ratio > trust_radius_expand_ratio .and. &
-                        abs(solution_norm - state%trust_radius / &
-                            trust_radius_expand_factor) > tol)) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not lie at trust region boundary near saddle point."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-
-        ! run generalized Lanczos trust region with a spherical trust region near the
-        ! saddle point and check that the returned solution norm equals the true
-        ! Euclidean norm of the solution and lies at the trust region boundary
-        settings%trust_region_shape = "spherical"
-        state%trust_radius = 0.4_rp
-        call generalized_lanczos_trust_region( &
-            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
-            .false., state, solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near saddle point for spherical trust region."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        if (abs(norm2(solution) - solution_norm) > tol) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Returned solution norm does not match Euclidean solution norm "// &
-                "near saddle point for spherical trust region."
-            test_generalized_lanczos_trust_region = .false.
-        end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - state%trust_radius / trust_radius_shrink_factor) > &
-             tol) .or. (ratio > trust_radius_expand_ratio .and. &
-                        abs(solution_norm - state%trust_radius / &
-                            trust_radius_expand_factor) > tol)) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not lie at trust region boundary near saddle point "// &
-                "for spherical trust region."
-            test_generalized_lanczos_trust_region = .false.
-        end if
+        ! start near saddle point and run generalized Lanczos trust region in the
+        ! ellipsoidal and the spherical trust region, which uses no preconditioner,
+        ! check whether the multiplier is positive, whether the solution lies at the
+        ! boundary of the trust region in its norm, which is the returned norm, and
+        ! reduces the function value, whether the reported relative residual is that
+        ! of the level-shifted Newton step in the inverse metric of the trust region,
+        ! below the reduction factor of the global region, and whether the reported
+        ! number of Hessian linear transformations agrees with the calls
+        call setup_hartmann6d_point(context, near_saddle_point, func, grad, h_diag)
+        do i_case = 1, size(shape_names)
+            settings%trust_region_shape = shape_names(i_case)
+            if (i_case == 1) then
+                metric = ref_trust_region_metric(h_diag)
+            else
+                metric = 1.0_rp
+            end if
+            state%trust_radius = 0.4_rp
+            state%n_hess_x = 0
+            context%n_hess_x_calls = 0
+            call generalized_lanczos_trust_region( &
+                func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+                .false., state, solution, solution_norm, lambda, error)
+            if (error /= 0) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Produced error near saddle point for "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+            if (.not. check_call_counts( &
+                context, "generalized_lanczos_trust_region", &
+                "near saddle point for "//trim(shape_names(i_case))//" trust region", &
+                n_hess_x=state%n_hess_x)) &
+                test_generalized_lanczos_trust_region = .false.
+            if (lambda <= 0.0_rp) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Multiplier is not positive near saddle point for "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+            ratio = hartmann6d_ratio(context, solution)
+            if (abs(solution_norm - metric_norm(solution, metric)) > tol .or. &
+                ratio <= 0.0_rp .or. abs(solution_norm - ref_step_trust_radius( &
+                    state%trust_radius, ratio)) > tol) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Solution does not reduce function value or does not lie at "// &
+                    "trust region boundary in the returned norm near saddle point "// &
+                    "for "//trim(shape_names(i_case))//" trust region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+            residual = grad + matmul(context%hess, solution) + &
+                       lambda * metric * solution
+            if (abs(state%relative_residual - metric_norm(residual, 1.0_rp / metric) / &
+                    metric_norm(grad, 1.0_rp / metric)) > tol .or. &
+                state%relative_residual > settings%global_red_factor) then
+                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                    "Relative residual wrong near saddle point for "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_generalized_lanczos_trust_region = .false.
+            end if
+        end do
         settings%trust_region_shape = "ellipsoidal"
 
-        ! run generalized Lanczos trust region with perturbation, check if error has
-        ! occured, whether the Lagrange multiplier is positive and whether the solution
-        ! lies at the trust region boundary and reduces the function value
-        settings%grad_noise = .true.
+        ! let the objective function reject the first step near the minimum and fail
+        ! when it evaluates the step solved again for the shrunk trust radius and check
+        ! that its error is reported with its origin
+        call setup_settings(settings, fault_context)
+        settings%grad_noise = .false.
+        call setup_hartmann6d_point(fault_context, near_minimum, func, grad, h_diag)
+        obj_func_funptr => first_step_rejecting_obj_func
+        hess_x_funptr => faulty_hess_x
+        fault_context%fault_callback = fault_obj_func
+        fault_context%fault_call = 2
+        state%trust_radius = 10.0_rp
         call generalized_lanczos_trust_region( &
             func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
             .false., state, solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error near saddle point for perturbed system."
+        if (error /= error_obj_func + 1) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: Did "// &
+                "not report the error of the objective function failing after the "// &
+                "rejected step with its origin."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (lambda <= 0.0_rp) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Lagrange multiplier is not positive near saddle point for "// &
-                "perturbed system."
+
+        ! start near the minimum with a trust radius far beyond the step, so that the
+        ! step ends inside the trust region, with one half as long as this step, so
+        ! that it ends on the boundary, and in a spherical trust region with a
+        ! vanishing Hessian, so that the step ends on the boundary after a basis
+        ! vector without curvature, and let the objective function accept this step
+        ! and reject it, so that the subproblem is solved again for the shrunk trust
+        ! radius from the stored Lanczos process, and check that this solution
+        ! performs no Hessian linear transformations, returns the same step inside the
+        ! trust region and a step on the boundary of the shrunk trust region
+        ! otherwise, with its norm in the trust region metric and the relative
+        ! residual of its level-shifted Newton step, and that the objective function is
+        ! evaluated once more, with a reduction factor the Lanczos process reaches
+        ! before the preconditioned residual vanishes numerically
+        fault_context%fault_callback = 0
+        settings%local_red_factor = 1e-3_rp
+        metric = ref_trust_region_metric(h_diag)
+        trust_radius = 10.0_rp
+        do i_restart = 1, size(restart_case_names)
+            if (i_restart == 3) then
+                settings%trust_region_shape = "spherical"
+                fault_context%hess = 0.0_rp
+                metric = 1.0_rp
+                trust_radius = 0.01_rp
+            end if
+            do i_case = 1, 2
+                if (i_case == 1) then
+                    obj_func_funptr => faulty_obj_func
+                else
+                    obj_func_funptr => first_step_rejecting_obj_func
+                end if
+                fault_context%n_callback_calls = 0
+                state%trust_radius = trust_radius
+                call generalized_lanczos_trust_region( &
+                    func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
+                    settings, .false., state, solution, solution_norm, lambda, error)
+                if (i_case == 1) then
+                    accepted_solution = solution
+                    n_hess_x_ref = fault_context%n_callback_calls(fault_hess_x)
+                    cycle
+                end if
+                if (error /= 0 .or. &
+                    fault_context%n_callback_calls(fault_obj_func) /= 2 .or. &
+                    fault_context%n_callback_calls(fault_hess_x) /= n_hess_x_ref) then
+                    write(stderr, *) "test_generalized_lanczos_trust_region "// &
+                        "failed: Rejected step "// &
+                        trim(restart_case_names(i_restart))//" not solved again "// &
+                        "from the stored Lanczos process and evaluated once more."
+                    test_generalized_lanczos_trust_region = .false.
+                end if
+                ratio = hartmann6d_ratio(fault_context, solution)
+                if ((i_restart == 1 .and. &
+                     any(abs(solution - accepted_solution) > tol)) .or. &
+                    (i_restart > 1 .and. &
+                     abs(metric_norm(solution, metric) - &
+                         ref_step_trust_radius(state%trust_radius, ratio)) > tol)) then
+                    write(stderr, *) "test_generalized_lanczos_trust_region "// &
+                        "failed: Step solved again after rejected step "// &
+                        trim(restart_case_names(i_restart))//" is not the same "// &
+                        "step inside or on the boundary of the shrunk trust region."
+                    test_generalized_lanczos_trust_region = .false.
+                end if
+                if (abs(solution_norm - metric_norm(solution, metric)) > tol) then
+                    write(stderr, *) "test_generalized_lanczos_trust_region "// &
+                        "failed: Returned norm of step solved again after rejected "// &
+                        "step "//trim(restart_case_names(i_restart))// &
+                        " is not its norm in the trust region metric."
+                    test_generalized_lanczos_trust_region = .false.
+                end if
+                residual = grad + matmul(fault_context%hess, solution) + &
+                           lambda * metric * solution
+                if (abs(state%relative_residual - &
+                        metric_norm(residual, 1.0_rp / metric) / &
+                        metric_norm(grad, 1.0_rp / metric)) > tol) then
+                    write(stderr, *) "test_generalized_lanczos_trust_region "// &
+                        "failed: Relative residual of step solved again after "// &
+                        "rejected step "//trim(restart_case_names(i_restart))//" wrong."
+                    test_generalized_lanczos_trust_region = .false.
+                end if
+            end do
+            trust_radius = 0.5_rp * metric_norm(accepted_solution, metric)
+        end do
+
+        ! let a single micro iteration not suffice near the minimum, so that the step
+        ! of the unconverged Lanczos process is rejected and the stored process cannot
+        ! solve the subproblem for the shrunk trust radius either, until the trust
+        ! region is small enough for the first micro iteration to reach its boundary,
+        ! and check that every rejected step starts a new Lanczos process instead of
+        ! evaluating an empty step
+        call setup_settings(settings, recording_context)
+        settings%grad_noise = .false.
+        settings%n_micro = 1
+        call setup_hartmann6d_point(recording_context, near_minimum, func, grad, h_diag)
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x_fun
+        state%trust_radius = 10.0_rp
+        call generalized_lanczos_trust_region( &
+            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+            .false., state, solution, solution_norm, lambda, error)
+        if (error /= 0 .or. state%micro_iteration <= settings%n_micro .or. &
+            recording_context%obj_func_zero_step) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: New "// &
+                "Lanczos process not started or empty step evaluated after step of "// &
+                "unconverged Lanczos process is rejected."
             test_generalized_lanczos_trust_region = .false.
         end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if (ratio <= 0.0_rp) then
+
+        ! run generalized Lanczos trust region on a quadratic model with a gradient
+        ! too small for its step to change the objective function, which does not
+        ! change at all, so that the first step reaches maximum precision, and check
+        ! that the subproblem stops without error and reports this and that a warning
+        ! is printed
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        quadratic_context%hess = identity_matrix(n_param)
+        quadratic_context%grad = spread(1e-9_rp, 1, n_param)
+        h_diag = 1.0_rp
+        obj_func_funptr => constant_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.4_rp
+        call generalized_lanczos_trust_region(1.0_rp, quadratic_context%grad, h_diag, &
+                                              n_param, obj_func_funptr, hess_x_funptr, &
+                                              settings, .false., state, solution, &
+                                              solution_norm, lambda, error)
+        if (error /= 0 .or. .not. state%max_precision_reached) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not reduce function value near saddle point for "// &
-                "perturbed system."
+                "Maximum precision not reached without error when the objective "// &
+                "function does not change."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - state%trust_radius / trust_radius_shrink_factor) > &
-             tol) .or. (ratio > trust_radius_expand_ratio .and. &
-                        abs(solution_norm - state%trust_radius / &
-                            trust_radius_expand_factor) > tol)) then
+        if (index(quadratic_context%log_message, &
+                  " "//function_unchanged_warning_msg) == 0) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Solution does not lie at trust region boundary near saddle point "// &
-                "for perturbed system."
+                "Warning not printed when the objective function does not change."
             test_generalized_lanczos_trust_region = .false.
         end if
 
@@ -10065,9 +9985,10 @@ contains
         settings%grad_noise = .false.
         settings%refresh_hess = .true.
         call setup_refresh_context(refresh_context, func, h_diag)
-        state%trust_radius = 0.4_rp
+        metric = ref_trust_region_metric(h_diag)
         obj_func_funptr => refresh_obj_func
         hess_x_funptr => refresh_hess_x
+        state%trust_radius = 0.4_rp
         call generalized_lanczos_trust_region(func, refresh_context%grad, h_diag, &
                                               n_param, obj_func_funptr, hess_x_funptr, &
                                               settings, .false., state, solution, &
@@ -10083,11 +10004,8 @@ contains
             test_generalized_lanczos_trust_region = .false.
         end if
         residual = refresh_context%grad + matmul(refresh_context%hess, solution)
-        precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
-        if (sqrt(dot_product(residual, residual / precond)) > &
-            settings%local_red_factor * &
-            sqrt(dot_product(refresh_context%grad, refresh_context%grad / precond))) &
-            then
+        if (metric_norm(residual, 1.0_rp / metric) > settings%local_red_factor * &
+            metric_norm(refresh_context%grad, 1.0_rp / metric)) then
             write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
                 "Solution does not describe Newton step of corrected Hessian model "// &
                 "after rejected step."
@@ -10095,89 +10013,710 @@ contains
         end if
 
         ! run generalized Lanczos trust region with a random perturbation of the
-        ! gradient and a preconditioner which does not project, after a subproblem
-        ! solved in either region, and determine if the solution stays in the
-        ! subspace of the projection and deviates from the Newton step by roughly the
-        ! relative size of the perturbation, which is the reduction factor of that
-        ! region
-        do i = 1, 2
-            local_region = i == 2
-            region_str = merge("local ", "global", local_region)
-            call legacy_setup_settings(settings)
-            settings%grad_noise = .true.
+        ! gradient in the range of a projection and a preconditioner which does not
+        ! project but inverts the Hessian up to a factor, so that the first micro
+        ! iteration solves the perturbed system exactly, after a subproblem solved in
+        ! either region, and determine if the solution stays in the range of the
+        ! projection and deviates from the Newton step by the perturbation, whose size
+        ! relative to the gradient is the reduction factor of that region
+        call setup_settings(settings, quadratic_context)
+        settings%precond_pd => mock_precond_pd
+        settings%project => mock_project_out_pair
+        quadratic_context%hess = 2.0_rp * identity_matrix(n_param)
+        call random_number(grad)
+        grad = grad + 0.5_rp
+        grad(1:2) = grad(1:2) - 0.5_rp * sum(grad(1:2))
+        quadratic_context%grad = grad
+        h_diag = 2.0_rp
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        do i_region = 1, 2
+            local_region = i_region == 2
+            region_name = merge("local ", "global", local_region)
             noise = merge(settings%local_red_factor, settings%global_red_factor, &
                           local_region)
-            settings%precond_pd => mock_precond_pd
-            settings%project => legacy_mock_project
-            call setup_truncation_model(.false., func, h_diag)
-            newton_solution = -overflow_grad / h_diag
             state%trust_radius = 10.0_rp
-            obj_func_funptr => overflow_obj_func
-            hess_x_funptr => overflow_hess_x
             call generalized_lanczos_trust_region( &
-                func, overflow_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
+                0.0_rp, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
                 settings, local_region, state, solution, solution_norm, lambda, error)
             if (error /= 0) then
                 write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                    "Produced error for perturbed gradient in "//trim(region_str)// &
+                    "Produced error for perturbed gradient in "//trim(region_name)// &
                     " region."
                 test_generalized_lanczos_trust_region = .false.
             end if
-            if (abs(solution(1) - solution(2)) > tol) then
+            if (abs(solution(1) + solution(2)) > tol) then
                 write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                    "Solution leaves the subspace of the projection for perturbed "// &
-                    "gradient in "//trim(region_str)//" region."
+                    "Solution leaves the range of the projection for perturbed "// &
+                    "gradient in "//trim(region_name)//" region."
                 test_generalized_lanczos_trust_region = .false.
             end if
-            if (norm2(solution - newton_solution) < &
-                0.1_rp * noise * norm2(overflow_grad) / maxval(h_diag)) then
+            if (abs(norm2(solution + 0.5_rp * grad) - 0.5_rp * noise * norm2(grad)) > &
+                tol) then
                 write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                    "Solution does not solve a perturbed system for perturbed "// &
-                    "gradient in "//trim(region_str)//" region."
-                test_generalized_lanczos_trust_region = .false.
-            end if
-            if (norm2(solution - newton_solution) > &
-                10.0_rp * noise * norm2(overflow_grad) / minval(h_diag)) then
-                write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                    "Solution deviates from the Newton step by more than the "// &
-                    "perturbation for perturbed gradient in "//trim(region_str)// &
+                    "Solution does not deviate from the Newton step by the "// &
+                    "perturbation for perturbed gradient in "//trim(region_name)// &
                     " region."
                 test_generalized_lanczos_trust_region = .false.
             end if
         end do
 
-        ! run generalized Lanczos trust region without Hessian refresh on a quadratic
-        ! model whose boundary step rotates one parameter by more than pi/4, so that it
-        ! is rejected and retried with the stored Lanczos factorization, which cannot
-        ! converge for the smaller trust radius within the micro iteration limit, and
-        ! determine if a new Lanczos process is started instead of evaluating an empty
-        ! step
-        call legacy_setup_settings(settings)
-        settings%grad_noise = .false.
-        settings%n_micro = 2
-        settings%local_red_factor = 1e-6_rp
-        settings%global_red_factor = 1e-6_rp
-        call setup_truncation_model(.true., func, h_diag)
-        overflow_grad = 0.0_rp
-        overflow_grad(1) = 10.0_rp
-        state%trust_radius = 2.0_rp
-        obj_func_funptr => overflow_obj_func
-        hess_x_funptr => overflow_hess_x
+        ! run generalized Lanczos trust region near the minimum with the random
+        ! perturbation of the gradient after a subproblem solved in the global region
+        ! and a negligible reduction factor of the local region, in which the Newton
+        ! step lies, and check that the micro iterations stop at the relative size of
+        ! the perturbation, the reduction factor of the global region, far above the
+        ! negligible one
+        call setup_settings(settings, context)
+        settings%local_red_factor = 1e-10_rp
+        call setup_hartmann6d_point(context, near_minimum, func, grad, h_diag)
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x_fun
+        state%trust_radius = 10.0_rp
         call generalized_lanczos_trust_region( &
-            func, overflow_grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, &
-            settings, .false., state, solution, solution_norm, lambda, error)
-        if (error /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
-                "Produced error for retried step."
+            func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+            .false., state, solution, solution_norm, lambda, error)
+        if (error /= 0 .or. state%relative_residual > settings%global_red_factor .or. &
+            state%relative_residual <= settings%local_red_factor) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: Micro "// &
+                "iterations do not stop at the perturbation of the global region."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (n_overflow_empty_steps /= 0) then
-            write(stderr, *) "test_generalized_lanczos_trust_region failed: Empty "// &
-                "step evaluated for retried step."
+
+        ! solve the subproblem of the double well function with a state holding the
+        ! values of an earlier subproblem and a positive-definite preconditioner which
+        ! reads the state through the pointer in its context, and check that the first
+        ! preconditioned residual already sees no micro iterations and the residual of
+        ! the vanishing solution, which is the gradient
+        call setup_settings(settings, state_context)
+        settings%grad_noise = .false.
+        settings%precond_pd => state_reading_precond_pd
+        state_context%vars = [0.5_rp, 0.1_rp]
+        state_context%state => state
+        double_well_grad = [2.0_rp * state_context%vars(1), -2.0_rp * &
+                            state_context%vars(2) + 4.0_rp * state_context%vars(2)**3]
+        double_well_h_diag = [2.0_rp, -2.0_rp + 12.0_rp * state_context%vars(2)**2]
+        obj_func_funptr => double_well_obj_func
+        hess_x_funptr => double_well_hess_x
+        state%trust_radius = 0.4_rp
+        state%micro_iteration = 7
+        state%jacobi_davidson_iteration = 3
+        state%relative_residual = 0.3_rp
+        call generalized_lanczos_trust_region( &
+            double_well_func(state_context%vars), double_well_grad, &
+            double_well_h_diag, 2_ip, obj_func_funptr, hess_x_funptr, settings, &
+            .false., state, double_well_solution, solution_norm, lambda, error)
+        if (error /= 0) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Produced error with a state of an earlier subproblem."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (.not. allocated(state_context%seen_states)) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Preconditioner did not read the state."
+            test_generalized_lanczos_trust_region = .false.
+        else if (state_context%seen_states(1)%micro_iteration /= 0 .or. &
+                 state_context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
+                 abs(state_context%seen_states(1)%relative_residual - 1.0_rp) > tol) &
+            then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: State "// &
+                "of an earlier subproblem seen by the first preconditioned residual."
             test_generalized_lanczos_trust_region = .false.
         end if
 
     end function test_generalized_lanczos_trust_region
+
+    logical(c_bool) function test_gltr_lanczos_process() bind(C)
+        !
+        ! this function tests the subroutine which runs the Lanczos process of
+        ! generalized Lanczos trust region
+        !
+        use opentrustregion, only: hess_x_type, solver_settings_type, &
+                                   gltr_lanczos_type, gltr_lanczos_process, error_hess_x
+
+        ! starting value of the function and of the micro iterations, which the
+        ! Lanczos process continues counting
+        real(rp), parameter :: func = 0.5_rp
+        integer(ip), parameter :: start_micro_iteration = 5
+
+        ! a fixed gradient and a coupled Hessian, which the diagonal preconditioner
+        ! does not invert, so that the Lanczos process needs several micro iterations
+        ! but fewer than the dimension to reduce the residual by the reduction factor
+        real(rp), parameter :: ref_grad(n_param) = &
+            [1.0_rp, -0.5_rp, 0.3_rp, 0.8_rp, -0.2_rp, 0.4_rp]
+        type(solver_settings_type) :: settings
+        type(solver_state_type), target :: state
+        type(gltr_lanczos_type) :: lanczos
+        real(rp) :: pred_func, solution_norm, interior_solution(n_param), trust_radius
+        real(rp), dimension(n_param) :: grad, h_diag, metric, residual, solution
+        real(rp), allocatable :: lanczos_vecs(:, :), tridiag(:, :)
+        integer(ip) :: i, j, n_interior, error
+        logical :: micro_converged
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        type(hartmann6d_fault_context_type), target :: fault_context
+
+        ! assume tests pass
+        test_gltr_lanczos_process = .true.
+
+        ! setup settings object
+        call setup_settings(settings, fault_context)
+        hess_x_funptr => faulty_hess_x
+        grad = ref_grad
+
+        ! run the Lanczos process on the coupled Hessian within a trust region far
+        ! beyond the Newton step and check that it converges inside the trust region
+        ! with a vanishing multiplier, adds one micro iteration and one Hessian linear
+        ! transformation per Lanczos vector to the state, returns the residual of the
+        ! model at the solution, its norm in the trust region metric, the value the
+        ! model predicts and the relative residual in the inverse metric, below the
+        ! reduction factor
+        settings%local_red_factor = 1e-2_rp
+        call set_coupled_hessian()
+        call run_lanczos_process(10.0_rp, 0.0_rp)
+        if (error /= 0 .or. .not. micro_converged .or. .not. lanczos%interior .or. &
+            abs(lanczos%lambda) > 0.0_rp) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Did not converge "// &
+                "inside the trust region with a vanishing multiplier."
+            test_gltr_lanczos_process = .false.
+        end if
+        call check_counters("inside the trust region")
+        if (norm2(residual - (grad + matmul(fault_context%hess, solution))) > tol) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Returned residual "// &
+                "is not that of the model at the solution inside the trust region."
+            test_gltr_lanczos_process = .false.
+        end if
+        call check_solution("inside the trust region")
+        if (abs(state%relative_residual - metric_norm(residual, 1.0_rp / metric) / &
+                metric_norm(grad, 1.0_rp / metric)) > tol .or. &
+            state%relative_residual > settings%local_red_factor) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Relative residual "// &
+                "wrong inside the trust region."
+            test_gltr_lanczos_process = .false.
+        end if
+
+        ! assemble the Lanczos vectors, the preconditioned residuals normalized by the
+        ! square roots of their dot products with the residuals and alternating in
+        ! sign with the step sizes, including the one of the residual the process
+        ! stopped at, and check that they are orthonormal in the trust region metric,
+        ! that they reduce the Hessian to the stored tridiagonal matrix and that the
+        ! stored off-diagonal element coupling the last of them to the next one is the
+        ! one the Hessian has
+        n_interior = lanczos%n_red_space
+        allocate(lanczos_vecs(n_param, n_interior + 1), tridiag(n_interior, n_interior))
+        do i = 1, n_interior + 1
+            if (i <= n_interior) then
+                lanczos_vecs(:, i) = lanczos%precond_residuals(:, i) / &
+                                     sqrt(lanczos%residual_dot_list(i))
+            else
+                lanczos_vecs(:, i) = &
+                    lanczos%precond_residuals(:, i) / &
+                    sqrt(dot_product(residual, lanczos%precond_residuals(:, i)))
+            end if
+            do j = 1, i - 1
+                lanczos_vecs(:, i) = -sign(1.0_rp, lanczos%stepsize_list(j)) * &
+                                     lanczos_vecs(:, i)
+            end do
+        end do
+        tridiag = tridiagonal_matrix(lanczos%diag(:n_interior), &
+                                     lanczos%off_diag(:n_interior - 1))
+        if (norm2(matmul(transpose(lanczos_vecs), spread(metric, 2, n_interior + 1) * &
+                         lanczos_vecs) - identity_matrix(n_interior + 1)) > tol) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Lanczos vectors "// &
+                "are not orthonormal in the trust region metric."
+            test_gltr_lanczos_process = .false.
+        end if
+        if (norm2(matmul(transpose(lanczos_vecs(:, :n_interior)), matmul( &
+            fault_context%hess, lanczos_vecs(:, :n_interior))) - tridiag) > tol) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Lanczos vectors do "// &
+                "not reduce the Hessian to the stored tridiagonal matrix."
+            test_gltr_lanczos_process = .false.
+        end if
+        if (abs(dot_product(lanczos_vecs(:, n_interior + 1), &
+                            matmul(fault_context%hess, lanczos_vecs(:, n_interior))) - &
+                lanczos%off_diag(n_interior)) > tol) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Off-diagonal "// &
+                "element coupling the last Lanczos vector to the next one not "// &
+                "stored when stopping inside the trust region."
+            test_gltr_lanczos_process = .false.
+        end if
+        interior_solution = solution
+
+        ! run the Lanczos process with a gradient perturbation larger than a negligible
+        ! reduction factor and check that it stops at the same solution, since the
+        ! perturbation raises the stopping tolerance to its size
+        settings%local_red_factor = 1e-8_rp
+        call run_lanczos_process(10.0_rp, 1e-2_rp)
+        if (error /= 0 .or. lanczos%n_red_space /= n_interior .or. &
+            any(abs(solution - interior_solution) > tol)) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Stopping tolerance "// &
+                "not raised by the gradient perturbation."
+            test_gltr_lanczos_process = .false.
+        end if
+
+        ! run the Lanczos process with a limit of micro iterations it cannot converge
+        ! within and check that it stops unconverged inside the trust region at the
+        ! limit and returns the residual of the model at the solution and its norm in
+        ! the trust region metric
+        settings%n_micro = 2
+        call run_lanczos_process(10.0_rp, 0.0_rp)
+        if (error /= 0 .or. micro_converged .or. .not. lanczos%interior .or. &
+            lanczos%n_red_space /= 2) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Did not stop "// &
+                "unconverged inside the trust region at the micro iteration limit."
+            test_gltr_lanczos_process = .false.
+        end if
+        call check_counters("at the micro iteration limit")
+        if (norm2(residual - (grad + matmul(fault_context%hess, solution))) > tol .or. &
+            abs(solution_norm - metric_norm(solution, metric)) > tol) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Returned residual "// &
+                "or solution norm wrong at the micro iteration limit."
+            test_gltr_lanczos_process = .false.
+        end if
+        call setup_settings(settings, fault_context)
+        settings%local_red_factor = 1e-2_rp
+
+        ! run the Lanczos process with a trust radius half as long as the solution
+        ! inside the trust region, so that its step reaches the trust region boundary
+        ! although the curvature is positive, and on a Hessian with a negative
+        ! eigenvalue, whose negative curvature the process detects inside the trust
+        ! region, and check that it converges on the trust region boundary
+        trust_radius = 0.5_rp * metric_norm(interior_solution, metric)
+        call run_lanczos_process(trust_radius, 0.0_rp)
+        call check_boundary("on the boundary at positive curvature")
+        fault_context%hess(1, 1) = -3.0_rp
+        h_diag(1) = -3.0_rp
+        metric = ref_trust_region_metric(h_diag)
+        call run_lanczos_process(10.0_rp, 0.0_rp)
+        call check_boundary("on the boundary at negative curvature")
+
+        ! run the Lanczos process in a spherical trust region with a gradient along a
+        ! direction without curvature, which the Hessian couples to another one, and
+        ! check that it stops at the boundary point along the negative gradient with a
+        ! vanishing multiplier after its first basis vector and stores the
+        ! off-diagonal element coupling this Lanczos vector to the next one, the norm
+        ! of the Hessian applied to it
+        settings%trust_region_shape = "spherical"
+        fault_context%hess = 0.0_rp
+        fault_context%hess(1, 2) = 1.0_rp
+        fault_context%hess(2, 1) = 1.0_rp
+        h_diag = 0.0_rp
+        metric = 1.0_rp
+        grad = 0.0_rp
+        grad(1) = ref_grad(1)
+        call run_lanczos_process(0.7_rp, 0.0_rp)
+        if (error /= 0 .or. .not. micro_converged .or. &
+            abs(lanczos%lambda) > 0.0_rp .or. lanczos%n_red_space /= 1) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Did not converge "// &
+                "after the first basis vector without curvature."
+            test_gltr_lanczos_process = .false.
+        end if
+        if (norm2(solution + 0.7_rp * grad / norm2(grad)) > tol) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Solution is not "// &
+                "the boundary point along the negative gradient without curvature."
+            test_gltr_lanczos_process = .false.
+        end if
+        call check_solution("without curvature")
+        if (abs(lanczos%off_diag(1) - &
+                norm2(matmul(fault_context%hess, grad)) / norm2(grad)) > tol) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Off-diagonal "// &
+                "element coupling the Lanczos vector without curvature to the next "// &
+                "one not stored."
+            test_gltr_lanczos_process = .false.
+        end if
+        settings%trust_region_shape = "ellipsoidal"
+        grad = ref_grad
+
+        ! check that the error of a failing Hessian linear transformation is reported
+        ! with its origin and counted
+        call set_coupled_hessian()
+        fault_context%fault_callback = fault_hess_x
+        fault_context%fault_call = 1
+        call run_lanczos_process(10.0_rp, 0.0_rp)
+        if (error /= error_hess_x + 1) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Error of failing "// &
+                "Hessian linear transformation not reported with its origin."
+            test_gltr_lanczos_process = .false.
+        end if
+        call check_counters("for failing Hessian linear transformation")
+
+    contains
+
+        subroutine set_coupled_hessian()
+            !
+            ! this subroutine sets the coupled positive-definite Hessian, its diagonal
+            ! and the trust region metric
+            !
+            integer(ip) :: i_row, i_col
+
+            do i_col = 1, n_param
+                do i_row = 1, n_param
+                    fault_context%hess(i_row, i_col) = &
+                        1.0_rp / real(1 + abs(i_row - i_col), kind=rp)
+                end do
+                fault_context%hess(i_col, i_col) = real(1 + i_col, kind=rp)
+            end do
+            h_diag = [(fault_context%hess(i_row, i_row), i_row=1, n_param)]
+            metric = ref_trust_region_metric(h_diag)
+
+        end subroutine set_coupled_hessian
+
+        subroutine run_lanczos_process(radius, noise)
+            !
+            ! this subroutine runs the Lanczos process from the vanishing solution with
+            ! a trust radius and a gradient perturbation, with micro iterations left in
+            ! the state and its Hessian linear transformations counted from zero
+            !
+            real(rp), intent(in) :: radius, noise
+
+            call setup_gltr_lanczos(lanczos, n_param, settings%n_micro)
+            residual = grad
+            solution = 0.0_rp
+            state%trust_radius = radius
+            state%micro_iteration = start_micro_iteration
+            state%n_hess_x = 0
+            fault_context%n_callback_calls = 0
+            call gltr_lanczos_process(func, h_diag, hess_x_funptr, residual, solution, &
+                                      lanczos, pred_func, solution_norm, &
+                                      micro_converged, noise, settings, state, error)
+
+        end subroutine run_lanczos_process
+
+        subroutine check_counters(case_name)
+            !
+            ! this subroutine checks that the reported number of Hessian linear
+            ! transformations agrees with the calls and that the micro iterations are
+            ! counted on with one per Hessian linear transformation
+            !
+            character(len=*), intent(in) :: case_name
+
+            if (state%n_hess_x /= fault_context%n_callback_calls(fault_hess_x) .or. &
+                state%micro_iteration /= start_micro_iteration + state%n_hess_x) then
+                write(stderr, *) "test_gltr_lanczos_process failed: Reported "// &
+                    "numbers of Hessian linear transformations or micro iterations "// &
+                    "wrong "//case_name//"."
+                test_gltr_lanczos_process = .false.
+            end if
+
+        end subroutine check_counters
+
+        subroutine check_solution(case_name)
+            !
+            ! this subroutine checks that the returned solution norm is the norm of the
+            ! solution in the trust region metric and that the predicted function value
+            ! is that of the model at the solution
+            !
+            character(len=*), intent(in) :: case_name
+
+            if (abs(solution_norm - metric_norm(solution, metric)) > tol) then
+                write(stderr, *) "test_gltr_lanczos_process failed: Returned "// &
+                    "solution norm is not the norm in the trust region metric "// &
+                    case_name//"."
+                test_gltr_lanczos_process = .false.
+            end if
+            if (abs(pred_func - &
+                    (func + dot_product(grad, solution) + 0.5_rp * dot_product( &
+                        solution, matmul(fault_context%hess, solution)))) > tol) then
+                write(stderr, *) "test_gltr_lanczos_process failed: Predicted "// &
+                    "function value is not that of the model "//case_name//"."
+                test_gltr_lanczos_process = .false.
+            end if
+
+        end subroutine check_solution
+
+        subroutine check_boundary(case_name)
+            !
+            ! this subroutine checks that the Lanczos process converged on the trust
+            ! region boundary with a positive multiplier, that the solution and the
+            ! predicted function value are consistent and that the relative residual
+            ! is that of the level-shifted Newton step in the inverse metric, below
+            ! the reduction factor of the global region
+            !
+            character(len=*), intent(in) :: case_name
+
+            real(rp) :: shifted_residual(n_param)
+
+            if (error /= 0 .or. .not. micro_converged .or. lanczos%interior .or. &
+                lanczos%lambda <= 0.0_rp) then
+                write(stderr, *) "test_gltr_lanczos_process failed: Did not "// &
+                    "converge with a positive multiplier "//case_name//"."
+                test_gltr_lanczos_process = .false.
+            end if
+            call check_counters(case_name)
+            if (abs(metric_norm(solution, metric) - state%trust_radius) > tol) then
+                write(stderr, *) "test_gltr_lanczos_process failed: Solution does "// &
+                    "not lie on the trust region boundary "//case_name//"."
+                test_gltr_lanczos_process = .false.
+            end if
+            call check_solution(case_name)
+            shifted_residual = grad + matmul(fault_context%hess, solution) + &
+                               lanczos%lambda * metric * solution
+            if (abs(state%relative_residual - &
+                    metric_norm(shifted_residual, 1.0_rp / metric) / &
+                    metric_norm(grad, 1.0_rp / metric)) > tol .or. &
+                state%relative_residual > settings%global_red_factor) then
+                write(stderr, *) "test_gltr_lanczos_process failed: Relative "// &
+                    "residual wrong "//case_name//"."
+                test_gltr_lanczos_process = .false.
+            end if
+
+        end subroutine check_boundary
+
+    end function test_gltr_lanczos_process
+
+    logical(c_bool) function test_gltr_precondition_residual() bind(C)
+        !
+        ! this function tests the subroutine which returns the preconditioned residual
+        ! of generalized Lanczos trust region and its dot product with the residual
+        !
+        use opentrustregion, only: solver_settings_type, gltr_precondition_residual
+
+        character(len=*), parameter :: shape_names(2) = &
+            [character(len=11) :: "ellipsoidal", "spherical"]
+        type(solver_settings_type) :: settings
+        real(rp), dimension(n_param) :: residual, h_diag, precond_residual, &
+                                        ref_precond_residual
+        real(rp) :: residual_dot
+        integer(ip) :: i_case, error
+        type(test_context_type), target :: context
+
+        ! assume tests pass
+        test_gltr_precondition_residual = .true.
+
+        ! setup settings object
+        call setup_settings(settings, context)
+
+        ! generate a residual and a Hessian diagonal with elements of both signs
+        call random_number(residual)
+        residual = residual - 0.5_rp
+        call random_number(h_diag)
+        h_diag = 2.0_rp * h_diag - 1.0_rp
+
+        ! check that the residual is divided by the metric of the ellipsoidal trust
+        ! region and left unpreconditioned for the spherical one, and that the dot
+        ! product with the residual is returned
+        do i_case = 1, size(shape_names)
+            settings%trust_region_shape = shape_names(i_case)
+            if (i_case == 1) then
+                ref_precond_residual = residual / ref_trust_region_metric(h_diag)
+            else
+                ref_precond_residual = residual
+            end if
+            call gltr_precondition_residual(residual, h_diag, precond_residual, &
+                                            residual_dot, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_gltr_precondition_residual failed: Produced "// &
+                    "error for "//trim(shape_names(i_case))//" trust region."
+                test_gltr_precondition_residual = .false.
+            end if
+            if (norm2(precond_residual - ref_precond_residual) > tol .or. &
+                abs(residual_dot - dot_product(residual, ref_precond_residual)) > tol) &
+                then
+                write(stderr, *) "test_gltr_precondition_residual failed: "// &
+                    "Preconditioned residual or its dot product wrong for "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_gltr_precondition_residual = .false.
+            end if
+        end do
+
+    end function test_gltr_precondition_residual
+
+    logical(c_bool) function test_gltr_assemble_solution() bind(C)
+        !
+        ! this function tests the subroutine which assembles the solution of the trust
+        ! region subproblem of generalized Lanczos trust region from the solution of
+        ! the reduced problem and the preconditioned residuals of the Lanczos process
+        !
+        use opentrustregion, only: hess_x_type, solver_settings_type, &
+                                   gltr_lanczos_type, gltr_assemble_solution, &
+                                   error_hess_x
+
+        ! size of the reduced space, which leaves the last stored preconditioned
+        ! residual unused, the step sizes of the Lanczos iterations, of both signs, and
+        ! the multiplier and step size of the hard case
+        integer(ip), parameter :: n_red_space = 3, n_micro = 4
+        real(rp), parameter :: step_sizes(n_red_space) = [0.5_rp, -0.3_rp, 0.7_rp], &
+                               lambda = 2.0_rp, hard_case_step_size = 0.3_rp
+        type(solver_settings_type) :: settings
+        type(gltr_lanczos_type) :: lanczos
+        real(rp) :: lanczos_vecs(n_param, n_red_space), solution(n_param), sign_factor
+        integer(ip) :: n_hess_x, i, j, i_case, error
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        type(hartmann6d_fault_context_type), target :: fault_context
+
+        ! assume tests pass
+        test_gltr_assemble_solution = .true.
+
+        ! setup settings object
+        call setup_settings(settings, fault_context)
+
+        ! generate random orthonormal Lanczos vectors, the residual dot products, the
+        ! solution and the unnormalized eigenvector of the reduced problem and store
+        ! the preconditioned residuals, the Lanczos vectors scaled by the square roots
+        ! of the residual dot products and alternating in sign with the step sizes
+        call setup_gltr_lanczos(lanczos, n_param, n_micro)
+        call random_number(lanczos_vecs)
+        do i = 1, n_red_space
+            do j = 1, i - 1
+                lanczos_vecs(:, i) = lanczos_vecs(:, i) - dot_product( &
+                    lanczos_vecs(:, j), lanczos_vecs(:, i)) * lanczos_vecs(:, j)
+            end do
+            lanczos_vecs(:, i) = lanczos_vecs(:, i) / norm2(lanczos_vecs(:, i))
+        end do
+        lanczos%n_red_space = n_red_space
+        lanczos%stepsize_list(:n_red_space) = step_sizes
+        call random_number(lanczos%residual_dot_list(:n_red_space))
+        lanczos%residual_dot_list(:n_red_space) = &
+            lanczos%residual_dot_list(:n_red_space) + 0.5_rp
+        call random_number(lanczos%red_space_solution(:n_red_space))
+        call random_number(lanczos%red_space_eigenvec(:n_red_space))
+        lanczos%red_space_eigenvec(:n_red_space) = &
+            2.0_rp * lanczos%red_space_eigenvec(:n_red_space) + 0.5_rp
+        sign_factor = 1.0_rp
+        do i = 1, n_red_space
+            lanczos%precond_residuals(:, i) = &
+                sign_factor * sqrt(lanczos%residual_dot_list(i)) * lanczos_vecs(:, i)
+            sign_factor = -sign(1.0_rp, step_sizes(i)) * sign_factor
+        end do
+        call random_number(lanczos%precond_residuals(:, n_micro))
+        lanczos%lambda = lambda
+        lanczos%hard_case_step_size = hard_case_step_size
+
+        ! the Hessian has the eigenvalue of the hard case, the negative multiplier,
+        ! along every direction
+        fault_context%hess = -lambda * identity_matrix(n_param)
+        hess_x_funptr => faulty_hess_x
+
+        ! assemble the solution and check that it is the solution of the reduced
+        ! problem in the Lanczos vectors and that no Hessian linear transformation is
+        ! performed, then in the hard case that it is completed along the eigenvector
+        ! of the reduced problem in the Lanczos vectors, scaled to unit norm, by the
+        ! step size of the hard case and that one Hessian linear transformation is
+        ! performed and counted, and that the error of a failing one is reported with
+        ! its origin
+        do i_case = 1, 3
+            lanczos%hard_case = i_case > 1
+            fault_context%n_callback_calls = 0
+            fault_context%fault_callback = merge(fault_hess_x, 0_ip, i_case == 3)
+            fault_context%fault_call = 1
+            n_hess_x = 7
+            call gltr_assemble_solution(lanczos, hess_x_funptr, solution, settings, &
+                                        n_hess_x, error)
+            if (n_hess_x /= 7 + fault_context%n_callback_calls(fault_hess_x) .or. &
+                fault_context%n_callback_calls(fault_hess_x) /= &
+                merge(0_ip, 1_ip, i_case == 1)) then
+                write(stderr, *) "test_gltr_assemble_solution failed: Hessian "// &
+                    "linear transformations not performed or counted correctly "// &
+                    trim(merge("outside", "in     ", i_case == 1))//" the hard case."
+                test_gltr_assemble_solution = .false.
+            end if
+            select case (i_case)
+            case (1)
+                if (error /= 0 .or. norm2(solution - matmul( &
+                    lanczos_vecs, lanczos%red_space_solution(:n_red_space))) > tol) then
+                    write(stderr, *) "test_gltr_assemble_solution failed: Solution "// &
+                        "is not the solution of the reduced problem in the Lanczos "// &
+                        "vectors."
+                    test_gltr_assemble_solution = .false.
+                end if
+            case (2)
+                if (error /= 0 .or. norm2(solution - matmul( &
+                    lanczos_vecs, lanczos%red_space_solution(:n_red_space) + &
+                    hard_case_step_size * lanczos%red_space_eigenvec(:n_red_space) / &
+                    norm2(lanczos%red_space_eigenvec(:n_red_space)))) > tol) then
+                    write(stderr, *) "test_gltr_assemble_solution failed: Solution "// &
+                        "not completed along the normalized eigenvector in the "// &
+                        "hard case."
+                    test_gltr_assemble_solution = .false.
+                end if
+            case (3)
+                if (error /= error_hess_x + 1) then
+                    write(stderr, *) "test_gltr_assemble_solution failed: Error of "// &
+                        "failing Hessian linear transformation not reported with "// &
+                        "its origin."
+                    test_gltr_assemble_solution = .false.
+                end if
+            end select
+        end do
+
+    end function test_gltr_assemble_solution
+
+    logical(c_bool) function test_solve_lanczos_subproblem() bind(C)
+        !
+        ! this function tests the subroutine which solves the trust region subproblem of
+        ! the leading part of the Lanczos tridiagonal matrix
+        !
+        use opentrustregion, only: gltr_lanczos_type, solve_lanczos_subproblem
+
+        ! size of the leading part, which leaves the rest of the stored Lanczos
+        ! factorization unused
+        integer(ip), parameter :: n_red_space = 3, n_micro = 4
+        type(gltr_lanczos_type) :: lanczos
+        real(rp) :: tridiag(n_red_space, n_red_space), &
+                    red_space_solution(n_red_space), func_diff, trust_radius
+        integer(ip) :: i_case
+
+        ! assume tests pass
+        test_solve_lanczos_subproblem = .true.
+
+        ! store a random positive-definite leading tridiagonal matrix and right hand
+        ! side, leaving the rest of the Lanczos factorization filled with the sentinel
+        ! of the fixture, whose use would make the matrix indefinite
+        call setup_gltr_lanczos(lanczos, n_param, n_micro)
+        call random_number(lanczos%diag(:n_red_space))
+        lanczos%diag(:n_red_space) = lanczos%diag(:n_red_space) + 3.0_rp
+        call random_number(lanczos%off_diag(:n_red_space - 1))
+        call random_number(lanczos%rhs(:n_red_space))
+        tridiag = tridiagonal_matrix(lanczos%diag(:n_red_space), &
+                                     lanczos%off_diag(:n_red_space - 1))
+
+        ! solve the subproblem within a trust region far beyond the Newton step and
+        ! within one half as long as the Newton step, and check that the solution is
+        ! the Newton step with a vanishing multiplier inside the trust region and the
+        ! level-shifted Newton step with a positive multiplier on its boundary, that
+        ! the returned function difference is the value of the model at the solution
+        ! and that the rest of the solution is left untouched
+        trust_radius = 100.0_rp
+        do i_case = 1, 2
+            lanczos%interior = .true.
+            lanczos%lambda = 0.0_rp
+            call solve_lanczos_subproblem(n_red_space, trust_radius, .false., .false., &
+                                          lanczos, func_diff)
+            red_space_solution = lanczos%red_space_solution(:n_red_space)
+            if (norm2(matmul(tridiag, red_space_solution) + lanczos%lambda * &
+                      red_space_solution + lanczos%rhs(:n_red_space)) > tol) then
+                write(stderr, *) "test_solve_lanczos_subproblem failed: Solution "// &
+                    "is not the level-shifted Newton step of the leading part "// &
+                    trim(merge("inside", "on    ", i_case == 1))// &
+                    " the trust region boundary."
+                test_solve_lanczos_subproblem = .false.
+            end if
+            if (i_case == 1 .and. abs(lanczos%lambda) > 0.0_rp) then
+                write(stderr, *) "test_solve_lanczos_subproblem failed: Solution "// &
+                    "not inside the trust region with a vanishing multiplier."
+                test_solve_lanczos_subproblem = .false.
+            end if
+            if (i_case == 2 .and. &
+                (lanczos%lambda <= 0.0_rp .or. &
+                 abs(norm2(red_space_solution) - trust_radius) > tol)) then
+                write(stderr, *) "test_solve_lanczos_subproblem failed: Solution "// &
+                    "not on the trust region boundary with a positive multiplier."
+                test_solve_lanczos_subproblem = .false.
+            end if
+            if (abs(func_diff - (dot_product( &
+                lanczos%rhs(:n_red_space), red_space_solution) + 0.5_rp * dot_product( &
+                    red_space_solution, matmul(tridiag, red_space_solution)))) > &
+                tol .or. any(abs(lanczos%red_space_solution(n_red_space + 1:) + &
+                                 1.0_rp) > 0.0_rp)) then
+                write(stderr, *) "test_solve_lanczos_subproblem failed: Returned "// &
+                    "function difference wrong or rest of the solution changed "// &
+                    trim(merge("inside", "on    ", i_case == 1))// &
+                    " the trust region boundary."
+                test_solve_lanczos_subproblem = .false.
+            end if
+            trust_radius = 0.5_rp * norm2(red_space_solution)
+        end do
+
+    end function test_solve_lanczos_subproblem
 
     logical(c_bool) function test_string_in() bind(C)
         !
