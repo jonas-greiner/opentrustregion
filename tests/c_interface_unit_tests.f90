@@ -1276,7 +1276,11 @@ contains
         ! check that the C function receives the vector and that its result is returned
         call random_number(x)
         call hess_x_f_wrapper_impl(hess_x_c_funptr, x, hess_x, error, host_context_c)
-        if (error /= 0 .or. any(abs(hess_x - 4.0_rp * x) > tol_c)) then
+        if (error /= 0) then
+            write(stderr, *) "test_hess_x_f_wrapper_impl failed: Produced error."
+            test_hess_x_f_wrapper_impl = .false.
+        end if
+        if (any(abs(hess_x - 4.0_rp * x) > tol_c)) then
             write(stderr, *) "test_hess_x_f_wrapper_impl failed: Result of the C "// &
                 "function not returned."
             test_hess_x_f_wrapper_impl = .false.
