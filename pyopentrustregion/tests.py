@@ -221,6 +221,7 @@ fortran_tests = {
         "h2o_fb_solver_stability",
         "h2o_fb_solver_tcg",
         "h2o_fb_stability_check_default",
+        "h2o_fb_stability_check_hess_symm",
         "h2o_fb_stability_check_jacobi_davidson",
     ],
     "c_integration_tests": [

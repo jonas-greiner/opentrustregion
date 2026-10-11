@@ -3972,9 +3972,16 @@ contains
         use opentrustregion, only: solver_settings_type, saddle_point_step
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
-        real(rp) :: grad_dir(n_param), kappa_dir(n_param), grad(n_param), &
-                    kappa(n_param), kappa_norm, min_eigval, grad_rms, target_grad_rms, &
-                    predicted_grad_rms, trust_radius
+        ! cases with a gradient RMS below and well above the convergence threshold and
+        ! a direction of negative curvature orthogonal to the gradient or overlapping
+        ! it positively or negatively
+        character(len=*), parameter :: case_names(4) = [ &
+            character(len=53) :: "below the convergence threshold", "above the "// &
+            "convergence threshold", "above the convergence threshold with "// &
+            "positive overlap", "above the convergence threshold with negative overlap"]
+        real(rp) :: grad_dir(n_param), kappa_dir(n_param), unstable_dir(n_param), &
+                    grad(n_param), kappa(n_param), kappa_norm, min_eigval, grad_rms, &
+                    target_grad_rms, predicted_grad_rms, trust_radius
         integer(ip) :: error, i
         type(solver_settings_type) :: settings
 
@@ -3999,22 +4006,30 @@ contains
         kappa_dir = kappa_dir / norm2(kappa_dir)
         min_eigval = -0.5_rp
 
-        ! test both a gradient RMS below and well above the convergence threshold
-        do i = 1, 2
+        ! test a gradient RMS below the convergence threshold, as when starting exactly
+        ! at a stationary point, and well above it, as when maximum precision is
+        ! reached at an unstable point before the gradient has converged, with the
+        ! direction of negative curvature orthogonal to the gradient, and well above it
+        ! with a direction overlapping the gradient, along which the step has to point
+        ! against the gradient
+        do i = 1, size(case_names)
             if (i == 1) then
-                ! below threshold, as when starting exactly at a stationary point
                 grad = 0.1_rp * settings%conv_tol * sqrt(real(n_param, kind=rp)) * &
                        grad_dir
             else
-                ! well above threshold, as when maximum precision is reached at an
-                ! unstable point before the gradient has converged
                 grad = 50.0_rp * settings%conv_tol * sqrt(real(n_param, kind=rp)) * &
                        grad_dir
             end if
             grad_rms = norm2(grad) / sqrt(real(n_param, kind=rp))
             target_grad_rms = 10.0_rp * max(settings%conv_tol, grad_rms)
+            if (i <= 2) then
+                unstable_dir = kappa_dir
+            else
+                unstable_dir = kappa_dir + merge(0.5_rp, -0.5_rp, i == 3) * grad_dir
+                unstable_dir = unstable_dir / norm2(unstable_dir)
+            end if
 
-            kappa = kappa_dir
+            kappa = unstable_dir
             call saddle_point_step(grad, grad_rms, min_eigval, trust_radius, settings, &
                                    kappa, kappa_norm)
 
@@ -4025,12 +4040,17 @@ contains
             if (ieee_is_nan(predicted_grad_rms) .or. &
                 abs(predicted_grad_rms - target_grad_rms) > tol) then
                 write(stderr, *) "test_saddle_point_step failed: Step does not "// &
-                    "reach targeted gradient RMS."
+                    "reach targeted gradient RMS "//trim(case_names(i))//"."
                 test_saddle_point_step = .false.
             end if
             if (abs(kappa_norm - norm2(kappa)) > tol) then
                 write(stderr, *) "test_saddle_point_step failed: Returned norm "// &
-                    "does not match step."
+                    "does not match step "//trim(case_names(i))//"."
+                test_saddle_point_step = .false.
+            end if
+            if (i > 2 .and. dot_product(grad, kappa) >= 0.0_rp) then
+                write(stderr, *) "test_saddle_point_step failed: Step does not "// &
+                    "point against the gradient "//trim(case_names(i))//"."
                 test_saddle_point_step = .false.
             end if
         end do
@@ -4262,6 +4282,40 @@ contains
             test_bisection_ah = .false.
         end if
 
+        ! test the hard case with a trust radius below the step at the crossover point,
+        ! which then lies outside the trust region, so that the bisection has to start
+        ! there and find the level-shifted Newton step on the trust region boundary,
+        ! which has no component along the lowest eigenvector and a level shift below
+        ! the lowest eigenvalue, here the step along the gradient direction with the
+        ! level shift -5
+        trust_radius = 0.1_rp
+        grad = 0.0_rp
+        grad(1) = grad_norm
+        call bisection_ah(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_bisection_ah failed: Produced error for hard "// &
+                "case with crossover step outside trust region."
+            test_bisection_ah = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol .or. &
+            norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                         mu * red_space_solution) + grad) > tol) then
+            write(stderr, *) "test_bisection_ah failed: Hard case solution with "// &
+                "crossover step outside trust region not level-shifted Newton step "// &
+                "on trust region boundary."
+            test_bisection_ah = .false.
+        end if
+        if (abs(mu + 5.0_rp) > tol .or. &
+            any(abs(red_space_solution - [-trust_radius, 0.0_rp, 0.0_rp]) > tol)) then
+            write(stderr, *) "test_bisection_ah failed: Hard case solution with "// &
+                "crossover step outside trust region not along gradient direction "// &
+                "with level shift below lowest eigenvalue."
+            test_bisection_ah = .false.
+        end if
+
         ! set up hard case with degenerate lowest eigenvalues
         trust_radius = 0.5_rp
         red_space_hess = 0.0_rp
@@ -4335,13 +4389,17 @@ contains
         character(len=*), parameter :: case_names(4) = &
             [character(len=29) :: "symmetric, indefinite", "asymmetric, indefinite", &
              "symmetric, positive-definite", "asymmetric, positive-definite"]
+        character(len=*), parameter :: hard_case_names(3) = &
+            [character(len=68) :: "symmetric Hessian", &
+             "asymmetric Hessian with right eigenvector along gradient direction", &
+             "asymmetric Hessian with right eigenvector against gradient direction"]
         type(solver_settings_type) :: settings
         real(rp) :: red_space_basis(n_param, n_trial), grad(n_param), grad_norm, &
                     red_space_hess(n_trial, n_trial), &
                     red_space_hess_left_eigvecs(n_trial, n_trial), &
                     red_space_hess_right_eigvecs(n_trial, n_trial), solution(n_param), &
                     red_space_solution(n_trial), trust_radius, mu, &
-                    grad_coupled_component
+                    grad_coupled_component, expected_red_space_solution(n_trial)
         complex(rp) :: red_space_hess_eigvals(n_trial)
         integer(ip) :: error, i_case
         logical :: positive_definite
@@ -4422,54 +4480,105 @@ contains
         ! eigenvector has no component along the gradient direction, so no level shift
         ! can reproduce the trust region solution and the remaining trust radius has to
         ! be filled with this eigenvector, for the symmetric Hessian and for this
-        ! Hessian made asymmetric without coupling the gradient direction to the
-        ! eigenvector of the lowest eigenvalue, which has to remain orthogonal to the
-        ! gradient for the hard case to arise, so that the hard case is detected from
-        ! the left eigenvector of the lowest eigenvalue while the remaining trust radius
-        ! is filled with the corresponding right eigenvector
-        do i_case = 1, 2
-            if (i_case == 2) red_space_hess(1, 3) = 0.5_rp
+        ! Hessian made asymmetric by coupling the gradient direction to the right
+        ! eigenvector of the lowest eigenvalue, (1, 1, 0) / sqrt(2), while its left
+        ! eigenvector remains orthogonal to the gradient for the hard case to arise, so
+        ! that the hard case is detected from the left eigenvector while the remaining
+        ! trust radius is filled with the right eigenvector, which has to point against
+        ! the gradient whichever sign it is returned with
+        do i_case = 1, size(hard_case_names)
+            if (i_case > 1) red_space_hess(1, 2) = -7.0_rp
             call diagonalize(i_case == 1)
+            if (i_case > 1) red_space_hess_right_eigvecs( &
+                :, minloc(red_space_hess_eigvals%re, dim=1)) = &
+                merge(1.0_rp, -1.0_rp, i_case == 2) * [1.0_rp, 1.0_rp, 0.0_rp] / &
+                sqrt(2.0_rp)
             call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
                               red_space_hess_eigvals, red_space_hess_right_eigvecs, &
                               red_space_hess_left_eigvecs, trust_radius, solution, &
                               red_space_solution, mu, settings, error)
             if (error /= 0) then
                 write(stderr, *) "test_bisection_mu failed: Produced error for "// &
-                    "hard case with "// &
-                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                    "hard case with "//trim(hard_case_names(i_case))//"."
                 test_bisection_mu = .false.
             end if
             if (abs(norm2(solution) - trust_radius) > tol) then
                 write(stderr, *) "test_bisection_mu failed: Hard case solution "// &
                     "does not respect trust radius for "// &
-                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                    trim(hard_case_names(i_case))//"."
                 test_bisection_mu = .false.
             end if
             if (abs(mu - minval(red_space_hess_eigvals%re)) > tol) then
                 write(stderr, *) "test_bisection_mu failed: Hard case level shift "// &
                     "not equal to lowest reduced space Hessian eigenvalue for "// &
-                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                    trim(hard_case_names(i_case))//"."
                 test_bisection_mu = .false.
             end if
-            grad_coupled_component = grad_norm / (minval(red_space_hess_eigvals%re) - &
-                                                  maxval(red_space_hess_eigvals%re))
-            if (any(abs(red_space_solution - [ &
-                grad_coupled_component, &
-                sqrt(trust_radius**2 - grad_coupled_component**2), 0.0_rp]) > tol)) then
+            ! the step at the lowest eigenvalue, which for the asymmetric Hessian is
+            ! the minimum norm solution (-1, 1, 0) / 14 orthogonal to the right
+            ! eigenvector, completed to the trust radius along the lowest eigenvector
+            if (i_case == 1) then
+                grad_coupled_component = grad_norm / &
+                                         (minval(red_space_hess_eigvals%re) - &
+                                          maxval(red_space_hess_eigvals%re))
+                expected_red_space_solution = [ &
+                    grad_coupled_component, &
+                    sqrt(trust_radius**2 - grad_coupled_component**2), 0.0_rp]
+            else
+                expected_red_space_solution = &
+                    grad_norm * [-1.0_rp, 1.0_rp, 0.0_rp] / 14.0_rp - &
+                    sqrt(trust_radius**2 - grad_norm**2 / 98.0_rp) * &
+                    [1.0_rp, 1.0_rp, 0.0_rp] / sqrt(2.0_rp)
+            end if
+            if (any(abs(red_space_solution - expected_red_space_solution) > tol)) then
                 write(stderr, *) "test_bisection_mu failed: Hard case reduced "// &
-                    "space solution not correct for "// &
-                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                    "space solution not correct for "//trim(hard_case_names(i_case))// &
+                    "."
                 test_bisection_mu = .false.
             end if
             if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > &
                     tol)) then
                 write(stderr, *) "test_bisection_mu failed: Hard case full space "// &
-                    "solution not correct for "// &
-                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                    "solution not correct for "//trim(hard_case_names(i_case))//"."
                 test_bisection_mu = .false.
             end if
         end do
+
+        ! let the trust radius be smaller than the step at the lowest eigenvalue of the
+        ! symmetric hard case, so that the bisection has to start from this singular
+        ! level shift and find the level-shifted Newton step on the trust region
+        ! boundary, which has no component along the lowest eigenvector and a level
+        ! shift below the lowest eigenvalue, here the step along the gradient direction
+        ! with the level shift -5
+        red_space_hess(1, 2) = 0.0_rp
+        trust_radius = 0.1_rp
+        grad = 0.0_rp
+        grad(1) = grad_norm
+        call diagonalize(.true.)
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_bisection_mu failed: Produced error for hard "// &
+                "case with step at lowest eigenvalue outside trust region."
+            test_bisection_mu = .false.
+        end if
+        if (abs(norm2(solution) - trust_radius) > tol .or. &
+            norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                         mu * red_space_solution) + grad) > tol) then
+            write(stderr, *) "test_bisection_mu failed: Hard case solution with "// &
+                "step at lowest eigenvalue outside trust region not level-shifted "// &
+                "Newton step on trust region boundary."
+            test_bisection_mu = .false.
+        end if
+        if (abs(mu + 5.0_rp) > tol .or. &
+            any(abs(red_space_solution - [-trust_radius, 0.0_rp, 0.0_rp]) > tol)) then
+            write(stderr, *) "test_bisection_mu failed: Hard case solution with "// &
+                "step at lowest eigenvalue outside trust region not along gradient "// &
+                "direction with level shift below lowest eigenvalue."
+            test_bisection_mu = .false.
+        end if
 
         ! set up hard case with degenerate lowest eigenvalues
         trust_radius = 0.5_rp
@@ -5922,11 +6031,12 @@ contains
                                    approx_hess_trial_vectors_warning_msg, &
                                    error_get_extra_trial_vectors
 
-        character(len=*), parameter :: case_names(5) = &
-            [character(len=33) :: "Hessian diagonal leading block", &
-             "converged warm start", "warm start that does not converge", &
-             "supplied extra trial vectors", "vanishing extra trial vectors"]
-        integer(ip), parameter :: n_trial_ref(5) = [3_ip, 3_ip, 2_ip, n_param, 1_ip]
+        character(len=*), parameter :: case_names(6) = &
+            [character(len=33) :: "Hessian diagonal leading block", "converged "// &
+             "warm start", "warm start that does not converge", "supplied extra "// &
+             "trial vectors", "no extra trial vectors", "vanishing extra trial vectors"]
+        integer(ip), parameter :: n_trial_ref(6) = &
+            [3_ip, 3_ip, 2_ip, n_param, 2_ip, 1_ip]
 
         type(stability_settings_type) :: settings
         real(rp) :: h_diag(n_param), h_diag_copy(n_param)
@@ -5980,8 +6090,15 @@ contains
                 settings%precond => null()
                 settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
             case (5)
+                ! request no extra trial vectors, so that the trial space consists of
+                ! the random trial vectors alone
+                settings%n_extra_trial_vectors = 0
+                settings%n_random_trial_vectors = 2
+                settings%get_extra_trial_vectors => null()
+            case (6)
                 ! supply extra trial vectors which all vanish, so that the trial space
                 ! consists of the random trial vector alone
+                settings%n_extra_trial_vectors = 2
                 settings%n_random_trial_vectors = 1
                 settings%get_extra_trial_vectors => mock_vanishing_extra_trial_vectors
             end select
@@ -7673,6 +7790,51 @@ contains
                                     n_hess_x=state%n_hess_x)) &
             test_level_shifted_davidson = .false.
 
+        ! run level-shifted Davidson, which accepts a Hessian declared not symmetric,
+        ! on a quadratic model whose Hessian is lower triangular, so that it is not
+        ! symmetric but has its diagonal elements as real eigenvalues, the lowest of
+        ! them negative with the first unit vector as left eigenvector, along which the
+        ! gradient has a component small enough that the level shift on the trust
+        ! region boundary lies close to this eigenvalue, and check that the solution is
+        ! a level-shifted Newton step of this Hessian to the reduction factor of the
+        ! global region on the boundary of the trust region it started from with a
+        ! level shift below its lowest eigenvalue, which the reduced space only reaches
+        ! with the reduced Hessian from both sides of the Hessian and diagonalized as a
+        ! non-symmetric matrix
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        settings%hess_symm = .false.
+        quadratic_context%hess = generate_random_symm_matrix(n_param)
+        do i = 1, n_param
+            quadratic_context%hess(:i - 1, i) = 0.0_rp
+            quadratic_context%hess(i, i) = real(i, kind=rp)
+        end do
+        quadratic_context%hess(1, 1) = -1.0_rp
+        call random_number(grad)
+        grad = 0.1_rp * (grad + 0.5_rp)
+        grad(1) = 0.01_rp
+        quadratic_context%grad = grad
+        h_diag = [(quadratic_context%hess(i, i), i=1, n_param)]
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.5_rp
+        call level_shifted_davidson(0.0_rp, grad, norm2(grad), h_diag, n_param, &
+                                    obj_func_funptr, hess_x_funptr, settings, .false., &
+                                    state, solution, solution_norm, mu, error)
+        if (error /= 0 .or. abs(solution_norm - 0.5_rp) > tol .or. &
+            mu >= minval(h_diag)) then
+            write(stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "or solution not on the trust region boundary with a level shift "// &
+                "below the lowest eigenvalue for non-symmetric Hessian."
+            test_level_shifted_davidson = .false.
+        end if
+        if (norm2(grad + matmul(quadratic_context%hess, solution) - mu * solution) > &
+            settings%global_red_factor * norm2(grad)) then
+            write(stderr, *) "test_level_shifted_davidson failed: Solution does "// &
+                "not describe level-shifted Newton step of non-symmetric Hessian."
+            test_level_shifted_davidson = .false.
+        end if
+
         ! run level-shifted Davidson with a Hessian linear transformation and with an
         ! objective function which fail and check that their errors are reported with
         ! their origins and that a failing Hessian linear transformation is counted
@@ -8312,27 +8474,47 @@ contains
 
         ! run truncated conjugate gradient near the minimum with a trust radius which
         ! contains the Newton step and a reduction factor it reaches before the
-        ! preconditioned residual vanishes numerically and check that the reported
-        ! relative residual is that of the returned solution in the preconditioner
-        ! metric, below the reduction factor
+        ! preconditioned residual vanishes numerically, in the ellipsoidal and the
+        ! spherical trust region, whose micro iterations track the norm of the solution
+        ! separately, and check that the returned norm is the norm of the trust region
+        ! and that the reported relative residual is that of the returned solution in
+        ! the preconditioner metric, which both trust regions use, below the reduction
+        ! factor
         settings%local_red_factor = 1e-3_rp
-        state%trust_radius = 10.0_rp
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          state, solution, solution_norm, error)
-        if (error /= 0) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
-                "error near minimum for interior solution."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        residual = grad + matmul(context%hess, solution)
-        if (abs(state%relative_residual - metric_norm(residual, 1.0_rp / metric) / &
-                metric_norm(grad, 1.0_rp / metric)) > tol .or. &
-            state%relative_residual > settings%local_red_factor) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Relative "// &
-                "residual wrong near minimum for interior solution."
-            test_truncated_conjugate_gradient = .false.
-        end if
+        do i_case = 1, size(shape_names)
+            settings%trust_region_shape = shape_names(i_case)
+            state%trust_radius = 10.0_rp
+            call truncated_conjugate_gradient( &
+                func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+                state, solution, solution_norm, error)
+            if (error /= 0) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Produced error near minimum for interior solution in "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_truncated_conjugate_gradient = .false.
+            end if
+            if (i_case == 1) then
+                shape_norm = metric_norm(solution, metric)
+            else
+                shape_norm = norm2(solution)
+            end if
+            if (abs(solution_norm - shape_norm) > tol) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Returned solution norm is not the norm of the trust region "// &
+                    "near minimum for interior solution in "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_truncated_conjugate_gradient = .false.
+            end if
+            residual = grad + matmul(context%hess, solution)
+            if (abs(state%relative_residual - metric_norm(residual, 1.0_rp / metric) / &
+                    metric_norm(grad, 1.0_rp / metric)) > tol .or. &
+                state%relative_residual > settings%local_red_factor) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Relative residual wrong near minimum for interior solution in "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_truncated_conjugate_gradient = .false.
+            end if
+        end do
         call setup_settings(settings, context)
         settings%grad_noise = .false.
 
@@ -8468,6 +8650,32 @@ contains
                   " "//function_unchanged_warning_msg) == 0) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Warning "// &
                 "not printed when the objective function does not change."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
+        ! run truncated conjugate gradient in a spherical trust region with a gradient
+        ! along a direction without curvature, which the Hessian couples to another
+        ! one, and check that the first basis vector leads to the boundary point along
+        ! the negative gradient
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        settings%trust_region_shape = "spherical"
+        quadratic_context%hess = 0.0_rp
+        quadratic_context%hess(1, 2) = 1.0_rp
+        quadratic_context%hess(2, 1) = 1.0_rp
+        quadratic_context%grad = 0.0_rp
+        quadratic_context%grad(1) = 1.0_rp
+        h_diag = 0.0_rp
+        obj_func_funptr => quadratic_obj_func
+        state%trust_radius = 0.7_rp
+        call truncated_conjugate_gradient( &
+            0.0_rp, quadratic_context%grad, h_diag, n_param, obj_func_funptr, &
+            hess_x_funptr, settings, state, solution, solution_norm, error)
+        if (error /= 0 .or. abs(solution_norm - 0.7_rp) > tol .or. &
+            norm2(solution + 0.7_rp * quadratic_context%grad) > tol) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "is not the boundary point along the negative gradient without "// &
+                "curvature."
             test_truncated_conjugate_gradient = .false.
         end if
 
@@ -10037,17 +10245,38 @@ contains
 
         ! run the Lanczos process with a trust radius half as long as the solution
         ! inside the trust region, so that its step reaches the trust region boundary
-        ! although the curvature is positive, and on a Hessian with a negative
-        ! eigenvalue, whose negative curvature the process detects inside the trust
-        ! region, and check that it converges on the trust region boundary
+        ! although the curvature is positive, and check that it converges on the trust
+        ! region boundary
         trust_radius = 0.5_rp * metric_norm(interior_solution, metric)
         call run_lanczos_process(trust_radius, 0.0_rp)
-        call check_boundary("on the boundary at positive curvature")
+        call check_boundary("on the boundary at positive curvature", .false.)
+
+        ! run the Lanczos process on the trust region boundary again with a limit of
+        ! micro iterations below the number it needed to converge there and check that
+        ! it stops at the limit with the solution of the reduced problem of the Lanczos
+        ! vectors so far on the boundary, whose relative residual lies above the
+        ! reduction factor, reported as converged unlike at the limit inside the trust
+        ! region, since this minimizer of the model on the boundary within the Lanczos
+        ! vectors is a usable step
+        settings%n_micro = lanczos%n_red_space - 1
+        call run_lanczos_process(trust_radius, 0.0_rp)
+        call check_boundary("on the boundary at the micro iteration limit", .true.)
+        if (lanczos%n_red_space /= settings%n_micro) then
+            write(stderr, *) "test_gltr_lanczos_process failed: Did not stop at "// &
+                "the micro iteration limit on the boundary."
+            test_gltr_lanczos_process = .false.
+        end if
+        call setup_settings(settings, fault_context)
+        settings%local_red_factor = 1e-2_rp
+
+        ! run the Lanczos process on a Hessian with a negative eigenvalue, whose
+        ! negative curvature the process detects inside the trust region, and check
+        ! that it converges on the trust region boundary
         fault_context%hess(1, 1) = -3.0_rp
         h_diag(1) = -3.0_rp
         metric = ref_trust_region_metric(h_diag)
         call run_lanczos_process(10.0_rp, 0.0_rp)
-        call check_boundary("on the boundary at negative curvature")
+        call check_boundary("on the boundary at negative curvature", .false.)
 
         ! run the Lanczos process in a spherical trust region with a gradient along a
         ! direction without curvature, which the Hessian couples to another one, and
@@ -10096,7 +10325,7 @@ contains
         grad = 0.0_rp
         grad(1) = 5e-8_rp
         call run_lanczos_process(1e-3_rp, 0.0_rp)
-        call check_boundary("for a short basis vector of negative curvature")
+        call check_boundary("for a short basis vector of negative curvature", .false.)
         settings%trust_region_shape = "ellipsoidal"
         grad = ref_grad
 
@@ -10197,15 +10426,17 @@ contains
 
         end subroutine check_solution
 
-        subroutine check_boundary(case_name)
+        subroutine check_boundary(case_name, at_limit)
             !
             ! this subroutine checks that the Lanczos process converged on the trust
             ! region boundary with a positive multiplier, that the solution and the
             ! predicted function value are consistent and that the relative residual
             ! is that of the level-shifted Newton step in the inverse metric, below
-            ! the reduction factor of the global region
+            ! the reduction factor of the global region unless the micro iteration
+            ! limit stopped the process before, and above it otherwise
             !
             character(len=*), intent(in) :: case_name
+            logical, intent(in) :: at_limit
 
             real(rp) :: shifted_residual(n_param)
 
@@ -10227,7 +10458,8 @@ contains
             if (abs(state%relative_residual - &
                     metric_norm(shifted_residual, 1.0_rp / metric) / &
                     metric_norm(grad, 1.0_rp / metric)) > tol .or. &
-                state%relative_residual > settings%global_red_factor) then
+                (state%relative_residual > settings%global_red_factor .neqv. &
+                 at_limit)) then
                 write(stderr, *) "test_gltr_lanczos_process failed: Relative "// &
                     "residual wrong "//case_name//"."
                 test_gltr_lanczos_process = .false.
@@ -10811,11 +11043,16 @@ contains
         use opentrustregion, only: solve_tridiagonal_subproblem
 
         integer(ip), parameter :: n_elem = 4
-        real(rp), parameter :: rel_tol = 1e-12_rp
+        real(rp), parameter :: rel_tol = 1e-12_rp, &
+                               warm_factors(2) = [1.0_rp + 1e-13_rp, 0.5_rp]
+        character(len=*), parameter :: warm_case_names(2) = &
+            [character(len=35) :: "within the accuracy of the boundary", &
+             "outside the trust region"]
         real(rp) :: diagonal(n_elem), off_diagonal(n_elem - 1), linear(n_elem), &
                     solution(n_elem), eigenvec(n_elem), ref_eigvals(n_elem), &
                     ref_eigvecs(n_elem, n_elem), trust_radius, lowest_eigenval, &
-                    lambda, func, hard_case_step_size, warm_lambda
+                    lambda, func, hard_case_step_size, warm_lambda, boundary_lambda
+        integer(ip) :: i_case
         logical :: interior, hard_case
 
         ! assume tests pass
@@ -10832,7 +11069,7 @@ contains
         ! starting from a multiplier which is not used without a warm start, and check
         ! that the solution is the Newton step inside the trust region with a
         ! vanishing multiplier
-        call run_subproblem(100.0_rp, .false., 1.0_rp)
+        call run_subproblem(100.0_rp, .true., .false., 1.0_rp)
         call check_solution("inside the trust region", solution, tol)
         if (.not. interior .or. abs(lambda) > 0.0_rp .or. hard_case) then
             write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
@@ -10842,7 +11079,7 @@ contains
 
         ! solve the subproblem within a trust region half as long as the Newton step
         ! and check that the solution lies on the boundary with a positive multiplier
-        call run_subproblem(0.5_rp * norm2(solution), .false., 0.0_rp)
+        call run_subproblem(0.5_rp * norm2(solution), .true., .false., 0.0_rp)
         call check_solution("on the trust region boundary", solution, tol)
         if (lambda <= 0.0_rp .or. hard_case .or. &
             abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
@@ -10851,41 +11088,57 @@ contains
             test_solve_tridiagonal_subproblem = .false.
         end if
 
-        ! solve the subproblem again with a warm start at a multiplier which differs
-        ! from this one by less than the accuracy of the boundary and check that the
-        ! solution is returned with the multiplier of the warm start
-        warm_lambda = (1.0_rp + 1e-13_rp) * lambda
-        call run_subproblem(trust_radius, .true., warm_lambda)
-        call check_solution("with a warm start", solution, tol)
-        if (abs(lambda - warm_lambda) > 0.0_rp .or. &
-            abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
-            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
-                "with the multiplier of the warm start not returned."
-            test_solve_tridiagonal_subproblem = .false.
-        end if
+        ! solve the subproblem again with warm starts at a multiplier which differs
+        ! from this one by less than the accuracy of the boundary, whose solution is
+        ! returned with the multiplier of the warm start, and at half this multiplier,
+        ! whose solution lies outside the trust region, from where Newton's method
+        ! continues towards the boundary, and check that the solution lies on the
+        ! boundary with the multiplier of the warm start or the one found before
+        boundary_lambda = lambda
+        do i_case = 1, size(warm_factors)
+            warm_lambda = warm_factors(i_case) * boundary_lambda
+            call run_subproblem(trust_radius, .true., .true., warm_lambda)
+            call check_solution("with a warm start "//trim(warm_case_names(i_case)), &
+                                solution, tol)
+            if (abs(norm2(solution) - trust_radius) > rel_tol * trust_radius .or. &
+                (i_case == 1 .and. abs(lambda - warm_lambda) > 0.0_rp) .or. &
+                (i_case > 1 .and. abs(lambda - boundary_lambda) > tol)) then
+                write(stderr, *) "test_solve_tridiagonal_subproblem failed: "// &
+                    "Solution with a warm start "//trim(warm_case_names(i_case))// &
+                    " not on the trust region boundary with the expected multiplier."
+                test_solve_tridiagonal_subproblem = .false.
+            end if
+        end do
 
         ! shift the tridiagonal matrix so that it becomes indefinite, solve the
-        ! subproblem and check that the solution lies on the boundary with a
-        ! multiplier which makes the shifted tridiagonal matrix positive
-        ! semidefinite, that no interior solution is reported and that the lowest
-        ! eigenvalue is returned
+        ! subproblem with an interior solution allowed, which is then ruled out, and
+        ! without, and check that the solution lies on the boundary with a multiplier
+        ! which makes the shifted tridiagonal matrix positive semidefinite, that no
+        ! interior solution is reported and that the lowest eigenvalue is returned
         diagonal = diagonal - 5.0_rp
         call ref_symm_mat_diag(tridiagonal_matrix(diagonal, off_diagonal), &
                                ref_eigvals, ref_eigvecs)
-        call run_subproblem(1.0_rp, .false., 0.0_rp)
-        call check_solution("for an indefinite tridiagonal matrix", solution, tol)
-        if (interior .or. hard_case .or. lambda < -ref_eigvals(1) .or. &
-            abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
-            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
-                "for an indefinite tridiagonal matrix not on the trust region "// &
-                "boundary with a multiplier above the negative lowest eigenvalue."
-            test_solve_tridiagonal_subproblem = .false.
-        end if
-        if (abs(lowest_eigenval - ref_eigvals(1)) > tridiag_eigval_tol) then
-            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Lowest "// &
-                "eigenvalue of an indefinite tridiagonal matrix not returned."
-            test_solve_tridiagonal_subproblem = .false.
-        end if
+        do i_case = 1, 2
+            call run_subproblem(1.0_rp, i_case == 1, .false., 0.0_rp)
+            call check_solution("for an indefinite tridiagonal matrix", solution, tol)
+            if (interior .or. hard_case .or. lambda < -ref_eigvals(1) .or. &
+                abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
+                write(stderr, *) "test_solve_tridiagonal_subproblem failed: "// &
+                    "Solution for an indefinite tridiagonal matrix not on the "// &
+                    "trust region boundary with a multiplier above the negative "// &
+                    "lowest eigenvalue "// &
+                    trim(merge("with   ", "without", i_case == 1))// &
+                    " an interior solution allowed."
+                test_solve_tridiagonal_subproblem = .false.
+            end if
+            if (abs(lowest_eigenval - ref_eigvals(1)) > tridiag_eigval_tol) then
+                write(stderr, *) "test_solve_tridiagonal_subproblem failed: Lowest "// &
+                    "eigenvalue of an indefinite tridiagonal matrix not returned "// &
+                    trim(merge("with   ", "without", i_case == 1))// &
+                    " an interior solution allowed."
+                test_solve_tridiagonal_subproblem = .false.
+            end if
+        end do
 
         ! solve the subproblem of a reducible tridiagonal matrix whose lowest
         ! eigenvector is nearly orthogonal to the linear term, so that the solution of
@@ -10897,7 +11150,7 @@ contains
         diagonal = [-1.0_rp, 2.0_rp, 3.0_rp, 4.0_rp]
         off_diagonal = 0.0_rp
         linear = [1e-16_rp, 1.0_rp, 1.0_rp, 1.0_rp]
-        call run_subproblem(10.0_rp, .false., 0.0_rp)
+        call run_subproblem(10.0_rp, .true., .false., 0.0_rp)
         call check_solution("in the hard case", solution + hard_case_step_size * &
                             eigenvec, tridiag_eigvec_tol)
         if (.not. hard_case .or. abs(lambda - 1.0_rp) > tridiag_eigval_tol .or. &
@@ -10910,19 +11163,36 @@ contains
             test_solve_tridiagonal_subproblem = .false.
         end if
 
+        ! give the linear term a small component along the lowest eigenvector, so that
+        ! the solution lies on the boundary of a smaller trust region close to the pole
+        ! at the negative lowest eigenvalue, solve the subproblem with a warm start at
+        ! a multiplier whose solution lies inside the trust region, from where Newton's
+        ! method would step past this pole, and check that the solution lies on the
+        ! boundary with a multiplier above the negative lowest eigenvalue
+        linear(1) = 1e-3_rp
+        call run_subproblem(1.0_rp, .true., .true., 2.0_rp)
+        call check_solution("with a warm start inside the trust region", solution, tol)
+        if (hard_case .or. lambda <= 1.0_rp .or. &
+            abs(norm2(solution) - trust_radius) > rel_tol * trust_radius) then
+            write(stderr, *) "test_solve_tridiagonal_subproblem failed: Solution "// &
+                "with a warm start inside the trust region not on the trust region "// &
+                "boundary with a multiplier above the negative lowest eigenvalue."
+            test_solve_tridiagonal_subproblem = .false.
+        end if
+
     contains
 
-        subroutine run_subproblem(radius, warm_start, start_lambda)
+        subroutine run_subproblem(radius, allow_interior, warm_start, start_lambda)
             !
             ! this subroutine solves the subproblem of the current tridiagonal matrix
-            ! and linear term for a trust radius, allowing an interior solution, with
-            ! or without a warm start at a multiplier
+            ! and linear term for a trust radius, with or without allowing an interior
+            ! solution and with or without a warm start at a multiplier
             !
             real(rp), intent(in) :: radius, start_lambda
-            logical, intent(in) :: warm_start
+            logical, intent(in) :: allow_interior, warm_start
 
             trust_radius = radius
-            interior = .true.
+            interior = allow_interior
             lambda = start_lambda
             lowest_eigenval = 0.0_rp
             call solve_tridiagonal_subproblem( &
@@ -10969,6 +11239,8 @@ contains
         use opentrustregion, only: get_tridiagonal_lowest_eigenvalue
 
         real(rp), parameter :: rel_tol = 1e-12_rp
+        character(len=*), parameter :: position_names(3) = &
+            [character(len=13) :: "first", "in the middle", "last"]
         real(rp) :: diagonal(n_param), off_diagonal(n_param - 1), &
                     ref_eigvals(n_param), ref_eigvecs(n_param, n_param), &
                     ref_block_eigvals(n_param - 1), &
@@ -11015,19 +11287,16 @@ contains
 
         ! check that the lowest eigenvalue is found for reducible tridiagonal matrices
         ! whose lowest diagonal element, the lower bound of the eigenvalues, comes
-        ! first or later, so that the pivot vanishes at the first or a later element
-        do i_case = 1, 2
-            if (i_case == 1) then
-                diagonal(:3) = [-1.0_rp, 2.0_rp, 3.0_rp]
-            else
-                diagonal(:3) = [2.0_rp, -1.0_rp, 3.0_rp]
-            end if
+        ! first, in the middle or last, so that the pivot vanishes at this element
+        do i_case = 1, size(position_names)
+            diagonal(:3) = [2.0_rp, 3.0_rp, 4.0_rp]
+            diagonal(i_case) = -1.0_rp
             if (abs(get_tridiagonal_lowest_eigenvalue( &
                 3_ip, diagonal(:3), [0.0_rp, 0.0_rp], rel_tol, .false., 0.0_rp) + &
                 1.0_rp) > tridiag_eigval_tol) then
                 write(stderr, *) "test_get_tridiagonal_lowest_eigenvalue failed: "// &
                     "Lowest eigenvalue wrong for reducible matrix with the lowest "// &
-                    "element "//trim(merge("first", "later", i_case == 1))//"."
+                    "element "//trim(position_names(i_case))//"."
                 test_get_tridiagonal_lowest_eigenvalue = .false.
             end if
         end do
@@ -11043,6 +11312,7 @@ contains
 
         real(rp) :: diagonal(n_param), off_diagonal(n_param - 1), eigenvec(n_param), &
                     ref_eigvals(n_param), ref_eigvecs(n_param, n_param)
+        integer(ip) :: i_case
 
         ! assume tests pass
         test_get_tridiagonal_lowest_eigenvector = .true.
@@ -11057,17 +11327,22 @@ contains
         call ref_symm_mat_diag(tridiagonal_matrix(diagonal, off_diagonal), &
                                ref_eigvals, ref_eigvecs)
 
-        ! check that a normalized eigenvector of the lowest eigenvalue is returned
-        call get_tridiagonal_lowest_eigenvector(n_param, ref_eigvals(1), diagonal, &
-                                                off_diagonal, eigenvec)
-        if (abs(norm2(eigenvec) - 1.0_rp) > tol .or. &
-            norm2(matmul(tridiagonal_matrix(diagonal, off_diagonal), eigenvec) - &
-                  ref_eigvals(1) * eigenvec) > tridiag_eigvec_tol) then
-            write(stderr, *) "test_get_tridiagonal_lowest_eigenvector failed: "// &
-                "Returned vector is not a normalized eigenvector of the lowest "// &
-                "eigenvalue."
-            test_get_tridiagonal_lowest_eigenvector = .false.
-        end if
+        ! check that a normalized eigenvector of the lowest eigenvalue is returned for
+        ! an estimate at this eigenvalue and for one above it, for which the shifted
+        ! matrix only becomes positive definite once the shift is perturbed further
+        do i_case = 1, 2
+            call get_tridiagonal_lowest_eigenvector(n_param, ref_eigvals(1) + merge( &
+                0.0_rp, 1e-5_rp, i_case == 1), diagonal, off_diagonal, eigenvec)
+            if (abs(norm2(eigenvec) - 1.0_rp) > tol .or. &
+                norm2(matmul(tridiagonal_matrix(diagonal, off_diagonal), eigenvec) - &
+                      ref_eigvals(1) * eigenvec) > tridiag_eigvec_tol) then
+                write(stderr, *) "test_get_tridiagonal_lowest_eigenvector failed: "// &
+                    "Returned vector is not a normalized eigenvector of the lowest "// &
+                    "eigenvalue for an estimate "// &
+                    trim(merge("at   ", "above", i_case == 1))//" this eigenvalue."
+                test_get_tridiagonal_lowest_eigenvector = .false.
+            end if
+        end do
 
     end function test_get_tridiagonal_lowest_eigenvector
 
