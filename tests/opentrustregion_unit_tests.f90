@@ -1271,6 +1271,26 @@ contains
 
     end subroutine identity_project
 
+    subroutine vanishing_project(vector, error, context)
+        !
+        ! this subroutine describes a projection which removes every vector and needs
+        ! no test context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        vector = 0.0_rp
+
+        error = 0
+
+    end subroutine vanishing_project
+
     subroutine stationary_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
                                       error, context)
         !
@@ -1535,6 +1555,37 @@ contains
         end select
 
     end subroutine state_reading_hess_x
+
+    subroutine state_reading_precond_pd(residual, precond_residual, error, context)
+        !
+        ! this subroutine describes a positive-definite preconditioner of the double
+        ! well function which keeps the residual and records the solver state it reads
+        ! through the pointer in its context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        ! keep residual
+        precond_residual = residual
+        error = 0
+
+        ! record the state
+        select type (context)
+        class is (double_well_state_context_type)
+            if (.not. allocated(context%seen_states)) &
+                allocate(context%seen_states(0), context%step_norms(0), &
+                         context%precond_step_norms(0))
+            context%seen_states = [context%seen_states, context%state]
+        end select
+
+    end subroutine state_reading_precond_pd
 
     function resolve_half_step_context(context, error) result(state)
         !
@@ -2278,28 +2329,6 @@ contains
         hess_x = hartmann6d_hess_x(x)
 
     end subroutine legacy_hess_x_fun
-
-    subroutine legacy_hess_x_fun_failing(x, hess_x, error, context)
-        !
-        ! this function describes a Hessian linear transformation which always fails
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        ! count call
-        n_hess_x_calls = n_hess_x_calls + 1
-
-        error = 1
-        hess_x = x
-
-    end subroutine legacy_hess_x_fun_failing
 
     subroutine overflow_hess_x(x, hess_x, error, context)
         !
@@ -6921,138 +6950,126 @@ contains
         !
         ! this function tests the truncated conjugate gradient subroutine
         !
-        use opentrustregion, only: &
-            obj_func_type, hess_x_type, solver_settings_type, &
-            truncated_conjugate_gradient, trust_radius_shrink_ratio, &
-            trust_radius_expand_ratio, trust_radius_shrink_factor, &
-            trust_radius_expand_factor, precond_rel_floor_factor, &
-            default_settings => default_solver_settings
+        use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
+                                   truncated_conjugate_gradient, precond_floor, &
+                                   precond_rel_floor_factor, error_hess_x, &
+                                   error_obj_func, function_unchanged_warning_msg
 
-        type(solver_state_type) :: state
-        real(rp) :: func, ratio, solution_norm, noise
+        character(len=*), parameter :: shape_names(2) = &
+            [character(len=11) :: "ellipsoidal", "spherical"]
+        type(solver_settings_type) :: settings
+        type(solver_state_type), target :: state
+        real(rp) :: func, ratio, solution_norm, noise, shape_norm, &
+                    double_well_grad(2), double_well_h_diag(2), double_well_solution(2)
         real(rp), dimension(n_param) :: grad, h_diag, newton_solution, solution, &
-                                        scaled_solution, residual, precond
-        integer(ip) :: i, error
+                                        scaled_solution, residual
+        integer(ip) :: i, i_case, error
         procedure(obj_func_type), pointer :: obj_func_funptr
         procedure(hess_x_type), pointer :: hess_x_funptr
-        type(solver_settings_type) :: settings
+        type(hartmann6d_context_type), target :: context
+        type(quadratic_context_type), target :: quadratic_context
+        type(hartmann6d_fault_context_type), target :: fault_context
+        type(double_well_state_context_type), target :: state_context
 
         ! assume tests pass
         test_truncated_conjugate_gradient = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
         settings%grad_noise = .false.
-        settings%n_micro = 50
-
-        ! initialize variables
-        state%trust_radius = 0.4_rp
-        obj_func_funptr => legacy_obj_func
-        hess_x_funptr => legacy_hess_x_fun
 
         ! start in quadratic region near minimum
-        curr_vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        call legacy_hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
+        call set_hartmann6d_point(near_minimum)
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x_fun
 
         ! run truncated conjugate gradient with micro iterations left in the state by
-        ! a previous subproblem, check whether the solution lies at the trust region
-        ! boundary and reduces the function value and whether the reported numbers of
+        ! a previous subproblem, check whether the solution stays within the trust
+        ! region and reduces the function value and whether the reported numbers of
         ! Hessian linear transformations and objective function evaluations agree
         ! with the calls and that of the micro iterations with the Hessian linear
         ! transformations, one of which each micro iteration performs, none of them
         ! being a Jacobi-Davidson iteration
+        state%trust_radius = 0.4_rp
         state%micro_iteration = 100
         state%jacobi_davidson_iteration = 100
         state%n_hess_x = 0
         state%n_obj_func = 0
-        n_hess_x_calls = 0
-        n_obj_func_calls = 0
         call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           state, solution, solution_norm, error)
         if (error /= 0) then
-            write(stderr, *) "test_truncated_jacobi_davidson failed: Produced "// &
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
                 "error near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
-        test_truncated_conjugate_gradient = &
-            test_truncated_conjugate_gradient .and. logical(call_counts_match( &
-                "truncated_conjugate_gradient", "near minimum", &
-                n_hess_x=state%n_hess_x, n_obj_func=state%n_obj_func), kind=c_bool)
-        if (state%micro_iteration /= n_hess_x_calls .or. &
+        if (.not. check_call_counts(context, "truncated_conjugate_gradient", &
+                                    "near minimum", n_hess_x=state%n_hess_x, &
+                                    n_obj_func=state%n_obj_func)) &
+            test_truncated_conjugate_gradient = .false.
+        if (state%micro_iteration /= context%n_hess_x_calls .or. &
             state%jacobi_davidson_iteration /= 0) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Reported "// &
                 "number of micro iterations wrong near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if (ratio <= 0.0_rp) then
+        ratio = model_ratio(solution)
+        if (ratio <= 0.0_rp .or. metric_norm(solution) > &
+            ref_step_trust_radius(state%trust_radius, ratio) + tol) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "does not reduce function value near minimum."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        if ((ratio < trust_radius_shrink_ratio .and. &
-             solution_norm > state%trust_radius / trust_radius_shrink_factor) .or. &
-            (ratio > trust_radius_expand_ratio .and. &
-             solution_norm > state%trust_radius / trust_radius_expand_factor)) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "does not stay within trust region near minimum."
+                "does not reduce function value or leaves the trust region near "// &
+                "minimum."
             test_truncated_conjugate_gradient = .false.
         end if
 
-        ! run truncated conjugate gradient with a spherical trust region and check that
-        ! the returned solution norm equals the true Euclidean norm of the solution
-        settings%trust_region_shape = "spherical"
+        ! run truncated conjugate gradient with a trust radius half as long as this
+        ! solution, so that the step reaches the trust region boundary although the
+        ! curvature is positive, and check whether the solution lies at the trust
+        ! region boundary and reduces the function value
+        state%trust_radius = 0.5_rp * metric_norm(solution)
         call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           state, solution, solution_norm, error)
         if (error /= 0) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
-                "error near minimum for spherical trust region."
+                "error near minimum with trust radius shorter than step."
             test_truncated_conjugate_gradient = .false.
         end if
-        if (abs(norm2(solution) - solution_norm) > tol) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Returned "// &
-                "solution norm does not match Euclidean solution norm for "// &
-                "spherical trust region."
+        ratio = model_ratio(solution)
+        if (ratio <= 0.0_rp .or. abs(metric_norm(solution) - ref_step_trust_radius( &
+            state%trust_radius, ratio)) > tol) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
+                "does not reduce function value or does not lie at trust region "// &
+                "boundary near minimum with trust radius shorter than step."
             test_truncated_conjugate_gradient = .false.
         end if
-        settings%trust_region_shape = "ellipsoidal"
 
         ! run truncated conjugate gradient with two preconditioners which only differ
         ! by a constant factor and check that both produce the same solution
         settings%local_red_factor = 1e-1_rp
-        settings%precond_pd => mock_precond_pd
-        state%trust_radius = 0.4_rp
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          state, solution, solution_norm, error)
-        if (error /= 0) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
-                "error near minimum for user-defined preconditioner."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        settings%precond_pd => mock_scaled_precond_pd
-        state%trust_radius = 0.4_rp
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          state, scaled_solution, solution_norm, error)
-        if (error /= 0) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
-                "error near minimum for scaled user-defined preconditioner."
-            test_truncated_conjugate_gradient = .false.
-        end if
+        do i_case = 1, 2
+            if (i_case == 1) then
+                settings%precond_pd => mock_precond_pd
+            else
+                settings%precond_pd => mock_scaled_precond_pd
+            end if
+            state%trust_radius = 0.4_rp
+            call truncated_conjugate_gradient( &
+                func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+                state, scaled_solution, solution_norm, error)
+            if (error /= 0) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Produced error near minimum for user-defined preconditioner."
+                test_truncated_conjugate_gradient = .false.
+            end if
+            if (i_case == 1) solution = scaled_solution
+        end do
         if (any(abs(solution - scaled_solution) > tol)) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
                 "depends on the scale of the preconditioner near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
-        nullify(settings%precond_pd)
-        settings%local_red_factor = default_settings%local_red_factor
+        settings%precond_pd => null()
 
         ! run truncated conjugate gradient near the minimum with a trust radius which
         ! contains the Newton step and a reduction factor it reaches before the
@@ -7069,101 +7086,205 @@ contains
                 "error near minimum for interior solution."
             test_truncated_conjugate_gradient = .false.
         end if
-        residual = grad + hartmann6d_hess_x(solution)
-        precond = max(abs(h_diag), precond_rel_floor_factor * maxval(abs(h_diag)))
-        if (abs(state%relative_residual - sqrt(dot_product( &
-            residual, residual / precond) / dot_product(grad, grad / precond))) > &
-            tol .or. state%relative_residual > settings%local_red_factor) then
+        residual = grad + matmul(context%hess, solution)
+        if (abs(state%relative_residual - metric_norm(residual, inverse=.true.) / &
+                metric_norm(grad, inverse=.true.)) > tol .or. &
+            state%relative_residual > settings%local_red_factor) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Relative "// &
                 "residual wrong near minimum for interior solution."
             test_truncated_conjugate_gradient = .false.
         end if
-        settings%local_red_factor = default_settings%local_red_factor
+        call setup_settings(settings, context)
+        settings%grad_noise = .false.
 
-        ! start near saddle point
-        curr_vars = [0.35_rp, 0.59_rp, 0.48_rp, 0.40_rp, 0.31_rp, 0.32_rp]
-        func = hartmann6d_func(curr_vars)
-        call hartmann6d_gradient(curr_vars, grad)
-        call legacy_hartmann6d_hessian(curr_vars)
-        h_diag = [(hess(i, i), i=1, size(h_diag))]
-        state%trust_radius = 0.4_rp
-
-        ! run truncated conjugate gradient, check whether the solution lies at the
-        ! trust region boundary and reduces the function value
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          state, solution, solution_norm, error)
-        if (error /= 0) then
-            write(stderr, *) "test_truncated_jacobi_davidson failed: Produced "// &
-                "error near saddle point."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if (ratio <= 0.0_rp) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "does not reduce function value near saddle point."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - state%trust_radius / trust_radius_shrink_factor) > &
-             tol) .or. (ratio > trust_radius_expand_ratio .and. &
-                        abs(solution_norm - state%trust_radius / &
-                            trust_radius_expand_factor) > tol)) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "does not lie at trust region boundary near saddle point."
-            test_truncated_conjugate_gradient = .false.
-        end if
-
-        ! run truncated conjugate gradient with a spherical trust region near the
-        ! saddle point and check that the returned solution norm equals the true
-        ! Euclidean norm of the solution
-        settings%trust_region_shape = "spherical"
-        state%trust_radius = 0.4_rp
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          state, solution, solution_norm, error)
-        if (error /= 0) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
-                "error near saddle point for spherical trust region."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        if (abs(norm2(solution) - solution_norm) > tol) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Returned "// &
-                "solution norm does not match Euclidean solution norm near saddle "// &
-                "point for spherical trust region."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        ratio = (hartmann6d_func(curr_vars + solution) - func) / &
-                dot_product(solution, grad + 0.5_rp * hartmann6d_hess_x(solution))
-        if ((trust_radius_shrink_ratio > ratio .and. &
-             abs(solution_norm - state%trust_radius / trust_radius_shrink_factor) > &
-             tol) .or. (ratio > trust_radius_expand_ratio .and. &
-                        abs(solution_norm - state%trust_radius / &
-                            trust_radius_expand_factor) > tol)) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "does not lie at trust region boundary near saddle point for "// &
-                "spherical trust region."
-            test_truncated_conjugate_gradient = .false.
-        end if
+        ! start near saddle point and run truncated conjugate gradient in the
+        ! ellipsoidal and the spherical trust region, check whether the solution lies
+        ! at the boundary of the trust region in its norm, which is the returned norm,
+        ! and reduces the function value
+        call set_hartmann6d_point(near_saddle_point)
+        do i_case = 1, size(shape_names)
+            settings%trust_region_shape = shape_names(i_case)
+            state%trust_radius = 0.4_rp
+            call truncated_conjugate_gradient( &
+                func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+                state, solution, solution_norm, error)
+            if (error /= 0) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Produced error near saddle point for "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_truncated_conjugate_gradient = .false.
+            end if
+            if (i_case == 1) then
+                shape_norm = metric_norm(solution)
+            else
+                shape_norm = norm2(solution)
+            end if
+            if (abs(solution_norm - shape_norm) > tol) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Returned solution norm is not the norm of the trust region "// &
+                    "near saddle point for "//trim(shape_names(i_case))// &
+                    " trust region."
+                test_truncated_conjugate_gradient = .false.
+            end if
+            ratio = model_ratio(solution)
+            if (ratio <= 0.0_rp .or. abs(solution_norm - ref_step_trust_radius( &
+                state%trust_radius, ratio)) > tol) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Solution does not reduce function value or does not lie at "// &
+                    "trust region boundary near saddle point for "// &
+                    trim(shape_names(i_case))//" trust region."
+                test_truncated_conjugate_gradient = .false.
+            end if
+        end do
         settings%trust_region_shape = "ellipsoidal"
 
+        ! run truncated conjugate gradient with a Hessian linear transformation and
+        ! with an objective function which fail and check that their errors are
+        ! reported with their origins and that a failing Hessian linear
+        ! transformation is counted
+        do i_case = 1, 2
+            if (i_case == 1) then
+                obj_func_funptr => obj_func
+                hess_x_funptr => hess_x_fun_failing
+            else
+                obj_func_funptr => obj_func_failing
+                hess_x_funptr => hess_x_fun
+            end if
+            state%trust_radius = 0.4_rp
+            state%n_hess_x = 0
+            context%n_hess_x_calls = 0
+            call truncated_conjugate_gradient( &
+                func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+                state, solution, solution_norm, error)
+            if (error /= merge(error_hess_x, error_obj_func, i_case == 1) + 1) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: Error "// &
+                    "of failing "// &
+                    trim(merge("Hessian linear transformation", &
+                               "objective function           ", i_case == 1))// &
+                    " not reported with its origin."
+                test_truncated_conjugate_gradient = .false.
+            end if
+            if (.not. check_call_counts(context, "truncated_conjugate_gradient", &
+                                        "for failing callback function", &
+                                        n_hess_x=state%n_hess_x)) &
+                test_truncated_conjugate_gradient = .false.
+        end do
+
+        ! start near the minimum with a trust radius far beyond the step, so that the
+        ! step ends inside the trust region, and let the objective function reject this
+        ! first step, so that the subproblem is solved again for the shrunk trust
+        ! radius, and check that the objective function is evaluated once more, and
+        ! that the error of this evaluation is reported with its origin when it fails
+        call setup_settings(settings, fault_context)
+        settings%grad_noise = .false.
+        fault_context%vars = near_minimum
+        fault_context%hess = hartmann6d_hessian(near_minimum)
+        func = hartmann6d_func(near_minimum)
+        call hartmann6d_gradient(near_minimum, grad)
+        h_diag = [(fault_context%hess(i, i), i=1, n_param)]
+        obj_func_funptr => first_step_rejecting_obj_func
+        do i_case = 1, 2
+            fault_context%n_callback_calls = 0
+            fault_context%fault_callback = merge(0_ip, fault_obj_func, i_case == 1)
+            fault_context%fault_call = 2
+            state%trust_radius = 10.0_rp
+            call truncated_conjugate_gradient( &
+                func, grad, h_diag, n_param, obj_func_funptr, hess_x_funptr, settings, &
+                state, solution, solution_norm, error)
+            if (i_case == 1 .and. &
+                (error /= 0 .or. fault_context%n_callback_calls(fault_obj_func) /= 2)) &
+                then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                    "Subproblem not solved and evaluated once more when step "// &
+                    "inside trust region is rejected."
+                test_truncated_conjugate_gradient = .false.
+            end if
+            if (i_case == 2 .and. error /= error_obj_func + 1) then
+                write(stderr, *) "test_truncated_conjugate_gradient failed: Did "// &
+                    "not report the error of the objective function failing after "// &
+                    "the rejected step with its origin."
+                test_truncated_conjugate_gradient = .false.
+            end if
+        end do
+
+        ! run truncated conjugate gradient on a quadratic model with a gradient too
+        ! small for its step to change the objective function, which does not change
+        ! at all, so that the first step reaches maximum precision, and check that the
+        ! subproblem stops without error and reports this and that a warning is printed
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        quadratic_context%hess = identity_matrix(n_param)
+        quadratic_context%grad = spread(1e-9_rp, 1, n_param)
+        h_diag = 1.0_rp
+        obj_func_funptr => constant_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.4_rp
+        call truncated_conjugate_gradient( &
+            1.0_rp, quadratic_context%grad, h_diag, n_param, obj_func_funptr, &
+            hess_x_funptr, settings, state, solution, solution_norm, error)
+        if (error /= 0 .or. .not. state%max_precision_reached) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Maximum "// &
+                "precision not reached without error when the objective function "// &
+                "does not change."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        if (index(quadratic_context%log_message, &
+                  " "//function_unchanged_warning_msg) == 0) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Warning "// &
+                "not printed when the objective function does not change."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
+        ! let a single micro iteration not suffice on a quadratic model with a
+        ! coupling, which the diagonal preconditioner does not invert, so that the
+        ! step of the unconverged micro iterations is rejected until the trust region
+        ! is small enough for the first micro iteration to reach its boundary, and
+        ! check that the objective function is evaluated more than once
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        settings%n_micro = 1
+        quadratic_context%hess = generate_random_symm_matrix(n_param)
+        do i = 1, n_param
+            quadratic_context%hess(i, i) = quadratic_context%hess(i, i) + &
+                                           real(2 * n_param, kind=rp)
+        end do
+        call random_number(grad)
+        quadratic_context%grad = grad + 0.5_rp
+        h_diag = [(quadratic_context%hess(i, i), i=1, n_param)]
+        obj_func_funptr => quadratic_obj_func
+        state%trust_radius = 10.0_rp
+        state%n_obj_func = 0
+        call truncated_conjugate_gradient( &
+            0.0_rp, quadratic_context%grad, h_diag, n_param, obj_func_funptr, &
+            hess_x_funptr, settings, state, solution, solution_norm, error)
+        if (error /= 0 .or. state%n_obj_func < 2) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Step of "// &
+                "micro iterations stopped at their limit not rejected."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
         ! run truncated conjugate gradient with a random perturbation of the gradient
-        ! and a preconditioner which does not project, and determine if the solution
-        ! stays in the subspace of the projection and deviates from the Newton step
-        ! by roughly the relative size of the perturbation, the local reduction factor
-        ! truncated conjugate gradient always solves to
-        call legacy_setup_settings(settings)
-        settings%grad_noise = .true.
+        ! in the range of a projection and a preconditioner which does not project, on
+        ! a diagonal Hessian which the projection preserves, and determine if the
+        ! solution stays in the range of the projection and deviates from the Newton
+        ! step by roughly the relative size of the perturbation, the local reduction
+        ! factor truncated conjugate gradient always solves to
+        call setup_settings(settings, quadratic_context)
         noise = settings%local_red_factor
         settings%precond_pd => mock_precond_pd
-        settings%project => legacy_mock_project
-        call setup_truncation_model(.false., func, h_diag)
-        newton_solution = -overflow_grad / h_diag
+        settings%project => mock_project_out_pair
+        quadratic_context%hess = identity_matrix(n_param)
+        do i = 1, n_param
+            quadratic_context%hess(i, i) = real(max(i, 2), kind=rp)
+        end do
+        call random_number(grad)
+        grad = grad + 0.5_rp
+        grad(1:2) = grad(1:2) - 0.5_rp * sum(grad(1:2))
+        quadratic_context%grad = grad
+        h_diag = [(quadratic_context%hess(i, i), i=1, n_param)]
+        newton_solution = -grad / h_diag
         state%trust_radius = 10.0_rp
-        obj_func_funptr => overflow_obj_func
-        hess_x_funptr => overflow_hess_x
-        call truncated_conjugate_gradient(func, overflow_grad, h_diag, n_param, &
+        call truncated_conjugate_gradient(0.0_rp, grad, h_diag, n_param, &
                                           obj_func_funptr, hess_x_funptr, settings, &
                                           state, solution, solution_norm, error)
         if (error /= 0) then
@@ -7171,45 +7292,370 @@ contains
                 "error for perturbed gradient."
             test_truncated_conjugate_gradient = .false.
         end if
-        if (abs(solution(1) - solution(2)) > tol) then
+        if (abs(solution(1) + solution(2)) > tol) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "leaves the subspace of the projection for perturbed gradient."
+                "leaves the range of the projection for perturbed gradient."
             test_truncated_conjugate_gradient = .false.
         end if
-        if (norm2(solution - newton_solution) < &
-            0.1_rp * noise * norm2(overflow_grad) / maxval(h_diag)) then
+        if (norm2(solution - newton_solution) < 0.1_rp * noise * norm2(grad) / &
+            maxval(h_diag) .or. norm2(solution - newton_solution) > 10.0_rp * noise * &
+            norm2(grad) / minval(h_diag)) then
             write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "does not solve a perturbed system for perturbed gradient."
-            test_truncated_conjugate_gradient = .false.
-        end if
-        if (norm2(solution - newton_solution) > &
-            10.0_rp * noise * norm2(overflow_grad) / minval(h_diag)) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Solution "// &
-                "deviates from the Newton step by more than the perturbation for "// &
+                "does not deviate from the Newton step by the perturbation for "// &
                 "perturbed gradient."
             test_truncated_conjugate_gradient = .false.
         end if
 
-        ! run truncated conjugate gradient with a Hessian linear transformation which
-        ! fails and check that the failing call is still counted
-        hess_x_funptr => legacy_hess_x_fun_failing
+        ! solve the subproblem of the double well function with a state holding the
+        ! values of an earlier subproblem and a positive-definite preconditioner which
+        ! reads the state through the pointer in its context, and check that the first
+        ! preconditioned residual already sees no micro iterations and the residual of
+        ! the vanishing solution, which is the gradient
+        call setup_settings(settings, state_context)
+        settings%grad_noise = .false.
+        settings%precond_pd => state_reading_precond_pd
+        state_context%vars = [0.5_rp, 0.1_rp]
+        state_context%state => state
+        double_well_grad = [2.0_rp * state_context%vars(1), -2.0_rp * &
+                            state_context%vars(2) + 4.0_rp * state_context%vars(2)**3]
+        double_well_h_diag = [2.0_rp, -2.0_rp + 12.0_rp * state_context%vars(2)**2]
+        obj_func_funptr => double_well_obj_func
+        hess_x_funptr => double_well_hess_x
         state%trust_radius = 0.4_rp
-        state%n_hess_x = 0
-        n_hess_x_calls = 0
-        call truncated_conjugate_gradient(func, grad, h_diag, n_param, &
-                                          obj_func_funptr, hess_x_funptr, settings, &
-                                          state, solution, solution_norm, error)
-        if (error == 0) then
-            write(stderr, *) "test_truncated_conjugate_gradient failed: Did not "// &
-                "report a failing Hessian linear transformation."
+        state%micro_iteration = 7
+        state%jacobi_davidson_iteration = 3
+        state%relative_residual = 0.3_rp
+        call truncated_conjugate_gradient( &
+            double_well_func(state_context%vars), double_well_grad, &
+            double_well_h_diag, 2_ip, obj_func_funptr, hess_x_funptr, settings, state, &
+            double_well_solution, solution_norm, error)
+        if (error /= 0) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Produced "// &
+                "error with a state of an earlier subproblem."
             test_truncated_conjugate_gradient = .false.
         end if
-        test_truncated_conjugate_gradient = &
-            test_truncated_conjugate_gradient .and. logical(call_counts_match( &
-                "truncated_conjugate_gradient", "for failing Hessian linear "// &
-                "transformation", n_hess_x=state%n_hess_x), kind=c_bool)
+        if (.not. allocated(state_context%seen_states)) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
+                "Preconditioner did not read the state."
+            test_truncated_conjugate_gradient = .false.
+        else if (state_context%seen_states(1)%micro_iteration /= 0 .or. &
+                 state_context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
+                 abs(state_context%seen_states(1)%relative_residual - 1.0_rp) > tol) &
+            then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: State of "// &
+                "an earlier subproblem seen by the first preconditioned residual."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
+    contains
+
+        subroutine set_hartmann6d_point(vars)
+            !
+            ! this subroutine moves the Hartmann 6D context to a point and evaluates the
+            ! function, its gradient and Hessian and the Hessian diagonal there
+            !
+            real(rp), intent(in) :: vars(:)
+
+            integer(ip) :: i_param
+
+            context%vars = vars
+            func = hartmann6d_func(vars)
+            call hartmann6d_gradient(vars, grad)
+            context%hess = hartmann6d_hessian(vars)
+            h_diag = [(context%hess(i_param, i_param), i_param=1, n_param)]
+
+        end subroutine set_hartmann6d_point
+
+        function metric() result(diag)
+            !
+            ! this function returns the diagonal of the ellipsoidal trust region
+            ! metric, the absolute Hessian diagonal floored relative to its largest
+            ! element
+            !
+            real(rp) :: diag(n_param)
+
+            diag = max(abs(h_diag), precond_floor, &
+                       precond_rel_floor_factor * maxval(abs(h_diag)))
+
+        end function metric
+
+        function metric_norm(vector, inverse) result(norm)
+            !
+            ! this function returns the norm of a vector in the ellipsoidal trust
+            ! region metric or in its inverse
+            !
+            real(rp), intent(in) :: vector(:)
+            logical, intent(in), optional :: inverse
+            real(rp) :: norm
+
+            if (present(inverse)) then
+                norm = sqrt(dot_product(vector, vector / metric()))
+            else
+                norm = sqrt(dot_product(vector, vector * metric()))
+            end if
+
+        end function metric_norm
+
+        function model_ratio(step) result(ratio)
+            !
+            ! this function returns the ratio of the actual to the predicted change of
+            ! the Hartmann 6D function for a step from the current point
+            !
+            real(rp), intent(in) :: step(:)
+            real(rp) :: ratio
+
+            ratio = (hartmann6d_func(context%vars + step) - func) / &
+                    dot_product(step, grad + 0.5_rp * matmul(context%hess, step))
+
+        end function model_ratio
 
     end function test_truncated_conjugate_gradient
+
+    logical(c_bool) function test_perturb_vector() bind(C)
+        !
+        ! this function tests the subroutine which perturbs a vector by a random vector
+        ! of a given size relative to it
+        !
+        use opentrustregion, only: solver_settings_type, perturb_vector, error_project
+
+        real(rp), parameter :: noise = 1e-3_rp
+        type(solver_settings_type) :: settings
+        real(rp) :: vector(n_param), perturbed_vector(n_param)
+        integer(ip) :: error, i_case
+        type(test_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
+
+        ! assume tests pass
+        test_perturb_vector = .true.
+
+        ! setup settings object
+        call setup_settings(settings, context)
+
+        ! perturb a random vector in the range of a projection without and with this
+        ! projection and check that the perturbation has the given size relative to
+        ! the vector and, with the projection, stays in its range
+        do i_case = 1, 2
+            if (i_case == 2) settings%project => mock_project_out_pair
+            call random_number(vector)
+            vector(1:2) = vector(1:2) - 0.5_rp * sum(vector(1:2))
+            perturbed_vector = vector
+            call perturb_vector(perturbed_vector, noise, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_perturb_vector failed: Produced error "// &
+                    trim(merge("without", "with   ", i_case == 1))//" projection."
+                test_perturb_vector = .false.
+            end if
+            if (abs(norm2(perturbed_vector - vector) - noise * norm2(vector)) > tol) &
+                then
+                write(stderr, *) "test_perturb_vector failed: Perturbation does "// &
+                    "not have the given relative size "// &
+                    trim(merge("without", "with   ", i_case == 1))//" projection."
+                test_perturb_vector = .false.
+            end if
+        end do
+        if (abs(perturbed_vector(1) + perturbed_vector(2)) > tol) then
+            write(stderr, *) "test_perturb_vector failed: Perturbation leaves the "// &
+                "range of the projection."
+            test_perturb_vector = .false.
+        end if
+
+        ! perturb a vector with a projection which removes every random vector and
+        ! check that the vector is left unperturbed
+        settings%project => vanishing_project
+        perturbed_vector = vector
+        call perturb_vector(perturbed_vector, noise, settings, error)
+        if (error /= 0 .or. maxval(abs(perturbed_vector - vector)) > 0.0_rp) then
+            write(stderr, *) "test_perturb_vector failed: Vector perturbed or "// &
+                "error produced when the projection removes every random vector."
+            test_perturb_vector = .false.
+        end if
+
+        ! check that the error of a failing projection is reported with its origin
+        call setup_settings(settings, fault_context)
+        settings%project => faulty_project
+        fault_context%fault_callback = fault_project
+        fault_context%fault_call = 1
+        call perturb_vector(perturbed_vector, noise, settings, error)
+        if (error /= error_project + 1) then
+            write(stderr, *) "test_perturb_vector failed: Error of failing "// &
+                "projection not reported with its origin."
+            test_perturb_vector = .false.
+        end if
+
+    end function test_perturb_vector
+
+    logical(c_bool) function test_noise_level() bind(C)
+        !
+        ! this function tests the function which returns the relative size of the
+        ! gradient perturbation
+        !
+        use opentrustregion, only: solver_settings_type, noise_level
+
+        type(solver_settings_type) :: settings
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_noise_level = .true.
+
+        ! initialize settings, whose local and global reduction factors differ
+        call settings%init(error)
+
+        ! check that the perturbation is the reduction factor of the region with the
+        ! gradient perturbation and vanishes without it
+        settings%grad_noise = .true.
+        if (abs(noise_level(settings, .true.) - settings%local_red_factor) > &
+            0.0_rp .or. &
+            abs(noise_level(settings, .false.) - settings%global_red_factor) > 0.0_rp) &
+            then
+            write(stderr, *) "test_noise_level failed: Perturbation not the "// &
+                "reduction factor of the region."
+            test_noise_level = .false.
+        end if
+        settings%grad_noise = .false.
+        if (abs(noise_level(settings, .true.)) > 0.0_rp .or. &
+            abs(noise_level(settings, .false.)) > 0.0_rp) then
+            write(stderr, *) "test_noise_level failed: Perturbation does not "// &
+                "vanish without gradient perturbation."
+            test_noise_level = .false.
+        end if
+
+    end function test_noise_level
+
+    logical(c_bool) function test_get_preconditioned_residual_dot() bind(C)
+        !
+        ! this function tests the function which returns the dot product of a residual
+        ! and its preconditioned residual
+        !
+        use opentrustregion, only: solver_settings_type, get_preconditioned_residual_dot
+
+        type(solver_settings_type) :: settings
+        real(rp) :: residual(n_param), residual_dot
+        integer(ip) :: error
+        type(test_context_type), target :: context
+
+        ! assume tests pass
+        test_get_preconditioned_residual_dot = .true.
+
+        ! setup settings object
+        call setup_settings(settings, context)
+
+        ! generate residual
+        call random_number(residual)
+        residual = residual + 0.5_rp
+
+        ! check that a positive-definite preconditioner gives the dot product
+        residual_dot = get_preconditioned_residual_dot(residual, 3.0_rp * residual, &
+                                                       settings, error)
+        if (error /= 0 .or. &
+            abs(residual_dot - 3.0_rp * dot_product(residual, residual)) > tol) then
+            write(stderr, *) "test_get_preconditioned_residual_dot failed: Dot "// &
+                "product not returned for positive-definite preconditioner."
+            test_get_preconditioned_residual_dot = .false.
+        end if
+
+        ! check that a negative dot product below numerical zero of a small residual
+        ! and a preconditioned residual which does not vanish relative to it and a
+        ! negative dot product of a preconditioned residual which vanishes relative to
+        ! the residual are taken as vanishing without an error
+        residual_dot = get_preconditioned_residual_dot( &
+            1e-8_rp * residual, -1e-16_rp * residual, settings, error)
+        if (error /= 0 .or. abs(residual_dot) > 0.0_rp) then
+            write(stderr, *) "test_get_preconditioned_residual_dot failed: Dot "// &
+                "product below numerical zero not taken as vanishing."
+            test_get_preconditioned_residual_dot = .false.
+        end if
+        residual_dot = get_preconditioned_residual_dot( &
+            1e10_rp * residual, -1e-7_rp * residual, settings, error)
+        if (error /= 0 .or. abs(residual_dot) > 0.0_rp) then
+            write(stderr, *) "test_get_preconditioned_residual_dot failed: Dot "// &
+                "product of vanishing preconditioned residual not taken as vanishing."
+            test_get_preconditioned_residual_dot = .false.
+        end if
+
+        ! check that a preconditioner which is not positive definite returns an error
+        ! and prints an error message
+        call setup_error_logging(settings, context)
+        residual_dot = &
+            get_preconditioned_residual_dot(residual, -residual, settings, error)
+        if (error /= 1) then
+            write(stderr, *) "test_get_preconditioned_residual_dot failed: No "// &
+                "error returned for preconditioner which is not positive definite."
+            test_get_preconditioned_residual_dot = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_get_preconditioned_residual_dot failed: No "// &
+                "error message printed for preconditioner which is not positive "// &
+                "definite."
+            test_get_preconditioned_residual_dot = .false.
+        end if
+
+    end function test_get_preconditioned_residual_dot
+
+    logical(c_bool) function test_find_point_on_boundary() bind(C)
+        !
+        ! this function tests the subroutine which moves a solution within the trust
+        ! region along a basis vector to the trust region boundary
+        !
+        use opentrustregion, only: find_point_on_boundary
+
+        real(rp), parameter :: trust_radius = 1.0_rp
+        real(rp) :: basis_vec(n_param), solution(n_param), start_solution(n_param), &
+                    solution_dot, solution_basis_vec_dot, basis_vec_dot, residual_dot, &
+                    curvature, pred_func, step_size, ref_step_size
+
+        ! assume tests pass
+        test_find_point_on_boundary = .true.
+
+        ! generate a solution within the trust region, a basis vector, the dot product
+        ! of the residual and its preconditioned residual and the curvature along the
+        ! basis vector, for a spherical trust region
+        call random_number(start_solution)
+        start_solution = 0.1_rp * start_solution
+        call random_number(basis_vec)
+        basis_vec = basis_vec - 0.5_rp
+        call random_number(residual_dot)
+        call random_number(curvature)
+        curvature = curvature - 0.5_rp
+        solution_dot = dot_product(start_solution, start_solution)
+        solution_basis_vec_dot = dot_product(start_solution, basis_vec)
+        basis_vec_dot = dot_product(basis_vec, basis_vec)
+
+        ! the step reaches the boundary at the positive root of the quadratic equation
+        ! for the norm of the solution along the basis vector
+        ref_step_size = (-solution_basis_vec_dot + sqrt( &
+            solution_basis_vec_dot**2 + &
+            basis_vec_dot * (trust_radius**2 - solution_dot))) / basis_vec_dot
+
+        ! move the solution to the boundary and check the step, the solution, its
+        ! squared norm and the predicted function value, which changes by the model
+        ! along the step, whose gradient along a conjugate gradient basis vector is
+        ! the negative dot product of the residual and its preconditioned residual
+        solution = start_solution
+        pred_func = 0.3_rp
+        call find_point_on_boundary(basis_vec, trust_radius, solution_basis_vec_dot, &
+                                    basis_vec_dot, residual_dot, curvature, &
+                                    solution_dot, solution, pred_func, step_size)
+        if (abs(step_size - ref_step_size) > tol) then
+            write(stderr, *) "test_find_point_on_boundary failed: Step does not "// &
+                "reach the trust region boundary."
+            test_find_point_on_boundary = .false.
+        end if
+        if (norm2(solution - (start_solution + ref_step_size * basis_vec)) > tol .or. &
+            abs(norm2(solution) - trust_radius) > tol .or. &
+            abs(solution_dot - trust_radius**2) > tol) then
+            write(stderr, *) "test_find_point_on_boundary failed: Solution or its "// &
+                "squared norm not moved to the trust region boundary."
+            test_find_point_on_boundary = .false.
+        end if
+        if (abs(pred_func - (0.3_rp + ref_step_size * &
+                             (0.5_rp * ref_step_size * curvature - residual_dot))) > &
+            tol) then
+            write(stderr, *) "test_find_point_on_boundary failed: Predicted "// &
+                "function value not updated."
+            test_find_point_on_boundary = .false.
+        end if
+
+    end function test_find_point_on_boundary
 
     logical(c_bool) function test_add_error_origin() bind(C)
         !
@@ -8954,17 +9400,20 @@ contains
         ! absoulte diagonal preconditioner used to define the ellipsoidal trust-region
         ! metric for TCG/GLTR
         !
-        use opentrustregion, only: solver_settings_type, rel_floor_diag_precond
+        use opentrustregion, only: solver_settings_type, rel_floor_diag_precond, &
+                                   error_precond_pd, error_project
 
         real(rp) :: vector(3), h_diag(3), precond_vector(3)
         type(solver_settings_type) :: settings
-        integer(ip) :: error
+        integer(ip) :: error, i_case
+        type(test_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
 
         ! assume tests pass
         test_rel_floor_diag_precond = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! initialize quantities; the first element is far below the relative floor
         ! (precond_rel_floor_factor * max|h_diag| = 1e-2 * 4 = 0.04) and should get
@@ -9002,8 +9451,9 @@ contains
         end if
         h_diag = [0.001_rp, -1.0_rp, 4.0_rp]
 
-        ! test custom projector
-        settings%project => legacy_mock_project
+        ! test a projection which removes the component along the sum of the first two
+        ! unit vectors
+        settings%project => mock_project_out_pair
 
         ! call subroutine and check if results match
         call rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
@@ -9012,7 +9462,7 @@ contains
                 "for custom projection function."
             test_rel_floor_diag_precond = .false.
         end if
-        if (any(abs(precond_vector - [13.0_rp, 13.0_rp, 0.25_rp]) > tol)) then
+        if (any(abs(precond_vector - [12.0_rp, -12.0_rp, 0.25_rp]) > tol)) then
             write(stderr, *) "test_rel_floor_diag_precond failed: Returned "// &
                 "preconditioned vector not correct for custom projection function."
             test_rel_floor_diag_precond = .false.
@@ -9034,6 +9484,31 @@ contains
                 "preconditioner."
             test_rel_floor_diag_precond = .false.
         end if
+
+        ! check that the errors of a failing positive-definite preconditioner and of a
+        ! failing projection of the default preconditioner are reported with their
+        ! origins
+        call setup_settings(settings, fault_context)
+        do i_case = 1, 2
+            if (i_case == 1) then
+                settings%precond_pd => faulty_precond_pd
+            else
+                settings%precond_pd => null()
+                settings%project => faulty_project
+            end if
+            fault_context%n_callback_calls = 0
+            fault_context%fault_callback = &
+                merge(fault_precond_pd, fault_project, i_case == 1)
+            fault_context%fault_call = 1
+            call rel_floor_diag_precond(vector, h_diag, precond_vector, settings, error)
+            if (error /= merge(error_precond_pd, error_project, i_case == 1) + 1) then
+                write(stderr, *) "test_rel_floor_diag_precond failed: Error of "// &
+                    "failing "// &
+                    trim(fault_callback_names(fault_context%fault_callback))// &
+                    " not reported with its origin."
+                test_rel_floor_diag_precond = .false.
+            end if
+        end do
 
     end function test_rel_floor_diag_precond
 
