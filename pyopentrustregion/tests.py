@@ -214,6 +214,7 @@ fortran_tests = {
         "h2o_fb_solver_davidson_ah",
         "h2o_fb_solver_default",
         "h2o_fb_solver_gltr",
+        "h2o_fb_solver_hess_symm",
         "h2o_fb_solver_jacobi_davidson_ah",
         "h2o_fb_solver_jacobi_davidson_ls",
         "h2o_fb_solver_line_search",
@@ -231,11 +232,6 @@ fortran_tests = {
         "state_layout",
     ],
 }
-
-# define return type of Fortran functions
-for tests in fortran_tests.values():
-    for test in tests:
-        getattr(lib, f"test_{test}").restype = c_bool
 
 # define signatures of the Fortran functions providing the reference settings
 lib.reference_field.restype = None
@@ -302,7 +298,10 @@ def add_tests(cls):
 
         return test
 
+    # the test functions return a C bool, whose upper bytes ctypes would otherwise read
+    # as part of an int
     for func_name in cls.tests:
+        getattr(lib, f"test_{func_name}").restype = c_bool
         setattr(cls, f"test_{func_name}", create_test(f"test_{func_name}"))
 
     return cls

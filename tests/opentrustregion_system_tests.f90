@@ -428,6 +428,8 @@ contains
                 solver_settings%line_search = .true.
             case ("stability")
                 solver_settings%stability = .true.
+            case ("non-symmetric Hessian")
+                solver_settings%hess_symm = .false.
             case default
                 solver_settings%subsystem_solver = option
                 if (index(option, "jacobi-davidson") == 1) &
@@ -672,6 +674,16 @@ contains
             check_h2o_fb_solver("h2o_fb_solver_stability", "stability"), kind=c_bool)
 
     end function test_h2o_fb_solver_stability
+
+    logical(c_bool) function test_h2o_fb_solver_hess_symm() bind(C)
+        !
+        ! this function tests the solver for the Foster-Boys localization of the
+        ! occupied orbitals of water with the Hessian treated as non-symmetric
+        !
+        test_h2o_fb_solver_hess_symm = logical(check_h2o_fb_solver( &
+            "h2o_fb_solver_hess_symm", "non-symmetric Hessian"), kind=c_bool)
+
+    end function test_h2o_fb_solver_hess_symm
 
     logical(c_bool) function test_h2o_fb_stability_check_default() bind(C)
         !
