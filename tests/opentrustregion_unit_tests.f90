@@ -1965,6 +1965,23 @@ contains
 
     end function generate_random_symm_matrix
 
+    function generate_random_upper_triangular_matrix(n) result(matrix)
+        !
+        ! this function generates a random upper triangular matrix, whose eigenvalues
+        ! are its diagonal elements
+        !
+        integer(ip), intent(in) :: n
+        real(rp) :: matrix(n, n)
+
+        integer(ip) :: i
+
+        call random_number(matrix)
+        do i = 1, n - 1
+            matrix(i + 1:, i) = 0.0_rp
+        end do
+
+    end function generate_random_upper_triangular_matrix
+
     subroutine setup_settings(settings, context)
         !
         ! this subroutine sets up a settings object for tests, which hands the test
@@ -2031,6 +2048,43 @@ contains
 
     end subroutine setup_refresh_context
 
+    subroutine setup_reduced_space(vars, grad, grad_norm, red_space_basis, &
+                                   red_space_hess)
+        !
+        ! this subroutine sets up the reduced space of the subproblem at a point of the
+        ! Hartmann 6D function, the gradient, an orthonormal basis which starts with
+        ! the gradient direction and continues with the leading unit vectors and the
+        ! Hessian in this basis
+        !
+        real(rp), intent(in) :: vars(:)
+        real(rp), intent(out) :: grad(:), grad_norm, red_space_basis(:, :), &
+                                 red_space_hess(:, :)
+
+        integer(ip) :: i, j
+
+        ! calculate gradient
+        call hartmann6d_gradient(vars, grad)
+        grad_norm = norm2(grad)
+
+        ! orthonormalize the leading unit vectors against the gradient direction
+        red_space_basis = 0.0_rp
+        red_space_basis(:, 1) = grad / grad_norm
+        do i = 2, size(red_space_basis, 2)
+            red_space_basis(i - 1, i) = 1.0_rp
+            do j = 1, i - 1
+                red_space_basis(:, i) = red_space_basis(:, i) - dot_product( &
+                    red_space_basis(:, i), red_space_basis(:, j)) * &
+                                        red_space_basis(:, j)
+            end do
+            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
+        end do
+
+        ! project Hessian onto the basis
+        red_space_hess = matmul(transpose(red_space_basis), &
+                                matmul(hartmann6d_hessian(vars), red_space_basis))
+
+    end subroutine setup_reduced_space
+
     subroutine ref_symm_mat_diag(matrix, eigvals, eigvecs)
         !
         ! this subroutine reimplements the eigendecomposition of a symmetric matrix,
@@ -2059,6 +2113,46 @@ contains
         deallocate(work)
 
     end subroutine ref_symm_mat_diag
+
+    subroutine ref_general_mat_diag(matrix, eigvals_re, eigvals_im, right_eigvecs, &
+                                    left_eigvecs)
+        !
+        ! this subroutine reimplements the eigendecomposition of a general matrix,
+        ! returning the real and imaginary parts of the eigenvalues and left
+        ! eigenvectors scaled to be biorthonormal to the right ones
+        !
+        real(rp), intent(in) :: matrix(:, :)
+        real(rp), intent(out) :: eigvals_re(:), eigvals_im(:), right_eigvecs(:, :), &
+                                 left_eigvecs(:, :)
+
+        integer(ip) :: n, lwork, info, i
+        real(rp), allocatable :: work(:), temp(:, :)
+        external :: dgeev
+
+        n = size(matrix, 1)
+        temp = matrix
+
+        ! query optimal workspace size
+        lwork = -1
+        allocate(work(1))
+        call dgeev("V", "V", n, temp, n, eigvals_re, eigvals_im, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
+        lwork = int(work(1), kind=ip)
+        deallocate(work)
+        allocate(work(lwork))
+
+        ! perform eigendecomposition
+        call dgeev("V", "V", n, temp, n, eigvals_re, eigvals_im, left_eigvecs, n, &
+                   right_eigvecs, n, work, lwork, info)
+        deallocate(work, temp)
+
+        ! scale left eigenvectors to biorthonormality
+        do i = 1, n
+            left_eigvecs(:, i) = left_eigvecs(:, i) / &
+                                 dot_product(left_eigvecs(:, i), right_eigvecs(:, i))
+        end do
+
+    end subroutine ref_general_mat_diag
 
     function ref_step_trust_radius(trust_radius, ratio)
         !
@@ -2415,36 +2509,6 @@ contains
         log_message = ""
 
     end subroutine legacy_setup_settings
-
-    subroutine diagonalize_test_matrix(matrix, eigvals, eigvecs, info)
-        !
-        ! this subroutine diagonalizes a symmetric matrix for use in tests
-        !
-        real(rp), intent(in) :: matrix(:, :)
-        real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
-        integer(ip), intent(out) :: info
-
-        integer(ip) :: n, lwork
-        real(rp), allocatable :: work(:)
-
-        external :: dsyev
-
-        n = size(matrix, 1)
-        eigvecs = matrix
-
-        ! query optimal workspace size
-        lwork = -1
-        allocate(work(1))
-        call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
-        lwork = int(work(1), kind=ip)
-        deallocate(work)
-        allocate(work(lwork))
-
-        ! perform eigendecomposition
-        call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
-        deallocate(work)
-
-    end subroutine diagonalize_test_matrix
 
     subroutine setup_truncation_model(coupled, func, h_diag)
         !
@@ -3991,108 +4055,52 @@ contains
         !
         use opentrustregion, only: newton_step
 
-        integer(ip), parameter :: n_trial = 3, lwork = 12
-        real(rp) :: red_space_basis(n_param, n_trial), vars(n_param), grad(n_param), &
-                    grad_norm, red_space_hess(n_trial, n_trial), &
-                    red_space_hess_left_eigvecs(n_trial, n_trial), &
-                    red_space_hess_right_eigvecs(n_trial, n_trial), &
-                    red_space_hess_eigvals(n_trial), &
-                    red_space_hess_imag_eigvals(n_trial), solution(n_param), &
-                    red_space_solution(n_trial), work(lwork), temp(n_trial, n_trial)
-        integer(ip) :: i, j, info
-
-        external :: dgeev
+        integer(ip), parameter :: n_trial = 3
+        character(len=*), parameter :: case_names(2) = &
+            [character(len=10) :: "symmetric", "asymmetric"]
+        real(rp) :: red_space_basis(n_param, n_trial), grad(n_param), grad_norm, &
+                    red_space_hess(n_trial, n_trial), eigvals(n_trial), &
+                    eigvals_im(n_trial), right_eigvecs(n_trial, n_trial), &
+                    left_eigvecs(n_trial, n_trial), solution(n_param), &
+                    red_space_solution(n_trial)
+        integer(ip) :: i_case
 
         ! assume tests pass
         test_newton_step = .true.
 
-        ! point in quadratic region near minimum
-        vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
+        ! set up the reduced space near a minimum, where its Hessian is positive
+        ! definite
+        call setup_reduced_space(near_minimum, grad, grad_norm, red_space_basis, &
+                                 red_space_hess)
 
-        ! calculate gradient and Hessian
-        call hartmann6d_gradient(vars, grad)
-        grad_norm = norm2(grad)
-        call legacy_hartmann6d_hessian(vars)
-
-        ! defined a reduced space basis
-        red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-
-        ! orthonormalize reduced space basis
-        do i = 2, 3
-            do j = 1, i - 1
-                ! subtract projection onto previous vectors
-                red_space_basis(:, i) = red_space_basis(:, i) - dot_product( &
-                    red_space_basis(:, i), red_space_basis(:, j)) * &
-                                        red_space_basis(:, j)
-            end do
-            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
+        ! perform the Newton step with the eigendecomposition of the reduced space
+        ! Hessian and of this Hessian made asymmetric and determine whether it solves
+        ! the Newton equation in the reduced space and is returned in the full space
+        do i_case = 1, size(case_names)
+            if (i_case == 1) then
+                call ref_symm_mat_diag(red_space_hess, eigvals, right_eigvecs)
+                left_eigvecs = right_eigvecs
+            else
+                red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
+                call ref_general_mat_diag(red_space_hess, eigvals, eigvals_im, &
+                                          right_eigvecs, left_eigvecs)
+            end if
+            call newton_step(grad_norm, red_space_basis, eigvals, right_eigvecs, &
+                             left_eigvecs, solution, red_space_solution)
+            if (norm2(matmul(red_space_basis, matmul( &
+                red_space_hess, red_space_solution)) + grad) > tol) then
+                write(stderr, *) "test_newton_step failed: Newton step does not "// &
+                    "satisfy Newton equation for "//trim(case_names(i_case))// &
+                    " Hessian."
+                test_newton_step = .false.
+            end if
+            if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > &
+                    tol)) then
+                write(stderr, *) "test_newton_step failed: Full space solution not "// &
+                    "correct for "//trim(case_names(i_case))//" Hessian."
+                test_newton_step = .false.
+            end if
         end do
-
-        ! define augmented Hessian
-        do i = 1, 3
-            do j = 1, 3
-                red_space_hess(i, j) = dot_product(red_space_basis(:, i), &
-                                                   matmul(hess, red_space_basis(:, j)))
-            end do
-        end do
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals, &
-                                     red_space_hess_right_eigvecs, info)
-        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
-
-        ! perform Newton step, determine whether resulting solution is correct in
-        ! reduced and full space
-        call newton_step(grad_norm, red_space_basis, red_space_hess_eigvals, &
-                         red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                         solution, red_space_solution)
-        if (norm2(matmul(red_space_basis, &
-                         matmul(red_space_hess, red_space_solution)) + grad) > tol) then
-            write(stderr, *) "test_newton_step failed: Newton step does not "// &
-                "satisfy Newton equation for symmetric Hessian."
-            test_newton_step = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_newton_step failed: Full space solution not "// &
-                "correct for symmetric Hessian."
-            test_newton_step = .false.
-        end if
-
-        ! make Hessian non-symmetric
-        red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
-
-        ! diagonalize non-symmetric Hessian
-        temp = red_space_hess
-        call dgeev("V", "V", 3_ip, temp, 3_ip, red_space_hess_eigvals, &
-                   red_space_hess_imag_eigvals, red_space_hess_left_eigvecs, 3_ip, &
-                   red_space_hess_right_eigvecs, 3_ip, work, lwork, info)
-
-        ! biorthonormalize eigenvectors
-        do i = 1, 3
-            red_space_hess_left_eigvecs(:, i) = &
-                red_space_hess_left_eigvecs(:, i) / &
-                dot_product(red_space_hess_left_eigvecs(:, i), &
-                            red_space_hess_right_eigvecs(:, i))
-        end do
-
-        ! perform Newton step, determine whether resulting solution is correct in
-        ! reduced and full space
-        call newton_step(grad_norm, red_space_basis, red_space_hess_eigvals, &
-                         red_space_hess_right_eigvecs, red_space_hess_left_eigvecs, &
-                         solution, red_space_solution)
-        if (norm2(matmul(red_space_basis, &
-                         matmul(red_space_hess, red_space_solution)) + grad) > tol) then
-            write(stderr, *) "test_newton_step failed: Newton step does not "// &
-                "satisfy Newton equation for asymmetric Hessian."
-            test_newton_step = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_newton_step failed: Full space solution not "// &
-                "correct for asymmetric Hessian."
-            test_newton_step = .false.
-        end if
 
     end function test_newton_step
 
@@ -5939,200 +5947,128 @@ contains
         use opentrustregion, only: &
             solver_settings_type, accept_trust_region_step, trust_radius_shrink_ratio, &
             trust_radius_expand_ratio, trust_radius_shrink_factor, &
-            trust_radius_expand_factor
+            trust_radius_expand_factor, function_unchanged_warning_msg
+
+        ! cases with the reason for accepting or rejecting the step, the size of the
+        ! first rotation, the norm of the step, the ratio of actual to predicted
+        ! function change, whether the micro iterations converged, and the expected
+        ! acceptance and trust radius, for a starting trust radius of one
+        character(len=*), parameter :: case_names(7) = &
+            [character(len=47) :: "micro iterations have not converged", "ratio is "// &
+             "negative", "individual rotations are too large", "ratio is too small", &
+             "ratio is acceptable", "ratio is too large at the trust region boundary", &
+             "ratio is too large within the trust region"]
+        real(rp), parameter :: &
+            case_rotations(7) = &
+                [0.3_rp, 0.3_rp, 1.0_rp, 0.3_rp, 0.3_rp, 0.3_rp, 0.3_rp], &
+            case_step_norms(7) = &
+                [0.5_rp, 0.5_rp, 0.5_rp, 0.5_rp, 0.5_rp, 1.0_rp, 0.5_rp], &
+            case_ratios(7) = [ &
+                1.0_rp, -1.0_rp, 1.0_rp, 0.9_rp * trust_radius_shrink_ratio, 0.5_rp * &
+                (trust_radius_shrink_ratio + trust_radius_expand_ratio), 1.1_rp * &
+                trust_radius_expand_ratio, 1.1_rp * trust_radius_expand_ratio], &
+            case_trust_radii(7) = [ &
+                trust_radius_shrink_factor, trust_radius_shrink_factor, &
+                trust_radius_shrink_factor, trust_radius_shrink_factor, 1.0_rp, &
+                trust_radius_expand_factor, 1.0_rp]
+        logical, parameter :: &
+            case_converged(7) = &
+                [.false., .true., .true., .true., .true., .true., .true.], &
+            case_accepted(7) = &
+                [.false., .false., .false., .true., .true., .true., .true.]
+
+        ! cases with the objective function value, the actual and the predicted
+        ! function change and whether maximum precision is reached, which requires that
+        ! neither change can be resolved relative to the objective function value
+        character(len=*), parameter :: precision_case_names(6) = &
+            [character(len=54) :: "vanishing function changes", &
+             "changes below the resolution of a large function value", &
+             "changes above the resolution of a small function value", "vanishing "// &
+             "changes of a vanishing function value", "only the predicted change "// &
+             "below the resolution", "only the actual change below the resolution"]
+        real(rp), parameter :: &
+            precision_case_funcs(6) = &
+                [-1.0_rp, -2000.0_rp, -1.0_rp, 0.0_rp, -1.0_rp, -1.0_rp], &
+            precision_case_actual(6) = &
+                [0.0_rp, 1e-13_rp, 1e-13_rp, 0.0_rp, 1e-3_rp, 1e-20_rp], &
+            precision_case_predicted(6) = &
+                [0.0_rp, 1e-13_rp, 1e-13_rp, 0.0_rp, 1e-20_rp, 1e-3_rp]
+        logical, parameter :: precision_case_reached(6) = &
+            [.true., .true., .false., .true., .false., .false.]
 
         logical :: accept_step
-        real(rp) :: solution(3), start_trust_radius
+        real(rp) :: solution(3)
         type(solver_state_type) :: state
         type(solver_settings_type) :: settings
+        type(test_context_type), target :: context
+        integer(ip) :: i
 
         ! assume tests pass
         test_accept_trust_region_step = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
         solution = [0.3_rp, 0.3_rp, 0.3_rp]
 
-        ! check if step is rejected and trust radius is correctly reduced if micro
-        ! iterations have not converged
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1.0_rp, 1.0_rp, .false., settings, state)
-        if (accept_step .or. &
-            abs(state%trust_radius - trust_radius_shrink_factor) > tol) then
-            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
-                "or trust radius not correctly reduced when micro iterations have "// &
-                "not converged."
-            test_accept_trust_region_step = .false.
-        end if
+        ! check for every case whether the step is accepted and the trust radius is
+        ! reduced, kept or expanded, without maximum precision being reported as
+        ! reached, the flag starts set so that a flag which is not cleared is detected
+        do i = 1, size(case_names)
+            state%trust_radius = 1.0_rp
+            state%max_precision_reached = .true.
+            solution(1) = case_rotations(i)
+            accept_step = accept_trust_region_step(solution, case_step_norms(i), &
+                                                   -1.0_rp, case_ratios(i), 1.0_rp, &
+                                                   case_converged(i), settings, state)
+            if (accept_step .neqv. case_accepted(i)) then
+                write(stderr, *) "test_accept_trust_region_step failed: Step "// &
+                    "acceptance incorrect when "//trim(case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+            if (abs(state%trust_radius - case_trust_radii(i)) > tol) then
+                write(stderr, *) "test_accept_trust_region_step failed: Trust "// &
+                    "radius not correctly updated when "//trim(case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+            if (state%max_precision_reached) then
+                write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
+                    "precision reported as reached when "//trim(case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+        end do
 
-        ! check if step is rejected and trust radius is correctly reduced if ratio is
-        ! negative
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               -1.0_rp, 1.0_rp, .true., settings, state)
-        if (accept_step .or. &
-            abs(state%trust_radius - trust_radius_shrink_factor) > tol) then
-            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
-                "or trust radius not correctly reduced when ratio is negative."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check if step is rejected and trust radius is correctly reduced if individual
-        ! rotations are too large
-        state%trust_radius = 1.0_rp
-        solution(1) = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1.0_rp, 1.0_rp, .true., settings, state)
-        if (accept_step .or. &
-            abs(state%trust_radius - trust_radius_shrink_factor) > tol) then
-            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
-                "or trust radius not correctly reduced when individual rotations "// &
-                "are too large."
-            test_accept_trust_region_step = .false.
-        end if
+        ! check for every case whether maximum precision is reported as reached and,
+        ! if so, whether the step is rejected with the trust radius left unchanged and
+        ! a warning printed
         solution(1) = 0.3_rp
-
-        ! check if step is accepted and trust radius is correctly reduced if ratio is
-        ! too small
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               0.9_rp * trust_radius_shrink_ratio, &
-                                               1.0_rp, .true., settings, state)
-        if (.not. accept_step .or. &
-            abs(state%trust_radius - trust_radius_shrink_factor) > tol) then
-            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
-                "accepted or trust radius not correctly reduced when ratio is too "// &
-                "small."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check if step is accepted and trust radius is correctly reduced if ratio is
-        ! ok
-        start_trust_radius = 1.0_rp
-        state%trust_radius = start_trust_radius
-        accept_step = accept_trust_region_step( &
-            solution, norm2(solution), -1.0_rp, &
-            0.5_rp * (trust_radius_shrink_ratio + trust_radius_expand_ratio), 1.0_rp, &
-            .true., settings, state)
-        if (.not. accept_step .or. abs(state%trust_radius - start_trust_radius) > tol) &
-            then
-            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
-                "accepted or trust radius changed when ratio is acceptable."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check if step is accepted and trust radius is correctly expanded if ratio is
-        ! too large and the step reaches the trust region boundary
-        start_trust_radius = 0.5_rp
-        state%trust_radius = start_trust_radius
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1.1_rp * trust_radius_expand_ratio, &
-                                               1.0_rp, .true., settings, state)
-        if (.not. accept_step .or. &
-            abs(state%trust_radius - &
-                trust_radius_expand_factor * start_trust_radius) > tol) then
-            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
-                "accepted or trust radius not correctly expanded when ratio is too "// &
-                "large."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check if step is accepted but trust radius is left unchanged if ratio is too
-        ! large but the step does not reach the trust region boundary
-        start_trust_radius = 1.0_rp
-        state%trust_radius = start_trust_radius
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1.1_rp * trust_radius_expand_ratio, &
-                                               1.0_rp, .true., settings, state)
-        if (.not. accept_step .or. abs(state%trust_radius - start_trust_radius) > tol) &
-            then
-            write(stderr, *) "test_accept_trust_region_step failed: Step not "// &
-                "accepted or trust radius incorrectly expanded when ratio is too "// &
-                "large but step does not reach the trust region boundary."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check if maximum precision is correctly handled for numerically vanishing
-        ! function improvement
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               0.0_rp, 0.0_rp, .true., settings, state)
-        if (.not. state%max_precision_reached) then
-            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
-                "precision not correctly handled for numerically vanishing "// &
-                "function improvement."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check that the resolution scales with the objective magnitude
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -2000.0_rp, &
-                                               1e-13_rp, 1e-13_rp, .true., settings, &
-                                               state)
-        if (.not. state%max_precision_reached) then
-            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
-                "precision not detected for a function change below the resolution "// &
-                "of a large objective function value."
-            test_accept_trust_region_step = .false.
-        end if
-
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1e-13_rp, 1e-13_rp, .true., settings, &
-                                               state)
-        if (state%max_precision_reached) then
-            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
-                "precision incorrectly detected for a function change well above "// &
-                "the resolution of a small objective function value."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check that maximum precision is detected for a vanishing objective function
-        ! value, whose resolution vanishes as well, when both function changes vanish,
-        ! and that the step is then not taken and the trust radius is left unchanged
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), 0.0_rp, &
-                                               0.0_rp, 0.0_rp, .true., settings, state)
-        if (.not. state%max_precision_reached) then
-            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
-                "precision not detected for vanishing function changes of a "// &
-                "vanishing objective function value."
-            test_accept_trust_region_step = .false.
-        end if
-        if (accept_step) then
-            write(stderr, *) "test_accept_trust_region_step failed: Step accepted "// &
-                "when maximum precision is reached."
-            test_accept_trust_region_step = .false.
-        end if
-        if (abs(state%trust_radius - 1.0_rp) > tol) then
-            write(stderr, *) "test_accept_trust_region_step failed: Trust radius "// &
-                "changed when maximum precision is reached."
-            test_accept_trust_region_step = .false.
-        end if
-
-        ! check that both changes have to be unresolvable
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1e-3_rp, 1e-20_rp, .true., settings, &
-                                               state)
-        if (state%max_precision_reached) then
-            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
-                "precision detected although only the predicted function change is "// &
-                "below the resolution."
-            test_accept_trust_region_step = .false.
-        end if
-        state%trust_radius = 1.0_rp
-        accept_step = accept_trust_region_step(solution, norm2(solution), -1.0_rp, &
-                                               1e-20_rp, 1e-3_rp, .true., settings, &
-                                               state)
-        if (state%max_precision_reached) then
-            write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
-                "precision detected although only the actual function change is "// &
-                "below the resolution."
-            test_accept_trust_region_step = .false.
-        end if
+        do i = 1, size(precision_case_names)
+            state%trust_radius = 1.0_rp
+            context%log_message = ""
+            accept_step = accept_trust_region_step( &
+                solution, 0.5_rp, precision_case_funcs(i), precision_case_actual(i), &
+                precision_case_predicted(i), .true., settings, state)
+            if (state%max_precision_reached .neqv. precision_case_reached(i)) then
+                write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
+                    "precision detected incorrectly for "// &
+                    trim(precision_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+            if (.not. precision_case_reached(i)) cycle
+            if (accept_step .or. abs(state%trust_radius - 1.0_rp) > tol) then
+                write(stderr, *) "test_accept_trust_region_step failed: Step "// &
+                    "accepted or trust radius changed at maximum precision for "// &
+                    trim(precision_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+            if (index(context%log_message, " "//function_unchanged_warning_msg) == 0) &
+                then
+                write(stderr, *) "test_accept_trust_region_step failed: No warning "// &
+                    "printed at maximum precision for "// &
+                    trim(precision_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+        end do
 
     end function test_accept_trust_region_step
 
@@ -7998,8 +7934,8 @@ contains
                 grad = 0.1_rp * settings%conv_tol * sqrt(real(n_param, kind=rp)) * &
                        grad_dir
             else
-                ! well above threshold, as when redirected while the trust radius has
-                ! collapsed but the gradient has not yet converged
+                ! well above threshold, as when maximum precision is reached at an
+                ! unstable point before the gradient has converged
                 grad = 50.0_rp * settings%conv_tol * sqrt(real(n_param, kind=rp)) * &
                        grad_dir
             end if
@@ -8051,58 +7987,32 @@ contains
         use opentrustregion, only: solver_settings_type, bisection_ah
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
-        type(solver_settings_type) :: settings
         integer(ip), parameter :: n_trial = 3
-        real(rp) :: red_space_basis(n_param, n_trial), vars(n_param), grad(n_param), &
-                    grad_norm, red_space_hess(n_trial, n_trial), &
-                    red_space_hess_eigvals(n_trial), &
+        real(rp), parameter :: negative_curvature_point(n_param) = &
+            [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
+        type(solver_settings_type) :: settings
+        real(rp) :: red_space_basis(n_param, n_trial), grad(n_param), grad_norm, &
+                    red_space_hess(n_trial, n_trial), red_space_hess_eigvals(n_trial), &
                     red_space_hess_left_eigvecs(n_trial, n_trial), &
                     red_space_hess_right_eigvecs(n_trial, n_trial), solution(n_param), &
                     red_space_solution(n_trial), trust_radius, mu, &
                     grad_coupled_component, newton_solution(n_param), &
                     newton_red_space_solution(n_trial)
-        integer(ip) :: i, j, error, info
+        integer(ip) :: error
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_bisection_ah = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
-        ! choose target trust radius
+        ! set up the reduced space at a point with strong negative curvature
         trust_radius = 1.0_rp
-
-        ! point with strong negative curvature
-        vars = [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
-
-        ! calculate gradient and Hessian
-        call hartmann6d_gradient(vars, grad)
-        grad_norm = norm2(grad)
-        call legacy_hartmann6d_hessian(vars)
-
-        ! defined a reduced space basis
-        red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-
-        ! orthonormalize reduced space basis
-        do i = 2, n_trial
-            do j = 1, i - 1
-                ! subtract projection onto previous vectors
-                red_space_basis(:, i) = red_space_basis(:, i) - dot_product( &
-                    red_space_basis(:, i), red_space_basis(:, j)) * &
-                                        red_space_basis(:, j)
-            end do
-            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
-        end do
-
-        ! define reduced space Hessian
-        red_space_hess = matmul(transpose(red_space_basis), &
-                                matmul(hess, red_space_basis))
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals, &
-                                     red_space_hess_right_eigvecs, info)
+        call setup_reduced_space(negative_curvature_point, grad, grad_norm, &
+                                 red_space_basis, red_space_hess)
+        call ref_symm_mat_diag(red_space_hess, red_space_hess_eigvals, &
+                               red_space_hess_right_eigvecs)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection, check whether error has occured and determine whether
@@ -8133,19 +8043,11 @@ contains
             test_bisection_ah = .false.
         end if
 
-        ! point in quadratic region near minimum
-        vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-
-        ! calculate gradient and Hessian to define augmented Hessian
-        call hartmann6d_gradient(vars, grad)
-        grad_norm = norm2(grad)
-        call legacy_hartmann6d_hessian(vars)
-        red_space_hess = matmul(transpose(red_space_basis), &
-                                matmul(hess, red_space_basis))
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals, &
-                                     red_space_hess_right_eigvecs, info)
+        ! set up the reduced space near a minimum
+        call setup_reduced_space(near_minimum, grad, grad_norm, red_space_basis, &
+                                 red_space_hess)
+        call ref_symm_mat_diag(red_space_hess, red_space_hess_eigvals, &
+                               red_space_hess_right_eigvecs)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! perform bisection and determine whether routine correctly falls back to the
@@ -8192,11 +8094,8 @@ contains
         red_space_hess(1, 1) = 5.0_rp
         red_space_hess(2, 2) = -2.0_rp
         red_space_hess(3, 3) = 3.0_rp
-        settings%hess_symm = .true.
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals, &
-                                     red_space_hess_right_eigvecs, info)
+        call ref_symm_mat_diag(red_space_hess, red_space_hess_eigvals, &
+                               red_space_hess_right_eigvecs)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! test hard case: lowest reduced space Hessian eigenvalue is negative and its
@@ -8242,10 +8141,8 @@ contains
         red_space_hess(1, 1) = 5.0_rp
         red_space_hess(2, 2) = -2.0_rp
         red_space_hess(3, 3) = -2.0_rp
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals, &
-                                     red_space_hess_right_eigvecs, info)
+        call ref_symm_mat_diag(red_space_hess, red_space_hess_eigvals, &
+                               red_space_hess_right_eigvecs)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
         ! test hard case with a degenerate lowest eigenvalue: the eigenvector spanning
@@ -8301,245 +8198,85 @@ contains
         !
         ! this function tests the level-shift bisection subroutine
         !
-        use opentrustregion, only: solver_settings_type, bisection_mu
+        use opentrustregion, only: solver_settings_type, bisection_mu, &
+                                   bisection_imaginary_eigval_warning_msg
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
+        integer(ip), parameter :: n_trial = 3
+        real(rp), parameter :: negative_curvature_point(n_param) = &
+            [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
+        character(len=*), parameter :: case_names(4) = &
+            [character(len=29) :: "symmetric, indefinite", "asymmetric, indefinite", &
+             "symmetric, positive-definite", "asymmetric, positive-definite"]
         type(solver_settings_type) :: settings
-        integer(ip), parameter :: n_trial = 3, lwork = 12
-        real(rp) :: red_space_basis(n_param, n_trial), vars(n_param), grad(n_param), &
-                    grad_norm, red_space_hess(n_trial, n_trial), &
+        real(rp) :: red_space_basis(n_param, n_trial), grad(n_param), grad_norm, &
+                    red_space_hess(n_trial, n_trial), &
                     red_space_hess_left_eigvecs(n_trial, n_trial), &
                     red_space_hess_right_eigvecs(n_trial, n_trial), solution(n_param), &
-                    red_space_solution(n_trial), trust_radius, mu, work(lwork), &
-                    temp(n_trial, n_trial), red_space_hess_eigvals_re(n_trial), &
-                    red_space_hess_eigvals_im(n_trial), grad_coupled_component
+                    red_space_solution(n_trial), trust_radius, mu, &
+                    grad_coupled_component
         complex(rp) :: red_space_hess_eigvals(n_trial)
-        integer(ip) :: i, j, error, info
-
-        external :: dgeev
+        integer(ip) :: error, i_case
+        logical :: positive_definite
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_bisection_mu = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
-        ! choose target trust radius
+        ! perform bisection in the reduced space at a point with strong negative
+        ! curvature and near a minimum, for the reduced space Hessian and for this
+        ! Hessian made asymmetric, check whether error has occured and determine
+        ! whether the solution is a level-shifted Newton step which reaches the trust
+        ! radius in the indefinite case and the Newton step within it in the positive
+        ! definite case, and whether it is returned in the full space
         trust_radius = 1.0_rp
-
-        ! point with strong negative curvature
-        vars = [0.29_rp, 0.47_rp, 0.66_rp, 0.41_rp, 0.23_rp, 0.26_rp]
-
-        ! calculate gradient and Hessian
-        call hartmann6d_gradient(vars, grad)
-        grad_norm = norm2(grad)
-        call legacy_hartmann6d_hessian(vars)
-
-        ! defined a reduced space basis
-        red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-
-        ! orthonormalize reduced space basis
-        do i = 2, n_trial
-            do j = 1, i - 1
-                ! subtract projection onto previous vectors
-                red_space_basis(:, i) = red_space_basis(:, i) - dot_product( &
-                    red_space_basis(:, i), red_space_basis(:, j)) * &
-                                        red_space_basis(:, j)
-            end do
-            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
+        do i_case = 1, size(case_names)
+            positive_definite = i_case > 2
+            call setup_reduced_space( &
+                merge(near_minimum, negative_curvature_point, positive_definite), &
+                grad, grad_norm, red_space_basis, red_space_hess)
+            if (mod(i_case, 2) == 0) &
+                red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
+            call diagonalize(mod(i_case, 2) == 1)
+            call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                              red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                              red_space_hess_left_eigvecs, trust_radius, solution, &
+                              red_space_solution, mu, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_bisection_mu failed: Produced error for "// &
+                    trim(case_names(i_case))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+            if ((positive_definite .and. norm2(solution) > trust_radius) .or. &
+                (.not. positive_definite .and. &
+                 abs(norm2(solution) - trust_radius) > tol)) then
+                write(stderr, *) "test_bisection_mu failed: Solution does not "// &
+                    "respect trust radius for "//trim(case_names(i_case))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+            if (positive_definite .and. abs(mu) > tol) then
+                write(stderr, *) "test_bisection_mu failed: Level shift does not "// &
+                    "vanish for "//trim(case_names(i_case))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+            if (norm2( &
+                matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
+                       mu * red_space_solution) + grad) > tol) then
+                write(stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
+                    "level-shifted Newton equation for "//trim(case_names(i_case))// &
+                    " Hessian."
+                test_bisection_mu = .false.
+            end if
+            if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > &
+                    tol)) then
+                write(stderr, *) "test_bisection_mu failed: Full space solution "// &
+                    "not correct for "//trim(case_names(i_case))//" Hessian."
+                test_bisection_mu = .false.
+            end if
         end do
-
-        ! define reduced space Hessian
-        red_space_hess = matmul(transpose(red_space_basis), &
-                                matmul(hess, red_space_basis))
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals_re, &
-                                     red_space_hess_right_eigvecs, info)
-        red_space_hess_eigvals%re = red_space_hess_eigvals_re
-        red_space_hess_eigvals%im = 0.0_rp
-        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
-
-        ! perform bisection, check whether error has occured and determine whether
-        ! resulting solution is correct in reduced and full space and respects target
-        ! trust radius
-        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
-                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
-                          red_space_hess_left_eigvecs, trust_radius, solution, &
-                          red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_bisection_mu failed: Produced error for "// &
-                "symmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Solution does not respect "// &
-                "trust radius for symmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                         mu * red_space_solution) + grad) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
-                "level-shifted Newton equation for symmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Full space solution not "// &
-                "correct for symmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-
-        ! make Hessian non-symmetric
-        red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
-
-        ! diagonalize non-symmetric Hessian
-        temp = red_space_hess
-        call dgeev("V", "V", n_trial, temp, n_trial, red_space_hess_eigvals_re, &
-                   red_space_hess_eigvals_im, red_space_hess_left_eigvecs, n_trial, &
-                   red_space_hess_right_eigvecs, n_trial, work, lwork, info)
-        red_space_hess_eigvals%re = red_space_hess_eigvals_re
-        red_space_hess_eigvals%im = red_space_hess_eigvals_im
-
-        ! perform bisection, check whether error has occured and determine whether
-        ! resulting solution is correct in reduced and full space and respects target
-        ! trust radius
-        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
-                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
-                          red_space_hess_left_eigvecs, trust_radius, solution, &
-                          red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_bisection_mu failed: Produced error for "// &
-                "asymmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Solution does not respect "// &
-                "trust radius for asymmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                         mu * red_space_solution) + grad) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
-                "level-shifted Newton equation for asymmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Full space solution not "// &
-                "correct for asymmetric, indefinite Hessian."
-            test_bisection_mu = .false.
-        end if
-
-        ! point in quadratic region near minimum
-        vars = [0.20_rp, 0.15_rp, 0.48_rp, 0.28_rp, 0.31_rp, 0.66_rp]
-
-        ! calculate gradient and Hessian to define reduced Hessian
-        call hartmann6d_gradient(vars, grad)
-        grad_norm = norm2(grad)
-        call legacy_hartmann6d_hessian(vars)
-        red_space_hess = matmul(transpose(red_space_basis), &
-                                matmul(hess, red_space_basis))
-
-        ! defined a reduced space basis
-        red_space_basis(:, 1) = grad / grad_norm
-        red_space_basis(:, 2) = [1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-        red_space_basis(:, 3) = [0.0_rp, 1.0_rp, 0.0_rp, 0.0_rp, 0.0_rp, 0.0_rp]
-
-        ! orthonormalize reduced space basis
-        do i = 2, n_trial
-            do j = 1, i - 1
-                ! subtract projection onto previous vectors
-                red_space_basis(:, i) = red_space_basis(:, i) - dot_product( &
-                    red_space_basis(:, i), red_space_basis(:, j)) * &
-                                        red_space_basis(:, j)
-            end do
-            red_space_basis(:, i) = red_space_basis(:, i) / norm2(red_space_basis(:, i))
-        end do
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals_re, &
-                                     red_space_hess_right_eigvecs, info)
-        red_space_hess_eigvals%re = red_space_hess_eigvals_re
-        red_space_hess_eigvals%im = 0.0_rp
-        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
-
-        ! perform bisection and determine whether routine correctly throws error since
-        ! minimum is closer than target trust radius and no level shift is necessary
-        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
-                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
-                          red_space_hess_left_eigvecs, trust_radius, solution, &
-                          red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_bisection_mu failed: Produced error for "// &
-                "symmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (norm2(solution) > trust_radius) then
-            write(stderr, *) "test_bisection_mu failed: Solution does not respect "// &
-                "trust radius for symmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(mu) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Level shift does not "// &
-                "vanish for symmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (norm2(matmul(red_space_basis, &
-                         matmul(red_space_hess, red_space_solution)) + grad) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
-                "Newton equation for symmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Full space solution not "// &
-                "correct for symmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-
-        ! make Hessian non-symmetric
-        red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
-
-        ! diagonalize non-symmetric Hessian
-        temp = red_space_hess
-        call dgeev("V", "V", n_trial, temp, n_trial, red_space_hess_eigvals_re, &
-                   red_space_hess_eigvals_im, red_space_hess_left_eigvecs, n_trial, &
-                   red_space_hess_right_eigvecs, n_trial, work, lwork, info)
-        red_space_hess_eigvals%re = red_space_hess_eigvals_re
-        red_space_hess_eigvals%im = red_space_hess_eigvals_im
-
-        ! perform bisection and determine whether routine correctly throws error since
-        ! minimum is closer than target trust radius and no level shift is necessary
-        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
-                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
-                          red_space_hess_left_eigvecs, trust_radius, solution, &
-                          red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_bisection_mu failed: Produced error for "// &
-                "asymmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (norm2(solution) > trust_radius) then
-            write(stderr, *) "test_bisection_mu failed: Solution does not respect "// &
-                "trust radius for asymmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(mu) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Level shift does not "// &
-                "vanish for asymmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (norm2(matmul(red_space_basis, &
-                         matmul(red_space_hess, red_space_solution)) + grad) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
-                "Newton equation for asymmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Full space solution not "// &
-                "correct for asymmetric, positive-definite Hessian."
-            test_bisection_mu = .false.
-        end if
 
         ! set up hard case by using an orthonormal basis as this is what the hard case
         ! step assumes
@@ -8554,103 +8291,58 @@ contains
         red_space_hess(2, 2) = -2.0_rp
         red_space_hess(3, 3) = 3.0_rp
 
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals_re, &
-                                     red_space_hess_right_eigvecs, info)
-        red_space_hess_eigvals%re = red_space_hess_eigvals_re
-        red_space_hess_eigvals%im = 0.0_rp
-        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
-
         ! test hard case: lowest reduced space Hessian eigenvalue is negative and its
         ! eigenvector has no component along the gradient direction, so no level shift
         ! can reproduce the trust region solution and the remaining trust radius has to
-        ! be filled with this eigenvector
-        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
-                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
-                          red_space_hess_left_eigvecs, trust_radius, solution, &
-                          red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_bisection_mu failed: Produced error for hard "// &
-                "case with symmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Hard case solution does "// &
-                "not respect trust radius for symmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(mu - minval(red_space_hess_eigvals%re)) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Hard case level shift not "// &
-                "equal to lowest reduced space Hessian eigenvalue for symmetric "// &
-                "Hessian."
-            test_bisection_mu = .false.
-        end if
-        grad_coupled_component = grad_norm / (minval(red_space_hess_eigvals%re) - &
-                                              maxval(red_space_hess_eigvals%re))
-        if (any(abs(red_space_solution - [ &
-            grad_coupled_component, sqrt(trust_radius**2 - grad_coupled_component**2), &
-            0.0_rp]) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Hard case reduced space "// &
-                "solution not correct for symmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Hard case full space "// &
-                "solution not correct for symmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-
-        ! make Hessian non-symmetric without coupling the gradient direction to the
-        ! eigenvector of the lowest eigenvalue since this eigenvector has to remain
-        ! orthogonal to the gradient for the hard case to arise
-        red_space_hess(1, 3) = 0.5_rp
-
-        ! diagonalize non-symmetric Hessian
-        temp = red_space_hess
-        call dgeev("V", "V", n_trial, temp, n_trial, red_space_hess_eigvals_re, &
-                   red_space_hess_eigvals_im, red_space_hess_left_eigvecs, n_trial, &
-                   red_space_hess_right_eigvecs, n_trial, work, lwork, info)
-        red_space_hess_eigvals%re = red_space_hess_eigvals_re
-        red_space_hess_eigvals%im = red_space_hess_eigvals_im
-
-        ! test hard case for an asymmetric Hessian: the hard case is detected from the
-        ! left eigenvector of the lowest eigenvalue having no component along the
-        ! gradient direction while the remaining trust radius is filled with the
-        ! corresponding right eigenvector
-        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
-                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
-                          red_space_hess_left_eigvecs, trust_radius, solution, &
-                          red_space_solution, mu, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_bisection_mu failed: Produced error for hard "// &
-                "case with asymmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Hard case solution does "// &
-                "not respect trust radius for asymmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (abs(mu - minval(red_space_hess_eigvals%re)) > tol) then
-            write(stderr, *) "test_bisection_mu failed: Hard case level shift not "// &
-                "equal to lowest reduced space Hessian eigenvalue for asymmetric "// &
-                "Hessian."
-            test_bisection_mu = .false.
-        end if
-        grad_coupled_component = grad_norm / (minval(red_space_hess_eigvals%re) - &
-                                              maxval(red_space_hess_eigvals%re))
-        if (any(abs(red_space_solution - [ &
-            grad_coupled_component, sqrt(trust_radius**2 - grad_coupled_component**2), &
-            0.0_rp]) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Hard case reduced space "// &
-                "solution not correct for asymmetric Hessian."
-            test_bisection_mu = .false.
-        end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
-            write(stderr, *) "test_bisection_mu failed: Hard case full space "// &
-                "solution not correct for asymmetric Hessian."
-            test_bisection_mu = .false.
-        end if
+        ! be filled with this eigenvector, for the symmetric Hessian and for this
+        ! Hessian made asymmetric without coupling the gradient direction to the
+        ! eigenvector of the lowest eigenvalue, which has to remain orthogonal to the
+        ! gradient for the hard case to arise, so that the hard case is detected from
+        ! the left eigenvector of the lowest eigenvalue while the remaining trust radius
+        ! is filled with the corresponding right eigenvector
+        do i_case = 1, 2
+            if (i_case == 2) red_space_hess(1, 3) = 0.5_rp
+            call diagonalize(i_case == 1)
+            call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                              red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                              red_space_hess_left_eigvecs, trust_radius, solution, &
+                              red_space_solution, mu, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_bisection_mu failed: Produced error for "// &
+                    "hard case with "// &
+                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+            if (abs(norm2(solution) - trust_radius) > tol) then
+                write(stderr, *) "test_bisection_mu failed: Hard case solution "// &
+                    "does not respect trust radius for "// &
+                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+            if (abs(mu - minval(red_space_hess_eigvals%re)) > tol) then
+                write(stderr, *) "test_bisection_mu failed: Hard case level shift "// &
+                    "not equal to lowest reduced space Hessian eigenvalue for "// &
+                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+            grad_coupled_component = grad_norm / (minval(red_space_hess_eigvals%re) - &
+                                                  maxval(red_space_hess_eigvals%re))
+            if (any(abs(red_space_solution - [ &
+                grad_coupled_component, &
+                sqrt(trust_radius**2 - grad_coupled_component**2), 0.0_rp]) > tol)) then
+                write(stderr, *) "test_bisection_mu failed: Hard case reduced "// &
+                    "space solution not correct for "// &
+                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+            if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > &
+                    tol)) then
+                write(stderr, *) "test_bisection_mu failed: Hard case full space "// &
+                    "solution not correct for "// &
+                    trim(merge("symmetric ", "asymmetric", i_case == 1))//" Hessian."
+                test_bisection_mu = .false.
+            end if
+        end do
 
         ! set up hard case with degenerate lowest eigenvalues
         trust_radius = 0.5_rp
@@ -8658,13 +8350,7 @@ contains
         red_space_hess(1, 1) = 5.0_rp
         red_space_hess(2, 2) = -2.0_rp
         red_space_hess(3, 3) = -2.0_rp
-
-        ! diagonalize Hessian
-        call diagonalize_test_matrix(red_space_hess, red_space_hess_eigvals_re, &
-                                     red_space_hess_right_eigvecs, info)
-        red_space_hess_eigvals%re = red_space_hess_eigvals_re
-        red_space_hess_eigvals%im = 0.0_rp
-        red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
+        call diagonalize(.true.)
 
         ! test hard case with a degenerate lowest eigenvalue: the eigenvector spanning
         ! the degenerate subspace used to fill the trust radius is not uniquely
@@ -8713,6 +8399,88 @@ contains
             test_bisection_mu = .false.
         end if
 
+        ! let the Newton step of a positive-definite Hessian reach the trust radius
+        ! exactly and check that it is taken without a level shift, since a bisection
+        ! towards a vanishing level shift could not converge
+        red_space_hess = 0.0_rp
+        red_space_hess(1, 1) = 2.0_rp
+        red_space_hess(2, 2) = 3.0_rp
+        red_space_hess(3, 3) = 4.0_rp
+        trust_radius = grad_norm / red_space_hess(1, 1)
+        call diagonalize(.true.)
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_bisection_mu failed: Produced error for Newton "// &
+                "step at the trust radius."
+            test_bisection_mu = .false.
+        end if
+        if (abs(mu) > tol .or. &
+            any(abs(red_space_solution - [-trust_radius, 0.0_rp, 0.0_rp]) > tol)) then
+            write(stderr, *) "test_bisection_mu failed: Newton step at the trust "// &
+                "radius not taken without a level shift."
+            test_bisection_mu = .false.
+        end if
+
+        ! let the lowest eigenvalues of an asymmetric Hessian be a complex pair, which
+        ! leads to no pole in the solution norm, so that the trust radius cannot be
+        ! reached, and check that the level shift is the real part of these eigenvalues
+        ! and that a warning is printed
+        red_space_hess = 0.0_rp
+        red_space_hess(1, 1) = 5.0_rp
+        red_space_hess(2:3, 2:3) = reshape([-2.0_rp, -1.0_rp, &
+                                            1.0_rp, -2.0_rp], [2, 2])
+        trust_radius = 0.6_rp
+        call diagonalize(.false.)
+        context%log_message = ""
+        call bisection_mu(red_space_hess, grad_norm, red_space_basis, &
+                          red_space_hess_eigvals, red_space_hess_right_eigvecs, &
+                          red_space_hess_left_eigvecs, trust_radius, solution, &
+                          red_space_solution, mu, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_bisection_mu failed: Produced error for complex "// &
+                "lowest eigenvalues."
+            test_bisection_mu = .false.
+        end if
+        if (abs(mu + 2.0_rp) > tol .or. norm2(solution) >= trust_radius) then
+            write(stderr, *) "test_bisection_mu failed: Level shift not the real "// &
+                "part of complex lowest eigenvalues or trust radius filled."
+            test_bisection_mu = .false.
+        end if
+        if (index(context%log_message, " "//bisection_imaginary_eigval_warning_msg) == &
+            0) then
+            write(stderr, *) "test_bisection_mu failed: No warning printed for "// &
+                "complex lowest eigenvalues."
+            test_bisection_mu = .false.
+        end if
+
+    contains
+
+        subroutine diagonalize(symmetric)
+            !
+            ! this subroutine diagonalizes the reduced space Hessian as a symmetric or
+            ! as a general matrix
+            !
+            logical, intent(in) :: symmetric
+
+            real(rp) :: eigvals_re(n_trial), eigvals_im(n_trial)
+
+            if (symmetric) then
+                call ref_symm_mat_diag(red_space_hess, eigvals_re, &
+                                       red_space_hess_right_eigvecs)
+                eigvals_im = 0.0_rp
+                red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
+            else
+                call ref_general_mat_diag(red_space_hess, eigvals_re, eigvals_im, &
+                                          red_space_hess_right_eigvecs, &
+                                          red_space_hess_left_eigvecs)
+            end if
+            red_space_hess_eigvals = cmplx(eigvals_re, eigvals_im, kind=rp)
+
+        end subroutine diagonalize
+
     end function test_bisection_mu
 
     logical(c_bool) function test_extend_matrix() bind(C)
@@ -8757,6 +8525,81 @@ contains
 
     end function test_extend_matrix
 
+    logical(c_bool) function test_mat_diag() bind(C)
+        !
+        ! this function tests the subroutine which determines the eigenvalues and left
+        ! and right eigenvectors of a symmetric or a general matrix
+        !
+        use opentrustregion, only: solver_settings_type, mat_diag
+
+        type(solver_settings_type) :: settings
+        real(rp) :: matrix(n_param, n_param), right_eigvecs(n_param, n_param), &
+                    left_eigvecs(n_param, n_param), ref_eigvals(n_param), &
+                    ref_eigvecs(n_param, n_param)
+        complex(rp) :: eigvals(n_param)
+        integer(ip) :: error, i
+        type(test_context_type), target :: context
+
+        ! assume tests pass
+        test_mat_diag = .true.
+
+        ! setup settings object
+        call setup_settings(settings, context)
+
+        ! diagonalize a random symmetric matrix as symmetric and determine whether the
+        ! eigenvalues are real and the left eigenvectors are the right ones, which are
+        ! eigenvectors
+        matrix = generate_random_symm_matrix(n_param)
+        call ref_symm_mat_diag(matrix, ref_eigvals, ref_eigvecs)
+        call mat_diag(matrix, .true., eigvals, right_eigvecs, left_eigvecs, settings, &
+                      error)
+        if (error /= 0) then
+            write(stderr, *) "test_mat_diag failed: Produced error for symmetric "// &
+                "matrix."
+            test_mat_diag = .false.
+        end if
+        if (any(abs(eigvals%re - ref_eigvals) > tol) .or. &
+            any(abs(eigvals%im) > 0.0_rp)) then
+            write(stderr, *) "test_mat_diag failed: Incorrect eigenvalues for "// &
+                "symmetric matrix."
+            test_mat_diag = .false.
+        end if
+        if (norm2(matmul(matrix, right_eigvecs) - &
+                  right_eigvecs * spread(eigvals%re, 1, n_param)) > tol .or. &
+            norm2(left_eigvecs - right_eigvecs) > 0.0_rp) then
+            write(stderr, *) "test_mat_diag failed: Incorrect eigenvectors for "// &
+                "symmetric matrix."
+            test_mat_diag = .false.
+        end if
+
+        ! diagonalize a random upper triangular matrix, whose eigenvalues are its
+        ! diagonal elements and which a symmetric diagonalization would take as the
+        ! symmetric matrix of its upper triangle, as general and determine whether
+        ! these eigenvalues and the right eigenvectors are returned
+        matrix = generate_random_upper_triangular_matrix(n_param)
+        call mat_diag(matrix, .false., eigvals, right_eigvecs, left_eigvecs, settings, &
+                      error)
+        if (error /= 0) then
+            write(stderr, *) "test_mat_diag failed: Produced error for general matrix."
+            test_mat_diag = .false.
+        end if
+        do i = 1, n_param
+            if (minval(abs(eigvals%re - matrix(i, i))) > tol) then
+                write(stderr, *) "test_mat_diag failed: Incorrect eigenvalues for "// &
+                    "general matrix."
+                test_mat_diag = .false.
+                exit
+            end if
+        end do
+        if (norm2(matmul(matrix, right_eigvecs) - &
+                  right_eigvecs * spread(eigvals%re, 1, n_param)) > tol) then
+            write(stderr, *) "test_mat_diag failed: Incorrect right eigenvectors "// &
+                "for general matrix."
+            test_mat_diag = .false.
+        end if
+
+    end function test_mat_diag
+
     logical(c_bool) function test_mat_min_eig() bind(C)
         !
         ! this function tests the subroutine for determining the minimum eigenvalue and
@@ -8766,63 +8609,45 @@ contains
         use opentrustregion, only: solver_settings_type, mat_min_eig
 
         type(solver_settings_type) :: settings
-        real(rp) :: symm_matrix(3, 3), general_matrix(3, 3)
-        real(rp) :: eigval, eigvec(3)
-        integer(ip) :: error
+        real(rp) :: matrix(n_param, n_param), eigval, eigvec(n_param), &
+                    ref_eigvals(n_param), ref_eigvecs(n_param, n_param), ref_min_eigval
+        integer(ip) :: error, i, i_case
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_mat_min_eig = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
-        ! initialize symmetric matrix
-        symm_matrix = reshape([3.0_rp, 1.0_rp, 1.0_rp, &
-                               1.0_rp, 4.0_rp, 2.0_rp, &
-                               1.0_rp, 2.0_rp, 5.0_rp], [3, 3])
-
-        ! call routine for the symmetric case and determine if lowest eigenvalue and
-        ! corresponding eigenvector are found
-        call mat_min_eig(symm_matrix, .true., eigval, eigvec, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_mat_min_eig failed: Produced error for "// &
-                "symmetric matrix."
-            test_mat_min_eig = .false.
-        end if
-        if (abs(eigval - 2.30797852837_rp) > tol) then
-            write(stderr, *) "test_mat_min_eig failed: Incorrect minimum "// &
-                "eigenvalue for symmetric matrix."
-            test_mat_min_eig = .false.
-        end if
-        if (norm2(matmul(symm_matrix, eigvec) - eigval * eigvec) > tol) then
-            write(stderr, *) "test_mat_min_eig failed: Incorrect eigenvector "// &
-                "corresponding to minimum eigenvalue for symmetric matrix."
-            test_mat_min_eig = .false.
-        end if
-
-        ! initialize non-symmetric matrix
-        general_matrix = reshape([3.0_rp, 2.0_rp, 4.0_rp, &
-                                  1.0_rp, 4.0_rp, 6.0_rp, &
-                                  3.0_rp, 5.0_rp, 5.0_rp], [3, 3])
-
-        ! call routine for the non-symmetric case and determine if lowest eigenvalue
-        ! and corresponding right eigenvector are found
-        call mat_min_eig(general_matrix, .false., eigval, eigvec, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_mat_min_eig failed: Produced error for "// &
-                "non-symmetric matrix."
-            test_mat_min_eig = .false.
-        end if
-        if (abs(eigval + 1.43567185527_rp) > tol) then
-            write(stderr, *) "test_mat_min_eig failed: Incorrect minimum "// &
-                "eigenvalue for non-symmetric matrix."
-            test_mat_min_eig = .false.
-        end if
-        if (norm2(matmul(general_matrix, eigvec) - eigval * eigvec) > tol) then
-            write(stderr, *) "test_mat_min_eig failed: Incorrect eigenvector "// &
-                "corresponding to minimum eigenvalue for non-symmetric matrix."
-            test_mat_min_eig = .false.
-        end if
+        ! determine whether the lowest eigenvalue and an eigenvector belonging to it
+        ! are returned for a random symmetric matrix and for a random upper triangular
+        ! matrix, whose lowest eigenvalue is its lowest diagonal element
+        do i_case = 1, 2
+            if (i_case == 1) then
+                matrix = generate_random_symm_matrix(n_param)
+                call ref_symm_mat_diag(matrix, ref_eigvals, ref_eigvecs)
+                ref_min_eigval = ref_eigvals(1)
+            else
+                matrix = generate_random_upper_triangular_matrix(n_param)
+                ref_min_eigval = minval([(matrix(i, i), i=1, n_param)])
+            end if
+            call mat_min_eig(matrix, i_case == 1, eigval, eigvec, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_mat_min_eig failed: Produced error for "// &
+                    trim(merge("symmetric    ", "non-symmetric", i_case == 1))// &
+                    " matrix."
+                test_mat_min_eig = .false.
+            end if
+            if (abs(eigval - ref_min_eigval) > tol .or. &
+                abs(norm2(eigvec) - 1.0_rp) > tol .or. &
+                norm2(matmul(matrix, eigvec) - eigval * eigvec) > tol) then
+                write(stderr, *) "test_mat_min_eig failed: Incorrect lowest "// &
+                    "eigenpair for "//trim(merge("symmetric    ", "non-symmetric", &
+                                                 i_case == 1))//" matrix."
+                test_mat_min_eig = .false.
+            end if
+        end do
 
     end function test_mat_min_eig
 
@@ -8834,50 +8659,75 @@ contains
         use opentrustregion, only: solver_settings_type, general_mat_diag
 
         type(solver_settings_type) :: settings
-        real(rp) :: matrix(3, 3), right_eigvecs(3, 3), left_eigvecs(3, 3), diag(3, 3), &
-                    eye(3, 3)
-        complex(rp) :: eigvals(3)
+        real(rp) :: matrix(n_param, n_param), right_eigvecs(n_param, n_param), &
+                    left_eigvecs(n_param, n_param), eigval_diag(n_param, n_param), &
+                    rotation(2, 2), rotation_right_eigvecs(2, 2), &
+                    rotation_left_eigvecs(2, 2)
+        complex(rp) :: eigvals(n_param), rotation_eigvals(2)
         integer(ip) :: error, i
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_general_mat_diag = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
-        ! initialize symmetric matrix
-        matrix = reshape([3.0_rp, 2.0_rp, 4.0_rp, &
-                          1.0_rp, 4.0_rp, 6.0_rp, &
-                          3.0_rp, 5.0_rp, 5.0_rp], [3, 3])
-
-        ! call function and determine if lowest eigenvalue is found
+        ! diagonalize a random upper triangular matrix, whose eigenvalues are its real
+        ! diagonal elements, and determine whether the left and right eigenvectors are
+        ! eigenvectors and biorthonormal
+        matrix = generate_random_upper_triangular_matrix(n_param)
         call general_mat_diag(matrix, eigvals, right_eigvecs, left_eigvecs, settings, &
                               error)
-        diag = 0.0_rp
-        eye = 0.0_rp
-        do i = 1, 3
-            diag(i, i) = eigvals(i)%re
-            eye(i, i) = 1.0_rp
-        end do
         if (error /= 0) then
             write(stderr, *) "test_general_mat_diag failed: Produced error."
             test_general_mat_diag = .false.
         end if
-        if (norm2(matmul(transpose(left_eigvecs), right_eigvecs) - eye) > tol) then
+        eigval_diag = 0.0_rp
+        do i = 1, n_param
+            eigval_diag(i, i) = eigvals(i)%re
+            if (minval(abs(eigvals%re - matrix(i, i))) > tol) then
+                write(stderr, *) "test_general_mat_diag failed: Diagonal element "// &
+                    "of triangular matrix not among the eigenvalues."
+                test_general_mat_diag = .false.
+            end if
+        end do
+        if (norm2(matmul(transpose(left_eigvecs), right_eigvecs) - &
+                  identity_matrix(n_param)) > tol) then
             write(stderr, *) "test_general_mat_diag failed: Left and right "// &
                 "eigenvectors are not biorthonormal."
             test_general_mat_diag = .false.
         end if
-        if (norm2(matmul(matrix, right_eigvecs) - matmul(right_eigvecs, diag)) > tol) &
-            then
+        if (norm2(matmul(matrix, right_eigvecs) - &
+                  matmul(right_eigvecs, eigval_diag)) > tol) then
             write(stderr, *) "test_general_mat_diag failed: Incorrect right "// &
                 "eigenvectors or eigenvalues for matrix."
             test_general_mat_diag = .false.
         end if
         if (norm2(matmul(transpose(left_eigvecs), matrix) - &
-                  matmul(diag, transpose(left_eigvecs))) > tol) then
+                  matmul(eigval_diag, transpose(left_eigvecs))) > tol) then
             write(stderr, *) "test_general_mat_diag failed: Incorrect left "// &
                 "eigenvectors or eigenvalues for matrix."
+            test_general_mat_diag = .false.
+        end if
+
+        ! diagonalize a scaled rotation, whose eigenvalues are a complex conjugate pair
+        ! with the cosine as real and the sine as imaginary part, and determine whether
+        ! both parts are returned
+        rotation = reshape([0.6_rp, 0.8_rp, &
+                            -0.8_rp, 0.6_rp], [2, 2])
+        call general_mat_diag(rotation, rotation_eigvals, rotation_right_eigvecs, &
+                              rotation_left_eigvecs, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_general_mat_diag failed: Produced error for "// &
+                "complex eigenvalues."
+            test_general_mat_diag = .false.
+        end if
+        if (any(abs(rotation_eigvals%re - 0.6_rp) > tol) .or. &
+            any(abs(abs(rotation_eigvals%im) - 0.8_rp) > tol) .or. &
+            abs(sum(rotation_eigvals%im)) > tol) then
+            write(stderr, *) "test_general_mat_diag failed: Incorrect complex "// &
+                "eigenvalues."
             test_general_mat_diag = .false.
         end if
 
@@ -8890,82 +8740,58 @@ contains
         !
         use opentrustregion, only: solver_settings_type, mat_lowest_eigpairs
 
-        integer(ip), parameter :: n = 3, n_target = 2
+        integer(ip), parameter :: n_target = 2
 
-        real(rp) :: symm_matrix(n, n), general_matrix(n, n), eigvals(n_target), &
-                    eigvecs(n, n_target), expected_symm(n_target), &
-                    expected_general(n_target), residual(n)
-        integer(ip) :: error, i
         type(solver_settings_type) :: settings
+        real(rp) :: matrix(n_param, n_param), eigvals(n_target), &
+                    eigvecs(n_param, n_target), ref_eigvals(n_param), &
+                    ref_eigvecs(n_param, n_param), diag_copy(n_param)
+        integer(ip) :: error, i, i_case
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_mat_lowest_eigpairs = .true.
 
         ! setup settings object
-        call legacy_setup_settings(settings)
+        call setup_settings(settings, context)
 
-        ! symmetric diagonal matrix with well separated eigenvalues
-        symm_matrix = 0.0_rp
-        symm_matrix(1, 1) = 5.0_rp
-        symm_matrix(2, 2) = 1.0_rp
-        symm_matrix(3, 3) = 3.0_rp
-        expected_symm = [1.0_rp, 3.0_rp]
-
-        ! call routine for the symmetric case and determine whether the lowest
-        ! eigenvalues are returned in ascending order
-        call mat_lowest_eigpairs(symm_matrix, .true., eigvals, eigvecs, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_mat_lowest_eigpairs failed: Produced error for "// &
-                "symmetric matrix."
-            test_mat_lowest_eigpairs = .false.
-            return
-        end if
-        if (norm2(eigvals - expected_symm) > tol) then
-            write(stderr, *) "test_mat_lowest_eigpairs failed: Incorrect lowest "// &
-                "eigenvalues for symmetric matrix."
-            test_mat_lowest_eigpairs = .false.
-        end if
-        do i = 1, n_target
-            residual = matmul(symm_matrix, eigvecs(:, i)) - eigvals(i) * eigvecs(:, i)
-            if (norm2(residual) > tol) then
-                write(stderr, *) "test_mat_lowest_eigpairs failed: Returned "// &
-                    "eigenvectors for symmetric matrix are not eigenvectors."
+        ! determine whether the lowest eigenvalues are returned in ascending order with
+        ! their eigenvectors for a random symmetric matrix and, ordered by their real
+        ! parts, for a random upper triangular matrix, whose eigenvalues are its
+        ! diagonal elements
+        do i_case = 1, 2
+            if (i_case == 1) then
+                matrix = generate_random_symm_matrix(n_param)
+                call ref_symm_mat_diag(matrix, ref_eigvals, ref_eigvecs)
+            else
+                matrix = generate_random_upper_triangular_matrix(n_param)
+                diag_copy = [(matrix(i, i), i=1, n_param)]
+                do i = 1, n_target
+                    ref_eigvals(i) = minval(diag_copy)
+                    diag_copy(minloc(diag_copy, dim=1)) = huge(1.0_rp)
+                end do
+            end if
+            call mat_lowest_eigpairs(matrix, i_case == 1, eigvals, eigvecs, settings, &
+                                     error)
+            if (error /= 0) then
+                write(stderr, *) "test_mat_lowest_eigpairs failed: Produced error "// &
+                    "for "//trim(merge("symmetric    ", "non-symmetric", &
+                                       i_case == 1))//" matrix."
                 test_mat_lowest_eigpairs = .false.
             end if
-        end do
-
-        ! upper triangular, and therefore non-symmetric, matrix whose eigenvalues are
-        ! its diagonal entries
-        general_matrix = 0.0_rp
-        general_matrix(1, 1) = 1.0_rp
-        general_matrix(2, 2) = 5.0_rp
-        general_matrix(3, 3) = 3.0_rp
-        general_matrix(1, 2) = 2.0_rp
-        general_matrix(1, 3) = 3.0_rp
-        general_matrix(2, 3) = 4.0_rp
-        expected_general = [1.0_rp, 3.0_rp]
-
-        ! call routine for the non-symmetric case and determine whether the
-        ! eigenvalues with the lowest real parts are returned in ascending order
-        call mat_lowest_eigpairs(general_matrix, .false., eigvals, eigvecs, settings, &
-                                 error)
-        if (error /= 0) then
-            write(stderr, *) "test_mat_lowest_eigpairs failed: Produced error for "// &
-                "non-symmetric matrix."
-            test_mat_lowest_eigpairs = .false.
-            return
-        end if
-        if (norm2(eigvals - expected_general) > tol) then
-            write(stderr, *) "test_mat_lowest_eigpairs failed: Incorrect "// &
-                "eigenvalues with lowest real parts for non-symmetric matrix."
-            test_mat_lowest_eigpairs = .false.
-        end if
-        do i = 1, n_target
-            residual = matmul(general_matrix, eigvecs(:, i)) - &
-                       eigvals(i) * eigvecs(:, i)
-            if (norm2(residual) > tol) then
-                write(stderr, *) "test_mat_lowest_eigpairs failed: Returned right "// &
-                    "eigenvectors for non-symmetric matrix are not eigenvectors."
+            if (any(abs(eigvals - ref_eigvals(:n_target)) > tol)) then
+                write(stderr, *) "test_mat_lowest_eigpairs failed: Incorrect "// &
+                    "lowest eigenvalues for "// &
+                    trim(merge("symmetric    ", "non-symmetric", i_case == 1))// &
+                    " matrix."
+                test_mat_lowest_eigpairs = .false.
+            end if
+            if (norm2(matmul(matrix, eigvecs) - &
+                      eigvecs * spread(eigvals, 1, n_param)) > tol) then
+                write(stderr, *) "test_mat_lowest_eigpairs failed: Returned "// &
+                    "eigenvectors are not eigenvectors for "// &
+                    trim(merge("symmetric    ", "non-symmetric", i_case == 1))// &
+                    " matrix."
                 test_mat_lowest_eigpairs = .false.
             end if
         end do

@@ -142,6 +142,7 @@ fortran_tests = {
         "level_shifted_davidson",
         "level_shifted_diag_precond",
         "lowest_h_diag_unit_vectors",
+        "mat_diag",
         "mat_lowest_eigpairs",
         "mat_min_eig",
         "minres",
