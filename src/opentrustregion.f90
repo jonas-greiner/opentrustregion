@@ -3592,15 +3592,14 @@ contains
         integer(ip), intent(out) :: error
 
         real(rp), allocatable :: &
-            residual(:), eigenvec(:), lanczos_diag(:), lanczos_off_diag(:), &
-            lanczos_diag_fact(:), lanczos_off_diag_fact(:), red_space_rhs(:), &
-            red_space_solution(:), red_space_eigenvec(:), work(:), stepsize_list(:), &
-            residual_dot_list(:), perturbed_grad(:)
+            residual(:), lanczos_diag(:), lanczos_off_diag(:), lanczos_diag_fact(:), &
+            lanczos_off_diag_fact(:), red_space_rhs(:), red_space_solution(:), &
+            red_space_eigenvec(:), work(:), stepsize_list(:), residual_dot_list(:), &
+            precond_residuals(:, :), perturbed_grad(:)
         real(rp) :: new_func, func_diff, lowest_eigval, hard_case_step_size, &
                     pred_func, conv_tol
         integer(ip) :: n_red_space
-        logical :: restart_lanczos, accept_step, micro_converged, hard_case, interior, &
-                   new_lanczos
+        logical :: restart_lanczos, accept_step, micro_converged, hard_case, interior
         real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
@@ -3616,8 +3615,8 @@ contains
         restart_lanczos = .false.
         n_red_space = 0
 
-        ! allocate space for residual and for lowest eigenvector
-        allocate(residual(n_param), eigenvec(n_param))
+        ! allocate space for residual
+        allocate(residual(n_param))
 
         ! allocate space for Lanczos tridiagonal
         allocate(lanczos_diag(settings%n_micro + 1), &
@@ -3633,9 +3632,11 @@ contains
         ! allocate work array for solving Lanczos subproblem
         allocate(work(settings%n_micro + 1))
 
-        ! allocate space to store the stepsizes and residual norms which allows for
-        ! more efficient processing in the second pass
-        allocate(stepsize_list(settings%n_micro), residual_dot_list(settings%n_micro))
+        ! allocate space to store the step sizes, residual dot products and
+        ! preconditioned residuals of the Lanczos process, from which the solution is
+        ! assembled
+        allocate(stepsize_list(settings%n_micro), residual_dot_list(settings%n_micro), &
+                 precond_residuals(n_param, settings%n_micro))
 
         ! perturb the gradient once for the whole subproblem, so that every Lanczos
         ! process started for it, after a rejected step or when a smaller trust radius
@@ -3652,90 +3653,68 @@ contains
         do while (.not. accept_step)
             ! reset microiteration convergence threshold
             micro_converged = .false.
-            new_lanczos = .false.
 
             ! reset problem
             residual = perturbed_grad
             solution = 0.0_rp
-            eigenvec = 0.0_rp
 
-            ! GLTR minimizer block
-            gltr_minimizer: block
-                ! check whether Lanczos is being run for the first time, the first
-                ! pass then also recovers the solution
-                if (.not. restart_lanczos .or. n_red_space <= 0) then
-                    call gltr_first_pass( &
-                        func, h_diag, hess_x_funptr, residual, solution, eigenvec, &
-                        lanczos_diag, lanczos_off_diag, lanczos_diag_fact, &
-                        lanczos_off_diag_fact, red_space_rhs, red_space_solution, &
-                        red_space_eigenvec, work, stepsize_list, residual_dot_list, &
-                        pred_func, lambda, solution_norm, lowest_eigval, &
-                        micro_converged, interior, hard_case, hard_case_step_size, &
-                        n_red_space, noise_level(settings, local_region), settings, &
-                        state, error)
-                    exit gltr_minimizer
+            ! run the Lanczos process, which assembles the solution itself, unless its
+            ! stored factorization can be reused for the smaller trust radius after a
+            ! rejected step
+            if (.not. restart_lanczos .or. n_red_space <= 0) then
+                call gltr_lanczos_process( &
+                    func, h_diag, hess_x_funptr, residual, solution, lanczos_diag, &
+                    lanczos_off_diag, lanczos_diag_fact, lanczos_off_diag_fact, &
+                    red_space_rhs, red_space_solution, red_space_eigenvec, work, &
+                    stepsize_list, residual_dot_list, precond_residuals, pred_func, &
+                    lambda, solution_norm, lowest_eigval, micro_converged, interior, &
+                    hard_case, hard_case_step_size, n_red_space, &
+                    noise_level(settings, local_region), settings, state, error)
+            else
+                ! find the solution to the Lanczos TR subproblem with this radius
+                call solve_tridiagonal_subproblem( &
+                    n_red_space, lanczos_diag(:n_red_space), &
+                    lanczos_off_diag(:n_red_space - 1), &
+                    lanczos_diag_fact(:n_red_space), &
+                    lanczos_off_diag_fact(:n_red_space - 1), &
+                    red_space_rhs(:n_red_space), state%trust_radius, interior, .true., &
+                    .false., lowest_eigval, lambda, func_diff, &
+                    red_space_solution(:n_red_space), &
+                    red_space_eigenvec(:n_red_space), work(:n_red_space), hard_case, &
+                    hard_case_step_size)
 
-                ! repeated Lanczos solution with smaller trust-region radius, which
-                ! reuses the Lanczos factorization from the first run
-                else
-                    ! find the solution to the Lanczos TR subproblem with this radius
-                    call solve_tridiagonal_subproblem( &
-                        n_red_space, lanczos_diag(:n_red_space), &
-                        lanczos_off_diag(:n_red_space - 1), &
-                        lanczos_diag_fact(:n_red_space), &
-                        lanczos_off_diag_fact(:n_red_space - 1), &
-                        red_space_rhs(:n_red_space), state%trust_radius, interior, &
-                        .true., .false., lowest_eigval, lambda, func_diff, &
-                        red_space_solution(:n_red_space), &
-                        red_space_eigenvec(:n_red_space), work(:n_red_space), &
-                        hard_case, hard_case_step_size)
+                ! record the optimal objective function value
+                pred_func = func + func_diff
 
-                    ! record the optimal objective function value
-                    pred_func = func + func_diff
+                ! compute the stopping tolerance from the initial residual of the
+                ! Lanczos process which is measured in the same preconditioner
+                ! metric as the residuals it is compared against, this makes the
+                ! stopping test invariant to a rescaling of the preconditioner
+                conv_tol = micro_conv_tol(lambda, noise_level(settings, local_region), &
+                                          red_space_rhs(1), settings)
 
-                    ! compute the stopping tolerance from the initial residual of the
-                    ! first pass which is measured in the same preconditioner metric as
-                    ! the residuals it is compared against, this makes the stopping
-                    ! test invariant to a rescaling of the preconditioner
-                    conv_tol = micro_conv_tol(lambda, noise_level( &
-                        settings, local_region), red_space_rhs(1), settings)
-
-                    ! check whether solution satisfies convergence criteria, otherwise
-                    ! start a new Lanczos process for this trust radius
-                    state%relative_residual = abs(lanczos_off_diag(n_red_space) * &
-                                                  red_space_solution(n_red_space)) / &
-                                              red_space_rhs(1)
-                    if (abs(lanczos_off_diag(n_red_space) * &
-                            red_space_solution(n_red_space)) > conv_tol) then
-                        new_lanczos = .true.
-                        exit gltr_minimizer
-                    end if
-
-                    ! solution reaches trust radius
-                    solution_norm = state%trust_radius
-
+                ! check whether solution satisfies convergence criteria, otherwise
+                ! start a new Lanczos process for this trust radius
+                state%relative_residual = abs(lanczos_off_diag(n_red_space) * &
+                                              red_space_solution(n_red_space)) / &
+                                          red_space_rhs(1)
+                if (abs(lanczos_off_diag(n_red_space) * &
+                        red_space_solution(n_red_space)) > conv_tol) then
+                    restart_lanczos = .false.
+                    cycle
                 end if
 
-                ! second pass to obtain solution
-                call gltr_second_pass( &
-                    residual, red_space_solution, red_space_eigenvec, &
-                    residual_dot_list, stepsize_list, h_diag, hess_x_funptr, &
-                    n_red_space, lambda, hard_case, hard_case_step_size, solution, &
-                    eigenvec, settings, state%n_hess_x, error)
-                if (error /= 0) exit gltr_minimizer
-
-                ! successful return
+                ! solution reaches trust radius, assemble it from the stored Lanczos
+                ! process
+                solution_norm = state%trust_radius
+                call gltr_assemble_solution( &
+                    n_red_space, red_space_solution, red_space_eigenvec, &
+                    residual_dot_list, stepsize_list, precond_residuals, hard_case, &
+                    lambda, hard_case_step_size, hess_x_funptr, solution, settings, &
+                    state%n_hess_x, error)
                 micro_converged = .true.
-
-            end block gltr_minimizer
-            if (error /= 0) exit
-
-            ! start a new Lanczos process without evaluating the function since no
-            ! solution was obtained from the stored Lanczos factorization
-            if (new_lanczos) then
-                restart_lanczos = .false.
-                cycle
             end if
+            if (error /= 0) exit
 
             ! evaluate function at predicted point
             new_func = obj_func(solution, error, settings%context)
@@ -3757,10 +3736,10 @@ contains
         end do
 
         ! deallocate arrays
-        deallocate(residual, eigenvec, lanczos_diag, lanczos_off_diag, &
-                   lanczos_diag_fact, lanczos_off_diag_fact, red_space_rhs, &
-                   red_space_solution, red_space_eigenvec, work, stepsize_list, &
-                   residual_dot_list, perturbed_grad)
+        deallocate(residual, lanczos_diag, lanczos_off_diag, lanczos_diag_fact, &
+                   lanczos_off_diag_fact, red_space_rhs, red_space_solution, &
+                   red_space_eigenvec, work, stepsize_list, residual_dot_list, &
+                   precond_residuals, perturbed_grad)
 
     end subroutine generalized_lanczos_trust_region
 
@@ -4102,38 +4081,43 @@ contains
 
     end function string_in
 
-    subroutine gltr_first_pass( &
-        func, h_diag, hess_x_funptr, residual, solution, eigenvec, lanczos_diag, &
+    subroutine gltr_lanczos_process( &
+        func, h_diag, hess_x_funptr, residual, solution, lanczos_diag, &
         lanczos_off_diag, lanczos_diag_fact, lanczos_off_diag_fact, red_space_rhs, &
         red_space_solution, red_space_eigenvec, work, stepsize_list, &
-        residual_dot_list, pred_func, lambda, solution_norm, lowest_eigval, &
-        micro_converged, interior, hard_case, hard_case_step_size, n_red_space, noise, &
-        settings, state, error)
+        residual_dot_list, precond_residuals, pred_func, lambda, solution_norm, &
+        lowest_eigval, micro_converged, interior, hard_case, hard_case_step_size, &
+        n_red_space, noise, settings, state, error)
         !
-        ! this subroutine performs the first Lanczos pass to compute the tridiagonal
-        ! matrix and the right hand side of the reduced problem
+        ! this subroutine runs the Lanczos process, which builds the tridiagonal matrix
+        ! and the right hand side of the reduced problem together with the step sizes,
+        ! the residual dot products and the preconditioned residuals of its
+        ! iterations, and solves the trust region subproblem, by conjugate gradient
+        ! while its solution is interior and on the reduced problem once it reaches
+        ! the trust region boundary, from where the solution is assembled
         !
         real(rp), intent(in) :: func, h_diag(:), noise
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
-        real(rp), intent(inout) :: residual(:), solution(:), eigenvec(:)
+        real(rp), intent(inout) :: residual(:), solution(:)
         real(rp), intent(out) :: &
             lanczos_diag(:), lanczos_off_diag(:), lanczos_diag_fact(:), &
             lanczos_off_diag_fact(:), red_space_rhs(:), red_space_solution(:), &
             red_space_eigenvec(:), work(:), stepsize_list(:), residual_dot_list(:), &
-            pred_func, lambda, solution_norm, lowest_eigval, hard_case_step_size
+            precond_residuals(:, :), pred_func, lambda, solution_norm, lowest_eigval, &
+            hard_case_step_size
         logical, intent(out) :: micro_converged, interior, hard_case
         integer(ip), intent(out) :: n_red_space
         type(solver_settings_type), intent(in) :: settings
         type(solver_state_type), intent(inout), target :: state
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: vector(:), basis_vec(:), precond_residuals_save(:, :)
-        integer(ip) :: n_param, it, switch_iteration, imicro
-        real(rp) :: step_size, alpha, trial_solution_dot, u_norm, basis_vec_dot, &
-                    solution_dot, solution_basis_vec_dot, residual_dot, &
-                    residual_dot_old, beta, lanczos_diag_elem, lanczos_off_diag_elem, &
-                    residual_norm, conv_tol, last_red_space_solution, curvature, &
-                    lanczos_tridiag_chol_pivot, min_func_diff, tau
+        real(rp), allocatable :: vector(:), basis_vec(:)
+        integer(ip) :: n_param, switch_iteration, imicro
+        real(rp) :: step_size, alpha, trial_solution_dot, basis_vec_dot, solution_dot, &
+                    solution_basis_vec_dot, residual_dot, residual_dot_old, beta, &
+                    lanczos_diag_elem, lanczos_off_diag_elem, residual_norm, conv_tol, &
+                    last_red_space_solution, curvature, lanczos_tridiag_chol_pivot, &
+                    min_func_diff
         logical :: negative_curvature, try_warm, use_old, spherical
         real(rp), external :: dnrm2, ddot
 
@@ -4200,10 +4184,6 @@ contains
         ! product and basis vector
         allocate(vector(n_param), basis_vec(n_param))
 
-        ! allocate space to save the preconditioned residuals, from which the solution
-        ! on the trust region boundary is assembled
-        allocate(precond_residuals_save(n_param, settings%n_micro))
-
         ! start of microiterations
         do
             ! obtain the preconditioned residual
@@ -4220,9 +4200,9 @@ contains
             if (error /= 0) exit
             residual_norm = sqrt(residual_dot)
 
-            ! save preconditioned residual
-            if (imicro < settings%n_micro) &
-                precond_residuals_save(:, imicro + 1) = vector
+            ! save preconditioned residual, from which the solution on the trust region
+            ! boundary is assembled
+            if (imicro < settings%n_micro) precond_residuals(:, imicro + 1) = vector
 
             ! get coupling coefficient and Lanczos tridiagonal elements
             if (imicro > 0) then
@@ -4310,43 +4290,15 @@ contains
                         red_space_eigenvec(:n_red_space), work(:n_red_space), &
                         hard_case, hard_case_step_size)
 
-                    ! record the optimal objective function value and prepare to
-                    ! recover the approximate solution
+                    ! record the optimal objective function value and assemble the
+                    ! solution
                     pred_func = func + min_func_diff
-                    tau = 1.0_rp
-
-                    ! assemble the solution from the saved preconditioned residuals
-                    do it = 1, n_red_space
-                        red_space_solution(it) = &
-                            tau * (red_space_solution(it) / sqrt(residual_dot_list(it)))
-                        if (hard_case) red_space_eigenvec(it) = &
-                            tau * (red_space_eigenvec(it) / sqrt(residual_dot_list(it)))
-                        tau = -sign(1.0_rp, stepsize_list(it)) * tau
-                    end do
-                    solution = MATMUL(precond_residuals_save(:, :n_red_space), &
-                                      red_space_solution(1:n_red_space))
-                    if (hard_case) &
-                        eigenvec = MATMUL(precond_residuals_save(:, :n_red_space), &
-                                          red_space_eigenvec(1:n_red_space))
-
-                    ! if the hard case has occured, ensure that the recovered
-                    ! eigenvector has unit norm and compute the complete solution
-                    if (hard_case) then
-                        call hess_x_funptr(eigenvec, vector, error, settings%context)
-                        state%n_hess_x = state%n_hess_x + 1
-                        call add_error_origin(error, error_hess_x, settings)
-                        if (error /= 0) exit
-                        u_norm = sqrt(-ddot(n_param, vector, 1_ip, eigenvec, 1_ip) / &
-                                      lambda)
-                        solution = solution + (hard_case_step_size / u_norm) * eigenvec
-                    end if
-                    if (spherical) then
-                        vector = residual
-                    else
-                        call rel_floor_diag_precond(residual, h_diag, vector, &
-                                                    settings, error)
-                        if (error /= 0) return
-                    end if
+                    call gltr_assemble_solution( &
+                        n_red_space, red_space_solution, red_space_eigenvec, &
+                        residual_dot_list, stepsize_list, precond_residuals, &
+                        hard_case, lambda, hard_case_step_size, hess_x_funptr, &
+                        solution, settings, state%n_hess_x, error)
+                    if (error /= 0) exit
                     micro_converged = .true.
                     exit
                 end if
@@ -4482,129 +4434,70 @@ contains
         end do
 
         ! deallocate vectors
-        deallocate(vector, basis_vec, precond_residuals_save)
+        deallocate(vector, basis_vec)
 
-    end subroutine gltr_first_pass
+    end subroutine gltr_lanczos_process
 
-    subroutine gltr_second_pass( &
-        residual_start, red_space_solution, red_space_eigenvec, residual_dot_list, &
-        stepsize_list, h_diag, hess_x_funptr, n_red_space, lambda, hard_case, &
-        hard_case_step_size, solution, eigenvec, settings, n_hess_x, error)
+    subroutine gltr_assemble_solution( &
+        n_red_space, red_space_solution, red_space_eigenvec, residual_dot_list, &
+        stepsize_list, precond_residuals, hard_case, lambda, hard_case_step_size, &
+        hess_x_funptr, solution, settings, n_hess_x, error)
         !
-        ! this subroutine performs the second Lanczos pass to compute the approximate
-        ! solution and eigenvector if the hard case has occured from the starting
-        ! residual of a stored Lanczos factorization
+        ! this subroutine assembles the solution of the trust region subproblem from
+        ! the solution of the reduced problem and the preconditioned residuals of the
+        ! Lanczos process, whose Lanczos vectors are these residuals normalized and
+        ! alternating in sign with the step sizes, and completes it in the hard case
+        ! along the eigenvector of the lowest eigenvalue assembled in the same way
         !
-        real(rp), intent(in) :: residual_start(:), red_space_solution(:), &
-                                red_space_eigenvec(:), residual_dot_list(:), &
-                                stepsize_list(:), h_diag(:)
-        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         integer(ip), intent(in) :: n_red_space
-        real(rp), intent(in) :: lambda, hard_case_step_size
+        real(rp), intent(in) :: red_space_solution(:), red_space_eigenvec(:), &
+                                residual_dot_list(:), stepsize_list(:), &
+                                precond_residuals(:, :), lambda, hard_case_step_size
         logical, intent(in) :: hard_case
-        real(rp), intent(inout) :: solution(:), eigenvec(:)
+        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
+        real(rp), intent(out) :: solution(:)
         type(solver_settings_type), intent(in) :: settings
         integer(ip), intent(inout), target :: n_hess_x
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_param, imicro
-        real(rp), allocatable :: vector(:), basis_vec(:), residual(:)
-        real(rp) :: tau, step_size, beta, residual_dot, residual_dot_old, u_norm
-        logical :: spherical
+        real(rp), allocatable :: solution_coeffs(:), eigenvec_coeffs(:), eigenvec(:), &
+                                 hess_eigenvec(:)
+        real(rp) :: tau, u_norm
+        integer(ip) :: i
         real(rp), external :: ddot
 
         ! initialize error flag
         error = 0
 
-        ! for a spherical trust region, GLTR falls back to no preconditioning
-        spherical = settings%trust_region_shape == "spherical"
-
-        ! initialize residual
-        residual = residual_start
-
-        ! number of parameters
-        n_param = size(residual_start)
-
-        ! initialize sign and iteration counter
+        ! coefficients of the preconditioned residuals
+        allocate(solution_coeffs(n_red_space), eigenvec_coeffs(n_red_space))
         tau = 1.0_rp
-        imicro = 0
-
-        ! allocate vector for the preconditioned residual and the Hessian vector product
-        allocate(vector(n_param), basis_vec(n_param))
-
-        ! start second pass loop
-        do
-            ! obtain the preconditioned residual
-            if (spherical) then
-                vector = residual
-            else
-                call rel_floor_diag_precond(residual, h_diag, vector, settings, error)
-                if (error /= 0) exit
-            end if
-
-            ! obtain the scaled norm of the residual
-            residual_dot = residual_dot_list(imicro + 1)
-
-            ! update the solution estimate
-            if (imicro /= 0) then
-                solution = solution + tau * (red_space_solution(imicro + 1) / &
-                                             sqrt(residual_dot)) * vector
-                if (hard_case) &
-                    eigenvec = eigenvec + tau * (red_space_eigenvec(imicro + 1) / &
-                                                 sqrt(residual_dot)) * vector
-            else
-                solution = &
-                    tau * (red_space_solution(imicro + 1) / sqrt(residual_dot)) * vector
-                if (hard_case) eigenvec = tau * (red_space_eigenvec(imicro + 1) / &
-                                                 sqrt(residual_dot)) * vector
-            end if
-
-            ! if the approximate minimizer is complete, exit
-            if (imicro + 1 == n_red_space) then
-                ! if the hard case has occured, ensure that the recovered eigenvector
-                ! has unit norm and compute the complete solution
-                if (hard_case) then
-                    call hess_x_funptr(eigenvec, vector, error, settings%context)
-                    n_hess_x = n_hess_x + 1
-                    call add_error_origin(error, error_hess_x, settings)
-                    if (error /= 0) exit
-                    u_norm = sqrt(-ddot(n_param, vector, 1_ip, eigenvec, 1_ip) / lambda)
-                    solution = solution + (hard_case_step_size / u_norm) * eigenvec
-                end if
-
-                exit
-            end if
-
-            ! get new basis vector
-            if (imicro > 0) then
-                beta = residual_dot / residual_dot_old
-                basis_vec = -vector + beta * basis_vec
-            else
-                basis_vec = -vector
-            end if
-            residual_dot_old = residual_dot
-
-            ! increment iteration
-            imicro = imicro + 1
-
-            ! obtain the linear transformation of new basis vector
-            call hess_x_funptr(basis_vec, vector, error, settings%context)
-            n_hess_x = n_hess_x + 1
-            call add_error_origin(error, error_hess_x, settings)
-            if (error /= 0) exit
-
-            ! retrieve the stepsize
-            step_size = stepsize_list(imicro)
-
-            ! update the residual
-            residual = residual + step_size * vector
-            tau = -sign(1.0_rp, step_size) * tau
+        do i = 1, n_red_space
+            solution_coeffs(i) = tau * &
+                                 (red_space_solution(i) / sqrt(residual_dot_list(i)))
+            if (hard_case) eigenvec_coeffs(i) = tau * (red_space_eigenvec(i) / &
+                                                       sqrt(residual_dot_list(i)))
+            tau = -sign(1.0_rp, stepsize_list(i)) * tau
         end do
 
-        ! deallocate vectors
-        deallocate(residual, vector, basis_vec)
+        ! assemble the solution
+        solution = matmul(precond_residuals(:, :n_red_space), solution_coeffs)
 
-    end subroutine gltr_second_pass
+        ! in the hard case, assemble the eigenvector, scale it to unit norm and
+        ! complete the solution along it to the trust region boundary
+        if (hard_case) then
+            eigenvec = matmul(precond_residuals(:, :n_red_space), eigenvec_coeffs)
+            allocate(hess_eigenvec(size(eigenvec)))
+            call hess_x_funptr(eigenvec, hess_eigenvec, error, settings%context)
+            n_hess_x = n_hess_x + 1
+            call add_error_origin(error, error_hess_x, settings)
+            if (error /= 0) return
+            u_norm = sqrt(-ddot(size(eigenvec, kind=ip), hess_eigenvec, 1_ip, &
+                                eigenvec, 1_ip) / lambda)
+            solution = solution + (hard_case_step_size / u_norm) * eigenvec
+        end if
+
+    end subroutine gltr_assemble_solution
 
     subroutine perturb_vector(vector, noise, settings, error)
         !
