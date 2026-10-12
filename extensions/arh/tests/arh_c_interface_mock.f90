@@ -65,7 +65,7 @@ contains
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
-        type(arh_settings_type_c), intent(inout) :: settings_c
+        type(arh_settings_type_c), intent(in) :: settings_c
         integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
 
@@ -196,7 +196,7 @@ contains
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
-        type(arh_settings_type_c), intent(inout) :: settings_c
+        type(arh_settings_type_c), intent(in) :: settings_c
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr

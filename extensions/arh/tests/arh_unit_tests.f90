@@ -1554,8 +1554,9 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         type(solver_settings_type) :: solver_settings
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
         settings%arh_type = "ms_psb"
 
         ! initialize random orthonormal MO coefficients and callback function pointers
@@ -1658,8 +1659,9 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         type(solver_settings_type) :: solver_settings
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
         settings%arh_type = "ms_psb"
 
         ! initialize random orthonormal MO coefficients and callback function pointers
@@ -1750,8 +1752,9 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         type(solver_settings_type) :: solver_settings
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
         settings%arh_type = "arh"
 
         ! initialize density matrix, orthonormal AO basis and callback function pointers
@@ -1822,8 +1825,9 @@ contains
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         type(solver_settings_type) :: solver_settings
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
         settings%arh_type = "arh"
 
         ! initialize density matrices, orthonormal AO basis and callback function
@@ -1933,14 +1937,19 @@ contains
                            precond_arh_callback_ptr, precond_pd_arh_callback_ptr, &
                            get_extra_trial_vectors_arh_callback_ptr, arh_n_micro
         use otr_oao, only: oao_object
-        use opentrustregion, only: solver_settings_type, default_solver_settings
-        use opentrustregion_unit_tests, only: mock_project
+        use opentrustregion, only: solver_settings_type, default_solver_settings, &
+                                   default_stability_settings, &
+                                   settings_uninitialized_warning_msg, &
+                                   stability_settings_uninitialized_warning_msg
+        use opentrustregion_unit_tests, only: mock_project, setup_settings, &
+                                              test_context_type
         use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
         class(arh_type), allocatable :: arh
         integer(ip) :: i_case, error
         character(len=:), allocatable :: case_name
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_arh_set_solver_settings = .true.
@@ -1956,6 +1965,7 @@ contains
             if (i_case == 1) then
                 case_name = "for uninitialized settings"
                 arh%settings%arh_type = "arh"
+                call setup_settings(solver_settings, context)
                 solver_settings%initialized = .false.
                 call arh_set_solver_settings(solver_settings, arh, error, mock_project)
             else
@@ -1974,6 +1984,12 @@ contains
             if (.not. solver_settings%initialized) then
                 write(stderr, *) "test_arh_set_solver_settings failed: Settings "// &
                     "not initialized "//case_name//"."
+                test_arh_set_solver_settings = .false.
+            end if
+            if (i_case == 1 .and. index( &
+                context%log_message, " "//settings_uninitialized_warning_msg) == 0) then
+                write(stderr, *) "test_arh_set_solver_settings failed: Warning not "// &
+                    "printed "//case_name//"."
                 test_arh_set_solver_settings = .false.
             end if
             if (.not. associated(solver_settings%precond, precond_arh_callback_ptr)) &
@@ -2056,6 +2072,34 @@ contains
                 end if
             end if
         end do
+
+        ! wire the ARH routines into initialized settings whose stability check
+        ! settings were not initialized, which the solver could no longer detect once
+        ! the routines are wired into them, so that these have to be initialized with
+        ! the warning the solver would print, through the logging function of the
+        ! solver settings, which have to be kept
+        call setup_settings(solver_settings, context)
+        solver_settings%stability_settings%initialized = .false.
+        call arh_set_solver_settings(solver_settings, arh, error)
+        if (error /= 0 .or. .not. associated(solver_settings%logger)) then
+            write(stderr, *) "test_arh_set_solver_settings failed: Produced error "// &
+                "or settings not kept for uninitialized stability check settings."
+            test_arh_set_solver_settings = .false.
+        end if
+        if (solver_settings%stability_settings /= default_stability_settings .or. &
+            .not. associated(solver_settings%stability_settings%precond, &
+                             precond_arh_callback_ptr)) then
+            write(stderr, *) "test_arh_set_solver_settings failed: Stability check "// &
+                "settings not initialized to their defaults with the ARH routines "// &
+                "wired into them."
+            test_arh_set_solver_settings = .false.
+        end if
+        if (index(context%log_message, &
+                  " "//stability_settings_uninitialized_warning_msg) == 0) then
+            write(stderr, *) "test_arh_set_solver_settings failed: Warning not "// &
+                "printed for uninitialized stability check settings."
+            test_arh_set_solver_settings = .false.
+        end if
         deallocate(arh, oao_object)
 
     end function test_arh_set_solver_settings

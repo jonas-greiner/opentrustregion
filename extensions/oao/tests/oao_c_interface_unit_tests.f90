@@ -42,6 +42,7 @@ contains
                                    mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
+        use opentrustregion, only: default_stability_settings
         use otr_common_c_interface_unit_tests, only: mock_evaluate_dm_cs, &
                                                      mock_evaluate_dm_os
 
@@ -50,6 +51,8 @@ contains
         type(oao_settings_type_c) :: settings_c
         type(solver_settings_type_c) :: solver_settings_c
         integer(c_ip) :: n_particle_c, error_c
+        integer(ip) :: i_call
+        logical :: nested_uninitialized
         character(len=:), allocatable :: case_name
 
         ! assume tests pass
@@ -67,9 +70,15 @@ contains
         settings_c = ref_oao_settings
         settings_c%logger = c_funloc(mock_logger_c)
 
-        ! both spin cases pass through the same C wrapper
-        do n_particle_c = 1, n_particle
+        ! both spin cases pass through the same C wrapper, the closed-shell case once
+        ! more with solver settings whose stability check settings were not
+        ! initialized
+        do i_call = 1, n_particle + 1
+            n_particle_c = int(merge(1_ip, i_call, i_call > n_particle), kind=c_ip)
+            nested_uninitialized = i_call > n_particle
             case_name = trim(shell_names(n_particle_c))
+            if (nested_uninitialized) &
+                case_name = case_name//" with uninitialized stability check settings"
 
             ! initialize density matrix
             allocate(dm_ao_c(n_ao, n_ao, n_particle_c))
@@ -83,17 +92,24 @@ contains
             end if
 
             ! initialize logger logical, global number of parameters and solver
-            ! settings, uninitialized for the closed-shell case and set to reference
-            ! values, which have to be kept, for the open-shell case
+            ! settings, uninitialized for the closed-shell case, set to reference
+            ! values, which have to be kept, for the open-shell case, and set to
+            ! reference values with stability check settings that were not initialized,
+            ! which have to be set to their defaults with a warning through the logging
+            ! function of the solver settings, for the last case
             test_logger = .false.
             n_param_global = -1
-            if (n_particle_c == 1) then
+            if (i_call == 1) then
                 solver_settings_c%initialized = .false._c_bool
             else
                 call get_reference_solver_values(solver_settings_c)
                 call unset_callbacks(solver_settings_c)
                 solver_settings_c%context = c_null_ptr
                 solver_settings_c%stability_settings%context = c_null_ptr
+                if (nested_uninitialized) then
+                    solver_settings_c%logger = c_funloc(mock_logger_c)
+                    solver_settings_c%stability_settings%initialized = .false._c_bool
+                end if
             end if
 
             ! clear the callback slots, which only the factory call may set
@@ -165,6 +181,13 @@ contains
                         "Initialized solver settings not kept for the "//case_name// &
                         " case."
                 end if
+            end if
+            if (nested_uninitialized .and. &
+                solver_settings_c%stability_settings /= default_stability_settings) then
+                test_oao_factory_c_wrapper = .false.
+                write(stderr, *) "test_oao_factory_c_wrapper failed: Stability "// &
+                    "check settings that were not initialized not set to their "// &
+                    "defaults for the "//case_name//" case."
             end if
 
             ! test the returned and wired functions for the reference number of
@@ -609,6 +632,17 @@ contains
         if (.not. settings%initialized) then
             write(stderr, *) "test_assign_oao_f_c failed: Settings not marked as "// &
                 "initialized."
+            test_assign_oao_f_c = .false.
+        end if
+
+        ! convert C settings that were not initialized and check that they are left
+        ! uninitialized without a logging function, so that the factory initializes
+        ! them after its warning
+        settings_c%initialized = .false.
+        settings = settings_c
+        if (settings%initialized .or. associated(settings%logger)) then
+            write(stderr, *) "test_assign_oao_f_c failed: Settings that were not "// &
+                "initialized converted."
             test_assign_oao_f_c = .false.
         end if
 

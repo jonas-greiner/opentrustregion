@@ -90,7 +90,7 @@ contains
         ! this subroutine wraps the factory function for orbitals parameterized in the
         ! MO basis to convert C variables to Fortran variables
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion, only: solver_settings_type, default_solver_settings
         use c_interface, only: solver_settings_type_c
         use otr_arh, only: arh_settings_type
         use otr_mo, only: obj_func_type, count_mo_params
@@ -104,7 +104,7 @@ contains
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c, n_mo_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
-        type(arh_settings_type_c), intent(inout) :: settings_c
+        type(arh_settings_type_c), intent(in) :: settings_c
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
@@ -180,6 +180,11 @@ contains
                                  fptr=logger_arh_callbacks%logger)
         settings%context => logger_arh_callbacks
 
+        ! the factory wires its routines into Fortran solver settings, which start
+        ! from the defaults since only the wired routines are copied into the C solver
+        ! settings, which are initialized there
+        solver_settings = default_solver_settings
+
         ! call factory function
         if (n_particle == 1) then
             call arh_factory_mo_cs(mo_coeff_2d, ao_overlap, n_occ(1), n_particle, &
@@ -228,7 +233,7 @@ contains
         ! this subroutine wraps the factory function for orbitals parameterized in the
         ! OAO basis to convert C variables to Fortran variables
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion, only: solver_settings_type, default_solver_settings
         use c_interface, only: solver_settings_type_c
         use otr_arh, only: arh_settings_type
         use otr_oao, only: obj_func_type
@@ -241,7 +246,7 @@ contains
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
-        type(arh_settings_type_c), intent(inout) :: settings_c
+        type(arh_settings_type_c), intent(in) :: settings_c
         type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         integer(c_ip) :: error_c
 
@@ -303,6 +308,11 @@ contains
             call c_f_procpointer(cptr=settings_c%logger, &
                                  fptr=logger_arh_callbacks%logger)
         settings%context => logger_arh_callbacks
+
+        ! the factory wires its routines into Fortran solver settings, which start
+        ! from the defaults since only the wired routines are copied into the C solver
+        ! settings, which are initialized there
+        solver_settings = default_solver_settings
 
         ! call factory function
         if (n_particle == 1) then

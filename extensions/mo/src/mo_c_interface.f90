@@ -95,7 +95,7 @@ contains
         ! this subroutine wraps the factory function for the subroutine to convert C
         ! variables to Fortran variables
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion, only: solver_settings_type, default_solver_settings
         use c_interface, only: solver_settings_type_c
         use otr_mo, only: mo_settings_type, count_mo_params
         use otr_common_c_interface, only: n_param
@@ -106,7 +106,7 @@ contains
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c, n_mo_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
-        type(mo_settings_type_c), intent(inout) :: settings_c
+        type(mo_settings_type_c), intent(in) :: settings_c
         type(c_funptr), intent(out) :: obj_func_mo_c_funptr, update_orbs_mo_c_funptr
         integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
@@ -182,6 +182,11 @@ contains
                                  fptr=logger_mo_callbacks%logger)
         settings%context => logger_mo_callbacks
 
+        ! the factory wires its routines into Fortran solver settings, which start
+        ! from the defaults since only the wired routines are copied into the C solver
+        ! settings, which are initialized there
+        solver_settings = default_solver_settings
+
         ! call factory function
         if (n_particle == 1) then
             call mo_factory_cs(mo_coeff_2d, ao_overlap, n_occ(1), n_particle, n_ao, &
@@ -222,15 +227,31 @@ contains
         ! extra trial vectors into C solver settings, leaving the projection to the
         ! caller
         !
-        use opentrustregion, only: solver_settings_type, default_solver_settings
-        use c_interface, only: solver_settings_type_c, assignment(=)
+        use opentrustregion, only: solver_settings_type, default_solver_settings, &
+                                   default_stability_settings, stderr, &
+                                   settings_uninitialized_warning_msg, &
+                                   stability_settings_uninitialized_warning_msg
+        use c_interface, only: solver_settings_type_c, assignment(=), &
+                               warn_uninitialized_settings_c
 
         type(solver_settings_type), intent(in) :: solver_settings
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
 
-        ! initialize settings
-        if (.not. solver_settings_c%initialized) &
+        ! initialize the C solver settings and their nested stability check settings if
+        ! they were not initialized, which the solver can no longer detect once the
+        ! routines are wired into them, after printing the warning the solver would
+        ! print, regardless of the verbosity, since the default settings would silence
+        ! it, through the logging function of the solver settings or on stderr since
+        ! solver settings that were not initialized provide none
+        if (.not. solver_settings_c%initialized) then
+            write(stderr, '(A)') " "//settings_uninitialized_warning_msg
             solver_settings_c = default_solver_settings
+        else if (.not. solver_settings_c%stability_settings%initialized) then
+            call warn_uninitialized_settings_c( &
+                solver_settings_c%logger, solver_settings_c%context, &
+                stability_settings_uninitialized_warning_msg)
+            solver_settings_c%stability_settings = default_stability_settings
+        end if
 
         ! associate the global procedure pointers to the Fortran function pointers and
         ! get C function pointers to the C wrapper functions

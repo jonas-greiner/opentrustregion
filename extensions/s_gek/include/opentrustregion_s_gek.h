@@ -53,7 +53,7 @@ void init_s_gek_settings(s_gek_settings_type *settings);
  */
 c_int update_orbs_s_gek_factory(update_orbs_fp update_orbs_orig_c_funptr,
                                 change_reference_fp change_reference_c_funptr,
-                                c_int n_param, s_gek_settings_type *settings,
+                                c_int n_param, const s_gek_settings_type *settings,
                                 update_orbs_fp *update_orbs_s_gek_c_funptr);
 
 /**

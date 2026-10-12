@@ -42,7 +42,7 @@ contains
         procedure(change_reference_type), intent(in), pointer :: change_reference_funptr
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
-        type(s_gek_settings_type), intent(inout) :: settings
+        type(s_gek_settings_type), intent(in) :: settings
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
 
         type(c_callbacks_type), target :: callbacks

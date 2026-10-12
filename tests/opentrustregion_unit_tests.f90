@@ -2516,7 +2516,7 @@ contains
             default_settings => default_solver_settings, error_solver, &
             error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
             error_precond, error_project, error_conv_check, error_precond_pd, &
-            error_get_extra_trial_vectors, verbosity_silent, subsystem_solver_options, &
+            error_get_extra_trial_vectors, subsystem_solver_options, &
             settings_uninitialized_warning_msg, &
             stability_settings_uninitialized_warning_msg
 
@@ -2595,11 +2595,10 @@ contains
         ! start at saddle point again with nested stability check settings that were
         ! not initialized, the solver initializes them before handing down its context,
         ! so the internal stability check still calls the Hessian linear transformation
-        ! with the solver's context, and prints a warning even when the solver is silent
+        ! with the solver's context, and prints a warning
         context%vars = saddle_point
         settings%stability_settings%initialized = .false.
         settings%logger => logger
-        settings%verbose = verbosity_silent
         context%log_message = ""
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
         if (error /= 0) then
@@ -7607,6 +7606,33 @@ contains
         end if
 
     end function test_print_results
+
+    logical(c_bool) function test_warn_uninitialized_settings() bind(C)
+        !
+        ! this function tests the subroutine which prints the warning that settings
+        ! were not initialized
+        !
+        use opentrustregion, only: solver_settings_type, warn_uninitialized_settings, &
+                                   verbosity_silent
+
+        type(solver_settings_type) :: settings
+        type(test_context_type), target :: context
+
+        ! assume tests pass
+        test_warn_uninitialized_settings = .true.
+
+        ! print the warning through the logging function of settings whose verbosity
+        ! silences every other message and check that it is printed regardless
+        call setup_settings(settings, context)
+        settings%verbose = verbosity_silent
+        call warn_uninitialized_settings(settings, "test warning")
+        if (context%log_message /= " test warning") then
+            write(stderr, *) "test_warn_uninitialized_settings failed: Warning not "// &
+                "printed through the logging function regardless of the verbosity."
+            test_warn_uninitialized_settings = .false.
+        end if
+
+    end function test_warn_uninitialized_settings
 
     logical(c_bool) function test_print_message() bind(C)
         !

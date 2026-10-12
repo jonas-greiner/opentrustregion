@@ -29,6 +29,10 @@ module otr_arh
     type(arh_settings_type), parameter :: default_arh_settings = arh_settings_type( &
         orbital_settings_type=default_orbital_settings, arh_type="ms_sr1")
 
+    ! warning for settings that were not initialized
+    character(len=*), parameter :: arh_settings_uninitialized_warning_msg = &
+        "ARH settings were not initialized. All ARH settings are set to default values"
+
     ! define setting options
     character(len=kw_len), parameter :: arh_types(5) = &
         [character(len=kw_len) :: "arh", "symm_arh", "ms_psb", "ms_sp", "ms_sr1"]
@@ -233,7 +237,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:)
 
         real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
@@ -285,7 +289,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
 
         ! initialize error flag
@@ -314,22 +318,36 @@ contains
         ! this subroutine performs common ARH initialization operations for orbitals
         ! parameterized in the MO basis
         !
+        use opentrustregion, only: warn_uninitialized_settings
         use otr_mo, only: mo_factory_common, mo_object
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
 
+        type(arh_settings_type) :: local_settings
+
+        ! work on a copy of the settings, which is initialized if they were not, after
+        ! printing a warning regardless of the verbosity, since the default settings
+        ! would silence it
+        local_settings = settings
+        if (.not. local_settings%initialized) then
+            call warn_uninitialized_settings(local_settings, &
+                                             arh_settings_uninitialized_warning_msg)
+            call local_settings%init(error)
+            if (error /= 0) return
+        end if
+
         ! perform ARH sanity check
-        call arh_sanity_check(settings, error)
+        call arh_sanity_check(local_settings, error)
         if (error /= 0) return
 
         ! call common MO setup, which performs the sanity check of the MO basis
         call mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                               error, settings, orbsym)
+                               error, local_settings, orbsym)
         if (error /= 0) return
 
         ! discard any state (in particular history and derived quantities) from a
@@ -340,7 +358,7 @@ contains
         allocate(arh_object, source=arh_mo_type(mo_object))
 
         ! set (potentially new) settings
-        arh_object%settings = settings
+        arh_object%settings = local_settings
 
     end subroutine arh_factory_mo_common
 
@@ -366,7 +384,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
 
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
 
@@ -416,7 +434,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
 
         ! initialize error flag
         error = 0
@@ -446,20 +464,35 @@ contains
         ! this subroutine performs common ARH initialization operations for orbitals
         ! parameterized in the OAO basis
         !
+        use opentrustregion, only: warn_uninitialized_settings
         use otr_oao, only: oao_factory_common, oao_object
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
+
+        type(arh_settings_type) :: local_settings
+
+        ! work on a copy of the settings, which is initialized if they were not, after
+        ! printing a warning regardless of the verbosity, since the default settings
+        ! would silence it
+        local_settings = settings
+        if (.not. local_settings%initialized) then
+            call warn_uninitialized_settings(local_settings, &
+                                             arh_settings_uninitialized_warning_msg)
+            call local_settings%init(error)
+            if (error /= 0) return
+        end if
 
         ! perform ARH sanity check
-        call arh_sanity_check(settings, error)
+        call arh_sanity_check(local_settings, error)
         if (error /= 0) return
 
         ! call common OAO setup, which performs the sanity check of the OAO basis
-        call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
+        call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, &
+                                local_settings)
         if (error /= 0) return
 
         ! discard any state (in particular history and derived quantities) from a
@@ -473,7 +506,7 @@ contains
         allocate(arh_object, source=arh_oao_type(oao_object))
 
         ! set (potentially new) settings
-        arh_object%settings = settings
+        arh_object%settings = local_settings
 
     end subroutine arh_factory_oao_common
 
@@ -519,6 +552,9 @@ contains
         ! approximate Hessian are cheap, and tells it whether the approximate Hessian
         ! of the given ARH type is symmetric
         !
+        use opentrustregion, only: warn_uninitialized_settings, &
+                                   settings_uninitialized_warning_msg, &
+                                   stability_settings_uninitialized_warning_msg
         use opentrustregion, only: project_type
 
         type(solver_settings_type), intent(inout) :: solver_settings
@@ -529,9 +565,20 @@ contains
         ! initialize error flag
         error = 0
 
-        ! initialize settings
+        ! initialize the settings and their nested stability check settings if they
+        ! were not initialized, which the solver can no longer detect once the
+        ! callback functions are wired into them, after printing the warning the solver
+        ! would print, regardless of the verbosity, since the default settings would
+        ! silence it
         if (.not. solver_settings%initialized) then
+            call warn_uninitialized_settings(solver_settings, &
+                                             settings_uninitialized_warning_msg)
             call solver_settings%init(error)
+            if (error /= 0) return
+        else if (.not. solver_settings%stability_settings%initialized) then
+            call warn_uninitialized_settings( &
+                solver_settings, stability_settings_uninitialized_warning_msg)
+            call solver_settings%stability_settings%init(error)
             if (error /= 0) return
         end if
 

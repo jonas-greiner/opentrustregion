@@ -45,6 +45,11 @@ module otr_qn
         qn_settings_type(logger=null(), initialized=.true., verbose=0, max_points=10, &
                          hess_update_scheme="sr1")
 
+    ! warning for settings that were not initialized
+    character(len=*), parameter :: qn_settings_uninitialized_warning_msg = &
+        "Quasi-Newton settings were not initialized. All quasi-Newton settings are "// &
+        "set to default values"
+
     type, abstract :: updating_type
         real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:)
         integer(ip) :: n_points = 0
@@ -97,42 +102,49 @@ contains
         !
         ! this subroutine returns a modified quasi-Newton orbital updating function
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion, only: verbosity_error, warn_uninitialized_settings
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr_in
         procedure(transport_type), intent(in), pointer :: transport_funptr_in
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr_in
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
-        type(qn_settings_type), intent(inout) :: settings
+        type(qn_settings_type), intent(in) :: settings
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
+
+        type(qn_settings_type) :: local_settings
 
         ! initialize error flag
         error = 0
 
+        ! work on a copy of the settings, which is initialized if they were not, after
+        ! printing a warning regardless of the verbosity, since the default settings
+        ! would silence it
+        local_settings = settings
+        if (.not. local_settings%initialized) then
+            call warn_uninitialized_settings(local_settings, &
+                                             qn_settings_uninitialized_warning_msg)
+            call local_settings%init(error)
+            if (error /= 0) return
+        end if
+
         ! get object for quasi-Newton and corresponding Hessian linear transformation
         ! function
-        if (settings%hess_update_scheme == "sr1") then
+        if (local_settings%hess_update_scheme == "sr1") then
             update_object => sr1_object
             hess_x_qn_funptr => sr1_hess_x_fun
-        else if (settings%hess_update_scheme == "bfgs") then
+        else if (local_settings%hess_update_scheme == "bfgs") then
             update_object => bfgs_object
             hess_x_qn_funptr => bfgs_hess_x_fun
         else
-            call settings%log("Quasi-Newton updating scheme not implemented.", &
-                              verbosity_error, .true.)
+            call local_settings%log("Quasi-Newton updating scheme not implemented.", &
+                                    verbosity_error, .true.)
             error = 1
             return
         end if
 
         ! set settings
-        update_object%settings = settings
-
-        ! initialize settings
-        if (.not. update_object%settings%initialized) then
-            call update_object%settings%init(error)
-            if (error /= 0) return
-        end if
+        update_object%settings = local_settings
 
         ! initialize updating object
         call update_object%init(n_param)

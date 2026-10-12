@@ -92,7 +92,7 @@ contains
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(c_funptr), intent(out) :: obj_func_mo_c_funptr, update_orbs_mo_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
-        type(mo_settings_type_c), intent(inout) :: settings_c
+        type(mo_settings_type_c), intent(in) :: settings_c
         integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
 

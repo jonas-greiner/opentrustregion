@@ -37,6 +37,11 @@ module otr_s_gek
         s_gek_settings_type(logger=null(), initialized=.true., use_subspace=.true., &
                             verbose=0, max_points=20)
 
+    ! warning for settings that were not initialized
+    character(len=*), parameter :: s_gek_settings_uninitialized_warning_msg = &
+        "S-GEK settings were not initialized. All S-GEK settings are set to "// &
+        "default values"
+
     type :: s_gek_type
         real(rp), allocatable :: kappa_list(:, :), disp_list(:, :), obj_func_list(:), &
                                  grad_list(:, :), local_grad_list(:, :), y_list(:, :), &
@@ -84,25 +89,34 @@ contains
         !
         ! this subroutine returns a modified S-GEK orbital updating function
         !
+        use opentrustregion, only: warn_uninitialized_settings
+
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr_in
         procedure(change_reference_type), intent(in), pointer :: &
             change_reference_funptr_in
         integer(ip), intent(in) :: n_param
-        type(s_gek_settings_type), intent(inout) :: settings
+        type(s_gek_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
+
+        type(s_gek_settings_type) :: local_settings
 
         ! initialize error flag
         error = 0
 
-        ! set settings
-        s_gek_object%settings = settings
-
-        ! initialize settings
-        if (.not. s_gek_object%settings%initialized) then
-            call s_gek_object%settings%init(error)
+        ! work on a copy of the settings, which is initialized if they were not, after
+        ! printing a warning regardless of the verbosity, since the default settings
+        ! would silence it
+        local_settings = settings
+        if (.not. local_settings%initialized) then
+            call warn_uninitialized_settings(local_settings, &
+                                             s_gek_settings_uninitialized_warning_msg)
+            call local_settings%init(error)
             if (error /= 0) return
         end if
+
+        ! set settings
+        s_gek_object%settings = local_settings
 
         ! set pointer to original orbital updating function
         update_orbs_orig_funptr => update_orbs_funptr_in

@@ -80,7 +80,7 @@ contains
 
         real(rp), intent(in) :: mo_coeff(:, :, :), ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
 
         real(rp), allocatable :: pattern(:, :, :)
@@ -185,7 +185,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:)
 
         integer(ip), allocatable :: orbsym_2d(:, :)
@@ -238,7 +238,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
 
         ! initialize logical
@@ -285,7 +285,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
 
         ! initialize logical
         test_passed = .true.
@@ -369,7 +369,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(inout) :: settings
+        type(arh_settings_type), intent(in) :: settings
 
         ! initialize logical
         test_passed = .true.

@@ -73,7 +73,7 @@ c_int arh_factory_mo(c_real *mo_coeff_c, const c_real *ao_overlap_c,
                      obj_func_fp *obj_func_arh_c_funptr,
                      update_orbs_fp *update_orbs_arh_c_funptr,
                      solver_settings_type *solver_settings_c,
-                     arh_settings_type *settings_c, const c_int *orbsym_c);
+                     const arh_settings_type *settings_c, const c_int *orbsym_c);
 
 /**
  * Fortran-callable ARH factory interface for orbitals parameterized in the OAO basis.
@@ -96,7 +96,7 @@ c_int arh_factory_oao(c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_parti
                       obj_func_fp *obj_func_arh_c_funptr,
                       update_orbs_fp *update_orbs_arh_c_funptr,
                       solver_settings_type *solver_settings_c,
-                      arh_settings_type *settings_c);
+                      const arh_settings_type *settings_c);
 
 /**
  * Fortran-callable ARH deconstructor.

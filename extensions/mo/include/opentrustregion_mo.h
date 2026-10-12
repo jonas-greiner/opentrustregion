@@ -63,8 +63,8 @@ c_int mo_factory(c_real *mo_coeff_c, const c_real *ao_overlap_c, const c_int *n_
                  c_int n_particle_c, c_int n_ao_c, c_int n_mo_c,
                  evaluate_dm_fp evaluate_dm_c_funptr, obj_func_fp *obj_func_mo_c_funptr,
                  update_orbs_fp *update_orbs_mo_c_funptr,
-                 solver_settings_type *solver_settings_c, mo_settings_type *settings_c,
-                 const c_int *orbsym_c);
+                 solver_settings_type *solver_settings_c,
+                 const mo_settings_type *settings_c, const c_int *orbsym_c);
 
 /**
  * Fortran-callable MO deconstructor.

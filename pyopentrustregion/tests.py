@@ -180,6 +180,7 @@ fortran_tests = {
         "string_to_lowercase",
         "symm_mat_diag",
         "truncated_conjugate_gradient",
+        "warn_uninitialized_settings",
     ],
     "c_interface_unit_tests": [
         "approx_hess_x_f_wrapper",
@@ -209,6 +210,7 @@ fortran_tests = {
         "stability_hess_x_f_wrapper",
         "store_optional_c_callbacks",
         "update_orbs_f_wrapper",
+        "warn_uninitialized_settings_c",
     ],
     "opentrustregion_system_tests": [
         "h2o_fb_solver_davidson_ah",

@@ -54,7 +54,7 @@ c_int oao_factory(c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_
                   obj_func_fp *obj_func_oao_c_funptr,
                   update_orbs_fp *update_orbs_oao_c_funptr,
                   solver_settings_type *solver_settings_c,
-                  oao_settings_type *settings_c);
+                  const oao_settings_type *settings_c);
 
 /**
  * Fortran-callable OAO deconstructor.

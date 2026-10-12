@@ -637,8 +637,9 @@ contains
         ! assume tests pass
         test_mo_factory_cs = .true.
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
 
         ! initialize random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -762,8 +763,9 @@ contains
         ! assume tests pass
         test_mo_factory_os = .true.
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
 
         ! initialize random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -852,11 +854,12 @@ contains
         ! closed- and the open-shell case
         !
         use otr_common, only: orbital_settings_type
-        use otr_mo, only: mo_factory_common, mo_object
+        use otr_mo, only: mo_factory_common, mo_object, &
+                          mo_settings_uninitialized_warning_msg
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: &
             n_ao, n_occ, n_particle_ref => n_particle, operator(==), shell_names
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use otr_common_unit_tests, only: mock_get_response_cs, mock_get_response_os, &
                                          mock_evaluate_dm_cs, mock_evaluate_dm_os
 
@@ -867,6 +870,7 @@ contains
                        single_irrep(n_mo, n_particle_ref)
         integer(ip), allocatable :: n_occ_old(:)
         type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context
         character(len=:), allocatable :: shell, leftover_case
         character(len=39), parameter :: leftover_names(4) = &
             [character(len=39) :: "a different number of AOs", &
@@ -1087,6 +1091,25 @@ contains
             ! deallocate MO object
             deallocate(mo_object)
         end do
+
+        ! set the object up with settings that were not initialized and determine if
+        ! these are initialized after a warning through their logging function
+        call setup_settings(settings, context)
+        settings%initialized = .false.
+        call mo_factory_common(mo_coeff(:, :, :1), ao_overlap, n_occ(:1), 1_ip, n_ao, &
+                               n_mo, error, settings)
+        if (error /= 0 .or. .not. mo_object%settings%initialized) then
+            write(stderr, *) "test_mo_factory_common failed: Produced error or "// &
+                "settings not initialized for uninitialized settings."
+            test_mo_factory_common = .false.
+        end if
+        if (index(context%log_message, " "//mo_settings_uninitialized_warning_msg) == &
+            0) then
+            write(stderr, *) "test_mo_factory_common failed: Warning not printed "// &
+                "for uninitialized settings."
+            test_mo_factory_common = .false.
+        end if
+        deallocate(mo_object)
 
     contains
 
@@ -1390,12 +1413,17 @@ contains
         use otr_mo, only: mo_set_solver_settings, precond_mo_callback_ptr, &
                           precond_pd_mo_callback_ptr, &
                           get_extra_trial_vectors_mo_callback_ptr
-        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use opentrustregion, only: solver_settings_type, default_solver_settings, &
+                                   default_stability_settings, &
+                                   settings_uninitialized_warning_msg, &
+                                   stability_settings_uninitialized_warning_msg
+        use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
         integer(ip) :: i_case, error
         character(len=:), allocatable :: case_name
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_mo_set_solver_settings = .true.
@@ -1406,6 +1434,8 @@ contains
         do i_case = 1, 2
             if (i_case == 1) then
                 case_name = "for uninitialized settings"
+                call setup_settings(solver_settings, context)
+                solver_settings%initialized = .false.
             else
                 case_name = "for initialized settings"
                 solver_settings = ref_solver_settings
@@ -1421,6 +1451,12 @@ contains
             if (.not. solver_settings%initialized) then
                 write(stderr, *) "test_mo_set_solver_settings failed: Settings not "// &
                     "initialized "//case_name//"."
+                test_mo_set_solver_settings = .false.
+            end if
+            if (i_case == 1 .and. index( &
+                context%log_message, " "//settings_uninitialized_warning_msg) == 0) then
+                write(stderr, *) "test_mo_set_solver_settings failed: Warning not "// &
+                    "printed "//case_name//"."
                 test_mo_set_solver_settings = .false.
             end if
             if (i_case == 1 .and. solver_settings /= default_solver_settings) then
@@ -1466,6 +1502,34 @@ contains
                 test_mo_set_solver_settings = .false.
             end if
         end do
+
+        ! wire the MO routines into initialized settings whose stability check
+        ! settings were not initialized, which the solver could no longer detect once
+        ! the routines are wired into them, so that these have to be initialized with
+        ! the warning the solver would print, through the logging function of the
+        ! solver settings, which have to be kept
+        call setup_settings(solver_settings, context)
+        solver_settings%stability_settings%initialized = .false.
+        call mo_set_solver_settings(solver_settings, error)
+        if (error /= 0 .or. .not. associated(solver_settings%logger)) then
+            write(stderr, *) "test_mo_set_solver_settings failed: Produced error "// &
+                "or settings not kept for uninitialized stability check settings."
+            test_mo_set_solver_settings = .false.
+        end if
+        if (solver_settings%stability_settings /= default_stability_settings .or. &
+            .not. associated(solver_settings%stability_settings%precond, &
+                             precond_mo_callback_ptr)) then
+            write(stderr, *) "test_mo_set_solver_settings failed: Stability check "// &
+                "settings not initialized to their defaults with the MO routines "// &
+                "wired into them."
+            test_mo_set_solver_settings = .false.
+        end if
+        if (index(context%log_message, &
+                  " "//stability_settings_uninitialized_warning_msg) == 0) then
+            write(stderr, *) "test_mo_set_solver_settings failed: Warning not "// &
+                "printed for uninitialized stability check settings."
+            test_mo_set_solver_settings = .false.
+        end if
 
     contains
 

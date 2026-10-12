@@ -340,12 +340,9 @@ contains
         if (.not. local_settings_c%initialized) then
             write(stderr, '(A)') " "//settings_uninitialized_warning_msg
         else if (.not. local_settings_c%stability_settings%initialized) then
-            if (associated(settings%logger)) then
-                call settings%logger( &
-                    " "//stability_settings_uninitialized_warning_msg, settings%context)
-            else
-                write(stderr, '(A)') " "//stability_settings_uninitialized_warning_msg
-            end if
+            call warn_uninitialized_settings_c( &
+                local_settings_c%logger, local_settings_c%context, &
+                stability_settings_uninitialized_warning_msg)
         end if
 
         ! call solver
@@ -1015,6 +1012,33 @@ contains
         deallocate(message_c)
 
     end subroutine logger_f_wrapper
+
+    subroutine warn_uninitialized_settings_c(logger_c_funptr, context_c, message)
+        !
+        ! this subroutine prints the warning that settings were not initialized through
+        ! a C logging function with the host context or on stderr without one,
+        ! regardless of the verbosity, since the default settings which replace
+        ! settings that were not initialized would silence it
+        !
+        use opentrustregion, only: stderr
+
+        type(c_funptr), intent(in) :: logger_c_funptr
+        type(c_ptr), intent(in) :: context_c
+        character(len=*), intent(in) :: message
+
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context
+
+        if (c_associated(logger_c_funptr)) then
+            call c_f_procpointer(cptr=logger_c_funptr, fptr=callbacks%logger)
+            callbacks%host_context = context_c
+            context => callbacks
+            call logger_f_wrapper(" "//message, context)
+        else
+            write(stderr, '(A)') " "//message
+        end if
+
+    end subroutine warn_uninitialized_settings_c
 
     subroutine init_solver_settings_c(settings) bind(C, name="init_solver_settings")
         !

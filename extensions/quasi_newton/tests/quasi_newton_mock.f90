@@ -42,7 +42,7 @@ contains
         procedure(transport_type), intent(in), pointer :: transport_funptr
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
         integer(ip), intent(in) :: n_param
-        type(qn_settings_type), intent(inout) :: settings
+        type(qn_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
 

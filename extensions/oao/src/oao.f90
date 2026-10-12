@@ -23,6 +23,10 @@ module otr_oao
     type(oao_settings_type), parameter :: default_oao_settings = &
         oao_settings_type(orbital_settings_type=default_orbital_settings)
 
+    ! warning for settings that were not initialized
+    character(len=*), parameter :: oao_settings_uninitialized_warning_msg = &
+        "OAO settings were not initialized. All OAO settings are set to default values"
+
     ! orbitals parameterized in the OAO basis, which points to the density matrix of
     ! the caller, which it updates in place
     type, extends(orbital_basis_type) :: oao_type
@@ -79,7 +83,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(oao_settings_type), intent(inout) :: settings
+        type(oao_settings_type), intent(in) :: settings
 
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
 
@@ -122,7 +126,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(oao_settings_type), intent(inout) :: settings
+        type(oao_settings_type), intent(in) :: settings
 
         ! initialize error flag
         error = 0
@@ -148,6 +152,7 @@ contains
         !
         ! this subroutine performs common OAO initialization operations
         !
+        use opentrustregion, only: warn_uninitialized_settings
         use otr_common, only: compute_sqrt_and_inv_sqrt
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
@@ -156,17 +161,29 @@ contains
         integer(ip), intent(out) :: error
         class(orbital_settings_type), intent(in) :: settings
 
+        class(orbital_settings_type), allocatable :: local_settings
         logical :: reuse
 
+        ! work on a copy of the settings, which is initialized if they were not, after
+        ! printing a warning regardless of the verbosity, since the default settings
+        ! would silence it
+        allocate(local_settings, source=settings)
+        if (.not. local_settings%initialized) then
+            call warn_uninitialized_settings(local_settings, &
+                                             oao_settings_uninitialized_warning_msg)
+            call local_settings%init(error)
+            if (error /= 0) return
+        end if
+
         ! perform sanity check
-        call oao_sanity_check(settings, n_particle, n_ao, error)
+        call oao_sanity_check(local_settings, n_particle, n_ao, error)
         if (error /= 0) return
 
         ! allocate object
         if (.not. allocated(oao_object)) allocate(oao_object)
 
         ! set (potentially new) settings
-        oao_object%settings = settings
+        oao_object%settings = local_settings
 
         ! determine whether the object was already set up for the same dimensions,
         ! which the square roots of the overlap matrix, allocated only once computed,
@@ -265,15 +282,30 @@ contains
         ! this subroutine wires the OAO preconditioners, projection and extra trial
         ! vectors into the solver settings and those of its stability check
         !
+        use opentrustregion, only: warn_uninitialized_settings, &
+                                   settings_uninitialized_warning_msg, &
+                                   stability_settings_uninitialized_warning_msg
+
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
 
         ! initialize error flag
         error = 0
 
-        ! initialize settings
+        ! initialize the settings and their nested stability check settings if they
+        ! were not initialized, which the solver can no longer detect once the
+        ! callback functions are wired into them, after printing the warning the solver
+        ! would print, regardless of the verbosity, since the default settings would
+        ! silence it
         if (.not. solver_settings%initialized) then
+            call warn_uninitialized_settings(solver_settings, &
+                                             settings_uninitialized_warning_msg)
             call solver_settings%init(error)
+            if (error /= 0) return
+        else if (.not. solver_settings%stability_settings%initialized) then
+            call warn_uninitialized_settings( &
+                solver_settings, stability_settings_uninitialized_warning_msg)
+            call solver_settings%stability_settings%init(error)
             if (error /= 0) return
         end if
 

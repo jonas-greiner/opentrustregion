@@ -407,24 +407,15 @@ contains
         ! beforehand through the caller's logging function or on stderr regardless of
         ! the verbosity
         if (.not. local_settings%initialized) then
-            if (associated(local_settings%logger)) then
-                call local_settings%logger(" "//settings_uninitialized_warning_msg, &
-                                           local_settings%context)
-            else
-                write(stderr, '(A)') " "//settings_uninitialized_warning_msg
-            end if
+            call warn_uninitialized_settings(local_settings, &
+                                             settings_uninitialized_warning_msg)
             call local_settings%init(error)
             call add_error_origin(error, error_solver, local_settings)
             if (error /= 0) return
         end if
         if (.not. local_settings%stability_settings%initialized) then
-            if (associated(local_settings%logger)) then
-                call local_settings%logger( &
-                    " "//stability_settings_uninitialized_warning_msg, &
-                    local_settings%context)
-            else
-                write(stderr, '(A)') " "//stability_settings_uninitialized_warning_msg
-            end if
+            call warn_uninitialized_settings( &
+                local_settings, stability_settings_uninitialized_warning_msg)
             call local_settings%stability_settings%init(error)
             call add_error_origin(error, error_solver, local_settings)
             if (error /= 0) return
@@ -711,12 +702,8 @@ contains
         ! beforehand through the caller's logging function or on stderr regardless of
         ! the verbosity
         if (.not. local_settings%initialized) then
-            if (associated(local_settings%logger)) then
-                call local_settings%logger(" "//settings_uninitialized_warning_msg, &
-                                           local_settings%context)
-            else
-                write(stderr, '(A)') " "//settings_uninitialized_warning_msg
-            end if
+            call warn_uninitialized_settings(local_settings, &
+                                             settings_uninitialized_warning_msg)
             call local_settings%init(error)
             call add_error_origin(error, error_stability_check, local_settings)
             if (error /= 0) return
@@ -2965,6 +2952,24 @@ contains
                       kappa_norm_str, verbosity_info)
 
     end subroutine print_results
+
+    subroutine warn_uninitialized_settings(settings, message)
+        !
+        ! this subroutine prints the warning that settings were not initialized through
+        ! the logging function of the given settings or on stderr without one,
+        ! regardless of their verbosity, since the default settings which replace
+        ! settings that were not initialized would silence it
+        !
+        class(settings_type), intent(in) :: settings
+        character(len=*), intent(in) :: message
+
+        if (associated(settings%logger)) then
+            call settings%logger(" "//message, settings%context)
+        else
+            write(stderr, '(A)') " "//message
+        end if
+
+    end subroutine warn_uninitialized_settings
 
     subroutine print_message(self, message, level, error)
         !

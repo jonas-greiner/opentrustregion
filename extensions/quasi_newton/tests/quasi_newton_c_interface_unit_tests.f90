@@ -367,6 +367,17 @@ contains
             test_assign_qn_f_c = .false.
         end if
 
+        ! convert C settings that were not initialized and check that they are left
+        ! uninitialized without a logging function, so that the factory initializes
+        ! them after its warning
+        settings_c%initialized = .false.
+        settings = settings_c
+        if (settings%initialized .or. associated(settings%logger)) then
+            write(stderr, *) "test_assign_qn_f_c failed: Settings that were not "// &
+                "initialized converted."
+            test_assign_qn_f_c = .false.
+        end if
+
     end function test_assign_qn_f_c
 
     logical(c_bool) function test_assign_qn_c_f() bind(C)

@@ -101,7 +101,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_mo_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(mo_settings_type), intent(inout) :: settings
+        type(mo_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:)
 
         real(rp), allocatable :: pattern(:, :, :)
@@ -229,7 +229,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_mo_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(mo_settings_type), intent(inout) :: settings
+        type(mo_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
 
         real(rp), allocatable :: pattern(:, :, :)

@@ -44,6 +44,7 @@ contains
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_mo_unit_tests, only: ref_count_mo_params
         use c_interface, only: solver_settings_type_c
+        use opentrustregion, only: default_stability_settings
         use otr_common_c_interface_unit_tests, only: mock_evaluate_dm_cs, &
                                                      mock_evaluate_dm_os
 
@@ -94,20 +95,29 @@ contains
             end if
 
             ! initialize logger logical, global number of parameters and solver
-            ! settings, uninitialized for the closed-shell case and set to reference
-            ! values with a projection of the caller, which have to be kept, for the
-            ! open-shell case
+            ! settings, uninitialized for the closed-shell case without symmetry, set
+            ! to reference values with stability check settings that were not
+            ! initialized, which have to be set to their defaults with a warning through
+            ! the logging function of the solver settings, for the closed-shell case
+            ! with symmetry, and set to reference values with a projection of the
+            ! caller, which have to be kept, for the open-shell case
             test_logger = .false.
             n_param_global = -1
-            if (n_particle_c == 1) then
+            if (n_particle_c == 1 .and. .not. with_irreps) then
                 solver_settings_c%initialized = .false._c_bool
             else
                 call get_reference_solver_values(solver_settings_c)
                 call unset_callbacks(solver_settings_c)
                 solver_settings_c%context = c_null_ptr
                 solver_settings_c%stability_settings%context = c_null_ptr
-                solver_settings_c%project = c_funloc(mock_project)
-                solver_settings_c%stability_settings%project = c_funloc(mock_project)
+                if (n_particle_c == 1) then
+                    solver_settings_c%logger = c_funloc(mock_logger_c)
+                    solver_settings_c%stability_settings%initialized = .false._c_bool
+                else
+                    solver_settings_c%project = c_funloc(mock_project)
+                    solver_settings_c%stability_settings%project = &
+                        c_funloc(mock_project)
+                end if
             end if
 
             ! set the irreps of the MOs passed to the wrapper, which an unallocated
@@ -191,6 +201,13 @@ contains
                 test_mo_factory_c_wrapper = .false.
                 write(stderr, *) "test_mo_factory_c_wrapper failed: Solver "// &
                     "settings not initialized for the "//case_name//" case."
+            end if
+            if (n_particle_c == 1 .and. with_irreps .and. &
+                solver_settings_c%stability_settings /= default_stability_settings) then
+                test_mo_factory_c_wrapper = .false.
+                write(stderr, *) "test_mo_factory_c_wrapper failed: Stability "// &
+                    "check settings that were not initialized not set to their "// &
+                    "defaults for the "//case_name//" case."
             end if
             if (n_particle_c == 2) then
                 if (solver_settings_c /= ref_solver_settings) then
@@ -625,6 +642,17 @@ contains
         if (.not. settings%initialized) then
             write(stderr, *) "test_assign_mo_f_c failed: Settings not marked as "// &
                 "initialized."
+            test_assign_mo_f_c = .false.
+        end if
+
+        ! convert C settings that were not initialized and check that they are left
+        ! uninitialized without a logging function, so that the factory initializes
+        ! them after its warning
+        settings_c%initialized = .false.
+        settings = settings_c
+        if (settings%initialized .or. associated(settings%logger)) then
+            write(stderr, *) "test_assign_mo_f_c failed: Settings that were not "// &
+                "initialized converted."
             test_assign_mo_f_c = .false.
         end if
 

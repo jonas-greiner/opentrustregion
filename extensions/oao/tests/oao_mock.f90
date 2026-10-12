@@ -93,7 +93,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(oao_settings_type), intent(inout) :: settings
+        type(oao_settings_type), intent(in) :: settings
 
         ! initialize logical
         test_passed = .true.
@@ -176,7 +176,7 @@ contains
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         type(solver_settings_type), intent(inout) :: solver_settings
         integer(ip), intent(out) :: error
-        type(oao_settings_type), intent(inout) :: settings
+        type(oao_settings_type), intent(in) :: settings
 
         ! initialize logical
         test_passed = .true.

@@ -1902,6 +1902,35 @@ contains
 
     end function test_logger_f_wrapper
 
+    logical(c_bool) function test_warn_uninitialized_settings_c() bind(C)
+        !
+        ! this function tests the subroutine which prints the warning that settings
+        ! were not initialized through a C logging function
+        !
+        use c_interface, only: warn_uninitialized_settings_c
+        use opentrustregion, only: stability_settings_uninitialized_warning_msg
+        use test_reference, only: host_context, arm_host_context_c, host_context_reached
+
+        type(c_ptr) :: host_context_c
+
+        ! assume tests pass
+        test_warn_uninitialized_settings_c = .true.
+
+        ! print the warning through the mock C logging function and check that it
+        ! received the warning together with the host context
+        call arm_host_context_c(host_context_c)
+        call warn_uninitialized_settings_c(c_funloc(mock_logger), host_context_c, &
+                                           stability_settings_uninitialized_warning_msg)
+        if (.not. host_context%stability_warning_logged) then
+            write(stderr, *) "test_warn_uninitialized_settings_c failed: Warning "// &
+                "not printed through the logging function."
+            test_warn_uninitialized_settings_c = .false.
+        end if
+        if (.not. host_context_reached("warn_uninitialized_settings_c")) &
+            test_warn_uninitialized_settings_c = .false.
+
+    end function test_warn_uninitialized_settings_c
+
     logical(c_bool) function test_init_solver_settings_c() bind(C)
         !
         ! this function tests that the solver settings initialization routine correctly

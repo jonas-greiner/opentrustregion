@@ -351,8 +351,9 @@ contains
         ! assume tests pass
         test_oao_factory_cs = .true.
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
 
         ! initialize density matrix and an orthonormal AO basis
         dm_ao = generate_random_density_matrix(n_ao, n_occ(1))
@@ -461,8 +462,9 @@ contains
         ! assume tests pass
         test_oao_factory_os = .true.
 
-        ! setup settings object
+        ! setup settings objects
         call setup_settings(settings)
+        call setup_settings(solver_settings)
 
         ! initialize density matrices and an orthonormal AO basis
         do i = 1, n_particle
@@ -537,10 +539,11 @@ contains
         ! case
         !
         use otr_common, only: orbital_settings_type
-        use otr_oao, only: oao_factory_common, oao_object
+        use otr_oao, only: oao_factory_common, oao_object, &
+                           oao_settings_uninitialized_warning_msg
         use otr_common_test_reference, only: &
             n_ao, n_occ, n_particle_ref => n_particle, operator(==), shell_names
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use otr_common_unit_tests, only: generate_random_density_matrix, &
                                          mock_get_response_cs, mock_get_response_os, &
                                          mock_evaluate_dm_cs, mock_evaluate_dm_os
@@ -551,6 +554,7 @@ contains
                     s_inv_sqrt(n_ao, n_ao)
         integer(ip) :: n_particle, leftover, n_ao_old, n_particle_old, i, error
         type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context
         character(len=:), allocatable :: shell, leftover_case
         character(len=39), parameter :: leftover_names(2) = &
             [character(len=39) :: "a different number of AOs", &
@@ -711,6 +715,25 @@ contains
             deallocate(oao_object)
         end do
 
+        ! set the object up with settings that were not initialized and determine if
+        ! these are initialized after a warning through their logging function
+        call setup_settings(settings, context)
+        settings%initialized = .false.
+        call oao_factory_common(dm_ao(:, :, :1), ao_overlap, 1_ip, n_ao, error, &
+                                settings)
+        if (error /= 0 .or. .not. oao_object%settings%initialized) then
+            write(stderr, *) "test_oao_factory_common failed: Produced error or "// &
+                "settings not initialized for uninitialized settings."
+            test_oao_factory_common = .false.
+        end if
+        if (index(context%log_message, " "//oao_settings_uninitialized_warning_msg) == &
+            0) then
+            write(stderr, *) "test_oao_factory_common failed: Warning not printed "// &
+                "for uninitialized settings."
+            test_oao_factory_common = .false.
+        end if
+        deallocate(oao_object)
+
     contains
 
         function check_oao_object(caller_dm_ao, expected_s_sqrt, case_name) &
@@ -857,12 +880,17 @@ contains
         use otr_oao, only: oao_set_solver_settings, precond_oao_callback_ptr, &
                            precond_pd_oao_callback_ptr, project_oao_callback_ptr, &
                            get_extra_trial_vectors_oao_callback_ptr
-        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use opentrustregion, only: solver_settings_type, default_solver_settings, &
+                                   default_stability_settings, &
+                                   settings_uninitialized_warning_msg, &
+                                   stability_settings_uninitialized_warning_msg
+        use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
         integer(ip) :: i_case, error
         character(len=:), allocatable :: case_name
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_oao_set_solver_settings = .true.
@@ -873,6 +901,8 @@ contains
         do i_case = 1, 2
             if (i_case == 1) then
                 case_name = "for uninitialized settings"
+                call setup_settings(solver_settings, context)
+                solver_settings%initialized = .false.
             else
                 case_name = "for initialized settings"
                 solver_settings = ref_solver_settings
@@ -886,6 +916,12 @@ contains
             if (.not. solver_settings%initialized) then
                 write(stderr, *) "test_oao_set_solver_settings failed: Settings "// &
                     "not initialized "//case_name//"."
+                test_oao_set_solver_settings = .false.
+            end if
+            if (i_case == 1 .and. index( &
+                context%log_message, " "//settings_uninitialized_warning_msg) == 0) then
+                write(stderr, *) "test_oao_set_solver_settings failed: Warning not "// &
+                    "printed "//case_name//"."
                 test_oao_set_solver_settings = .false.
             end if
             if (i_case == 1 .and. solver_settings /= default_solver_settings) then
@@ -920,6 +956,34 @@ contains
                 test_oao_set_solver_settings = .false.
             end if
         end do
+
+        ! wire the OAO routines into initialized settings whose stability check
+        ! settings were not initialized, which the solver could no longer detect once
+        ! the routines are wired into them, so that these have to be initialized with
+        ! the warning the solver would print, through the logging function of the
+        ! solver settings, which have to be kept
+        call setup_settings(solver_settings, context)
+        solver_settings%stability_settings%initialized = .false.
+        call oao_set_solver_settings(solver_settings, error)
+        if (error /= 0 .or. .not. associated(solver_settings%logger)) then
+            write(stderr, *) "test_oao_set_solver_settings failed: Produced error "// &
+                "or settings not kept for uninitialized stability check settings."
+            test_oao_set_solver_settings = .false.
+        end if
+        if (solver_settings%stability_settings /= default_stability_settings .or. &
+            .not. associated(solver_settings%stability_settings%precond, &
+                             precond_oao_callback_ptr)) then
+            write(stderr, *) "test_oao_set_solver_settings failed: Stability check "// &
+                "settings not initialized to their defaults with the OAO routines "// &
+                "wired into them."
+            test_oao_set_solver_settings = .false.
+        end if
+        if (index(context%log_message, &
+                  " "//stability_settings_uninitialized_warning_msg) == 0) then
+            write(stderr, *) "test_oao_set_solver_settings failed: Warning not "// &
+                "printed for uninitialized stability check settings."
+            test_oao_set_solver_settings = .false.
+        end if
 
     end function test_oao_set_solver_settings
 
