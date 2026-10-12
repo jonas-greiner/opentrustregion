@@ -9,8 +9,8 @@ module otr_arh_test_reference
     use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
     use otr_common_test_reference, only: ref_orbital_settings_type, ref_orbital_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_funptr, c_f_procpointer, &
-                                           c_associated
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
+                                           c_f_procpointer, c_associated
 
     implicit none
 
@@ -63,8 +63,8 @@ module otr_arh_test_reference
 
 contains
 
-    function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message) &
-        result(test_passed)
+    function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
+                                        context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer
         ! with Coulomb, exact-exchange and non-linear potential contributions for the
@@ -76,6 +76,7 @@ contains
 
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
         real(rp), target :: dm_ao(n_ao, n_ao), &
@@ -114,7 +115,7 @@ contains
             energy = 0.0_rp
             outputs = 0.0_rp
             call evaluate_dm_funptr(dm_ao, energy, fock, v_coulomb, v_exchange, &
-                                    v_nonlinear, error)
+                                    v_nonlinear, error, context)
 
             ! check for error
             if (error /= 0) then
@@ -146,8 +147,8 @@ contains
 
     end function test_evaluate_dm_cs_funptr
 
-    function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message) &
-        result(test_passed)
+    function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message, &
+                                        context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer
         ! with Coulomb, exact-exchange and non-linear potential contributions for the
@@ -160,6 +161,7 @@ contains
 
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
         real(rp), target :: &
@@ -199,7 +201,7 @@ contains
             energy = 0.0_rp
             outputs = 0.0_rp
             call evaluate_dm_funptr(dm_ao, energy, fock, v_coulomb, v_exchange, &
-                                    v_nonlinear, error)
+                                    v_nonlinear, error, context)
 
             ! check for error
             if (error /= 0) then
@@ -232,7 +234,7 @@ contains
     end function test_evaluate_dm_os_funptr
 
     function test_evaluate_dm_c_funptr(evaluate_dm_c_funptr, n_particle, test_name, &
-                                       message) result(test_passed)
+                                       message, context_c) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating C function pointer
         ! with Coulomb, exact-exchange and non-linear potential contributions for the
@@ -247,6 +249,7 @@ contains
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
         integer(ip), intent(in) :: n_particle
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in) :: context_c
         logical :: test_passed
 
         procedure(evaluate_dm_c_type), pointer :: evaluate_dm_funptr
@@ -294,7 +297,7 @@ contains
             energy = 0.0_c_rp
             outputs = 0.0_c_rp
             error = evaluate_dm_funptr(dm_ao, energy, fock, v_coulomb, v_exchange, &
-                                       v_nonlinear)
+                                       v_nonlinear, context_c)
 
             ! check for error
             if (error /= 0) then

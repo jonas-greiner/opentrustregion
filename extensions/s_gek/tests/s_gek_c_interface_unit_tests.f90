@@ -8,13 +8,13 @@ module otr_s_gek_c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol, tol_c, n_param, n_param_c
+    use test_reference, only: tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
                                            c_associated, c_loc, c_null_ptr
 
     implicit none
 
-    logical :: test_passed_mock_change_reference
+    logical :: test_passed_mock_change_reference = .false.
     character(len=:), allocatable :: test_name
 
     ! whether the orbital update the C wrapper calls was handed the host context and
@@ -60,20 +60,28 @@ contains
     end subroutine mock_update_orbs_bundle
 
     function mock_change_reference(new_ref_c, n_points_c, kappa_list_c, &
-                                   local_grad_list_c, grad_list_c) result(error) bind(C)
+                                   local_grad_list_c, grad_list_c, context_c) &
+        result(error) bind(C)
         !
         ! this subroutine is a mock subroutine for the reference change C function
         !
+        use test_reference, only: check_host_context_c
+        use otr_s_gek_test_reference, only: n_points
+
         real(c_rp), intent(in), target :: new_ref_c(*)
         integer(c_ip), intent(in), value :: n_points_c
         real(c_rp), intent(inout), target :: kappa_list_c(*), local_grad_list_c(*), &
                                              grad_list_c(*)
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
+
+        ! check host context
+        call check_host_context_c(context_c)
 
         ! initialize logical
         test_passed_mock_change_reference = .true.
 
-        if (n_points_c /= 4_c_ip) then
+        if (n_points_c /= n_points) then
             test_passed_mock_change_reference = .false.
             write(stderr, *) test_name//" failed: Number of points inside given "// &
                 "change reference function wrong."
@@ -96,20 +104,23 @@ contains
 
     end function mock_change_reference
 
-    logical(c_bool) function test_update_orbs_s_gek_factory_c_wrapper() bind(C)
+    logical(c_bool) function test_s_gek_factory_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper for the S-GEK orbital update factory
         !
-        use otr_s_gek_c_interface, only: s_gek_settings_type_c, &
-                                         update_orbs_s_gek_factory, &
-                                         update_orbs_s_gek_factory_c_wrapper
-        use otr_s_gek_mock, only: &
-            mock_update_orbs_s_gek_factory, &
-            test_passed_mock_update_orbs_s_gek_factory => test_passed
+        use otr_s_gek_c_interface, only: s_gek_settings_type_c, s_gek_factory, &
+                                         s_gek_factory_c_wrapper
+        use otr_s_gek_mock, only: mock_s_gek_factory, &
+                                  test_passed_mock_s_gek_factory => test_passed
         use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings
-        use c_interface_unit_tests, only: mock_update_orbs
-        use otr_common_mock, only: mock_logger_c, test_logger
-        use test_reference, only: check_update_orbs_c_funptr
+        use otr_s_gek_c_interface, only: update_orbs_s_gek_before_wrapping, &
+                                         update_orbs_orig_s_gek_before_wrapping, &
+                                         s_gek_callbacks
+        use otr_common_c_interface, only: n_param_global => n_param
+        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
+        use otr_common_mock, only: mock_logger_c, mock_update_orbs
+        use test_reference, only: check_update_orbs_c_funptr, arm_host_context_c, &
+                                  host_context, host_context_reached
 
         type(c_funptr) :: update_orbs_orig_c_funptr, change_reference_c_funptr, &
                           update_orbs_s_gek_c_funptr
@@ -117,78 +128,135 @@ contains
         integer(c_ip) :: error_c
 
         ! assume tests pass
-        test_update_orbs_s_gek_factory_c_wrapper = .true.
+        test_s_gek_factory_c_wrapper = .true.
 
         ! set test name
-        test_name = "test_update_orbs_s_gek_factory_c_wrapper"
+        test_name = "test_s_gek_factory_c_wrapper"
 
         ! inject mock function
-        update_orbs_s_gek_factory => mock_update_orbs_s_gek_factory
+        s_gek_factory => mock_s_gek_factory
 
         ! get C function pointers to Fortran functions
-        update_orbs_orig_c_funptr = c_funloc(mock_update_orbs)
+        update_orbs_orig_c_funptr = c_funloc(mock_update_orbs_orig)
         change_reference_c_funptr = c_funloc(mock_change_reference)
 
         ! associate optional settings with values
         settings = ref_s_gek_settings
         settings%logger = c_funloc(mock_logger_c)
 
-        ! initialize logger logical
-        test_logger = .false.
+        ! arm the host context of the settings, which the logging and change of
+        ! reference functions receive
+        call arm_host_context_c(settings%context)
+
+        ! clear the global number of parameters, the callback slots, which only the
+        ! factory call may set, and the flags of the mocks
+        n_param_global = -1
+        nullify(update_orbs_s_gek_before_wrapping, &
+                update_orbs_orig_s_gek_before_wrapping)
+        test_passed_mock_s_gek_factory = .false.
+        test_passed_mock_change_reference = .false.
 
         ! call S-GEK orbital updating factory C wrapper
-        error_c = update_orbs_s_gek_factory_c_wrapper( &
-            update_orbs_orig_c_funptr, change_reference_c_funptr, n_param_c, settings, &
-            update_orbs_s_gek_c_funptr)
+        error_c = s_gek_factory_c_wrapper(update_orbs_orig_c_funptr, &
+                                          change_reference_c_funptr, n_param_c, &
+                                          settings, update_orbs_s_gek_c_funptr)
 
-        ! check if logging subroutine was correctly called
-        if (.not. test_logger) then
-            test_update_orbs_s_gek_factory_c_wrapper = .false.
-            write(stderr, *) "test_update_orbs_s_gek_factory_c_wrapper failed: "// &
-                "Called logging subroutine wrong."
+        ! check if the mock factory received the correct input and called the logging
+        ! function, and if the given change of reference function received the correct
+        ! input
+        if (.not. test_passed_mock_s_gek_factory) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Mock factory "// &
+                "received wrong input."
+            test_s_gek_factory_c_wrapper = .false.
         end if
+        if (.not. test_passed_mock_change_reference) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Given change of "// &
+                "reference function received wrong input."
+            test_s_gek_factory_c_wrapper = .false.
+        end if
+        if (.not. host_context%logger_called) then
+            test_s_gek_factory_c_wrapper = .false.
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Called logging "// &
+                "subroutine wrong."
+        end if
+
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("s_gek_factory_c_wrapper")) &
+            test_s_gek_factory_c_wrapper = .false.
 
         ! check if output variables are as expected
         if (error_c /= 0) then
-            test_update_orbs_s_gek_factory_c_wrapper = .false.
-            write(stderr, *) "test_update_orbs_s_gek_factory_c_wrapper failed: "// &
-                "Returned error code wrong."
+            test_s_gek_factory_c_wrapper = .false.
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Returned error "// &
+                "code wrong."
+        end if
+
+        ! check if the callback slots point to the returned and given functions,
+        ! without which calling the returned function below would crash
+        if (.not. (associated( &
+            update_orbs_s_gek_before_wrapping, mock_update_orbs) .and. associated( &
+                update_orbs_orig_s_gek_before_wrapping, mock_update_orbs_orig) .and. &
+            associated(s_gek_callbacks%change_reference, mock_change_reference))) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Callback slots "// &
+                "not set."
+            test_s_gek_factory_c_wrapper = .false.
+            return
+        end if
+
+        ! determine if the number of parameters was set
+        if (n_param_global /= n_param) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Number of "// &
+                "parameters not set."
+            test_s_gek_factory_c_wrapper = .false.
         end if
 
         ! test returned orbital update function
-        test_update_orbs_s_gek_factory_c_wrapper = &
-            test_update_orbs_s_gek_factory_c_wrapper .and. check_update_orbs_c_funptr( &
-                update_orbs_s_gek_c_funptr, "update_orbs_s_gek_factory_c_wrapper", &
-                " by returned orbital updating function", c_null_ptr) .and. &
-            test_passed_mock_update_orbs_s_gek_factory .and. &
-            test_passed_mock_change_reference
+        if (.not. check_update_orbs_c_funptr( &
+            update_orbs_s_gek_c_funptr, "s_gek_factory_c_wrapper", &
+            " by returned orbital updating function", c_null_ptr)) &
+            test_s_gek_factory_c_wrapper = .false.
 
-    end function test_update_orbs_s_gek_factory_c_wrapper
+    end function test_s_gek_factory_c_wrapper
 
     logical(c_bool) function test_change_reference_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the reference change
         !
         use otr_s_gek, only: change_reference_type
-        use otr_s_gek_c_interface, only: change_reference_before_wrapping, &
-                                         change_reference_f_wrapper
+        use otr_s_gek_c_interface, only: s_gek_callbacks, change_reference_f_wrapper
         use otr_s_gek_test_reference, only: test_change_reference_funptr
+        use test_reference, only: arm_host_context_c, host_context_reached
 
         procedure(change_reference_type), pointer :: change_reference_funptr
+        class(*), pointer :: context
+
+        ! assume tests pass
+        test_change_reference_f_wrapper = .true.
 
         ! set test name
         test_name = "test_change_reference_f_wrapper"
 
-        ! inject mock subroutine
-        change_reference_before_wrapping => mock_change_reference
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        s_gek_callbacks%change_reference => mock_change_reference
+        call arm_host_context_c(s_gek_callbacks%host_context)
+        context => s_gek_callbacks
 
         ! get pointer to subroutine
         change_reference_funptr => change_reference_f_wrapper
 
+        ! clear the flag of the mock
+        test_passed_mock_change_reference = .false.
+
         ! test change reference Fortran wrapper
-        test_change_reference_f_wrapper = test_change_reference_funptr( &
-            change_reference_funptr, "change_reference_f_wrapper", "") .and. &
-                                          test_passed_mock_change_reference
+        if (.not. test_change_reference_funptr( &
+            change_reference_funptr, "change_reference_f_wrapper", "", context)) &
+            test_change_reference_f_wrapper = .false.
+        if (.not. test_passed_mock_change_reference) &
+            test_change_reference_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("change_reference_f_wrapper")) &
+            test_change_reference_f_wrapper = .false.
 
     end function test_change_reference_f_wrapper
 
@@ -201,7 +269,6 @@ contains
                                          update_orbs_orig_s_gek_before_wrapping, &
                                          update_orbs_s_gek_c_wrapper
         use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
-        use otr_common_mock, only:
         use test_reference, only: check_update_orbs_c_funptr, host_context
 
         ! set global number of parameters for assumed size arrays
@@ -320,7 +387,8 @@ contains
         use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings, &
                                             operator(/=)
         use c_interface, only: c_callbacks_type
-        use otr_common_mock, only: mock_logger_c, test_logger
+        use otr_common_mock, only: mock_logger_c
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(s_gek_settings_type_c) :: settings_c
         type(s_gek_settings_type) :: settings
@@ -345,13 +413,15 @@ contains
             write(stderr, *) "test_assign_s_gek_f_c failed: Logging function not "// &
                 "associated with value."
         else
-            test_logger = .false.
+            call arm_host_context_c(callbacks%host_context)
             call settings%logger("test", settings%context)
-            if (.not. test_logger) then
+            if (.not. host_context%logger_called) then
                 test_assign_s_gek_f_c = .false.
                 write(stderr, *) "test_assign_s_gek_f_c failed: Called logging "// &
                     "subroutine wrong."
             end if
+            if (.not. host_context_reached("assign_s_gek_f_c")) &
+                test_assign_s_gek_f_c = .false.
         end if
 
         ! check against reference values
@@ -403,14 +473,18 @@ contains
         ! convert to C settings
         settings_c = settings
 
-        ! check that callback function pointers are not associated
+        ! check that no callback function pointers and host contexts are associated
         if (c_associated(settings_c%logger)) then
             test_assign_s_gek_c_f = .false.
             write(stderr, *) "test_assign_s_gek_c_f failed: Logger function associated."
         end if
+        if (c_associated(settings_c%context)) then
+            write(stderr, *) "test_assign_s_gek_c_f failed: Host context associated."
+            test_assign_s_gek_c_f = .false.
+        end if
 
         ! check against reference values
-        if (settings /= ref_s_gek_settings) then
+        if (settings_c /= ref_s_gek_settings) then
             write(stderr, *) "test_assign_s_gek_c_f failed: Settings not converted "// &
                 "correctly."
             test_assign_s_gek_c_f = .false.

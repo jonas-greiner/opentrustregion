@@ -6,6 +6,6 @@
 
 from .python_interface import (
     SGEKSettings,
-    update_orbs_s_gek_factory,
+    s_gek_factory,
     update_orbs_s_gek_deconstructor,
 )

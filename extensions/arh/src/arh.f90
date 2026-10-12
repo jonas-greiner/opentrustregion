@@ -43,7 +43,7 @@ module otr_arh
 
     abstract interface
         subroutine evaluate_dm_cs_type(dm, energy, fock, v_coulomb, v_exchange, &
-                                       v_nonlinear, error)
+                                       v_nonlinear, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
@@ -51,10 +51,11 @@ module otr_arh
             real(rp), intent(out), optional, target, contiguous :: &
                 fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
         end subroutine evaluate_dm_cs_type
 
         subroutine evaluate_dm_os_type(dm, energy, fock, v_coulomb, v_exchange, &
-                                       v_nonlinear, error)
+                                       v_nonlinear, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
@@ -63,6 +64,7 @@ module otr_arh
                 fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), &
                 v_nonlinear(:, :, :)
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
         end subroutine evaluate_dm_os_type
     end interface
 
@@ -642,11 +644,13 @@ contains
             call arh_object%evaluate_dm_cs( &
                 rot_dm_ao(:, :, 1), energy, v_coulomb=v_coulomb_ao(:, :, 1), &
                 v_exchange=v_exchange_ao(:, :, 1), &
-                v_nonlinear=v_nonlinear_ao(:, :, 1), error=error)
+                v_nonlinear=v_nonlinear_ao(:, :, 1), error=error, &
+                context=arh_object%settings%context)
         else
             call arh_object%evaluate_dm_os(rot_dm_ao, energy, v_coulomb=v_coulomb_ao, &
                                            v_exchange=v_exchange_ao, &
-                                           v_nonlinear=v_nonlinear_ao, error=error)
+                                           v_nonlinear=v_nonlinear_ao, error=error, &
+                                           context=arh_object%settings%context)
         end if
         if (error /= 0) return
 
@@ -728,11 +732,12 @@ contains
                 call arh_object%evaluate_dm_cs( &
                     arh_object%orbitals%dm_ao(:, :, 1), arh_object%orbitals%energy, &
                     fock_ao(:, :, 1), v_coulomb_ao(:, :, 1), v_exchange_ao(:, :, 1), &
-                    v_nonlinear_ao(:, :, 1), error)
+                    v_nonlinear_ao(:, :, 1), error, arh_object%settings%context)
             else
                 call arh_object%evaluate_dm_os( &
                     arh_object%orbitals%dm_ao, arh_object%orbitals%energy, fock_ao, &
-                    v_coulomb_ao, v_exchange_ao, v_nonlinear_ao, error)
+                    v_coulomb_ao, v_exchange_ao, v_nonlinear_ao, error, &
+                    arh_object%settings%context)
             end if
             if (error /= 0) then
                 deallocate(fock_ao, v_coulomb_ao, v_exchange_ao, v_nonlinear_ao)

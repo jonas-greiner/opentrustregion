@@ -79,39 +79,53 @@ contains
 
     end subroutine record_mock_call
 
-    subroutine mock_get_response_cs(dm, response, error)
+    subroutine mock_get_response_cs(dm, response, error, context)
         !
         ! this subroutine is a mock response function for the closed-shell case
         !
+        use test_reference, only: check_host_context
+
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out), target, contiguous :: response(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
 
         error = 0
         response = mock_response_factor * dm
 
     end subroutine mock_get_response_cs
 
-    subroutine mock_get_response_os(dm, response, error)
+    subroutine mock_get_response_os(dm, response, error, context)
         !
         ! this subroutine is a mock response function for the open-shell case
         !
+        use test_reference, only: check_host_context
+
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
 
         error = 0
         response = mock_response_factor * dm
 
     end subroutine mock_get_response_os
 
-    subroutine mock_evaluate_dm_cs(dm, energy, fock, get_response_funptr, error)
+    subroutine mock_evaluate_dm_cs(dm, energy, fock, get_response_funptr, error, &
+                                   context)
         !
         ! this subroutine is a mock density matrix evaluating function for the
         ! closed-shell case, which returns a multiple of the density matrix that
         ! changes between calls so that non-vanishing differences are produced
         !
         use otr_common, only: get_response_cs_type
+        use test_reference, only: check_host_context
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
@@ -119,6 +133,10 @@ contains
         procedure(get_response_cs_type), intent(out), optional, pointer :: &
             get_response_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
                               merge(2_ip, 0_ip, present(get_response_funptr)))
@@ -131,13 +149,15 @@ contains
 
     end subroutine mock_evaluate_dm_cs
 
-    subroutine mock_evaluate_dm_os(dm, energy, fock, get_response_funptr, error)
+    subroutine mock_evaluate_dm_os(dm, energy, fock, get_response_funptr, error, &
+                                   context)
         !
         ! this subroutine is a mock density matrix evaluating function for the
         ! open-shell case, which returns a multiple of the density matrix that changes
         ! between calls so that non-vanishing differences are produced
         !
         use otr_common, only: get_response_os_type
+        use test_reference, only: check_host_context
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
@@ -145,6 +165,10 @@ contains
         procedure(get_response_os_type), intent(out), optional, pointer :: &
             get_response_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
                               merge(2_ip, 0_ip, present(get_response_funptr)))
@@ -157,7 +181,8 @@ contains
 
     end subroutine mock_evaluate_dm_os
 
-    subroutine mock_evaluate_dm_failing_cs(dm, energy, fock, get_response_funptr, error)
+    subroutine mock_evaluate_dm_failing_cs(dm, energy, fock, get_response_funptr, &
+                                           error, context)
         !
         ! this subroutine is a mock density matrix evaluating function for the
         ! closed-shell case, which fails
@@ -170,6 +195,7 @@ contains
         procedure(get_response_cs_type), intent(out), optional, pointer :: &
             get_response_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         error = 1
         energy = sum(dm)
@@ -178,7 +204,8 @@ contains
 
     end subroutine mock_evaluate_dm_failing_cs
 
-    subroutine mock_evaluate_dm_failing_os(dm, energy, fock, get_response_funptr, error)
+    subroutine mock_evaluate_dm_failing_os(dm, energy, fock, get_response_funptr, &
+                                           error, context)
         !
         ! this subroutine is a mock density matrix evaluating function for the
         ! open-shell case, which fails
@@ -191,6 +218,7 @@ contains
         procedure(get_response_os_type), intent(out), optional, pointer :: &
             get_response_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         error = 1
         energy = sum(dm)
@@ -445,6 +473,7 @@ contains
         !
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, shell_names
+        use test_reference, only: arm_host_context, host_context_reached
 
         type(mock_orbital_basis_type) :: basis
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
@@ -457,6 +486,7 @@ contains
 
         ! set up the mock orbital basis and a density matrix for every particle channel
         call setup_settings(basis%settings)
+        call arm_host_context(basis%settings)
         basis%n_ao = n_ao
         do i = 1, n_particle
             dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
@@ -523,6 +553,10 @@ contains
                 test_refresh_response_orbital_basis = .false.
             end if
         end do
+
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("refresh_response_orbital_basis")) &
+            test_refresh_response_orbital_basis = .false.
 
         ! call routine with a failing density matrix evaluating function and determine
         ! if the error is passed on and the response stays marked stale

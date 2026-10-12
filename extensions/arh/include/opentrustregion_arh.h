@@ -23,7 +23,8 @@ extern "C" {
  * potential contributions */
 typedef c_int arh_evaluate_dm_fn(const c_real *dm_ao_c, c_real *energy_c,
                                  c_real *fock_c, c_real *v_coulomb_c,
-                                 c_real *v_exchange_c, c_real *v_nonlinear_c);
+                                 c_real *v_exchange_c, c_real *v_nonlinear_c,
+                                 void *context);
 typedef arh_evaluate_dm_fn *arh_evaluate_dm_fp;
 
 /* ------------------------------------------------------------------
@@ -34,6 +35,7 @@ typedef struct {
   c_bool initialized;
   c_int verbose;
   char arh_type[OTR_KW_LEN + 1];
+  void *context;
 } arh_settings_type;
 
 // Fortran-callable init routine for ARH settings

@@ -7,9 +7,8 @@
 module otr_s_gek_c_interface_mock
 
     use opentrustregion, only: stderr
-    use c_interface, only: c_rp, c_ip
-    use otr_s_gek_c_interface, only: update_orbs_s_gek_factory_c_wrapper, &
-                                     init_s_gek_settings_c, &
+    use c_interface, only: c_ip
+    use otr_s_gek_c_interface, only: s_gek_factory_c_wrapper, init_s_gek_settings_c, &
                                      update_orbs_s_gek_deconstructor_c_wrapper
     use otr_s_gek_test_reference, only: ref_s_gek_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
@@ -18,13 +17,12 @@ module otr_s_gek_c_interface_mock
     implicit none
 
     logical(c_bool), bind(C) :: &
-        test_update_orbs_s_gek_factory_interface = .true._c_bool, &
+        test_s_gek_factory_interface = .true._c_bool, &
         test_update_orbs_s_gek_deconstructor_interface = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_s_gek_factory_c_wrapper), pointer :: &
-        mock_update_orbs_s_gek_factory_c_wrapper_ptr => &
-        mock_update_orbs_s_gek_factory_c_wrapper
+    procedure(s_gek_factory_c_wrapper), pointer :: mock_s_gek_factory_c_wrapper_ptr => &
+        mock_s_gek_factory_c_wrapper
     procedure(init_s_gek_settings_c), pointer :: mock_init_s_gek_settings_c_ptr => &
         mock_init_s_gek_settings_c
     procedure(update_orbs_s_gek_deconstructor_c_wrapper), pointer :: &
@@ -33,18 +31,17 @@ module otr_s_gek_c_interface_mock
 
 contains
 
-    function mock_update_orbs_s_gek_factory_c_wrapper( &
+    function mock_s_gek_factory_c_wrapper( &
         update_orbs_orig_c_funptr, change_reference_c_funptr, n_param_c, settings_c, &
-        update_orbs_s_gek_c_funptr) result(error_c) &
-        bind(C, name="mock_update_orbs_s_gek_factory")
+        update_orbs_s_gek_c_funptr) result(error_c) bind(C, name="mock_s_gek_factory")
         !
         ! this subroutine is a mock routine for the S-GEK orbital updating factory C
         ! wrapper subroutine
         !
         use, intrinsic :: iso_c_binding, only: c_null_ptr
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
-        use c_interface, only: update_orbs_c_type, hess_x_c_type, logger_c_type
-        use test_reference, only: check_update_orbs_c_funptr
+        use c_interface, only: logger_c_type
+        use test_reference, only: check_update_orbs_c_funptr, n_param
         use otr_s_gek_test_reference, only: test_change_reference_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_update_orbs
 
@@ -59,23 +56,22 @@ contains
         character(len=:), allocatable, target :: message
 
         ! test passed orbital update function
-        test_update_orbs_s_gek_factory_interface = &
-            test_update_orbs_s_gek_factory_interface .and. check_update_orbs_c_funptr( &
-                update_orbs_orig_c_funptr, "update_orbs_s_gek_factory_py_interface", &
-                " by given orbital updating function", c_null_ptr)
+        if (.not. check_update_orbs_c_funptr( &
+            update_orbs_orig_c_funptr, "s_gek_factory_py_interface", &
+            " by given orbital updating function", c_null_ptr)) &
+            test_s_gek_factory_interface = .false.
 
         ! test passed change reference function
-        test_update_orbs_s_gek_factory_interface = &
-            test_update_orbs_s_gek_factory_interface .and. &
-            test_change_reference_c_funptr(change_reference_c_funptr, &
-                                           "update_orbs_s_gek_factory_py_interface", &
-                                           " by given change reference function")
+        if (.not. test_change_reference_c_funptr( &
+            change_reference_c_funptr, "s_gek_factory_py_interface", &
+            " by given change reference function", c_null_ptr)) &
+            test_s_gek_factory_interface = .false.
 
         ! check if passed number of parameters is correct
-        if (n_param_c /= 3) then
-            write(stderr, *) "test_update_orbs_s_gek_factory_interface failed: "// &
-                "Passed number of parameters wrong."
-            test_update_orbs_s_gek_factory_interface = .false.
+        if (n_param_c /= n_param) then
+            write(stderr, *) "test_s_gek_factory_py_interface failed: Passed "// &
+                "number of parameters wrong."
+            test_s_gek_factory_interface = .false.
         end if
 
         ! get Fortran pointer to passed logging function and call it
@@ -85,9 +81,9 @@ contains
 
         ! check optional settings against reference values
         if (settings_c /= ref_s_gek_settings) then
-            write(stderr, *) "test_update_orbs_s_gek_factory_py_interface failed: "// &
-                "Passed settings associated with wrong values."
-            test_update_orbs_s_gek_factory_interface = .false.
+            write(stderr, *) "test_s_gek_factory_py_interface failed: Passed "// &
+                "settings associated with wrong values."
+            test_s_gek_factory_interface = .false.
         end if
 
         ! set function pointer to mock S-GEK orbital updating function
@@ -96,7 +92,7 @@ contains
         ! set return arguments
         error_c = 0
 
-    end function mock_update_orbs_s_gek_factory_c_wrapper
+    end function mock_s_gek_factory_c_wrapper
 
     subroutine mock_init_s_gek_settings_c(settings) &
         bind(C, name="mock_init_s_gek_settings")

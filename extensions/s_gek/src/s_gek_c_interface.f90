@@ -6,43 +6,49 @@
 
 module otr_s_gek_c_interface
 
-    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
+    use opentrustregion, only: ip, rp, update_orbs_type, hess_x_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
                            hess_x_c_type
-    use otr_common_c_interface, only: n_param
     use otr_s_gek, only: &
-        change_reference_type, &
-        standard_update_orbs_s_gek_factory => update_orbs_s_gek_factory, &
+        change_reference_type, standard_s_gek_factory => s_gek_factory, &
         standard_update_orbs_s_gek_deconstructor => update_orbs_s_gek_deconstructor
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_char, c_funptr, c_funloc, &
-                                           c_f_procpointer, c_associated, c_null_funptr
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
+                                           c_f_procpointer, c_associated, &
+                                           c_null_funptr, c_null_ptr
 
     implicit none
-
-    ! callback bundle of the logging function of the S-GEK settings, held here since
-    ! the settings outlive the factory call that sets it
-    type(c_callbacks_type), target :: logger_s_gek_callbacks
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
         function change_reference_c_type(new_ref_c, n_points_c, kappa_list_c, &
-                                         local_grad_list_c, grad_list_c) &
+                                         local_grad_list_c, grad_list_c, context_c) &
             result(error_c) bind(C)
-            import :: c_rp, c_ip
+            import :: c_rp, c_ip, c_ptr
 
             real(c_rp), intent(in), target :: new_ref_c(*)
             integer(c_ip), intent(in), value :: n_points_c
             real(c_rp), intent(inout), target :: kappa_list_c(*), &
                                                  local_grad_list_c(*), grad_list_c(*)
+            type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
         end function change_reference_c_type
     end interface
 
+    ! bundle of the C callback functions of S-GEK, which extends that of the core by
+    ! the change of reference function
+    type, extends(c_callbacks_type) :: s_gek_c_callbacks_type
+        procedure(change_reference_c_type), pointer, nopass :: change_reference => &
+            null()
+    end type
+
+    ! callback bundle of the change of reference function, and the logging function and
+    ! host context of the S-GEK settings, held here since the settings outlive the
+    ! factory call that sets it
+    type(s_gek_c_callbacks_type), target :: s_gek_callbacks
+
     ! define procedure pointer which will point to the Fortran procedures
     procedure(update_orbs_c_type), pointer :: &
         update_orbs_orig_s_gek_before_wrapping => null()
-    procedure(change_reference_c_type), pointer :: change_reference_before_wrapping => &
-        null()
     procedure(update_orbs_type), pointer :: update_orbs_s_gek_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_s_gek_before_wrapping => null()
 
@@ -51,10 +57,11 @@ module otr_s_gek_c_interface
         type(c_funptr) :: logger
         logical(c_bool) :: initialized, use_subspace
         integer(c_ip) :: verbose, max_points
+        type(c_ptr) :: context
     end type
 
-    procedure(standard_update_orbs_s_gek_factory), pointer :: &
-        update_orbs_s_gek_factory => standard_update_orbs_s_gek_factory
+    procedure(standard_s_gek_factory), pointer :: s_gek_factory => &
+        standard_s_gek_factory
     procedure(standard_update_orbs_s_gek_deconstructor), pointer :: &
         update_orbs_s_gek_deconstructor => standard_update_orbs_s_gek_deconstructor
 
@@ -74,16 +81,16 @@ module otr_s_gek_c_interface
 
 contains
 
-    function update_orbs_s_gek_factory_c_wrapper( &
+    function s_gek_factory_c_wrapper( &
         update_orbs_orig_c_funptr, change_reference_c_funptr, n_param_c, settings_c, &
-        update_orbs_s_gek_c_funptr) result(error_c) &
-        bind(C, name="update_orbs_s_gek_factory")
+        update_orbs_s_gek_c_funptr) result(error_c) bind(C, name="s_gek_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C
         ! variables to Fortran variables
         !
         use otr_s_gek, only: s_gek_settings_type
         use c_interface, only: update_orbs_f_wrapper
+        use otr_common_c_interface, only: n_param
 
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
                                              change_reference_c_funptr
@@ -101,8 +108,6 @@ contains
         ! associate the input C function pointers to Fortran procedure pointers
         call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
                              fptr=update_orbs_orig_s_gek_before_wrapping)
-        call c_f_procpointer(cptr=change_reference_c_funptr, &
-                             fptr=change_reference_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         ! the orbital update which wraps the original one calls it through the C
@@ -115,31 +120,37 @@ contains
         ! assumed size arrays passed from C to Fortran
         n_param = int(n_param_c, kind=ip)
 
-        ! convert settings and hand the logging function to its wrapper in a bundle,
-        ! which is held by the module since the settings outlive this call
+        ! convert settings and hand the change of reference function and the logging
+        ! function with the host context of initialized settings to their wrappers in
+        ! the bundle held by the module, which the settings point to
         settings = settings_c
-        logger_s_gek_callbacks = c_callbacks_type()
-        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
-            call c_f_procpointer(cptr=settings_c%logger, &
-                                 fptr=logger_s_gek_callbacks%logger)
-        settings%context => logger_s_gek_callbacks
+        s_gek_callbacks = s_gek_c_callbacks_type()
+        call c_f_procpointer(cptr=change_reference_c_funptr, &
+                             fptr=s_gek_callbacks%change_reference)
+        if (settings_c%initialized) then
+            if (c_associated(settings_c%logger)) call c_f_procpointer( &
+                cptr=settings_c%logger, fptr=s_gek_callbacks%logger)
+            s_gek_callbacks%host_context = settings_c%context
+        end if
+        settings%context => s_gek_callbacks
 
-        ! associate the global procedure pointer to the update_orbs function
-        call update_orbs_s_gek_factory(update_orbs_funptr, change_reference_funptr, &
-                                       n_param, error, settings, &
-                                       update_orbs_s_gek_funptr)
+        ! call factory function
+        call s_gek_factory(update_orbs_funptr, change_reference_funptr, n_param, &
+                           error, settings, update_orbs_s_gek_funptr)
+
+        ! associate the global procedure pointer to the Fortran function pointer
         update_orbs_s_gek_before_wrapping => update_orbs_s_gek_funptr
 
-        ! get a C function pointer to the update_orbs wrapper function
+        ! get a C function pointer to the C wrapper function
         update_orbs_s_gek_c_funptr = c_funloc(update_orbs_s_gek_c_wrapper)
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
 
-    end function update_orbs_s_gek_factory_c_wrapper
+    end function s_gek_factory_c_wrapper
 
     subroutine change_reference_f_wrapper(new_ref, n_points, kappa_list, &
-                                          local_grad_list, grad_list, error)
+                                          local_grad_list, grad_list, error, context)
         !
         ! this subroutine wraps the change reference subroutine to convert Fortran
         ! variables to C variables
@@ -149,6 +160,7 @@ contains
         real(rp), intent(inout), target :: kappa_list(:, :), local_grad_list(:, :), &
                                            grad_list(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(c_rp), pointer :: new_ref_c(:), kappa_list_c(:, :), &
                                local_grad_list_c(:, :), grad_list_c(:, :)
@@ -175,8 +187,9 @@ contains
         end if
 
         ! call change reference C function
-        error_c = change_reference_before_wrapping( &
-            new_ref_c, n_points_c, kappa_list_c, local_grad_list_c, grad_list_c)
+        error_c = s_gek_callbacks%change_reference( &
+            new_ref_c, n_points_c, kappa_list_c, local_grad_list_c, grad_list_c, &
+            s_gek_callbacks%host_context)
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)
@@ -258,7 +271,7 @@ contains
         ! this subroutine converts S-GEK settings from C to Fortran
         !
         use otr_s_gek, only: s_gek_settings_type
-        use c_interface, only: character_from_c, logger_f_wrapper
+        use c_interface, only: logger_f_wrapper
 
         type(s_gek_settings_type), intent(out) :: settings
         type(s_gek_settings_type_c), intent(in) :: settings_c
@@ -289,7 +302,6 @@ contains
         ! this subroutine converts S-GEK settings from Fortran to C
         !
         use otr_s_gek, only: s_gek_settings_type
-        use c_interface, only: character_to_c
 
         type(s_gek_settings_type_c), intent(out) :: settings_c
         type(s_gek_settings_type), intent(in) :: settings
@@ -304,6 +316,9 @@ contains
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)
             settings_c%max_points = int(settings%max_points, kind=c_ip)
+
+            ! the host context cannot be converted
+            settings_c%context = c_null_ptr
 
             ! set settings to initialized
             settings_c%initialized = .true._c_bool

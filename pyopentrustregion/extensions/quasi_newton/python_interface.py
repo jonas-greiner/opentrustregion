@@ -6,9 +6,8 @@
 
 from __future__ import annotations
 
-import sys
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, c_char, Structure
+from ctypes import POINTER, byref, c_bool, c_void_p, c_char, Structure
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
@@ -16,6 +15,8 @@ from pyopentrustregion.python_interface import (
     c_int,
     c_real,
     kw_len,
+    callback_type,
+    CallbackInterface,
     update_orbs_interface_type,
     logger_interface_type,
     UpdateOrbsInterface,
@@ -24,17 +25,23 @@ from pyopentrustregion.python_interface import (
     Settings,
     auto_bind_fields,
 )
-from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
+from pyopentrustregion.extensions.common.python_interface import (
+    UpdateOrbsPyInterface,
+    check_callback_arguments,
+)
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any, Dict
+
+    TransportType = Callable[[np.ndarray, np.ndarray], None]
+    InitHessType = Callable[[np.ndarray], None]
 
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-transport_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
-init_hess_interface_type = CFUNCTYPE(c_int, POINTER(c_real))
+transport_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real))
+init_hess_interface_type = callback_type(c_int, POINTER(c_real))
 
 
 # define classes corresponding to C structs for settings
@@ -45,6 +52,7 @@ class QNSettingsC(Structure):
         ("verbose", c_int),
         ("max_points", c_int),
         ("hess_update_scheme", c_char * (kw_len + 1)),
+        ("context", c_void_p),
     ]
 
 
@@ -69,17 +77,17 @@ auto_bind_fields(QNSettings)
 
 # define interface factories
 @dataclass
-class TransportInterface:
+class TransportInterface(CallbackInterface):
     """
     this class provides the interface to transport a tangent vector along a
     geodesic and to write it to the memory provided through pointers
     """
 
-    transport: Callable[[np.ndarray, np.ndarray], None]
+    transport: TransportType
     n_param: int
     exception: Dict[str, Exception]
 
-    def __call__(self, geodesic_ptr, tangent_vector_ptr) -> int:
+    def call(self, geodesic_ptr, tangent_vector_ptr) -> int:
         # convert matrix pointers to numpy arrays
         geodesic = np.ctypeslib.as_array(geodesic_ptr, shape=(self.n_param,))
         tangent_vector = np.ctypeslib.as_array(
@@ -97,17 +105,17 @@ class TransportInterface:
 
 
 @dataclass
-class InitHessInterface:
+class InitHessInterface(CallbackInterface):
     """
     this class provides the interface to initialize the Hessian and to write it
     to the memory provided through pointers
     """
 
-    init_hess: Callable[[np.ndarray], None]
+    init_hess: InitHessType
     n_param: int
     exception: Dict[str, Exception]
 
-    def __call__(self, vector_ptr) -> int:
+    def call(self, vector_ptr) -> int:
         # convert matrix pointers to numpy arrays
         vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
 
@@ -121,13 +129,13 @@ class InitHessInterface:
         return 0
 
 
-def update_orbs_qn_factory(
+def qn_factory(
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
-    transport: Callable[[np.ndarray, np.ndarray], None],
-    init_hess: Callable[[np.ndarray], None],
+    transport: TransportType,
+    init_hess: InitHessType,
     n_param: int,
     settings: QNSettings,
 ) -> Callable[
@@ -139,15 +147,18 @@ def update_orbs_qn_factory(
     # shares one, and handed to solver through the returned object
     exception = adopt_collector(update_orbs)
 
-    # define interfaces for callback functions
+    # define interfaces for callback functions, whose arguments the C interface cannot
+    # check
+    check_callback_arguments(transport, "transport", ("geodesic", "tangent_vector"))
+    check_callback_arguments(init_hess, "init_hess", ("vector",))
     update_orbs_interface = update_orbs_interface_type(
         UpdateOrbsInterface(update_orbs, n_param, exception)
     )
     transport_interface = transport_interface_type(
-        TransportInterface(transport=transport, n_param=n_param, exception=exception)
+        TransportInterface(transport, n_param, exception)
     )
     init_hess_interface = init_hess_interface_type(
-        InitHessInterface(init_hess=init_hess, n_param=n_param, exception=exception)
+        InitHessInterface(init_hess, n_param, exception)
     )
 
     # set interfaces for optional callback functions, these need to be set here since
@@ -161,15 +172,15 @@ def update_orbs_qn_factory(
         exception,
     )
 
-    if not hasattr(lib, "update_orbs_qn_factory"):
+    if not hasattr(lib, "qn_factory"):
         raise RuntimeError(
             "Please reinstall the package with: "
             "CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install ."
         )
 
     # define result and argument types
-    lib.update_orbs_qn_factory.restype = c_int
-    lib.update_orbs_qn_factory.argtypes = [
+    lib.qn_factory.restype = c_int
+    lib.qn_factory.argtypes = [
         update_orbs_interface_type,
         transport_interface_type,
         init_hess_interface_type,
@@ -180,7 +191,7 @@ def update_orbs_qn_factory(
 
     # call Fortran function
     update_orbs_qn_funptr = update_orbs_interface_type()
-    error = lib.update_orbs_qn_factory(
+    error = lib.qn_factory(
         update_orbs_interface,
         transport_interface,
         init_hess_interface,
@@ -192,13 +203,11 @@ def update_orbs_qn_factory(
     if error:
         if "exc" in exception:
             raise RuntimeError(
-                "OpenTrustRegion quasi-Newton update factory produced error (code "
-                f"{error})."
+                f"OpenTrustRegion quasi-Newton factory produced error (code {error})."
             ) from exception["exc"]
         else:
             raise RuntimeError(
-                "OpenTrustRegion quasi-Newton update factory produced error (code "
-                f"{error})."
+                f"OpenTrustRegion quasi-Newton factory produced error (code {error})."
             )
 
     return UpdateOrbsPyInterface(

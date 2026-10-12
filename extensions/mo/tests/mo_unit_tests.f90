@@ -1554,7 +1554,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! MO basis
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use otr_mo, only: obj_func_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo
@@ -1586,6 +1586,7 @@ contains
             call setup_mo_object(mo_coeff(:, :, :n_particle), ao_overlap, &
                                  n_occ(:n_particle))
             call setup_settings(mo_object%settings)
+            call arm_host_context(mo_object%settings)
             if (n_particle == 1) then
                 mo_object%evaluate_dm_cs => mock_evaluate_dm_cs
             else
@@ -1667,6 +1668,10 @@ contains
                 test_obj_func_mo_callback = .false.
             end if
 
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("obj_func_mo_callback")) &
+                test_obj_func_mo_callback = .false.
+
             ! deallocate MO object
             deallocate(mo_object, kappa)
         end do
@@ -1679,7 +1684,7 @@ contains
         ! Hessian diagonal evaluation in the MO basis, for the closed-shell and the
         ! open-shell case
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use otr_mo, only: update_orbs_mo_callback, mo_object, hess_x_mo_callback_ptr
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: setup_settings
@@ -1714,6 +1719,7 @@ contains
             call setup_mo_object(mo_coeff(:, :, :n_particle), ao_overlap, &
                                  n_occ(:n_particle))
             call setup_settings(mo_object%settings)
+            call arm_host_context(mo_object%settings)
             allocate(kappa(mo_object%n_param), grad(mo_object%n_param), &
                      h_diag(mo_object%n_param))
             if (n_particle == 1) then
@@ -1901,6 +1907,10 @@ contains
                 test_update_orbs_mo_callback = .false.
             end if
 
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("update_orbs_mo_callback")) &
+                test_update_orbs_mo_callback = .false.
+
             ! deallocate MO object and case arrays
             deallocate(mo_object, kappa, grad, h_diag)
         end do
@@ -1947,7 +1957,7 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the MO basis
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use otr_mo, only: hess_x_mo_callback, mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
@@ -1990,6 +2000,8 @@ contains
                                  case_n_occ(:n_particle, i_case), &
                                  case_irreps(:, :n_particle, i_case))
             call setup_settings(mo_object%settings)
+            call arm_host_context(mo_object%settings)
+            call arm_host_context(mo_object%settings)
             call setup_random_mo_channels(case_n_occ(:n_particle, i_case), n_mo)
             if (n_particle == 1) then
                 mo_object%get_response_cs => mock_get_response_cs
@@ -2016,6 +2028,11 @@ contains
                     "Hessian linear transformation for the "//case_name//" case."
                 test_hess_x_mo_callback = .false.
             end if
+
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("hess_x_mo_callback")) &
+                test_hess_x_mo_callback = .false.
+
             deallocate(mo_object, x, hess_x)
         end do
 
@@ -2062,6 +2079,10 @@ contains
                 "linear transformation with a refreshed response."
             test_hess_x_mo_callback = .false.
         end if
+
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("hess_x_mo_callback")) &
+            test_hess_x_mo_callback = .false.
 
         ! deallocate MO object
         deallocate(mo_object, x, hess_x)
@@ -2141,7 +2162,7 @@ contains
 
         end function model_energy
 
-        subroutine model_response_cs(dm, response_out, error_out)
+        subroutine model_response_cs(dm, response_out, error_out, context_out)
             !
             ! this subroutine is the response function of the closed-shell quadratic
             ! model energy
@@ -2149,13 +2170,14 @@ contains
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out), target, contiguous :: response_out(:, :)
             integer(ip), intent(out) :: error_out
+            class(*), intent(in), pointer :: context_out
 
             error_out = 0
             response_out = model_scale * dm
 
         end subroutine model_response_cs
 
-        subroutine model_response_os(dm, response_out, error_out)
+        subroutine model_response_os(dm, response_out, error_out, context_out)
             !
             ! this subroutine is the response function of the open-shell quadratic
             ! model energy
@@ -2163,13 +2185,14 @@ contains
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out), target :: response_out(:, :, :)
             integer(ip), intent(out) :: error_out
+            class(*), intent(in), pointer :: context_out
 
             error_out = 0
             response_out = model_scale * dm
 
         end subroutine model_response_os
 
-        subroutine mock_get_stale_response_os(dm, response_out, error_out)
+        subroutine mock_get_stale_response_os(dm, response_out, error_out, context_out)
             !
             ! this subroutine is a mock response function for the open-shell case which
             ! belongs to outdated orbitals and returns a vanishing response
@@ -2177,6 +2200,7 @@ contains
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out), target :: response_out(:, :, :)
             integer(ip), intent(out) :: error_out
+            class(*), intent(in), pointer :: context_out
 
             error_out = 0
             response_out = 0.0_rp * dm

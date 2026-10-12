@@ -571,7 +571,7 @@ contains
         ! returns in the context
         hess_x_c_funptr = c_null_funptr
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%update_orbs(kappa_c, func_c, grad_c, h_diag_c, &
                                             hess_x_c_funptr, callbacks%host_context)
@@ -618,7 +618,7 @@ contains
 
         ! call C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             call hess_x_f_wrapper_impl(callbacks%hess_x, x, hess_x, error, &
                                        callbacks%host_context)
@@ -690,7 +690,7 @@ contains
         ! call obj_func C function
         obj_func_c = 0.0_c_rp
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%obj_func(kappa_c, obj_func_c, callbacks%host_context)
         class default
@@ -733,7 +733,7 @@ contains
 
         ! call precond C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%precond(residual_c, mu_c, precond_residual_c, &
                                         callbacks%host_context)
@@ -776,7 +776,7 @@ contains
 
         ! call precond_pd C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%precond_pd(residual_c, precond_residual_c, &
                                            callbacks%host_context)
@@ -815,7 +815,7 @@ contains
 
         ! call project C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%project(vector_c, callbacks%host_context)
         class default
@@ -845,7 +845,7 @@ contains
         ! call conv_check C function
         converged_c = .false._c_bool
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%conv_check(converged_c, callbacks%host_context)
         class default
@@ -870,7 +870,7 @@ contains
 
         ! call C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             call hess_x_f_wrapper_impl(callbacks%stability_hess_x, x, hess_x, error, &
                                        callbacks%host_context)
@@ -892,7 +892,7 @@ contains
 
         ! call C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             call hess_x_f_wrapper_impl(callbacks%approx_hess_x, x, hess_x, error, &
                                        callbacks%host_context)
@@ -923,7 +923,7 @@ contains
 
         ! call get_extra_trial_vectors C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%get_extra_trial_vectors(trial_vectors_c, size( &
                 trial_vectors, 2, kind=c_ip), callbacks%host_context)
@@ -968,7 +968,7 @@ contains
         ! call conv_check C function
         converged_c = .false._c_bool
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             error_c = callbacks%conv_check_stability( &
                 residual_c, eigval_c, converged_c, callbacks%host_context)
@@ -1005,7 +1005,7 @@ contains
 
         ! call logging C function
         select type (callbacks => context)
-        type is (c_callbacks_type)
+        class is (c_callbacks_type)
             call copy_state_to_c(callbacks)
             call callbacks%logger(message_c, callbacks%host_context)
         end select

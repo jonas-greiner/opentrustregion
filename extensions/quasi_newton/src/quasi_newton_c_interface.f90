@@ -9,45 +9,53 @@ module otr_qn_c_interface
     use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
                            hess_x_c_type
-    use otr_common_c_interface, only: n_param
     use otr_qn, only: &
-        transport_type, init_hess_type, &
-        standard_update_orbs_qn_factory => update_orbs_qn_factory, &
+        transport_type, init_hess_type, standard_qn_factory => qn_factory, &
         standard_update_orbs_qn_deconstructor => update_orbs_qn_deconstructor
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_char, c_funptr, c_funloc, &
-                                           c_f_procpointer, c_associated, c_null_funptr
+                                           c_f_procpointer, c_associated, &
+                                           c_null_funptr, c_null_ptr
 
     implicit none
 
-    ! callback bundle of the logging function of the QN settings, held here since
-    ! the settings outlive the factory call that sets it
-    type(c_callbacks_type), target :: logger_qn_callbacks
-
     ! C-interoperable interfaces for the callback functions
     abstract interface
-        function transport_c_type(geodesic_c, tangent_vector_c) result(error_c) bind(C)
-            import :: c_rp, c_ip
+        function transport_c_type(geodesic_c, tangent_vector_c, context_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip, c_ptr
 
             real(c_rp), intent(in), target :: geodesic_c(*)
             real(c_rp), intent(inout), target :: tangent_vector_c(*)
+            type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
         end function transport_c_type
     end interface
 
     abstract interface
-        function init_hess_c_type(vector_c) result(error_c) bind(C)
-            import :: c_rp, c_ip
+        function init_hess_c_type(vector_c, context_c) result(error_c) bind(C)
+            import :: c_rp, c_ip, c_ptr
 
             real(c_rp), intent(inout), target :: vector_c(*)
+            type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
         end function init_hess_c_type
     end interface
 
+    ! bundle of the C callback functions of quasi-Newton, which extends that of the
+    ! core by the transport and initial Hessian functions
+    type, extends(c_callbacks_type) :: qn_c_callbacks_type
+        procedure(transport_c_type), pointer, nopass :: transport => null()
+        procedure(init_hess_c_type), pointer, nopass :: init_hess => null()
+    end type
+
+    ! callback bundle of the transport and initial Hessian functions, and the logging
+    ! function and host context of the quasi-Newton settings, held here since the
+    ! settings outlive the factory call that sets it
+    type(qn_c_callbacks_type), target :: qn_callbacks
+
     ! define procedure pointer which will point to the Fortran procedures
     procedure(update_orbs_c_type), pointer :: update_orbs_orig_qn_before_wrapping => &
         null()
-    procedure(transport_c_type), pointer :: transport_before_wrapping => null()
-    procedure(init_hess_c_type), pointer :: init_hess_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_qn_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_qn_before_wrapping => null()
 
@@ -57,10 +65,10 @@ module otr_qn_c_interface
         logical(c_bool) :: initialized
         integer(c_ip) :: verbose, max_points
         character(kind=c_char) :: hess_update_scheme(kw_len + 1)
+        type(c_ptr) :: context
     end type
 
-    procedure(standard_update_orbs_qn_factory), pointer :: update_orbs_qn_factory => &
-        standard_update_orbs_qn_factory
+    procedure(standard_qn_factory), pointer :: qn_factory => standard_qn_factory
     procedure(standard_update_orbs_qn_deconstructor), pointer :: &
         update_orbs_qn_deconstructor => standard_update_orbs_qn_deconstructor
 
@@ -79,16 +87,16 @@ module otr_qn_c_interface
 
 contains
 
-    function update_orbs_qn_factory_c_wrapper( &
+    function qn_factory_c_wrapper( &
         update_orbs_orig_c_funptr, transport_c_funptr, init_hess_c_funptr, n_param_c, &
-        settings_c, update_orbs_qn_c_funptr) result(error_c) &
-        bind(C, name="update_orbs_qn_factory")
+        settings_c, update_orbs_qn_c_funptr) result(error_c) bind(C, name="qn_factory")
         !
         ! this subroutine wraps the factory function for the subroutine to convert C
         ! variables to Fortran variables
         !
         use otr_qn, only: qn_settings_type
         use c_interface, only: update_orbs_f_wrapper
+        use otr_common_c_interface, only: n_param
 
         type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
                                              transport_c_funptr, init_hess_c_funptr
@@ -108,8 +116,6 @@ contains
         ! procedure pointer
         call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
                              fptr=update_orbs_orig_qn_before_wrapping)
-        call c_f_procpointer(cptr=transport_c_funptr, fptr=transport_before_wrapping)
-        call c_f_procpointer(cptr=init_hess_c_funptr, fptr=init_hess_before_wrapping)
 
         ! associate procedure pointer to wrapper function
         ! the orbital update which wraps the original one calls it through the C
@@ -123,30 +129,36 @@ contains
         ! assumed size arrays passed from C to Fortran
         n_param = int(n_param_c, kind=ip)
 
-        ! convert settings and hand the logging function to its wrapper in a bundle,
-        ! which is held by the module since the settings outlive this call
+        ! convert settings and hand the transport and initial Hessian functions and the
+        ! logging function with the host context of initialized settings to their
+        ! wrappers in the bundle held by the module, which the settings point to
         settings = settings_c
-        logger_qn_callbacks = c_callbacks_type()
-        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
-            call c_f_procpointer(cptr=settings_c%logger, &
-                                 fptr=logger_qn_callbacks%logger)
-        settings%context => logger_qn_callbacks
+        qn_callbacks = qn_c_callbacks_type()
+        call c_f_procpointer(cptr=transport_c_funptr, fptr=qn_callbacks%transport)
+        call c_f_procpointer(cptr=init_hess_c_funptr, fptr=qn_callbacks%init_hess)
+        if (settings_c%initialized) then
+            if (c_associated(settings_c%logger)) &
+                call c_f_procpointer(cptr=settings_c%logger, fptr=qn_callbacks%logger)
+            qn_callbacks%host_context = settings_c%context
+        end if
+        settings%context => qn_callbacks
 
-        ! associate the global procedure pointer to the update_orbs function
-        call update_orbs_qn_factory(update_orbs_funptr, transport_funptr, &
-                                    init_hess_funptr, n_param, error, settings, &
-                                    update_orbs_qn_funptr)
+        ! call factory function
+        call qn_factory(update_orbs_funptr, transport_funptr, init_hess_funptr, &
+                        n_param, error, settings, update_orbs_qn_funptr)
+
+        ! associate the global procedure pointer to the Fortran function pointer
         update_orbs_qn_before_wrapping => update_orbs_qn_funptr
 
-        ! get a C function pointer to the update_orbs wrapper function
+        ! get a C function pointer to the C wrapper function
         update_orbs_qn_c_funptr = c_funloc(update_orbs_qn_c_wrapper)
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
 
-    end function update_orbs_qn_factory_c_wrapper
+    end function qn_factory_c_wrapper
 
-    subroutine transport_f_wrapper(geodesic, tangent_vector, error)
+    subroutine transport_f_wrapper(geodesic, tangent_vector, error, context)
         !
         ! this subroutine wraps the transport subroutine to convert Fortran variables
         ! to C variables
@@ -154,6 +166,7 @@ contains
         real(rp), intent(in), target :: geodesic(:)
         real(rp), intent(inout), target :: tangent_vector(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(c_rp), pointer :: geodesic_c(:), tangent_vector_c(:)
         integer(c_ip) :: error_c
@@ -170,7 +183,8 @@ contains
         end if
 
         ! call transport C function
-        error_c = transport_before_wrapping(geodesic_c, tangent_vector_c)
+        error_c = qn_callbacks%transport(geodesic_c, tangent_vector_c, &
+                                         qn_callbacks%host_context)
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)
@@ -182,13 +196,14 @@ contains
 
     end subroutine transport_f_wrapper
 
-    subroutine init_hess_f_wrapper(vector, error)
+    subroutine init_hess_f_wrapper(vector, error, context)
         !
         ! this subroutine wraps the initial Hessian subroutine to convert Fortran
         ! variables to C variables
         !
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(c_rp), pointer :: vector_c(:)
         integer(c_ip) :: error_c
@@ -202,7 +217,7 @@ contains
         end if
 
         ! call initial Hessian C function
-        error_c = init_hess_before_wrapping(vector_c)
+        error_c = qn_callbacks%init_hess(vector_c, qn_callbacks%host_context)
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)
@@ -326,6 +341,9 @@ contains
 
             ! convert characters
             settings_c%hess_update_scheme = character_to_c(settings%hess_update_scheme)
+
+            ! the host context cannot be converted
+            settings_c%context = c_null_ptr
 
             ! set settings to initialized
             settings_c%initialized = .true._c_bool

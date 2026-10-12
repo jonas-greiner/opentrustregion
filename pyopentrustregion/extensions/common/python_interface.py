@@ -7,13 +7,15 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, byref, c_void_p, cast
+from ctypes import POINTER, byref, c_void_p, cast
 from dataclasses import dataclass
 from inspect import signature
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     c_int,
     c_real,
+    callback_type,
+    CallbackInterface,
     hess_x_interface_type,
     precond_interface_type,
     precond_pd_interface_type,
@@ -34,8 +36,8 @@ if TYPE_CHECKING:
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant data
-get_response_interface_type = CFUNCTYPE(c_int, POINTER(c_real), POINTER(c_real))
-evaluate_dm_interface_type = CFUNCTYPE(
+get_response_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real))
+evaluate_dm_interface_type = callback_type(
     c_int,
     POINTER(c_real),
     POINTER(c_real),
@@ -46,7 +48,7 @@ evaluate_dm_interface_type = CFUNCTYPE(
 
 # define interface factories
 @dataclass
-class GetResponseInterface:
+class GetResponseInterface(CallbackInterface):
     """
     this class provides the interface to write the response to the memory provided for
     a given density matrix
@@ -58,7 +60,7 @@ class GetResponseInterface:
     closed_shell: bool
     exception: Dict[str, Exception]
 
-    def __call__(self, dm_ao_ptr, response_ptr) -> int:
+    def call(self, dm_ao_ptr, response_ptr) -> int:
         # convert matrix pointers to numpy arrays
         if self.closed_shell:
             dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=2 * (self.n_ao,))
@@ -82,7 +84,7 @@ class GetResponseInterface:
 
 
 @dataclass
-class EvaluateDMInterface:
+class EvaluateDMInterface(CallbackInterface):
     """
     this class provides the interface to the density matrix evaluating function
     """
@@ -94,7 +96,7 @@ class EvaluateDMInterface:
     exception: Dict[str, Exception]
     get_response_funptr: Optional[Any] = None
 
-    def __call__(self, dm_ao_ptr, energy_ptr, fock_ptr, get_response_funptr) -> int:
+    def call(self, dm_ao_ptr, energy_ptr, fock_ptr, get_response_funptr) -> int:
         # convert matrix pointers to numpy arrays
         shape = (
             2 * (self.n_ao,)

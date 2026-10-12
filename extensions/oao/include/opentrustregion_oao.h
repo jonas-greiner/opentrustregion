@@ -21,6 +21,7 @@ typedef struct {
   logger_fp logger;
   c_bool initialized;
   c_int verbose;
+  void *context;
 } oao_settings_type;
 
 // Fortran-callable init routine for OAO settings

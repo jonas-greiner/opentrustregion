@@ -7,9 +7,8 @@
 module otr_qn_c_interface_mock
 
     use opentrustregion, only: stderr
-    use c_interface, only: c_rp, c_ip
-    use otr_qn_c_interface, only: update_orbs_qn_factory_c_wrapper, &
-                                  init_qn_settings_c, &
+    use c_interface, only: c_ip
+    use otr_qn_c_interface, only: qn_factory_c_wrapper, init_qn_settings_c, &
                                   update_orbs_qn_deconstructor_c_wrapper
     use otr_qn_test_reference, only: ref_qn_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
@@ -18,13 +17,12 @@ module otr_qn_c_interface_mock
     implicit none
 
     logical(c_bool), bind(C) :: &
-        test_update_orbs_qn_factory_interface = .true._c_bool, &
+        test_qn_factory_interface = .true._c_bool, &
         test_update_orbs_qn_deconstructor_interface = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_qn_factory_c_wrapper), pointer :: &
-        mock_update_orbs_qn_factory_c_wrapper_ptr => &
-        mock_update_orbs_qn_factory_c_wrapper
+    procedure(qn_factory_c_wrapper), pointer :: mock_qn_factory_c_wrapper_ptr => &
+        mock_qn_factory_c_wrapper
     procedure(init_qn_settings_c), pointer :: mock_init_qn_settings_c_ptr => &
         mock_init_qn_settings_c
     procedure(update_orbs_qn_deconstructor_c_wrapper), pointer :: &
@@ -33,18 +31,18 @@ module otr_qn_c_interface_mock
 
 contains
 
-    function mock_update_orbs_qn_factory_c_wrapper( &
-        update_orbs_orig_c_funptr, transport_c_funptr, init_hess_c_funptr, n_param_c, &
-        settings_c, update_orbs_qn_c_funptr) result(error_c) &
-        bind(C, name="mock_update_orbs_qn_factory")
+    function mock_qn_factory_c_wrapper(update_orbs_orig_c_funptr, transport_c_funptr, &
+                                       init_hess_c_funptr, n_param_c, settings_c, &
+                                       update_orbs_qn_c_funptr) result(error_c) &
+        bind(C, name="mock_qn_factory")
         !
         ! this subroutine is a mock routine for the quasi-Newton orbital updating
         ! factory C wrapper subroutine
         !
         use, intrinsic :: iso_c_binding, only: c_null_ptr
         use otr_qn_c_interface, only: qn_settings_type_c
-        use c_interface, only: update_orbs_c_type, hess_x_c_type, logger_c_type
-        use test_reference, only: check_update_orbs_c_funptr
+        use c_interface, only: logger_c_type
+        use test_reference, only: check_update_orbs_c_funptr, n_param
         use otr_qn_test_reference, only: test_transport_c_funptr, &
                                          test_init_hess_c_funptr, operator(/=)
         use c_interface_unit_tests, only: mock_update_orbs
@@ -60,28 +58,26 @@ contains
         character(len=:), allocatable, target :: message
 
         ! test passed orbital update function
-        test_update_orbs_qn_factory_interface = &
-            test_update_orbs_qn_factory_interface .and. check_update_orbs_c_funptr( &
-                update_orbs_orig_c_funptr, "update_orbs_qn_factory_py_interface", &
-                " by given orbital updating function", c_null_ptr)
+        if (.not. check_update_orbs_c_funptr( &
+            update_orbs_orig_c_funptr, "qn_factory_py_interface", &
+            " by given orbital updating function", c_null_ptr)) &
+            test_qn_factory_interface = .false.
 
         ! test passed transport function
-        test_update_orbs_qn_factory_interface = &
-            test_update_orbs_qn_factory_interface .and. test_transport_c_funptr( &
-                transport_c_funptr, "update_orbs_qn_factory_py_interface", &
-                " by given transport function")
+        if (.not. test_transport_c_funptr( &
+            transport_c_funptr, "qn_factory_py_interface", " by given transport "// &
+            "function", c_null_ptr)) test_qn_factory_interface = .false.
 
         ! test passed initial Hessian function
-        test_update_orbs_qn_factory_interface = &
-            test_update_orbs_qn_factory_interface .and. test_init_hess_c_funptr( &
-                init_hess_c_funptr, "update_orbs_qn_factory_py_interface", &
-                " by given initial Hessian function")
+        if (.not. test_init_hess_c_funptr( &
+            init_hess_c_funptr, "qn_factory_py_interface", " by given initial "// &
+            "Hessian function", c_null_ptr)) test_qn_factory_interface = .false.
 
         ! check if passed number of parameters is correct
-        if (n_param_c /= 3) then
-            write(stderr, *) "test_update_orbs_qn_factory_interface failed: Passed "// &
-                "number of parameters wrong."
-            test_update_orbs_qn_factory_interface = .false.
+        if (n_param_c /= n_param) then
+            write(stderr, *) "test_qn_factory_py_interface failed: Passed number "// &
+                "of parameters wrong."
+            test_qn_factory_interface = .false.
         end if
 
         ! get Fortran pointer to passed logging function and call it
@@ -91,9 +87,9 @@ contains
 
         ! check optional settings against reference values
         if (settings_c /= ref_qn_settings) then
-            write(stderr, *) "test_update_orbs_qn_factory_py_interface failed: "// &
-                "Passed settings associated with wrong values."
-            test_update_orbs_qn_factory_interface = .false.
+            write(stderr, *) "test_qn_factory_py_interface failed: Passed settings "// &
+                "associated with wrong values."
+            test_qn_factory_interface = .false.
         end if
 
         ! set function pointer to mock quasi-Newton orbital updating function
@@ -102,7 +98,7 @@ contains
         ! set return arguments
         error_c = 0
 
-    end function mock_update_orbs_qn_factory_c_wrapper
+    end function mock_qn_factory_c_wrapper
 
     subroutine mock_init_qn_settings_c(settings) bind(C, name="mock_init_qn_settings")
         !

@@ -6,15 +6,16 @@
 
 from __future__ import annotations
 
-import sys
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, byref, c_bool, c_void_p, Structure
+from ctypes import POINTER, byref, c_bool, c_void_p, Structure
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
     c_int,
     c_real,
+    callback_type,
+    CallbackInterface,
     update_orbs_interface_type,
     logger_interface_type,
     UpdateOrbsInterface,
@@ -23,16 +24,23 @@ from pyopentrustregion.python_interface import (
     Settings,
     auto_bind_fields,
 )
-from pyopentrustregion.extensions.common.python_interface import UpdateOrbsPyInterface
+from pyopentrustregion.extensions.common.python_interface import (
+    UpdateOrbsPyInterface,
+    check_callback_arguments,
+)
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any, Dict
+
+    ChangeReferenceType = Callable[
+        [np.ndarray, np.ndarray, np.ndarray, np.ndarray], None
+    ]
 
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-change_reference_interface_type = CFUNCTYPE(
+change_reference_interface_type = callback_type(
     c_int, POINTER(c_real), c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
 
@@ -45,6 +53,7 @@ class SGEKSettingsC(Structure):
         ("use_subspace", c_bool),
         ("verbose", c_int),
         ("max_points", c_int),
+        ("context", c_void_p),
     ]
 
 
@@ -69,18 +78,18 @@ auto_bind_fields(SGEKSettings)
 
 # define interface factories
 @dataclass
-class ChangeReferenceInterface:
+class ChangeReferenceInterface(CallbackInterface):
     """
     this class provides the interface to change the reference and to write the
     parameter, local gradient, and gradient lists to the memory provided through
     pointers
     """
 
-    change_reference: Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], None]
+    change_reference: ChangeReferenceType
     n_param: int
     exception: Dict[str, Exception]
 
-    def __call__(
+    def call(
         self, new_ref_ptr, n_points, kappa_list_ptr, local_grad_list_ptr, grad_list_ptr
     ) -> int:
         # convert matrix pointers to numpy arrays
@@ -103,12 +112,12 @@ class ChangeReferenceInterface:
         return 0
 
 
-def update_orbs_s_gek_factory(
+def s_gek_factory(
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
-    change_reference: Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], None],
+    change_reference: ChangeReferenceType,
     n_param: int,
     settings: SGEKSettings,
 ) -> Callable[
@@ -120,7 +129,13 @@ def update_orbs_s_gek_factory(
     # shares one, and handed to solver through the returned object
     exception = adopt_collector(update_orbs)
 
-    # define interfaces for callback functions
+    # define interfaces for callback functions, whose arguments the C interface cannot
+    # check
+    check_callback_arguments(
+        change_reference,
+        "change_reference",
+        ("new_ref", "kappa_list", "local_grad_list", "grad_list"),
+    )
     update_orbs_interface = update_orbs_interface_type(
         UpdateOrbsInterface(update_orbs, n_param, exception)
     )
@@ -139,15 +154,15 @@ def update_orbs_s_gek_factory(
         exception,
     )
 
-    if not hasattr(lib, "update_orbs_s_gek_factory"):
+    if not hasattr(lib, "s_gek_factory"):
         raise RuntimeError(
             "Please reinstall the package with: "
             "CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install ."
         )
 
     # define result and argument types
-    lib.update_orbs_s_gek_factory.restype = c_int
-    lib.update_orbs_s_gek_factory.argtypes = [
+    lib.s_gek_factory.restype = c_int
+    lib.s_gek_factory.argtypes = [
         update_orbs_interface_type,
         change_reference_interface_type,
         c_int,
@@ -157,7 +172,7 @@ def update_orbs_s_gek_factory(
 
     # call Fortran function
     update_orbs_s_gek_funptr = update_orbs_interface_type()
-    error = lib.update_orbs_s_gek_factory(
+    error = lib.s_gek_factory(
         update_orbs_interface,
         change_reference_interface,
         n_param,
@@ -168,11 +183,11 @@ def update_orbs_s_gek_factory(
     if error:
         if "exc" in exception:
             raise RuntimeError(
-                f"OpenTrustRegion S-GEK update factory produced error (code {error})."
+                f"OpenTrustRegion S-GEK factory produced error (code {error})."
             ) from exception["exc"]
         else:
             raise RuntimeError(
-                f"OpenTrustRegion S-GEK update factory produced error (code {error})."
+                f"OpenTrustRegion S-GEK factory produced error (code {error})."
             )
 
     return UpdateOrbsPyInterface(

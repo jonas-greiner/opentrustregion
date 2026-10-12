@@ -9,7 +9,7 @@ module otr_qn_test_reference
     use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: n_param, tol, tol_c
-    use, intrinsic :: iso_c_binding, only: c_char, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_funptr, c_f_procpointer, &
                                            c_associated
 
     implicit none
@@ -26,7 +26,7 @@ module otr_qn_test_reference
     end type
 
     ! general reference parameters
-    type(ref_qn_settings_type) :: ref_qn_settings = &
+    type(ref_qn_settings_type), parameter :: ref_qn_settings = &
         ref_qn_settings_type(verbose=3, max_points=100, hess_update_scheme="bfgs")
 
     interface assignment(=)
@@ -51,7 +51,7 @@ module otr_qn_test_reference
 
 contains
 
-    function test_transport_funptr(transport_funptr, test_name, message) &
+    function test_transport_funptr(transport_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided transport function pointer
@@ -60,9 +60,10 @@ contains
 
         procedure(transport_type), intent(in), pointer :: transport_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
-        real(rp), allocatable :: geodesic(:), tangent_vector(:)
+        real(rp), allocatable :: geodesic(:), tangent_vector(:), expected(:)
         integer(ip) :: error
 
         ! assume tests pass
@@ -79,12 +80,13 @@ contains
         ! allocate arrays
         allocate(geodesic(n_param), tangent_vector(n_param))
 
-        ! initialize input arrays
-        geodesic = 2.0_rp
-        tangent_vector = 3.0_rp
+        ! generate random input arrays, which the mock transport multiplies
+        call random_number(geodesic)
+        call random_number(tangent_vector)
+        expected = geodesic * tangent_vector
 
         ! call transport function pointer
-        call transport_funptr(geodesic, tangent_vector, error)
+        call transport_funptr(geodesic, tangent_vector, error, context)
 
         ! check for error
         if (error /= 0) then
@@ -93,19 +95,19 @@ contains
         end if
 
         ! check tangent vector
-        if (any((tangent_vector - 6.0_rp) > tol)) then
+        if (any(abs(tangent_vector - expected) > tol)) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
                 message//" wrong."
         end if
 
         ! deallocate arrays
-        deallocate(geodesic, tangent_vector)
+        deallocate(geodesic, tangent_vector, expected)
 
     end function test_transport_funptr
 
-    function test_transport_c_funptr(transport_c_funptr, test_name, message) &
-        result(test_passed)
+    function test_transport_c_funptr(transport_c_funptr, test_name, message, &
+                                     context_c) result(test_passed)
         !
         ! this function tests a provided transport C function pointer
         !
@@ -113,10 +115,11 @@ contains
 
         type(c_funptr), intent(in) :: transport_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in) :: context_c
         logical :: test_passed
 
         procedure(transport_c_type), pointer :: transport_funptr
-        real(c_rp), allocatable :: geodesic(:), tangent_vector(:)
+        real(c_rp), allocatable :: geodesic(:), tangent_vector(:), expected(:)
         integer(c_ip) :: error
 
         ! assume tests pass
@@ -136,12 +139,13 @@ contains
         ! allocate arrays
         allocate(geodesic(n_param), tangent_vector(n_param))
 
-        ! initialize new reference
-        geodesic = 2.0_c_rp
-        tangent_vector = 3.0_c_rp
+        ! generate random input arrays, which the mock transport multiplies
+        call random_number(geodesic)
+        call random_number(tangent_vector)
+        expected = geodesic * tangent_vector
 
         ! call transport function pointer
-        error = transport_funptr(geodesic, tangent_vector)
+        error = transport_funptr(geodesic, tangent_vector, context_c)
 
         ! check for error
         if (error /= 0) then
@@ -150,18 +154,18 @@ contains
         end if
 
         ! check tangent vector
-        if (any((tangent_vector - 6.0_c_rp) > tol_c)) then
+        if (any(abs(tangent_vector - expected) > tol_c)) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
                 message//" wrong."
         end if
 
         ! deallocate arrays
-        deallocate(geodesic, tangent_vector)
+        deallocate(geodesic, tangent_vector, expected)
 
     end function test_transport_c_funptr
 
-    function test_init_hess_funptr(init_hess_funptr, test_name, message) &
+    function test_init_hess_funptr(init_hess_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided initial Hessian function pointer
@@ -170,9 +174,10 @@ contains
 
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
-        real(rp), allocatable :: vector(:)
+        real(rp), allocatable :: vector(:), expected(:)
         integer(ip) :: error
 
         ! assume tests pass
@@ -189,11 +194,12 @@ contains
         ! allocate arrays
         allocate(vector(n_param))
 
-        ! initialize input arrays
-        vector = 2.0_rp
+        ! generate a random input array, which the mock initial Hessian doubles
+        call random_number(vector)
+        expected = 2.0_rp * vector
 
         ! call initial Hessian function pointer
-        call init_hess_funptr(vector, error)
+        call init_hess_funptr(vector, error, context)
 
         ! check for error
         if (error /= 0) then
@@ -202,19 +208,19 @@ contains
         end if
 
         ! check vector
-        if (any((vector - 4.0_rp) > tol)) then
+        if (any(abs(vector - expected) > tol)) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Vector returned"//message// &
                 " wrong."
         end if
 
         ! deallocate arrays
-        deallocate(vector)
+        deallocate(vector, expected)
 
     end function test_init_hess_funptr
 
-    function test_init_hess_c_funptr(init_hess_c_funptr, test_name, message) &
-        result(test_passed)
+    function test_init_hess_c_funptr(init_hess_c_funptr, test_name, message, &
+                                     context_c) result(test_passed)
         !
         ! this function tests a provided initial Hessian C function pointer
         !
@@ -222,10 +228,11 @@ contains
 
         type(c_funptr), intent(in) :: init_hess_c_funptr
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in) :: context_c
         logical :: test_passed
 
         procedure(init_hess_c_type), pointer :: init_hess_funptr
-        real(c_rp), allocatable :: vector(:)
+        real(c_rp), allocatable :: vector(:), expected(:)
         integer(c_ip) :: error
 
         ! assume tests pass
@@ -245,11 +252,12 @@ contains
         ! allocate arrays
         allocate(vector(n_param))
 
-        ! initialize new reference
-        vector = 2.0_c_rp
+        ! generate a random input array, which the mock initial Hessian doubles
+        call random_number(vector)
+        expected = 2.0_c_rp * vector
 
         ! call initial Hessian function pointer
-        error = init_hess_funptr(vector)
+        error = init_hess_funptr(vector, context_c)
 
         ! check for error
         if (error /= 0) then
@@ -258,14 +266,14 @@ contains
         end if
 
         ! check vector
-        if (any((vector - 4.0_c_rp) > tol_c)) then
+        if (any(abs(vector - expected) > tol_c)) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Vector returned"//message// &
                 " wrong."
         end if
 
         ! deallocate arrays
-        deallocate(vector)
+        deallocate(vector, expected)
 
     end function test_init_hess_c_funptr
 

@@ -159,9 +159,9 @@ contains
         end if
 
         ! test passed density matrix evaluating function
-        test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
-            evaluate_dm_funptr, "mo_factory_c_wrapper", &
-            " by given density matrix evaluating function")
+        if (.not. test_evaluate_dm_cs_funptr( &
+            evaluate_dm_funptr, "mo_factory_c_wrapper", " by given density matrix "// &
+            "evaluating function", settings%context)) test_passed = .false.
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -287,9 +287,9 @@ contains
         end if
 
         ! test passed density matrix evaluating function
-        test_passed = test_passed .and. test_evaluate_dm_os_funptr( &
-            evaluate_dm_funptr, "mo_factory_c_wrapper", &
-            " by given density matrix evaluating function")
+        if (.not. test_evaluate_dm_os_funptr( &
+            evaluate_dm_funptr, "mo_factory_c_wrapper", " by given density matrix "// &
+            "evaluating function", settings%context)) test_passed = .false.
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then

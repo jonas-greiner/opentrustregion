@@ -18,11 +18,12 @@ extern "C" {
  * ------------------------------------------------------------------ */
 
 /* Transport callback */
-typedef c_int transport_fn(const c_real *geodesic_c, c_real *transport_vector_c);
+typedef c_int transport_fn(const c_real *geodesic_c, c_real *tangent_vector_c,
+                           void *context);
 typedef transport_fn *transport_fp;
 
 /* Hessian initialization callback */
-typedef c_int init_hess_fn(c_real *vector_c);
+typedef c_int init_hess_fn(c_real *vector_c, void *context);
 typedef init_hess_fn *init_hess_fp;
 
 /* ------------------------------------------------------------------
@@ -34,6 +35,7 @@ typedef struct {
   c_int verbose;
   c_int max_points;
   char hess_update_scheme[OTR_KW_LEN + 1];
+  void *context;
 } qn_settings_type;
 
 // Fortran-callable init routine for quasi-Newton settings
@@ -44,24 +46,26 @@ void init_qn_settings(qn_settings_type *settings);
  * ------------------------------------------------------------------ */
 
 /**
- * Fortran-callable update_orbs_qn_factory interface
+ * Fortran-callable quasi-Newton factory interface.
  *
- * @param update_orbs_orig_c_funptr    Pointer to original update_orbs callback
- * @param transport_c_funptr           C pointer to transport callback
- * @param init_hess_c_funptr           C pointer to init_hess callback
- * @param n_param                      Number of parameters
- * @param settings                     Quasi-Newton settings
- * @param update_orbs_qn_c_funptr      Pointer to new update_orbs callback
- * @return                             Integer error code from Fortran
+ * @param update_orbs_orig_c_funptr               C pointer to original update_orbs
+ *                                                callback
+ * @param transport_c_funptr                      C pointer to transport callback
+ * @param init_hess_c_funptr                      C pointer to init_hess callback
+ * @param n_param_c                               Number of parameters
+ * @param settings_c                              Quasi-Newton settings
+ * @param update_orbs_qn_c_funptr                 Output: wrapped update_orbs function
+ *                                                pointer
+ *
+ * @return                                        Integer error code from Fortran
  */
-c_int update_orbs_qn_factory(update_orbs_fp update_orbs_orig_c_funptr,
-                             transport_fp transport_c_funptr,
-                             init_hess_fp init_hess_c_funptr, c_int n_param,
-                             const qn_settings_type *settings,
-                             update_orbs_fp *update_orbs_qn_c_funptr);
+c_int qn_factory(update_orbs_fp update_orbs_orig_c_funptr,
+                 transport_fp transport_c_funptr, init_hess_fp init_hess_c_funptr,
+                 c_int n_param_c, const qn_settings_type *settings_c,
+                 update_orbs_fp *update_orbs_qn_c_funptr);
 
 /**
- * Fortran-callable update_orbs_qn_deconstructor interface
+ * Fortran-callable quasi-Newton deconstructor.
  */
 void update_orbs_qn_deconstructor(void);
 

@@ -28,7 +28,7 @@ from pyopentrustregion.tests import (
 from pyopentrustregion.python_interface import c_real, c_int
 from pyopentrustregion.extensions.s_gek import (
     SGEKSettings,
-    update_orbs_s_gek_factory,
+    s_gek_factory,
     update_orbs_s_gek_deconstructor,
 )
 
@@ -42,12 +42,12 @@ fortran_tests = {
     "s_gek_c_interface_tests": [
         "assign_s_gek_c_f",
         "assign_s_gek_f_c",
+        "change_reference_f_wrapper",
         "hess_x_s_gek_c_wrapper",
         "init_s_gek_settings_c",
-        "change_reference_f_wrapper",
+        "s_gek_factory_c_wrapper",
         "update_orbs_s_gek_c_wrapper",
         "update_orbs_s_gek_deconstructor_c_wrapper",
-        "update_orbs_s_gek_factory_c_wrapper",
     ],
 }
 
@@ -138,10 +138,10 @@ class SGEKPyInterfaceTests(unittest.TestCase):
 
     # replace original library with mock library
     @patch(
-        "pyopentrustregion.python_interface.lib.update_orbs_s_gek_factory",
-        lib.mock_update_orbs_s_gek_factory,
+        "pyopentrustregion.python_interface.lib.s_gek_factory",
+        lib.mock_s_gek_factory,
     )
-    def test_update_orbs_s_gek_factory_py_interface(self):
+    def test_s_gek_factory_py_interface(self):
         """
         this function tests the S-GEK orbital updating factory python interface
         """
@@ -156,14 +156,14 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         self.test_logger = True
 
         # call S-GEK orbital updating factory python interface
-        update_orbs_s_gek = update_orbs_s_gek_factory(
+        update_orbs_s_gek = s_gek_factory(
             self.mock_update_orbs, self.mock_change_reference, n_param, settings
         )
 
         # check if logger was called correctly
         if not self.test_logger:
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: Called logging "
+                " test_s_gek_factory_py_interface failed: Called logging "
                 "function wrong."
             )
             test_passed = False
@@ -176,7 +176,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
             func, hess_x_funptr = update_orbs_s_gek(kappa, grad, h_diag)
         except RuntimeError:
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: Returned S-GEK "
+                " test_s_gek_factory_py_interface failed: Returned S-GEK "
                 "orbital updating raises error."
             )
             test_passed = False
@@ -184,25 +184,25 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         # check results
         if self.change_reference_new_ref is not True:
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: New "
+                " test_s_gek_factory_py_interface failed: New "
                 "reference parameters inside given change reference function wrong."
             )
             test_passed = False
         if func != 3.0:
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: Returned"
+                " test_s_gek_factory_py_interface failed: Returned"
                 " function value of returned S-GEK orbital updating function wrong."
             )
             test_passed = False
         if not np.allclose(grad, np.full(n_param, 2.0, dtype=np.float64)):
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: Returned "
+                " test_s_gek_factory_py_interface failed: Returned "
                 "gradient of returned S-GEK orbital updating function wrong."
             )
             test_passed = False
         if not np.allclose(h_diag, np.full(n_param, 3.0, dtype=np.float64)):
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: Returned "
+                " test_s_gek_factory_py_interface failed: Returned "
                 "S-GEK Hessian diagonal of returned S-GEK orbital updating function "
                 "wrong."
             )
@@ -216,7 +216,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
             hess_x_funptr(x, hess_x)
         except RuntimeError:
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: Returned "
+                " test_s_gek_factory_py_interface failed: Returned "
                 "S-GEK Hessian linear transformation function of returned S-GEK "
                 "orbital updating function raises error."
             )
@@ -225,25 +225,42 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         # check results
         if not np.allclose(hess_x, np.full(n_param, 4.0, dtype=np.float64)):
             print(
-                " test_update_orbs_s_gek_factory_py_interface failed: Returned Hessian "
+                " test_s_gek_factory_py_interface failed: Returned Hessian "
                 "linear transformation of returned S-GEK orbital updating function "
                 "wrong."
             )
             test_passed = False
 
+        # call s_gek_factory python interface for a host callback which cannot be
+        # called with the arguments the C interface passes, which has to raise an error
+        # before the Fortran factory is called
+        try:
+            s_gek_factory(
+                self.mock_update_orbs,
+                lambda new_ref, kappa_list, local_grad_list: None,
+                n_param,
+                settings,
+            )
+            print(
+                " test_s_gek_factory_py_interface failed: change_reference with a "
+                "wrong number of arguments did not raise an error."
+            )
+            test_passed = False
+        except TypeError:
+            pass
+
         self.assertTrue(
-            c_bool.in_dll(lib, "test_update_orbs_s_gek_factory_interface").value
-            and test_passed,
-            "test_update_orbs_s_gek_factory_py_interface failed",
+            c_bool.in_dll(lib, "test_s_gek_factory_interface").value and test_passed,
+            "test_s_gek_factory_py_interface failed",
         )
-        print(" test_update_orbs_s_gek_factory_py_interface PASSED")
+        print(" test_s_gek_factory_py_interface PASSED")
 
     # replace original library with mock library
     @patch(
         "pyopentrustregion.python_interface.lib.update_orbs_s_gek_deconstructor",
         lib.mock_update_orbs_s_gek_deconstructor,
     )
-    def test_update_orbs_deconstructor_py_interface(self):
+    def test_update_orbs_s_gek_deconstructor_py_interface(self):
         """
         this function tests the S-GEK orbital updating deconstructor python
         interface

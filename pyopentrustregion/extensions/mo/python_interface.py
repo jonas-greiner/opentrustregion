@@ -46,6 +46,7 @@ class MOSettingsC(Structure):
         ("logger", c_void_p),
         ("initialized", c_bool),
         ("verbose", c_int),
+        ("context", c_void_p),
     ]
 
 

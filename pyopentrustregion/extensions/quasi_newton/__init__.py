@@ -6,6 +6,6 @@
 
 from .python_interface import (
     QNSettings,
-    update_orbs_qn_factory,
+    qn_factory,
     update_orbs_qn_deconstructor,
 )

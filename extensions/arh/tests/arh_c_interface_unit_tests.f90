@@ -10,8 +10,8 @@ module otr_arh_c_interface_unit_tests
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, tol_c
     use otr_arh_c_interface, only: evaluate_dm_c_type
-    use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_funptr, c_funloc, &
-                                           c_f_procpointer, c_null_ptr
+    use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_ptr, c_funptr, &
+                                           c_funloc, c_f_procpointer, c_null_ptr
 
     implicit none
 
@@ -24,7 +24,7 @@ module otr_arh_c_interface_unit_tests
 contains
 
     function mock_arh_evaluate_dm_cs(dm_ao, energy, fock, v_coulomb, v_exchange, &
-                                     v_nonlinear) result(error) bind(C)
+                                     v_nonlinear, context_c) result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the density matrix evaluating C
         ! function with separate Coulomb, exact-exchange and non-linear potential
@@ -33,14 +33,19 @@ contains
         use otr_common_test_reference, only: n_ao
         use otr_arh_test_reference, only: arh_evaluate_dm_factors
         use otr_common_unit_tests, only: record_mock_call
+        use test_reference, only: check_host_context_c
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         real(c_rp), intent(out), optional :: fock(*), v_coulomb(*), v_exchange(*), &
                                              v_nonlinear(*)
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
         integer(c_ip) :: flat_len = n_ao**2
+
+        ! check host context
+        call check_host_context_c(context_c)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
             2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
@@ -60,7 +65,7 @@ contains
     end function mock_arh_evaluate_dm_cs
 
     function mock_arh_evaluate_dm_os(dm_ao, energy, fock, v_coulomb, v_exchange, &
-                                     v_nonlinear) result(error) bind(C)
+                                     v_nonlinear, context_c) result(error) bind(C)
         !
         ! this subroutine is a test subroutine for the density matrix evaluating C
         ! function with separate Coulomb, exact-exchange and non-linear potential
@@ -69,14 +74,19 @@ contains
         use otr_common_test_reference, only: n_ao, n_particle
         use otr_arh_test_reference, only: arh_evaluate_dm_factors
         use otr_common_unit_tests, only: record_mock_call
+        use test_reference, only: check_host_context_c
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         real(c_rp), intent(out), optional :: fock(*), v_coulomb(*), v_exchange(*), &
                                              v_nonlinear(*)
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
         integer(c_ip) :: flat_len = n_ao**2 * n_particle
+
+        ! check host context
+        call check_host_context_c(context_c)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
             2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
@@ -117,13 +127,13 @@ contains
             get_reference_solver_values, unset_callbacks, check_obj_func_c_funptr, &
             check_update_orbs_c_funptr, check_precond_c_funptr, &
             check_precond_pd_c_funptr, check_get_extra_trial_vectors_c_funptr, &
-            ref_solver_settings, operator(/=), n_param_ref => n_param
+            ref_solver_settings, operator(/=), n_param_ref => n_param, &
+            arm_host_context_c, host_context, host_context_reached
         use otr_mo_c_interface, only: &
             obj_func_mo_before_wrapping, precond_mo_before_wrapping, &
             precond_pd_mo_before_wrapping, get_extra_trial_vectors_mo_before_wrapping
-        use otr_common_mock, only: mock_logger_c, test_logger, mock_obj_func, &
-                                   mock_precond, mock_precond_pd, &
-                                   mock_get_extra_trial_vectors
+        use otr_common_mock, only: mock_logger_c, mock_obj_func, mock_precond, &
+                                   mock_precond_pd, mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use otr_mo_unit_tests, only: ref_count_mo_params
         use c_interface, only: solver_settings_type_c
@@ -176,11 +186,12 @@ contains
                 evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_os)
             end if
 
-            ! initialize logger logical, global number of parameters and solver
-            ! settings, uninitialized for the closed-shell case and, for the open-shell
-            ! case, set to reference values with a projection supplied by the caller,
-            ! which have to be kept
-            test_logger = .false.
+            ! arm the host context of the ARH settings, which the logging and density
+            ! matrix evaluating functions receive, and initialize the global number of
+            ! parameters and solver settings, uninitialized for the closed-shell case
+            ! and, for the open-shell case, set to reference values with a projection
+            ! supplied by the caller, which have to be kept
+            call arm_host_context_c(settings_c%context)
             n_param_global = -1
             if (n_particle_c == 1) then
                 solver_settings_c%initialized = .false._c_bool
@@ -226,7 +237,7 @@ contains
                 write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Mock "// &
                     "factory received wrong input for the "//case_name//" case."
             end if
-            if (.not. test_logger) then
+            if (.not. host_context%logger_called) then
                 test_arh_factory_mo_c_wrapper = .false.
                 write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Called "// &
                     "logging subroutine wrong for the "//case_name//" case."
@@ -236,6 +247,10 @@ contains
                 write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Irreps of "// &
                     "the MOs passed on wrongly for the "//case_name//" case."
             end if
+
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("arh_factory_mo_c_wrapper")) &
+                test_arh_factory_mo_c_wrapper = .false.
 
             ! check if output variables are as expected
             if (error_c /= 0) then
@@ -388,14 +403,14 @@ contains
             check_update_orbs_c_funptr, check_precond_c_funptr, &
             check_precond_pd_c_funptr, check_project_c_funptr, &
             check_get_extra_trial_vectors_c_funptr, ref_solver_settings, operator(/=), &
-            n_param_ref => n_param
+            n_param_ref => n_param, arm_host_context_c, host_context, &
+            host_context_reached
         use otr_oao_c_interface, only: &
             obj_func_oao_before_wrapping, precond_oao_before_wrapping, &
             precond_pd_oao_before_wrapping, &
             get_extra_trial_vectors_oao_before_wrapping, project_oao_before_wrapping
-        use otr_common_mock, only: mock_logger_c, test_logger, mock_obj_func, &
-                                   mock_precond, mock_precond_pd, &
-                                   mock_get_extra_trial_vectors
+        use otr_common_mock, only: mock_logger_c, mock_obj_func, mock_precond, &
+                                   mock_precond_pd, mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
 
@@ -436,10 +451,12 @@ contains
                 evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_os)
             end if
 
-            ! initialize logger logical, global number of parameters and solver
-            ! settings, uninitialized for the closed-shell case and set to reference
-            ! values, which have to be kept, for the open-shell case
-            test_logger = .false.
+            ! arm the host context of the ARH settings, which the logging and density
+            ! matrix evaluating functions receive, and initialize the global number of
+            ! parameters and solver settings, uninitialized for the closed-shell case
+            ! and set to reference values, which have to be kept, for the open-shell
+            ! case
+            call arm_host_context_c(settings_c%context)
             n_param_global = -1
             if (n_particle_c == 1) then
                 solver_settings_c%initialized = .false._c_bool
@@ -468,11 +485,15 @@ contains
                 write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Mock "// &
                     "factory received wrong input for the "//case_name//" case."
             end if
-            if (.not. test_logger) then
+            if (.not. host_context%logger_called) then
                 test_arh_factory_oao_c_wrapper = .false.
                 write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Called "// &
                     "logging subroutine wrong for the "//case_name//" case."
             end if
+
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("arh_factory_oao_c_wrapper")) &
+                test_arh_factory_oao_c_wrapper = .false.
 
             ! check if output variables are as expected
             if (error_c /= 0) then
@@ -614,16 +635,22 @@ contains
         ! for the closed-shell case
         !
         use otr_arh, only: evaluate_dm_cs_type
-        use otr_arh_c_interface, only: evaluate_dm_before_wrapping, &
-                                       evaluate_dm_cs_f_wrapper
+        use otr_arh_c_interface, only: arh_callbacks, evaluate_dm_cs_f_wrapper
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr
         use otr_common_unit_tests, only: mock_requests
+        use test_reference, only: arm_host_context_c, host_context_reached
 
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
+        class(*), pointer :: context
         integer(ip) :: request
 
-        ! inject mock subroutine
-        evaluate_dm_before_wrapping => mock_arh_evaluate_dm_cs
+        ! assume tests pass
+        test_evaluate_dm_cs_f_wrapper = .true.
+
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        arh_callbacks%evaluate_dm => mock_arh_evaluate_dm_cs
+        call arm_host_context_c(arh_callbacks%host_context)
+        context => arh_callbacks
 
         ! get pointer to subroutine
         evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
@@ -632,8 +659,9 @@ contains
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        test_evaluate_dm_cs_f_wrapper = test_evaluate_dm_cs_funptr( &
-            evaluate_dm_cs_funptr, "evaluate_dm_cs_f_wrapper", "")
+        if (.not. test_evaluate_dm_cs_funptr(evaluate_dm_cs_funptr, &
+                                             "evaluate_dm_cs_f_wrapper", "", context)) &
+            test_evaluate_dm_cs_f_wrapper = .false.
         if (size(mock_requests) /= 16 .or. &
             .not. all([(any(mock_requests == request), request=0, 15)])) then
             write(stderr, *) "test_evaluate_dm_cs_f_wrapper failed: Outputs passed "// &
@@ -641,6 +669,10 @@ contains
                 "wrong."
             test_evaluate_dm_cs_f_wrapper = .false.
         end if
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("evaluate_dm_cs_f_wrapper")) &
+            test_evaluate_dm_cs_f_wrapper = .false.
 
     end function test_evaluate_dm_cs_f_wrapper
 
@@ -651,16 +683,22 @@ contains
         ! for the open-shell case
         !
         use otr_arh, only: evaluate_dm_os_type
-        use otr_arh_c_interface, only: evaluate_dm_before_wrapping, &
-                                       evaluate_dm_os_f_wrapper
+        use otr_arh_c_interface, only: arh_callbacks, evaluate_dm_os_f_wrapper
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr
         use otr_common_unit_tests, only: mock_requests
+        use test_reference, only: arm_host_context_c, host_context_reached
 
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        class(*), pointer :: context
         integer(ip) :: request
 
-        ! inject mock subroutine
-        evaluate_dm_before_wrapping => mock_arh_evaluate_dm_os
+        ! assume tests pass
+        test_evaluate_dm_os_f_wrapper = .true.
+
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        arh_callbacks%evaluate_dm => mock_arh_evaluate_dm_os
+        call arm_host_context_c(arh_callbacks%host_context)
+        context => arh_callbacks
 
         ! get pointer to subroutine
         evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
@@ -669,14 +707,19 @@ contains
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        test_evaluate_dm_os_f_wrapper = test_evaluate_dm_os_funptr( &
-            evaluate_dm_os_funptr, "evaluate_dm_os_f_wrapper", "")
+        if (.not. test_evaluate_dm_os_funptr(evaluate_dm_os_funptr, &
+                                             "evaluate_dm_os_f_wrapper", "", context)) &
+            test_evaluate_dm_os_f_wrapper = .false.
         if (size(mock_requests) /= 16 .or. &
             .not. all([(any(mock_requests == request), request=0, 15)])) then
             write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: Outputs passed "// &
                 "on to density matrix evaluating C function for open-shell case wrong."
             test_evaluate_dm_os_f_wrapper = .false.
         end if
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("evaluate_dm_os_f_wrapper")) &
+            test_evaluate_dm_os_f_wrapper = .false.
 
     end function test_evaluate_dm_os_f_wrapper
 
@@ -790,7 +833,8 @@ contains
         use otr_arh, only: arh_settings_type
         use otr_arh_test_reference, only: assignment(=), operator(/=), ref_arh_settings
         use c_interface, only: c_callbacks_type
-        use otr_common_mock, only: mock_logger_c, test_logger
+        use otr_common_mock, only: mock_logger_c
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(arh_settings_type_c) :: settings_c
         type(arh_settings_type) :: settings
@@ -815,13 +859,15 @@ contains
             write(stderr, *) "test_assign_arh_f_c failed: Logging function not "// &
                 "associated with value."
         else
-            test_logger = .false.
+            call arm_host_context_c(callbacks%host_context)
             call settings%logger("test", settings%context)
-            if (.not. test_logger) then
+            if (.not. host_context%logger_called) then
                 test_assign_arh_f_c = .false.
                 write(stderr, *) "test_assign_arh_f_c failed: Called logging "// &
                     "subroutine wrong."
             end if
+            if (.not. host_context_reached("assign_arh_f_c")) &
+                test_assign_arh_f_c = .false.
         end if
 
         ! check against reference values
@@ -872,10 +918,14 @@ contains
         ! convert to C settings
         settings_c = settings
 
-        ! check logging function
+        ! check that no callback function pointers and host contexts are associated
         if (c_associated(settings_c%logger)) then
             test_assign_arh_c_f = .false.
             write(stderr, *) "test_assign_arh_c_f failed: Logger function associated."
+        end if
+        if (c_associated(settings_c%context)) then
+            write(stderr, *) "test_assign_arh_c_f failed: Host context associated."
+            test_assign_arh_c_f = .false.
         end if
 
         ! check against reference values

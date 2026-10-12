@@ -23,27 +23,30 @@ module otr_common
     ! density matrix evaluating functions and the response functions they return, with
     ! which the orbital bases evaluate the exact Hessian
     abstract interface
-        subroutine get_response_cs_type(dm, response, error)
+        subroutine get_response_cs_type(dm, response, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
             real(rp), intent(out), target, contiguous :: response(:, :)
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
         end subroutine get_response_cs_type
     end interface
 
     abstract interface
-        subroutine get_response_os_type(dm, response, error)
+        subroutine get_response_os_type(dm, response, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out), target :: response(:, :, :)
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
         end subroutine get_response_os_type
     end interface
 
     abstract interface
-        subroutine evaluate_dm_cs_type(dm, energy, fock, get_response_funptr, error)
+        subroutine evaluate_dm_cs_type(dm, energy, fock, get_response_funptr, error, &
+                                       context)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
@@ -52,11 +55,13 @@ module otr_common
             procedure(get_response_cs_type), intent(out), optional, pointer :: &
                 get_response_funptr
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
         end subroutine evaluate_dm_cs_type
     end interface
 
     abstract interface
-        subroutine evaluate_dm_os_type(dm, energy, fock, get_response_funptr, error)
+        subroutine evaluate_dm_os_type(dm, energy, fock, get_response_funptr, error, &
+                                       context)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
@@ -65,6 +70,7 @@ module otr_common
             procedure(get_response_os_type), intent(out), optional, pointer :: &
                 get_response_funptr
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
         end subroutine evaluate_dm_os_type
     end interface
 
@@ -203,11 +209,11 @@ contains
         if (associated(self%evaluate_dm_cs)) then
             call self%evaluate_dm_cs(self%dm_ao(:, :, 1), energy, &
                                      get_response_funptr=self%get_response_cs, &
-                                     error=error)
+                                     error=error, context=self%settings%context)
         else
             call self%evaluate_dm_os(self%dm_ao, energy, &
                                      get_response_funptr=self%get_response_os, &
-                                     error=error)
+                                     error=error, context=self%settings%context)
         end if
         if (error /= 0) return
 

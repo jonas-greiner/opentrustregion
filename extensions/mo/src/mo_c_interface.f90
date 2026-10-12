@@ -9,28 +9,30 @@ module otr_mo_c_interface
     use opentrustregion, only: ip, rp, obj_func_type, update_orbs_type, hess_x_type, &
                                precond_type, precond_pd_type, &
                                get_extra_trial_vectors_type
-    use c_interface, only: c_ip, c_rp, c_callbacks_type, obj_func_c_type, &
-                           update_orbs_c_type, hess_x_c_type, precond_c_type, &
-                           precond_pd_c_type, get_extra_trial_vectors_c_type
+    use c_interface, only: c_ip, c_rp, obj_func_c_type, update_orbs_c_type, &
+                           hess_x_c_type, precond_c_type, precond_pd_c_type, &
+                           get_extra_trial_vectors_c_type
     use otr_mo, only: standard_mo_factory_cs => mo_factory_cs, &
                       standard_mo_factory_os => mo_factory_os, &
                       standard_mo_deconstructor => mo_deconstructor
     use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                           get_response_cs_type, get_response_os_type
-    use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type
+    use otr_common_c_interface, only: orbital_c_callbacks_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_loc, &
                                            c_f_pointer, c_funloc, c_f_procpointer, &
-                                           c_associated, c_null_funptr
+                                           c_associated, c_null_funptr, c_null_ptr
 
     implicit none
 
-    ! callback bundle of the logging function of the MO settings, held here since
-    ! the settings outlive the factory call that sets it
-    type(c_callbacks_type), target :: logger_mo_callbacks
+    ! callback bundle of the density matrix evaluating function, the response function
+    ! it returned last, and the logging function and host context of the MO settings,
+    ! held here since the settings outlive the factory call that sets it; the wrappers
+    ! of the density matrix evaluating and response functions find it here rather than
+    ! through the context they receive, since ARH in the MO basis replaces the settings
+    ! of the shared MO object, context included
+    type(orbital_c_callbacks_type), target :: mo_callbacks
 
     ! define procedure pointer which will point to the Fortran procedures
-    procedure(evaluate_dm_c_type), pointer :: evaluate_dm_mo_before_wrapping => null()
-    procedure(get_response_c_type), pointer :: get_response_mo_before_wrapping => null()
     procedure(obj_func_type), pointer :: obj_func_mo_before_wrapping => null()
     procedure(update_orbs_type), pointer :: update_orbs_mo_before_wrapping => null()
     procedure(hess_x_type), pointer :: hess_x_mo_before_wrapping => null()
@@ -44,6 +46,7 @@ module otr_mo_c_interface
         type(c_funptr) :: logger
         logical(c_bool) :: initialized
         integer(c_ip) :: verbose
+        type(c_ptr) :: context
     end type
 
     ! MO coefficients passed from C, which are updated from their Fortran copy after
@@ -162,10 +165,6 @@ contains
             ao_overlap = reshape(real(ao_overlap_c(:n_ao**2), kind=rp), [n_ao, n_ao])
         end if
 
-        ! associate the input C pointers to Fortran procedure pointers
-        call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                             fptr=evaluate_dm_mo_before_wrapping)
-
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
             evaluate_dm_cs_funptr => evaluate_dm_mo_cs_f_wrapper
@@ -173,14 +172,18 @@ contains
             evaluate_dm_os_funptr => evaluate_dm_mo_os_f_wrapper
         end if
 
-        ! convert settings and hand the logging function to its wrapper in a bundle,
-        ! which is held by the module since the settings outlive this call
+        ! convert settings and hand the density matrix evaluating function and the
+        ! logging function with the host context of initialized settings to their
+        ! wrappers in the bundle held by the module, which the settings point to
         settings = settings_c
-        logger_mo_callbacks = c_callbacks_type()
-        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
-            call c_f_procpointer(cptr=settings_c%logger, &
-                                 fptr=logger_mo_callbacks%logger)
-        settings%context => logger_mo_callbacks
+        mo_callbacks = orbital_c_callbacks_type()
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=mo_callbacks%evaluate_dm)
+        if (settings_c%initialized) then
+            if (c_associated(settings_c%logger)) &
+                call c_f_procpointer(cptr=settings_c%logger, fptr=mo_callbacks%logger)
+            mo_callbacks%host_context = settings_c%context
+        end if
+        settings%context => mo_callbacks
 
         ! the factory wires its routines into Fortran solver settings, which start
         ! from the defaults since only the wired routines are copied into the C solver
@@ -281,7 +284,7 @@ contains
     end subroutine mo_set_solver_settings_c
 
     subroutine evaluate_dm_mo_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, &
-                                           error)
+                                           error, context)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the closed-shell case
@@ -291,8 +294,8 @@ contains
         real(rp), intent(out), optional, target, contiguous :: fock(:, :)
         procedure(get_response_cs_type), intent(out), optional, pointer :: &
             get_response_cs_funptr
-
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(rp), pointer :: dm_3d(:, :, :), fock_3d(:, :, :)
         procedure(get_response_os_type), pointer :: get_response_funptr
@@ -302,16 +305,18 @@ contains
         if (present(fock)) fock_3d(1:size(fock, 1), 1:size(fock, 2), 1:1) => fock
         if (present(get_response_cs_funptr)) then
             call evaluate_dm_mo_os_f_wrapper(dm_3d, energy, fock_3d, &
-                                             get_response_funptr, error)
+                                             get_response_funptr, error, context)
             get_response_cs_funptr => null()
             if (error == 0) get_response_cs_funptr => get_response_mo_cs_f_wrapper
         else
-            call evaluate_dm_mo_os_f_wrapper(dm_3d, energy, fock_3d, error=error)
+            call evaluate_dm_mo_os_f_wrapper(dm_3d, energy, fock_3d, error=error, &
+                                             context=context)
         end if
 
     end subroutine evaluate_dm_mo_cs_f_wrapper
 
-    subroutine evaluate_dm_mo_os_f_wrapper(dm, energy, fock, get_response_funptr, error)
+    subroutine evaluate_dm_mo_os_f_wrapper(dm, energy, fock, get_response_funptr, &
+                                           error, context)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the open-shell case
@@ -324,28 +329,21 @@ contains
         procedure(get_response_os_type), intent(out), optional, pointer :: &
             get_response_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
-        type(c_funptr) :: get_response_c_funptr
-
-        ! call density matrix evaluating C function, and associate a returned C pointer
-        ! to the response function with a Fortran procedure pointer
+        ! call density matrix evaluating C function, which keeps a returned response C
+        ! function in the bundle, and associate a Fortran procedure pointer with the
+        ! wrapper of the response function
+        call evaluate_dm_f_wrapper_impl(mo_callbacks, dm, energy, &
+                                        present(get_response_funptr), error, fock)
         if (present(get_response_funptr)) then
-            call evaluate_dm_f_wrapper_impl(evaluate_dm_mo_before_wrapping, dm, &
-                                            energy, error, fock, get_response_c_funptr)
             get_response_funptr => null()
-            if (error == 0) then
-                call c_f_procpointer(cptr=get_response_c_funptr, &
-                                     fptr=get_response_mo_before_wrapping)
-                get_response_funptr => get_response_mo_os_f_wrapper
-            end if
-        else
-            call evaluate_dm_f_wrapper_impl(evaluate_dm_mo_before_wrapping, dm, &
-                                            energy, error, fock)
+            if (error == 0) get_response_funptr => get_response_mo_os_f_wrapper
         end if
 
     end subroutine evaluate_dm_mo_os_f_wrapper
 
-    subroutine get_response_mo_cs_f_wrapper(dm, response, error)
+    subroutine get_response_mo_cs_f_wrapper(dm, response, error, context)
         !
         ! this subroutine wraps the response subroutine to convert Fortran variables to
         ! C variables
@@ -353,16 +351,17 @@ contains
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out), target, contiguous :: response(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(rp), pointer :: dm_3d(:, :, :), response_3d(:, :, :)
 
         dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
         response_3d(1:size(response, 1), 1:size(response, 2), 1:1) => response
-        call get_response_mo_os_f_wrapper(dm_3d, response_3d, error)
+        call get_response_mo_os_f_wrapper(dm_3d, response_3d, error, context)
 
     end subroutine get_response_mo_cs_f_wrapper
 
-    subroutine get_response_mo_os_f_wrapper(dm, response, error)
+    subroutine get_response_mo_os_f_wrapper(dm, response, error, context)
         !
         ! this subroutine wraps the response subroutine to convert Fortran variables to
         ! C variables
@@ -372,9 +371,9 @@ contains
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
-        call get_response_f_wrapper_impl(get_response_mo_before_wrapping, dm, &
-                                         response, error)
+        call get_response_f_wrapper_impl(mo_callbacks, dm, response, error)
 
     end subroutine get_response_mo_os_f_wrapper
 
@@ -558,6 +557,9 @@ contains
 
             ! convert integers
             settings_c%verbose = int(settings%verbose, kind=c_ip)
+
+            ! the host context cannot be converted
+            settings_c%context = c_null_ptr
 
             ! set settings to initialized
             settings_c%initialized = .true._c_bool

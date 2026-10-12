@@ -8,33 +8,46 @@ module otr_common_c_interface
 
     use opentrustregion, only: ip, rp
     use c_interface, only: c_ip, c_rp, c_callbacks_type
-    use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_funloc, c_loc, c_f_pointer
+    use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_funloc, c_loc, &
+                                           c_f_pointer, c_f_procpointer
 
     implicit none
 
-    ! C-interoperable interfaces for the callback functions
+    ! C-interoperable interfaces for the density matrix evaluating functions and the
+    ! response functions they return, which the orbital bases share
     abstract interface
-        function evaluate_dm_c_type(dm_ao_c, energy_c, fock_c, get_response_c_funptr) &
-            result(error_c) bind(C)
-            import :: c_rp, c_ip, c_funptr
+        function evaluate_dm_c_type(dm_ao_c, energy_c, fock_c, get_response_c_funptr, &
+                                    context_c) result(error_c) bind(C)
+            import :: c_rp, c_ip, c_funptr, c_ptr
 
             real(c_rp), intent(in), target :: dm_ao_c(*)
             real(c_rp), intent(out) :: energy_c
             real(c_rp), intent(out), optional :: fock_c(*)
             type(c_funptr), intent(out), optional :: get_response_c_funptr
+            type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
         end function evaluate_dm_c_type
     end interface
 
     abstract interface
-        function get_response_c_type(dm_ao_c, response_c) result(error_c) bind(C)
-            import :: c_rp, c_ip
+        function get_response_c_type(dm_ao_c, response_c, context_c) result(error_c) &
+            bind(C)
+            import :: c_rp, c_ip, c_ptr
 
             real(c_rp), intent(in), target :: dm_ao_c(*)
             real(c_rp), intent(out), target :: response_c(*)
+            type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
         end function get_response_c_type
     end interface
+
+    ! bundle of the C callback functions of an orbital basis, which extends that of the
+    ! core by the density matrix evaluating function and the response function it
+    ! returned last
+    type, extends(c_callbacks_type) :: orbital_c_callbacks_type
+        procedure(evaluate_dm_c_type), pointer, nopass :: evaluate_dm => null()
+        procedure(get_response_c_type), pointer, nopass :: get_response => null()
+    end type
 
     ! global variables
     integer(ip) :: n_param
@@ -342,23 +355,24 @@ contains
 
     end function get_extra_trial_vectors_c_wrapper_impl
 
-    subroutine evaluate_dm_f_wrapper_impl(evaluate_dm_before_wrapping, dm, energy, &
-                                          error, fock, get_response_c_funptr)
+    subroutine evaluate_dm_f_wrapper_impl(callbacks, dm, energy, get_response, error, &
+                                          fock)
         !
-        ! this subroutine wraps the density matrix evaluating C function to convert
-        ! Fortran variables to C variables, returning the C function pointer to the
-        ! response function if one is requested
+        ! this subroutine wraps the density matrix evaluating C function of a callback
+        ! bundle to convert Fortran variables to C variables, handing the host context
+        ! of the bundle to it, and keeps the response C function it returns in the
+        ! bundle if one is requested
         !
-        procedure(evaluate_dm_c_type), intent(in), pointer :: &
-            evaluate_dm_before_wrapping
+        type(orbital_c_callbacks_type), intent(inout) :: callbacks
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
+        logical, intent(in) :: get_response
         integer(ip), intent(out) :: error
         real(rp), intent(out), optional, target :: fock(:, :, :)
-        type(c_funptr), intent(out), optional :: get_response_c_funptr
 
         real(c_rp) :: energy_c
         real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :)
+        type(c_funptr) :: get_response_c_funptr
         integer(c_ip) :: error_c
 
         ! convert arguments to C kind
@@ -372,12 +386,16 @@ contains
             if (present(fock)) allocate(fock_c(size(dm, 1), size(dm, 2), size(dm, 3)))
         end if
 
-        ! call density matrix evaluating C function
-        if (present(get_response_c_funptr)) then
-            error_c = evaluate_dm_before_wrapping(dm_c, energy_c, fock_c, &
-                                                  get_response_c_funptr)
+        ! call density matrix evaluating C function and keep the response C function it
+        ! returns in the bundle
+        if (get_response) then
+            error_c = callbacks%evaluate_dm( &
+                dm_c, energy_c, fock_c, get_response_c_funptr, callbacks%host_context)
+            if (error_c == 0) call c_f_procpointer(cptr=get_response_c_funptr, &
+                                                   fptr=callbacks%get_response)
         else
-            error_c = evaluate_dm_before_wrapping(dm_c, energy_c, fock_c)
+            error_c = callbacks%evaluate_dm(dm_c, energy_c, fock_c, &
+                                            context_c=callbacks%host_context)
         end if
 
         ! convert arguments to Fortran kind
@@ -393,14 +411,13 @@ contains
 
     end subroutine evaluate_dm_f_wrapper_impl
 
-    subroutine get_response_f_wrapper_impl(get_response_before_wrapping, dm, response, &
-                                           error)
+    subroutine get_response_f_wrapper_impl(callbacks, dm, response, error)
         !
-        ! this subroutine wraps the response C function to convert Fortran variables to
-        ! C variables
+        ! this subroutine wraps the response C function of a callback bundle to convert
+        ! Fortran variables to C variables, handing the host context of the bundle to
+        ! it
         !
-        procedure(get_response_c_type), intent(in), pointer :: &
-            get_response_before_wrapping
+        type(orbital_c_callbacks_type), intent(in) :: callbacks
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
@@ -419,7 +436,7 @@ contains
         end if
 
         ! call response C function
-        error_c = get_response_before_wrapping(dm_c, response_c)
+        error_c = callbacks%get_response(dm_c, response_c, callbacks%host_context)
 
         ! convert arguments to Fortran kind
         error = int(error_c, kind=ip)

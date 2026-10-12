@@ -729,8 +729,9 @@ The routine `oao_factory` constructs and returns OAO versions of the energy and 
   Accepts an AO density matrix and returns:
   - Energy value (real)
   - Fock matrix (real array, written in-place)
-  - A `get_response` function pointer: a callback that accepts a density matrix perturbation and returns the corresponding linear response of the Fock matrix (real array, written in-place) and an integer error code. This is used to build the exact Hessian-vector product. In Python, the argument is a flag saying whether this function is needed, and the callback returns it together with the energy, or `None` in its place when it is not needed.
+  - A `get_response` function pointer: a callback that accepts a density matrix perturbation and returns the corresponding linear response of the Fock matrix (real array, written in-place) and an integer error code, and receives the same host context as `evaluate_dm` as its last argument. This is used to build the exact Hessian-vector product. In Python, the argument is a flag saying whether this function is needed, and the callback returns it together with the energy, or `None` in its place when it is not needed.
   - An integer error code (0 for success, positive integers < 100 for errors)
+  - Receives the host context of the extension's settings as its last argument.
 
   Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` (or, for `get_response`, `False`) in Python, and the callback must not build it.
 - **`obj_func_oao`** (subroutine): Returned OAO objective function as defined for the `solver` subroutine.
@@ -900,11 +901,13 @@ CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install .
 
 #### Usage
 
-This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the `hess_x` function is never called. The routine `update_orbs_qn_factory` constructs and returns a quasi-Newton version of the orbital-updating subroutine. This routine requires the following input arguments:
+This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the `hess_x` function is never called. The routine `qn_factory` constructs and returns a quasi-Newton version of the orbital-updating subroutine. This routine requires the following input arguments:
 
 #### Required Arguments
 
 - **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine is not used. The returned orbital updating subroutine calls it with the host context the solver hands to it.
+- **`transport`** (subroutine): Transports a tangent vector in place along the geodesic of an orbital rotation, so that the stored steps and gradient differences refer to the current orbitals, and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the quasi-Newton settings as its last argument.
+- **`init_hess`** (subroutine): Applies the initial Hessian approximation in place to a vector and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the quasi-Newton settings as its last argument.
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`qn_settings`** (qn_settings_type): Settings object which controls optional arguments as described below.
 - **`update_orbs`** (subroutine):  
@@ -916,7 +919,7 @@ The following Fortran snippet demonstrates how to use the quasi-Newton interface
 
 ```fortran
 use opentrustregion, only: settings_type, update_orbs_type, solver
-use opentrustregion_quasi_newton, only: update_orbs_qn_factory, qn_settings_type, &
+use opentrustregion_quasi_newton, only: qn_factory, qn_settings_type, &
                                         update_orbs_qn_deconstructor
 
 type(settings_type) :: settings
@@ -937,7 +940,7 @@ qn_settings%verbose = 1
 qn_settings%hess_update_scheme = "sr1"
 
 ! get a quasi-Newton orbital updating subroutine
-call update_orbs_qn_factory(update_orbs_funptr, n_param, qn_settings, update_orbs_qn_funptr)
+call qn_factory(update_orbs_funptr, n_param, qn_settings, update_orbs_qn_funptr)
 
 ! initialize settings
 call settings%init(error)
@@ -973,7 +976,7 @@ strcpy(qn_settings.hess_update_scheme, "sr1");
 
 // get a quasi-Newton orbital updating function
 update_orbs_fp update_orbs_qn_funptr;
-update_orbs_qn_factory(update_orbs, n_param, qn_settings, &update_orbs_qn_funptr);
+qn_factory(update_orbs, n_param, qn_settings, &update_orbs_qn_funptr);
 
 // initialize settings
 solver_settings_type settings = solver_settings_init();
@@ -992,7 +995,7 @@ The following Python snippet demonstrates the equivalent usage through the Pytho
 ```python
 from pyopentrustregion import SolverSettings, solver
 from pyopentrustregion.extensions.quasi_newton import (
-    QNSettings, update_orbs_qn_factory, update_orbs_qn_deconstructor
+    QNSettings, qn_factory, update_orbs_qn_deconstructor
 )
 
 # initialize quasi-Newton settings
@@ -1003,7 +1006,7 @@ qn_settings.verbose = 1
 qn_settings.hess_update_scheme = "sr1"
 
 # get a quasi-Newton orbital updating function
-update_orbs_qn = update_orbs_qn_factory(update_orbs, n_param, qn_settings)
+update_orbs_qn = qn_factory(update_orbs, n_param, qn_settings)
 
 # initialize settings
 settings = SolverSettings()
@@ -1020,7 +1023,7 @@ update_orbs_qn_deconstructor()
 - Callback functions (`update_orbs`, `obj_func`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
 - Quasi-Newton settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `hess_update_scheme`) can then be overridden.
-- A quasi-Newton orbital updating function is obtained by calling `update_orbs_qn_factory` with the original `update_orbs` pointer, `n_param`, and `qn_settings`.
+- A quasi-Newton orbital updating function is obtained by calling `qn_factory` with the original `update_orbs` pointer, `n_param`, and `qn_settings`.
 - The `solver` is then called with the quasi-Newton-wrapped `update_orbs` function.
 - Clean up quasi-Newton resources by calling `update_orbs_qn_deconstructor`.
 
@@ -1031,6 +1034,7 @@ The quasi-Newton factory function can be fine-tuned using the following settings
   - `"sr1"`: symmetric rank-1 update,
   - `"bfgs"`: Broyden-Fletcher-Goldfarb-Shanno update,
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport` and `init_hess` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
 ### Augmented Roothaan–Hall (ARH)
 
@@ -1067,6 +1071,7 @@ The ARH factories construct and return ARH versions of the energy and orbital up
   - Exact-exchange potential (real array, written in-place): the exchange matrix of the density matrix of every spin channel, weighted by the exact-exchange fractions of the functional, and zero for a functional without exact exchange
   - Non-linear (exchange-correlation) potential (real array, written in-place)
   - An integer error code (0 for success, positive integers < 100 for errors)
+  - Receives the host context of the ARH settings as its last argument.
 
   The linear (Coulomb and exact exchange) potential of a spin channel is thereby the Coulomb potential of both spin channels minus its own exact-exchange potential, and the non-linear potential is the rest of the effective potential, i.e. the effective potential minus this linear potential.
 
@@ -1367,6 +1372,7 @@ The ARH factories can be fine-tuned using the following settings:
   - `"ms_sp"`: subspace-projected multisecant method,
   - `"ms_sr1"`: multisecant symmetric-rank-1 method, which treats the linear (Coulomb and exact exchange) part of the response exactly as the difference of a Coulomb and an exact-exchange multisecant term, each bounded by its positive semidefinite kernel, and the non-linear (exchange-correlation) part through a separate multisecant system regularized by the multisecant analogue of the SR1 skipping criterion.
 - **`verbose`** (integer): Controls the verbosity of output of the ARH routines.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
 ### Subspace Gradient-Enhanced Kriging Extension
 
@@ -1388,11 +1394,12 @@ CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install .
 
 #### Usage
 
-This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the `hess_x` function is never called. The routine `update_orbs_s_gek_factory` constructs and returns an S-GEK version of the orbital-updating subroutine. This routine requires the following input arguments:
+This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the `hess_x` function is never called. The routine `s_gek_factory` constructs and returns an S-GEK version of the orbital-updating subroutine. This routine requires the following input arguments:
 
 #### Required Arguments
 
 - **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine is not used. The returned orbital updating subroutine calls it with the host context the solver hands to it.
+- **`change_reference`** (subroutine): Expresses the parameters, local gradients and gradients of the `n_points` stored points in place relative to a new reference point and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the S-GEK settings as its last argument.
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`s_gek_settings`** (s_gek_settings_type): Settings object which controls optional arguments as described below.
 - **`update_orbs`** (subroutine):  
@@ -1404,7 +1411,7 @@ The following Fortran snippet demonstrates how to use the S-GEK interface:
 
 ```fortran
 use opentrustregion, only: settings_type, update_orbs_type, solver
-use otr_s_gek, only: update_orbs_s_gek_factory, s_gek_settings_type, &
+use otr_s_gek, only: s_gek_factory, s_gek_settings_type, &
                      update_orbs_s_gek_deconstructor
 
 type(settings_type) :: settings
@@ -1425,7 +1432,7 @@ s_gek_settings%verbose = 1
 s_gek_settings%max_points = 30
 
 ! get a S-GEK orbital updating subroutine
-call update_orbs_s_gek_factory(update_orbs_funptr, n_param, s_gek_settings, update_orbs_s_gek_funptr)
+call s_gek_factory(update_orbs_funptr, n_param, s_gek_settings, update_orbs_s_gek_funptr)
 
 ! initialize settings
 call settings%init(error)
@@ -1461,7 +1468,7 @@ s_gek_settings.max_points = 30;
 
 // get a S_GEK orbital updating function
 update_orbs_fp update_orbs_s_gek_funptr;
-update_orbs_s_gek_factory(update_orbs, n_param, s_gek_settings, &update_orbs_s_gek_funptr);
+s_gek_factory(update_orbs, n_param, s_gek_settings, &update_orbs_s_gek_funptr);
 
 // initialize settings
 solver_settings_type settings = solver_settings_init();
@@ -1481,7 +1488,7 @@ The following Python snippet demonstrates the equivalent usage through the Pytho
 ```python
 from pyopentrustregion import SolverSettings, solver
 from pyopentrustregion.extensions.s_gek import (
-    SGEKSettings, update_orbs_s_gek_factory, update_orbs_s_gek_deconstructor
+    SGEKSettings, s_gek_factory, update_orbs_s_gek_deconstructor
 )
 
 # initialize S-GEK settings
@@ -1492,7 +1499,7 @@ s_gek_settings.verbose = 1
 s_gek_settings.max_points = 30
 
 # get a S-GEK orbital updating function
-update_orbs_s_gek = update_orbs_s_gek_factory(update_orbs, n_param, s_gek_settings)
+update_orbs_s_gek = s_gek_factory(update_orbs, n_param, s_gek_settings)
 
 # initialize settings
 settings = SolverSettings()
@@ -1509,7 +1516,7 @@ update_orbs_s_gek_deconstructor()
 - Callback functions (`update_orbs`, `obj_func`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
 - S-GEK settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `max_points`) can then be overridden.
-- A S-GEK orbital updating function is obtained by calling `update_orbs_s_gek_factory` with the original `update_orbs` pointer, `n_param`, and `s_gek_settings`.
+- A S-GEK orbital updating function is obtained by calling `s_gek_factory` with the original `update_orbs` pointer, `n_param`, and `s_gek_settings`.
 - The `solver` is then called with the S-GEK-wrapped `update_orbs` function.
 - Clean up S-GEK resources by calling `update_orbs_s_gek_deconstructor`.
 
@@ -1519,6 +1526,7 @@ The S-GEK factory function can be fine-tuned using the following settings:
 - **`use_subspace`** (boolean): Specifies whether the surrogate model is constructed in a subspace.
 - **`max_points`** (integer): Controls the number of points for the surrogate model and subspace construction.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `change_reference` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
 ## AI Usage Disclosure
 

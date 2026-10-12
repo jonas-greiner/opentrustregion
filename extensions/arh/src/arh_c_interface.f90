@@ -15,34 +15,42 @@ module otr_arh_c_interface
                        standard_arh_factory_oao_os => arh_factory_oao_os, &
                        standard_arh_deconstructor => arh_deconstructor, &
                        evaluate_dm_os_type, evaluate_dm_cs_type
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_loc, &
-                                           c_f_pointer, c_funloc, c_f_procpointer, &
-                                           c_associated, c_char, c_null_funptr
+    use, intrinsic :: iso_c_binding, only: &
+        c_bool, c_ptr, c_funptr, c_loc, c_f_pointer, c_funloc, c_f_procpointer, &
+        c_associated, c_char, c_null_funptr, c_null_ptr
 
     implicit none
-
-    ! callback bundle of the logging function of the ARH settings, held here since
-    ! the settings outlive the factory call that sets it
-    type(c_callbacks_type), target :: logger_arh_callbacks
-
-    ! define procedure pointer which will point to the Fortran procedures
-    procedure(evaluate_dm_c_type), pointer :: evaluate_dm_before_wrapping => null()
-    procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
-    procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
         function evaluate_dm_c_type(dm_ao_c, energy_c, fock_c, v_coulomb_c, &
-                                    v_exchange_c, v_nonlinear_c) result(error_c) bind(C)
-            import :: c_rp, c_ip
+                                    v_exchange_c, v_nonlinear_c, context_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip, c_ptr
 
             real(c_rp), intent(in), target :: dm_ao_c(*)
             real(c_rp), intent(out) :: energy_c
             real(c_rp), intent(out), optional :: fock_c(*), v_coulomb_c(*), &
                                                  v_exchange_c(*), v_nonlinear_c(*)
+            type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
         end function evaluate_dm_c_type
     end interface
+
+    ! bundle of the C callback functions of ARH, which extends that of the core by the
+    ! density matrix evaluating function
+    type, extends(c_callbacks_type) :: arh_c_callbacks_type
+        procedure(evaluate_dm_c_type), pointer, nopass :: evaluate_dm => null()
+    end type
+
+    ! callback bundle of the density matrix evaluating function, and the logging
+    ! function and host context of the ARH settings, held here since the settings
+    ! outlive the factory call that sets it
+    type(arh_c_callbacks_type), target :: arh_callbacks
+
+    ! define procedure pointer which will point to the Fortran procedures
+    procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
+    procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
 
     ! derived type for ARH settings
     type, bind(C) :: arh_settings_type_c
@@ -50,6 +58,7 @@ module otr_arh_c_interface
         logical(c_bool) :: initialized
         integer(c_ip) :: verbose
         character(kind=c_char) :: arh_type(kw_len + 1)
+        type(c_ptr) :: context
     end type
 
     procedure(standard_arh_factory_mo_cs), pointer :: arh_factory_mo_cs => &
@@ -160,10 +169,6 @@ contains
             ao_overlap = reshape(real(ao_overlap_c(:n_ao**2), kind=rp), [n_ao, n_ao])
         end if
 
-        ! associate the input C pointers to Fortran procedure pointers
-        call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                             fptr=evaluate_dm_before_wrapping)
-
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
             evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
@@ -171,14 +176,18 @@ contains
             evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
         end if
 
-        ! convert settings and hand the logging function to its wrapper in a bundle,
-        ! which is held by the module since the settings outlive this call
+        ! convert settings and hand the density matrix evaluating function and the
+        ! logging function with the host context of initialized settings to their
+        ! wrappers in the bundle held by the module, which the settings point to
         settings = settings_c
-        logger_arh_callbacks = c_callbacks_type()
-        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
-            call c_f_procpointer(cptr=settings_c%logger, &
-                                 fptr=logger_arh_callbacks%logger)
-        settings%context => logger_arh_callbacks
+        arh_callbacks = arh_c_callbacks_type()
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=arh_callbacks%evaluate_dm)
+        if (settings_c%initialized) then
+            if (c_associated(settings_c%logger)) &
+                call c_f_procpointer(cptr=settings_c%logger, fptr=arh_callbacks%logger)
+            arh_callbacks%host_context = settings_c%context
+        end if
+        settings%context => arh_callbacks
 
         ! the factory wires its routines into Fortran solver settings, which start
         ! from the defaults since only the wired routines are copied into the C solver
@@ -289,10 +298,6 @@ contains
             ao_overlap = reshape(real(ao_overlap_c(:n_ao**2), kind=rp), [n_ao, n_ao])
         end if
 
-        ! associate the input C pointers to Fortran procedure pointers
-        call c_f_procpointer(cptr=evaluate_dm_c_funptr, &
-                             fptr=evaluate_dm_before_wrapping)
-
         ! associate procedure pointer to wrapper function
         if (n_particle == 1) then
             evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
@@ -300,14 +305,18 @@ contains
             evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
         end if
 
-        ! convert settings and hand the logging function to its wrapper in a bundle,
-        ! which is held by the module since the settings outlive this call
+        ! convert settings and hand the density matrix evaluating function and the
+        ! logging function with the host context of initialized settings to their
+        ! wrappers in the bundle held by the module, which the settings point to
         settings = settings_c
-        logger_arh_callbacks = c_callbacks_type()
-        if (settings_c%initialized .and. c_associated(settings_c%logger)) &
-            call c_f_procpointer(cptr=settings_c%logger, &
-                                 fptr=logger_arh_callbacks%logger)
-        settings%context => logger_arh_callbacks
+        arh_callbacks = arh_c_callbacks_type()
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=arh_callbacks%evaluate_dm)
+        if (settings_c%initialized) then
+            if (c_associated(settings_c%logger)) &
+                call c_f_procpointer(cptr=settings_c%logger, fptr=arh_callbacks%logger)
+            arh_callbacks%host_context = settings_c%context
+        end if
+        settings%context => arh_callbacks
 
         ! the factory wires its routines into Fortran solver settings, which start
         ! from the defaults since only the wired routines are copied into the C solver
@@ -351,7 +360,7 @@ contains
     end function arh_factory_oao_c_wrapper
 
     subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
-                                        v_nonlinear, error)
+                                        v_nonlinear, error, context)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the closed-shell case
@@ -361,6 +370,7 @@ contains
         real(rp), intent(out), optional, target, contiguous :: &
             fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(rp), pointer :: dm_3d(:, :, :), fock_3d(:, :, :), v_coulomb_3d(:, :, :), &
                              v_exchange_3d(:, :, :), v_nonlinear_3d(:, :, :)
@@ -377,12 +387,12 @@ contains
             v_nonlinear_3d(1:size(v_nonlinear, 1), 1:size(v_nonlinear, 2), 1:1) => &
             v_nonlinear
         call evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, v_coulomb_3d, &
-                                      v_exchange_3d, v_nonlinear_3d, error)
+                                      v_exchange_3d, v_nonlinear_3d, error, context)
 
     end subroutine evaluate_dm_cs_f_wrapper
 
     subroutine evaluate_dm_os_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
-                                        v_nonlinear, error)
+                                        v_nonlinear, error, context)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the open-shell case
@@ -392,6 +402,7 @@ contains
         real(rp), intent(out), optional, target :: &
             fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(c_rp) :: energy_c
         real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :), v_coulomb_c(:, :, :), &
@@ -418,8 +429,9 @@ contains
         end if
 
         ! call density matrix evaluating C function
-        error_c = evaluate_dm_before_wrapping(dm_c, energy_c, fock_c, v_coulomb_c, &
-                                              v_exchange_c, v_nonlinear_c)
+        error_c = arh_callbacks%evaluate_dm(dm_c, energy_c, fock_c, v_coulomb_c, &
+                                            v_exchange_c, v_nonlinear_c, &
+                                            arh_callbacks%host_context)
 
         ! convert arguments to Fortran kind
         energy = real(energy_c, kind=rp)
@@ -569,6 +581,9 @@ contains
 
             ! convert characters
             settings_c%arh_type = character_to_c(settings%arh_type)
+
+            ! the host context cannot be converted
+            settings_c%context = c_null_ptr
 
             ! set settings to initialized
             settings_c%initialized = .true._c_bool

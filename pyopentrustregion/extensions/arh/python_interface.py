@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import CFUNCTYPE, POINTER, c_bool, c_void_p, c_char, Structure, byref
+from ctypes import POINTER, c_bool, c_void_p, c_char, Structure, byref
 from dataclasses import dataclass
 from inspect import signature
 from typing import TYPE_CHECKING
@@ -16,6 +16,8 @@ from pyopentrustregion.python_interface import (
     c_int,
     c_real,
     kw_len,
+    callback_type,
+    CallbackInterface,
     obj_func_interface_type,
     update_orbs_interface_type,
     logger_interface_type,
@@ -58,7 +60,7 @@ if TYPE_CHECKING:
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-arh_evaluate_dm_interface_type = CFUNCTYPE(
+arh_evaluate_dm_interface_type = callback_type(
     c_int,
     POINTER(c_real),
     POINTER(c_real),
@@ -76,6 +78,7 @@ class ARHSettingsC(Structure):
         ("initialized", c_bool),
         ("verbose", c_int),
         ("arh_type", c_char * (kw_len + 1)),
+        ("context", c_void_p),
     ]
 
 
@@ -100,7 +103,7 @@ auto_bind_fields(ARHSettings)
 
 # define interface factories
 @dataclass
-class ARHEvaluateDMInterface:
+class ARHEvaluateDMInterface(CallbackInterface):
     """
     this class provides the interface to the density matrix evaluating function with
     Coulomb, exact-exchange and non-linear potential contributions
@@ -112,7 +115,7 @@ class ARHEvaluateDMInterface:
     closed_shell: bool
     exception: Dict[str, Exception]
 
-    def __call__(
+    def call(
         self,
         dm_ao_ptr,
         energy_ptr,

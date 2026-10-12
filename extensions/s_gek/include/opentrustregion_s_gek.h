@@ -14,13 +14,13 @@ extern "C" {
 #endif
 
 /* ------------------------------------------------------------------
- * Callback typedefs
+ * Declarations for S-GEK functions and function pointer types
  * ------------------------------------------------------------------ */
 
 /* Change of reference callback */
-typedef c_int change_reference_fn(const c_real *new_ref, c_int n_points,
-                                  c_real *kappa_list, c_real *local_grad_list,
-                                  c_real *grad_list);
+typedef c_int change_reference_fn(const c_real *new_ref_c, c_int n_points_c,
+                                  c_real *kappa_list_c, c_real *local_grad_list_c,
+                                  c_real *grad_list_c, void *context);
 typedef change_reference_fn *change_reference_fp;
 
 /* ------------------------------------------------------------------
@@ -32,6 +32,7 @@ typedef struct {
   c_bool use_subspace;
   c_int verbose;
   c_int max_points;
+  void *context;
 } s_gek_settings_type;
 
 // Fortran-callable init routine for S-GEK settings
@@ -42,22 +43,26 @@ void init_s_gek_settings(s_gek_settings_type *settings);
  * ------------------------------------------------------------------ */
 
 /**
- * Fortran-callable update_orbs_s_gek_factory interface
+ * Fortran-callable S-GEK factory interface.
  *
- * @param update_orbs_orig_c_funptr    Pointer to original update_orbs callback
- * @param change_reference_c_funptr    Pointer to change of reference callback
- * @param n_param                      Number of parameters
- * @param settings                     S-GEK settings
- * @param update_orbs_s_gek_c_funptr   Pointer to new update_orbs callback
- * @return                             Integer error code from Fortran
+ * @param update_orbs_orig_c_funptr               C pointer to original update_orbs
+ *                                                callback
+ * @param change_reference_c_funptr               C pointer to change of reference
+ *                                                callback
+ * @param n_param_c                               Number of parameters
+ * @param settings_c                              S-GEK settings
+ * @param update_orbs_s_gek_c_funptr              Output: wrapped update_orbs function
+ *                                                pointer
+ *
+ * @return                                        Integer error code from Fortran
  */
-c_int update_orbs_s_gek_factory(update_orbs_fp update_orbs_orig_c_funptr,
-                                change_reference_fp change_reference_c_funptr,
-                                c_int n_param, const s_gek_settings_type *settings,
-                                update_orbs_fp *update_orbs_s_gek_c_funptr);
+c_int s_gek_factory(update_orbs_fp update_orbs_orig_c_funptr,
+                    change_reference_fp change_reference_c_funptr, c_int n_param_c,
+                    const s_gek_settings_type *settings_c,
+                    update_orbs_fp *update_orbs_s_gek_c_funptr);
 
 /**
- * Fortran-callable update_orbs_s_gek_deconstructor interface
+ * Fortran-callable S-GEK deconstructor.
  */
 void update_orbs_s_gek_deconstructor(void);
 

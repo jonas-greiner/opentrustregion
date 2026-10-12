@@ -36,10 +36,10 @@ contains
             check_update_orbs_c_funptr, check_precond_c_funptr, &
             check_precond_pd_c_funptr, check_project_c_funptr, &
             check_get_extra_trial_vectors_c_funptr, ref_solver_settings, operator(/=), &
-            n_param_ref => n_param
-        use otr_common_mock, only: mock_logger_c, test_logger, mock_obj_func, &
-                                   mock_precond, mock_precond_pd, &
-                                   mock_get_extra_trial_vectors
+            n_param_ref => n_param, arm_host_context_c, host_context, &
+            host_context_reached
+        use otr_common_mock, only: mock_logger_c, mock_obj_func, mock_precond, &
+                                   mock_precond_pd, mock_get_extra_trial_vectors
         use otr_common_c_interface, only: n_param_global => n_param
         use c_interface, only: solver_settings_type_c
         use opentrustregion, only: default_stability_settings
@@ -91,13 +91,15 @@ contains
                 evaluate_dm_c_funptr = c_funloc(mock_evaluate_dm_os)
             end if
 
-            ! initialize logger logical, global number of parameters and solver
-            ! settings, uninitialized for the closed-shell case, set to reference
-            ! values, which have to be kept, for the open-shell case, and set to
-            ! reference values with stability check settings that were not initialized,
-            ! which have to be set to their defaults with a warning through the logging
-            ! function of the solver settings, for the last case
-            test_logger = .false.
+            ! arm the host context of the OAO settings, which the logging and density
+            ! matrix evaluating functions receive, and initialize the global number of
+            ! parameters and solver settings, uninitialized for the closed-shell case,
+            ! set to reference values, which have to be kept, for the open-shell case,
+            ! and set to reference values with stability check settings that were not
+            ! initialized, which have to be set to their defaults with a warning
+            ! through the logging function of the solver settings, which receives the
+            ! same host context, for the last case
+            call arm_host_context_c(settings_c%context)
             n_param_global = -1
             if (i_call == 1) then
                 solver_settings_c%initialized = .false._c_bool
@@ -108,6 +110,7 @@ contains
                 solver_settings_c%stability_settings%context = c_null_ptr
                 if (nested_uninitialized) then
                     solver_settings_c%logger = c_funloc(mock_logger_c)
+                    solver_settings_c%context = settings_c%context
                     solver_settings_c%stability_settings%initialized = .false._c_bool
                 end if
             end if
@@ -130,11 +133,15 @@ contains
                 write(stderr, *) "test_oao_factory_c_wrapper failed: Mock factory "// &
                     "received wrong input for the "//case_name//" case."
             end if
-            if (.not. test_logger) then
+            if (.not. host_context%logger_called) then
                 test_oao_factory_c_wrapper = .false.
                 write(stderr, *) "test_oao_factory_c_wrapper failed: Called "// &
                     "logging subroutine wrong for the "//case_name//" case."
             end if
+
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("oao_factory_c_wrapper")) &
+                test_oao_factory_c_wrapper = .false.
 
             ! check if output variables are as expected
             if (error_c /= 0) then
@@ -263,21 +270,27 @@ contains
         ! function
         !
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type
-        use otr_oao_c_interface, only: evaluate_dm_oao_before_wrapping, &
-                                       evaluate_dm_oao_cs_f_wrapper, &
+        use otr_oao_c_interface, only: oao_callbacks, evaluate_dm_oao_cs_f_wrapper, &
                                        evaluate_dm_oao_os_f_wrapper
         use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
                                              test_evaluate_dm_os_funptr
         use otr_common_unit_tests, only: mock_requests
         use otr_common_c_interface_unit_tests, only: mock_evaluate_dm_cs, &
                                                      mock_evaluate_dm_os
+        use test_reference, only: arm_host_context_c, host_context_reached
 
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        class(*), pointer :: context
         integer(ip) :: request
 
-        ! inject mock subroutine
-        evaluate_dm_oao_before_wrapping => mock_evaluate_dm_cs
+        ! assume tests pass
+        test_evaluate_dm_oao_f_wrapper = .true.
+
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        oao_callbacks%evaluate_dm => mock_evaluate_dm_cs
+        call arm_host_context_c(oao_callbacks%host_context)
+        context => oao_callbacks
 
         ! get pointer to subroutine
         evaluate_dm_cs_funptr => evaluate_dm_oao_cs_f_wrapper
@@ -286,8 +299,9 @@ contains
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        test_evaluate_dm_oao_f_wrapper = test_evaluate_dm_cs_funptr( &
-            evaluate_dm_cs_funptr, "evaluate_dm_oao_f_wrapper", "")
+        if (.not. test_evaluate_dm_cs_funptr( &
+            evaluate_dm_cs_funptr, "evaluate_dm_oao_f_wrapper", "", context)) &
+            test_evaluate_dm_oao_f_wrapper = .false.
         if (size(mock_requests) /= 4 .or. &
             .not. all([(any(mock_requests == request), request=0, 3)])) then
             write(stderr, *) "test_evaluate_dm_oao_f_wrapper failed: Outputs "// &
@@ -296,8 +310,13 @@ contains
             test_evaluate_dm_oao_f_wrapper = .false.
         end if
 
-        ! inject mock subroutine
-        evaluate_dm_oao_before_wrapping => mock_evaluate_dm_os
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("evaluate_dm_oao_f_wrapper")) &
+            test_evaluate_dm_oao_f_wrapper = .false.
+
+        ! inject mock C function and arm the host context again
+        oao_callbacks%evaluate_dm => mock_evaluate_dm_os
+        call arm_host_context_c(oao_callbacks%host_context)
 
         ! get pointer to subroutine
         evaluate_dm_os_funptr => evaluate_dm_oao_os_f_wrapper
@@ -306,9 +325,9 @@ contains
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        test_evaluate_dm_oao_f_wrapper = &
-            test_evaluate_dm_oao_f_wrapper .and. test_evaluate_dm_os_funptr( &
-                evaluate_dm_os_funptr, "evaluate_dm_oao_f_wrapper", "")
+        if (.not. test_evaluate_dm_os_funptr( &
+            evaluate_dm_os_funptr, "evaluate_dm_oao_f_wrapper", "", context)) &
+            test_evaluate_dm_oao_f_wrapper = .false.
         if (size(mock_requests) /= 4 .or. &
             .not. all([(any(mock_requests == request), request=0, 3)])) then
             write(stderr, *) "test_evaluate_dm_oao_f_wrapper failed: Outputs "// &
@@ -317,6 +336,10 @@ contains
             test_evaluate_dm_oao_f_wrapper = .false.
         end if
 
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("evaluate_dm_oao_f_wrapper")) &
+            test_evaluate_dm_oao_f_wrapper = .false.
+
     end function test_evaluate_dm_oao_f_wrapper
 
     logical(c_bool) function test_get_response_oao_f_wrapper() bind(C)
@@ -324,37 +347,53 @@ contains
         ! this function tests the Fortran wrapper for the response function
         !
         use otr_common, only: get_response_cs_type, get_response_os_type
-        use otr_oao_c_interface, only: get_response_oao_before_wrapping, &
-                                       get_response_oao_cs_f_wrapper, &
+        use otr_oao_c_interface, only: oao_callbacks, get_response_oao_cs_f_wrapper, &
                                        get_response_oao_os_f_wrapper
         use otr_common_test_reference, only: test_get_response_cs_funptr, &
                                              test_get_response_os_funptr
         use otr_common_c_interface_unit_tests, only: mock_get_response_cs, &
                                                      mock_get_response_os
+        use test_reference, only: arm_host_context_c, host_context_reached
 
         procedure(get_response_cs_type), pointer :: get_response_cs_funptr
         procedure(get_response_os_type), pointer :: get_response_os_funptr
+        class(*), pointer :: context
 
-        ! inject mock subroutine
-        get_response_oao_before_wrapping => mock_get_response_cs
+        ! assume tests pass
+        test_get_response_oao_f_wrapper = .true.
+
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        oao_callbacks%get_response => mock_get_response_cs
+        call arm_host_context_c(oao_callbacks%host_context)
+        context => oao_callbacks
 
         ! get pointer to subroutine
         get_response_cs_funptr => get_response_oao_cs_f_wrapper
 
         ! test response function wrapper
-        test_get_response_oao_f_wrapper = test_get_response_cs_funptr( &
-            get_response_cs_funptr, "get_response_oao_f_wrapper", "")
+        if (.not. test_get_response_cs_funptr( &
+            get_response_cs_funptr, "get_response_oao_f_wrapper", "", context)) &
+            test_get_response_oao_f_wrapper = .false.
 
-        ! inject mock subroutine
-        get_response_oao_before_wrapping => mock_get_response_os
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("get_response_oao_f_wrapper")) &
+            test_get_response_oao_f_wrapper = .false.
+
+        ! inject mock C function and arm the host context again
+        oao_callbacks%get_response => mock_get_response_os
+        call arm_host_context_c(oao_callbacks%host_context)
 
         ! get pointer to subroutine
         get_response_os_funptr => get_response_oao_os_f_wrapper
 
         ! test response function wrapper
-        test_get_response_oao_f_wrapper = &
-            test_get_response_oao_f_wrapper .and. test_get_response_os_funptr( &
-                get_response_os_funptr, "get_response_oao_f_wrapper", "")
+        if (.not. test_get_response_os_funptr( &
+            get_response_os_funptr, "get_response_oao_f_wrapper", "", context)) &
+            test_get_response_oao_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("get_response_oao_f_wrapper")) &
+            test_get_response_oao_f_wrapper = .false.
 
     end function test_get_response_oao_f_wrapper
 
@@ -587,7 +626,8 @@ contains
         use otr_oao, only: oao_settings_type
         use otr_oao_test_reference, only: assignment(=), ref_oao_settings, operator(/=)
         use c_interface, only: c_callbacks_type
-        use otr_common_mock, only: mock_logger_c, test_logger
+        use otr_common_mock, only: mock_logger_c
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(oao_settings_type_c) :: settings_c
         type(oao_settings_type) :: settings
@@ -612,13 +652,15 @@ contains
             write(stderr, *) "test_assign_oao_f_c failed: Logging function not "// &
                 "associated with value."
         else
-            test_logger = .false.
+            call arm_host_context_c(callbacks%host_context)
             call settings%logger("test", settings%context)
-            if (.not. test_logger) then
+            if (.not. host_context%logger_called) then
                 test_assign_oao_f_c = .false.
                 write(stderr, *) "test_assign_oao_f_c failed: Called logging "// &
                     "subroutine wrong."
             end if
+            if (.not. host_context_reached("assign_oao_f_c")) &
+                test_assign_oao_f_c = .false.
         end if
 
         ! check against reference values
@@ -669,10 +711,14 @@ contains
         ! convert to C settings
         settings_c = settings
 
-        ! check that callback function pointers are not associated
+        ! check that no callback function pointers and host contexts are associated
         if (c_associated(settings_c%logger)) then
             test_assign_oao_c_f = .false.
             write(stderr, *) "test_assign_oao_c_f failed: Logger function associated."
+        end if
+        if (c_associated(settings_c%context)) then
+            write(stderr, *) "test_assign_oao_c_f failed: Host context associated."
+            test_assign_oao_c_f = .false.
         end if
 
         ! check against reference values

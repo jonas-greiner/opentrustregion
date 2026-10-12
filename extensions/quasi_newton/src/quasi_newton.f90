@@ -13,22 +13,24 @@ module otr_qn
 
     ! interfaces for callback functions
     abstract interface
-        subroutine transport_type(geodesic, tangent_vector, error)
+        subroutine transport_type(geodesic, tangent_vector, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target :: geodesic(:)
             real(rp), intent(inout), target :: tangent_vector(:)
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
 
         end subroutine transport_type
     end interface
 
     abstract interface
-        subroutine init_hess_type(vector, error)
+        subroutine init_hess_type(vector, error, context)
             import :: rp, ip
 
             real(rp), intent(inout), target :: vector(:)
             integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
 
         end subroutine init_hess_type
     end interface
@@ -96,9 +98,9 @@ module otr_qn
 
 contains
 
-    subroutine update_orbs_qn_factory(update_orbs_funptr_in, transport_funptr_in, &
-                                      init_hess_funptr_in, n_param, error, settings, &
-                                      update_orbs_qn_funptr)
+    subroutine qn_factory(update_orbs_funptr_in, transport_funptr_in, &
+                          init_hess_funptr_in, n_param, error, settings, &
+                          update_orbs_qn_funptr)
         !
         ! this subroutine returns a modified quasi-Newton orbital updating function
         !
@@ -161,7 +163,7 @@ contains
         ! get pointer to modified orbital updating function
         update_orbs_qn_funptr => update_orbs_qn
 
-    end subroutine update_orbs_qn_factory
+    end subroutine qn_factory
 
     subroutine update_orbs_qn(kappa, func, grad, h_diag, hess_x_funptr, error, context)
         !
@@ -250,16 +252,18 @@ contains
 
         ! transport history
         do i = 1, self%n_points
-            call transport_funptr(kappa, self%kappa_list(:, i), error)
+            call transport_funptr(kappa, self%kappa_list(:, i), error, &
+                                  self%settings%context)
             if (error /= 0) return
-            call transport_funptr(kappa, self%grad_diff_list(:, i), error)
+            call transport_funptr(kappa, self%grad_diff_list(:, i), error, &
+                                  self%settings%context)
             if (error /= 0) return
         end do
 
         ! check if last gradient is available to calculate gradient difference
         if (allocated(self%last_grad)) then
             ! calculate gradient difference
-            call transport_funptr(kappa, self%last_grad, error)
+            call transport_funptr(kappa, self%last_grad, error, self%settings%context)
             if (error /= 0) return
             grad_diff = grad - self%last_grad
 
@@ -339,7 +343,7 @@ contains
         n_param = size(kappa)
         kappa_norm = sqrt(ddot(n_param, kappa, 1_ip, kappa, 1_ip))
         residual = -kappa
-        call init_hess_funptr(residual, error)
+        call init_hess_funptr(residual, error, self%settings%context)
         if (error /= 0) return
         residual = residual + grad_diff
         residual_norm = sqrt(ddot(n_param, residual, 1_ip, residual, 1_ip))
@@ -383,7 +387,7 @@ contains
 
         ! initialize with Hessian diagonal
         hess_x = x
-        call init_hess_funptr(hess_x, error)
+        call init_hess_funptr(hess_x, error, update_object%settings%context)
         if (error /= 0) return
 
         ! only current point is available
@@ -393,7 +397,7 @@ contains
         allocate(psi(n_param, sr1_object%n_points))
         do i = 1, sr1_object%n_points
             psi(:, i) = -sr1_object%kappa_list(:, i)
-            call init_hess_funptr(psi(:, i), error)
+            call init_hess_funptr(psi(:, i), error, update_object%settings%context)
             if (error /= 0) return
             psi(:, i) = psi(:, i) + sr1_object%grad_diff_list(:, i)
         end do
@@ -516,7 +520,7 @@ contains
 
         ! initialize with Hessian diagonal
         hess_x = x
-        call init_hess_funptr(hess_x, error)
+        call init_hess_funptr(hess_x, error, update_object%settings%context)
         if (error /= 0) return
 
         ! only current point is available
@@ -529,7 +533,7 @@ contains
         compact_scal_mat = 0.0_rp
         do j = 1, bfgs_object%n_points
             init_hess_x = bfgs_object%kappa_list(:, j)
-            call init_hess_funptr(init_hess_x, error)
+            call init_hess_funptr(init_hess_x, error, update_object%settings%context)
             if (error /= 0) return
             do i = 1, bfgs_object%n_points
                 ! Weighted Top-Left: kappa_i^T * h_start * kappa_j
@@ -595,7 +599,7 @@ contains
         do i = 1, bfgs_object%n_points
             ! subtract rotation difference contributions
             init_hess_x = bfgs_object%kappa_list(:, i)
-            call init_hess_funptr(init_hess_x, error)
+            call init_hess_funptr(init_hess_x, error, update_object%settings%context)
             if (error /= 0) return
             hess_x = hess_x - (solution(i) * init_hess_x)
             ! subtract gradient difference contributions

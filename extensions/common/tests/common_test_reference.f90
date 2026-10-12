@@ -8,8 +8,8 @@ module otr_common_test_reference
 
     use opentrustregion, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
-    use, intrinsic :: iso_c_binding, only: c_funptr, c_f_procpointer, c_associated, &
-                                           c_null_funptr
+    use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_f_procpointer, &
+                                           c_associated, c_null_funptr
 
     implicit none
 
@@ -51,8 +51,8 @@ module otr_common_test_reference
 
 contains
 
-    function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message) &
-        result(test_passed)
+    function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
+                                        context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer for
         ! the closed-shell case for every combination of requested outputs
@@ -62,6 +62,7 @@ contains
 
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
         real(rp), target :: dm_ao(n_ao, n_ao), fock(n_ao, n_ao)
@@ -97,9 +98,10 @@ contains
             fock = 0.0_rp
             if (btest(request, 1)) then
                 call evaluate_dm_funptr(dm_ao, energy, fock_ptr, get_response_funptr, &
-                                        error)
+                                        error, context)
             else
-                call evaluate_dm_funptr(dm_ao, energy, fock_ptr, error=error)
+                call evaluate_dm_funptr(dm_ao, energy, fock_ptr, error=error, &
+                                        context=context)
             end if
 
             ! check for error
@@ -126,16 +128,17 @@ contains
             end if
 
             ! test returned response function
-            if (btest(request, 1)) &
-                test_passed = test_passed .and. test_get_response_cs_funptr( &
-                    get_response_funptr, test_name, &
-                    " by response function returned"//message//requested)
+            if (btest(request, 1)) then
+                if (.not. test_get_response_cs_funptr( &
+                    get_response_funptr, test_name, " by response function returned"// &
+                    message//requested, context)) test_passed = .false.
+            end if
         end do
 
     end function test_evaluate_dm_cs_funptr
 
-    function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message) &
-        result(test_passed)
+    function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message, &
+                                        context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer for
         ! the open-shell case for every combination of requested outputs
@@ -145,6 +148,7 @@ contains
 
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle)
@@ -180,9 +184,10 @@ contains
             fock = 0.0_rp
             if (btest(request, 1)) then
                 call evaluate_dm_funptr(dm_ao, energy, fock_ptr, get_response_funptr, &
-                                        error)
+                                        error, context)
             else
-                call evaluate_dm_funptr(dm_ao, energy, fock_ptr, error=error)
+                call evaluate_dm_funptr(dm_ao, energy, fock_ptr, error=error, &
+                                        context=context)
             end if
 
             ! check for error
@@ -209,16 +214,17 @@ contains
             end if
 
             ! test returned response function
-            if (btest(request, 1)) &
-                test_passed = test_passed .and. test_get_response_os_funptr( &
-                    get_response_funptr, test_name, &
-                    " by response function returned"//message//requested)
+            if (btest(request, 1)) then
+                if (.not. test_get_response_os_funptr( &
+                    get_response_funptr, test_name, " by response function returned"// &
+                    message//requested, context)) test_passed = .false.
+            end if
         end do
 
     end function test_evaluate_dm_os_funptr
 
     function test_evaluate_dm_c_funptr(evaluate_dm_c_funptr, n_particle, test_name, &
-                                       message) result(test_passed)
+                                       message, context_c) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating C function pointer
         ! for the closed- (n_particle = 1) or open-shell (n_particle = 2) case for every
@@ -230,6 +236,7 @@ contains
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
         integer(ip), intent(in) :: n_particle
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in) :: context_c
         logical :: test_passed
 
         procedure(evaluate_dm_c_type), pointer :: evaluate_dm_funptr
@@ -273,10 +280,10 @@ contains
             energy = 0.0_c_rp
             fock = 0.0_c_rp
             if (btest(request, 1)) then
-                error = &
-                    evaluate_dm_funptr(dm_ao, energy, fock_ptr, get_response_c_funptr)
+                error = evaluate_dm_funptr(dm_ao, energy, fock_ptr, &
+                                           get_response_c_funptr, context_c)
             else
-                error = evaluate_dm_funptr(dm_ao, energy, fock_ptr)
+                error = evaluate_dm_funptr(dm_ao, energy, fock_ptr, context_c=context_c)
             end if
 
             ! check for error
@@ -303,16 +310,18 @@ contains
             end if
 
             ! test returned response function
-            if (btest(request, 1)) &
-                test_passed = test_passed .and. test_get_response_c_funptr( &
+            if (btest(request, 1)) then
+                if (.not. test_get_response_c_funptr( &
                     get_response_c_funptr, n_particle, test_name, &
-                    " by response function returned"//message//requested)
+                    " by response function returned"//message//requested, context_c)) &
+                    test_passed = .false.
+            end if
         end do
 
     end function test_evaluate_dm_c_funptr
 
-    function test_get_response_cs_funptr(get_response_funptr, test_name, message) &
-        result(test_passed)
+    function test_get_response_cs_funptr(get_response_funptr, test_name, message, &
+                                         context) result(test_passed)
         !
         ! this function tests a provided response function pointer for the closed-shell
         ! case
@@ -322,6 +331,7 @@ contains
 
         procedure(get_response_cs_type), intent(in), pointer :: get_response_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
         real(rp), allocatable :: dm_ao(:, :), response(:, :)
@@ -345,7 +355,7 @@ contains
         call random_number(dm_ao)
 
         ! call response subroutine
-        call get_response_funptr(dm_ao, response, error)
+        call get_response_funptr(dm_ao, response, error, context)
 
         ! check for error
         if (error /= 0) then
@@ -366,8 +376,8 @@ contains
 
     end function test_get_response_cs_funptr
 
-    function test_get_response_os_funptr(get_response_funptr, test_name, message) &
-        result(test_passed)
+    function test_get_response_os_funptr(get_response_funptr, test_name, message, &
+                                         context) result(test_passed)
         !
         ! this function tests a provided response function pointer for the open-shell
         ! case
@@ -377,6 +387,7 @@ contains
 
         procedure(get_response_os_type), intent(in), pointer :: get_response_funptr
         character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
         logical :: test_passed
 
         real(rp), allocatable :: dm_ao(:, :, :), response(:, :, :)
@@ -400,7 +411,7 @@ contains
         call random_number(dm_ao)
 
         ! call response subroutine
-        call get_response_funptr(dm_ao, response, error)
+        call get_response_funptr(dm_ao, response, error, context)
 
         ! check for error
         if (error /= 0) then
@@ -422,7 +433,7 @@ contains
     end function test_get_response_os_funptr
 
     function test_get_response_c_funptr(get_response_c_funptr, n_particle, test_name, &
-                                        message) result(test_passed)
+                                        message, context_c) result(test_passed)
         !
         ! this function tests a provided response C function pointer for the closed-
         ! (n_particle = 1) or open-shell (n_particle = 2) case
@@ -433,6 +444,7 @@ contains
         type(c_funptr), intent(in) :: get_response_c_funptr
         integer(ip), intent(in) :: n_particle
         character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in) :: context_c
         logical :: test_passed
 
         procedure(get_response_c_type), pointer :: get_response_funptr_c
@@ -464,7 +476,7 @@ contains
         call random_number(dm_ao)
 
         ! call response function
-        error = get_response_funptr_c(dm_ao, response)
+        error = get_response_funptr_c(dm_ao, response, context_c)
 
         ! check for error
         if (error /= 0) then

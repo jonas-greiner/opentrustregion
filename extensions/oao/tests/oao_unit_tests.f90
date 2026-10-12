@@ -992,7 +992,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! OAO basis
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use otr_common_unit_tests, only: identity_matrix, &
                                          generate_random_density_matrix, &
                                          generate_random_symm_matrix, mock_requests, &
@@ -1017,6 +1017,7 @@ contains
         ! different square root of the overlap matrix, which must not be used for it
         allocate(oao_object)
         call setup_settings(oao_object%settings)
+        call arm_host_context(oao_object%settings)
         oao_object%n_ao = n_ao
         oao_object%n_particle = n_particle
         oao_object%n_param = n_param
@@ -1115,6 +1116,11 @@ contains
                 "for a plane rotation."
             test_obj_func_oao_callback = .false.
         end if
+
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("obj_func_oao_callback")) &
+            test_obj_func_oao_callback = .false.
+
         deallocate(oao_object)
 
     end function test_obj_func_oao_callback
@@ -1125,7 +1131,7 @@ contains
         ! Hessian diagonal evaluation in the OAO basis, for the closed-shell and the
         ! open-shell case
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_fock_factor, mock_requests, &
@@ -1167,6 +1173,7 @@ contains
             end do
             allocate(oao_object)
             call setup_settings(oao_object%settings)
+            call arm_host_context(oao_object%settings)
             oao_object%n_ao = n_ao
             oao_object%n_particle = n_particle
             oao_object%n_param = n_param
@@ -1358,6 +1365,10 @@ contains
                 test_update_orbs_oao_callback = .false.
             end if
 
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("update_orbs_oao_callback")) &
+                test_update_orbs_oao_callback = .false.
+
             ! deallocate OAO object and case arrays
             deallocate(oao_object, dm_ao, dm_oao, kappa, grad, h_diag)
         end do
@@ -1404,7 +1415,7 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the OAO basis
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_requests, mock_response_factor, &
@@ -1441,6 +1452,7 @@ contains
         ! set up the OAO object
         allocate(oao_object)
         call setup_settings(oao_object%settings)
+        call arm_host_context(oao_object%settings)
         oao_object%n_ao = n_ao
         oao_object%dm_oao = dm_oao
         oao_object%fock_oo = fock_oo
@@ -1531,12 +1543,16 @@ contains
             test_hess_x_oao_callback = .false.
         end if
 
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("hess_x_oao_callback")) &
+            test_hess_x_oao_callback = .false.
+
         ! deallocate OAO object
         deallocate(oao_object)
 
     contains
 
-        subroutine mock_get_stale_response_os(dm, response_out, error_out)
+        subroutine mock_get_stale_response_os(dm, response_out, error_out, context_out)
             !
             ! this subroutine is a mock response function for the open-shell case which
             ! belongs to an outdated density and returns a vanishing response
@@ -1544,6 +1560,7 @@ contains
             real(rp), intent(in), target :: dm(:, :, :)
             real(rp), intent(out), target :: response_out(:, :, :)
             integer(ip), intent(out) :: error_out
+            class(*), intent(in), pointer :: context_out
 
             error_out = 0
             response_out = 0.0_rp * dm

@@ -139,11 +139,10 @@ contains
         end if
 
         ! test passed density matrix evaluating function
-        test_mo_factory_interface = &
-            test_mo_factory_interface .and. test_evaluate_dm_c_funptr( &
-                evaluate_dm_c_funptr, int(n_particle_c, kind=ip), &
-                "mo_factory_py_interface", &
-                " by given density matrix evaluating function")
+        if (.not. test_evaluate_dm_c_funptr( &
+            evaluate_dm_c_funptr, int(n_particle_c, kind=ip), &
+            "mo_factory_py_interface", " by given density matrix evaluating function", &
+            c_null_ptr)) test_mo_factory_interface = .false.
 
         ! get Fortran pointer to passed logging function and call it
         message = "test"//c_null_char

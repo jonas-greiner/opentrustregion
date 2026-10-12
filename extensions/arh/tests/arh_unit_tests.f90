@@ -77,7 +77,7 @@ contains
     end function mock_potential_os
 
     subroutine mock_evaluate_dm_cs(dm, energy, fock, v_coulomb, v_exchange, &
-                                   v_nonlinear, error)
+                                   v_nonlinear, error, context)
         !
         ! this subroutine is a mock density matrix evaluating function with Coulomb,
         ! exact-exchange and non-linear potential contributions for the closed-shell
@@ -85,12 +85,17 @@ contains
         ! so that non-vanishing differences are produced
         !
         use otr_common_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
+        use test_reference, only: check_host_context
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), optional, target, contiguous :: &
             fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
             2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
@@ -109,7 +114,7 @@ contains
     end subroutine mock_evaluate_dm_cs
 
     subroutine mock_evaluate_dm_os(dm, energy, fock, v_coulomb, v_exchange, &
-                                   v_nonlinear, error)
+                                   v_nonlinear, error, context)
         !
         ! this subroutine is a mock density matrix evaluating function with Coulomb,
         ! exact-exchange and non-linear potential contributions for the open-shell case,
@@ -117,14 +122,19 @@ contains
         ! that non-vanishing differences are produced
         !
         use otr_common_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
+        use test_reference, only: check_host_context
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
         real(rp), intent(out), optional, target :: &
             fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: i
+
+        ! check host context
+        call check_host_context(context)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
             2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
@@ -669,7 +679,7 @@ contains
         ! for orbitals parameterized in the OAO basis, which also adds the evaluated
         ! point together with the potentials the shell keeps to the history
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use opentrustregion, only: obj_func_type
         use otr_arh, only: obj_func_arh_callback, arh_object
         use otr_oao, only: oao_object
@@ -696,6 +706,7 @@ contains
         ! the first call
         call setup_arh_and_scaled_oao_objects(basis_scale, dm_ao, dm_oao)
         call setup_empty_history(n_particle)
+        call arm_host_context(arh_object%settings)
         deallocate(arh_object%dm_list)
         obj_func => obj_func_arh_callback
 
@@ -794,6 +805,9 @@ contains
             passed = .false.
         end if
 
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("obj_func_arh_callback")) passed = .false.
+
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
 
@@ -806,7 +820,7 @@ contains
         ! which passes the Fock matrix in the history basis on to the orbital basis and
         ! adds the point the orbitals are rotated away from to the history
         !
-        use test_reference, only: no_context
+        use test_reference, only: no_context, arm_host_context, host_context_reached
         use opentrustregion, only: update_orbs_type, hess_x_type
         use otr_arh, only: update_orbs_arh_callback, arh_object, hess_x_arh_callback_ptr
         use otr_oao, only: oao_object
@@ -835,6 +849,7 @@ contains
         ! set up the OAO and ARH objects
         call setup_arh_and_scaled_oao_objects(basis_scale, dm_ao, dm_oao)
         arh_object%settings%arh_type = "ms_psb"
+        call arm_host_context(arh_object%settings)
         update_orbs => update_orbs_arh_callback
         if (n_particle == 1) then
             arh_object%evaluate_dm_cs => mock_evaluate_dm_cs
@@ -1065,6 +1080,9 @@ contains
             end if
         end block checks
 
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("update_orbs_arh_callback")) passed = .false.
+
         ! deallocate ARH and OAO objects
         deallocate(arh_object, oao_object)
 
@@ -1072,7 +1090,7 @@ contains
 
         subroutine mock_evaluate_dm_failing_cs(dm, energy_out, fock_out, &
                                                v_coulomb_out, v_exchange_out, &
-                                               v_nonlinear_out, error_out)
+                                               v_nonlinear_out, error_out, context_out)
             !
             ! this subroutine is a mock density matrix evaluating function for the
             ! closed-shell case, which fails
@@ -1083,6 +1101,7 @@ contains
                 fock_out(:, :), v_coulomb_out(:, :), v_exchange_out(:, :), &
                 v_nonlinear_out(:, :)
             integer(ip), intent(out) :: error_out
+            class(*), intent(in), pointer :: context_out
 
             error_out = 1
             energy_out = sum(dm)
@@ -1095,7 +1114,7 @@ contains
 
         subroutine mock_evaluate_dm_failing_os(dm, energy_out, fock_out, &
                                                v_coulomb_out, v_exchange_out, &
-                                               v_nonlinear_out, error_out)
+                                               v_nonlinear_out, error_out, context_out)
             !
             ! this subroutine is a mock density matrix evaluating function for the
             ! open-shell case, which fails
@@ -1106,6 +1125,7 @@ contains
                 fock_out(:, :, :), v_coulomb_out(:, :, :), v_exchange_out(:, :, :), &
                 v_nonlinear_out(:, :, :)
             integer(ip), intent(out) :: error_out
+            class(*), intent(in), pointer :: context_out
 
             error_out = 1
             energy_out = sum(dm)

@@ -87,7 +87,11 @@ class CommonPyInterfaceTests(unittest.TestCase):
         energy = (c_real * 1)()
         get_response_funptr = (c_void_p * 1)()
         error = evaluate_dm(
-            dm_ao.ctypes.data_as(POINTER(c_real)), energy, None, get_response_funptr
+            dm_ao.ctypes.data_as(POINTER(c_real)),
+            energy,
+            None,
+            get_response_funptr,
+            None,
         )
         if error == 0 or not isinstance(exception.get("exc"), RuntimeError):
             print(

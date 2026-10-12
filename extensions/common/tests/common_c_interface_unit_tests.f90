@@ -9,7 +9,7 @@ module otr_common_c_interface_unit_tests
     use opentrustregion, only: ip
     use c_interface, only: c_rp, c_ip
     use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type
-    use, intrinsic :: iso_c_binding, only: c_funptr, c_funloc
+    use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_funloc
 
     implicit none
 
@@ -23,22 +23,27 @@ module otr_common_c_interface_unit_tests
 
 contains
 
-    function mock_evaluate_dm_cs(dm_ao, energy, fock, get_response_c_funptr) &
-        result(error) bind(C)
+    function mock_evaluate_dm_cs(dm_ao, energy, fock, get_response_c_funptr, &
+                                 context_c) result(error) bind(C)
         !
         ! this function is a test function for the density matrix evaluating C function
         ! for 2D density matrices
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao
         use otr_common_unit_tests, only: record_mock_call
+        use test_reference, only: check_host_context_c
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         real(c_rp), intent(out), optional :: fock(*)
         type(c_funptr), intent(out), optional :: get_response_c_funptr
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
         integer(ip) :: flat_len = n_ao**2
+
+        ! check host context
+        call check_host_context_c(context_c)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
                               merge(2_ip, 0_ip, present(get_response_c_funptr)))
@@ -51,22 +56,27 @@ contains
 
     end function mock_evaluate_dm_cs
 
-    function mock_evaluate_dm_os(dm_ao, energy, fock, get_response_c_funptr) &
-        result(error) bind(C)
+    function mock_evaluate_dm_os(dm_ao, energy, fock, get_response_c_funptr, &
+                                 context_c) result(error) bind(C)
         !
         ! this function is a test function for the density matrix evaluating C function
         ! for 3D density matrices
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao, n_particle
         use otr_common_unit_tests, only: record_mock_call
+        use test_reference, only: check_host_context_c
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
         real(c_rp), intent(out), optional :: fock(*)
         type(c_funptr), intent(out), optional :: get_response_c_funptr
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
         integer(ip) :: flat_len = n_ao**2 * n_particle
+
+        ! check host context
+        call check_host_context_c(context_c)
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
                               merge(2_ip, 0_ip, present(get_response_c_funptr)))
@@ -79,18 +89,23 @@ contains
 
     end function mock_evaluate_dm_os
 
-    function mock_get_response_cs(dm_ao, response) result(error) bind(C)
+    function mock_get_response_cs(dm_ao, response, context_c) result(error) bind(C)
         !
         ! this function is a test function for the response C function for 2D density
         ! matrices
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao
+        use test_reference, only: check_host_context_c
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out), target :: response(*)
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
         integer(c_ip) :: flat_len = n_ao**2
+
+        ! check host context
+        call check_host_context_c(context_c)
 
         response(:flat_len) = evaluate_dm_factors(2) * dm_ao(:flat_len)
 
@@ -98,18 +113,23 @@ contains
 
     end function mock_get_response_cs
 
-    function mock_get_response_os(dm_ao, response) result(error) bind(C)
+    function mock_get_response_os(dm_ao, response, context_c) result(error) bind(C)
         !
         ! this function is a test function for the response C function for 3D density
         ! matrices
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao, n_particle
+        use test_reference, only: check_host_context_c
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out), target :: response(*)
+        type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
         integer(c_ip) :: flat_len = n_ao**2 * n_particle
+
+        ! check host context
+        call check_host_context_c(context_c)
 
         response(:flat_len) = evaluate_dm_factors(2) * dm_ao(:flat_len)
 

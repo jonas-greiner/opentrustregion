@@ -201,10 +201,11 @@ contains
             ao_overlap, [n_occ], n_particle, n_ao, n_mo, settings, orbsym_2d)
 
         ! test passed density matrix evaluating function
-        test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
+        if (.not. test_evaluate_dm_cs_funptr( &
             evaluate_dm_funptr, "arh_factory_mo_c_wrapper", " by given density "// &
             "matrix evaluating function with Coulomb, exact-exchange and "// &
-            "non-linear potential contributions")
+            "non-linear potential contributions", settings%context)) &
+            test_passed = .false.
 
         ! set output quantities
         error = 0
@@ -249,10 +250,11 @@ contains
                                     n_mo, settings, orbsym)
 
         ! test passed density matrix evaluating function
-        test_passed = test_passed .and. test_evaluate_dm_os_funptr( &
+        if (.not. test_evaluate_dm_os_funptr( &
             evaluate_dm_funptr, "arh_factory_mo_c_wrapper", " by given density "// &
             "matrix evaluating function with Coulomb, exact-exchange and "// &
-            "non-linear potential contributions")
+            "non-linear potential contributions", settings%context)) &
+            test_passed = .false.
 
         ! set output quantities
         error = 0
@@ -317,10 +319,11 @@ contains
         end if
 
         ! test passed density matrix evaluating function
-        test_passed = test_passed .and. test_evaluate_dm_cs_funptr( &
+        if (.not. test_evaluate_dm_cs_funptr( &
             evaluate_dm_funptr, "arh_factory_oao_c_wrapper", " by given density "// &
             "matrix evaluating function with Coulomb, exact-exchange and "// &
-            "non-linear potential contributions")
+            "non-linear potential contributions", settings%context)) &
+            test_passed = .false.
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -401,10 +404,11 @@ contains
         end if
 
         ! test passed density matrix evaluating function
-        test_passed = test_passed .and. test_evaluate_dm_os_funptr( &
+        if (.not. test_evaluate_dm_os_funptr( &
             evaluate_dm_os_funptr, "arh_factory_oao_c_wrapper", " by given density "// &
             "matrix evaluating function with Coulomb, exact-exchange and "// &
-            "non-linear potential contributions")
+            "non-linear potential contributions", settings%context)) &
+            test_passed = .false.
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then

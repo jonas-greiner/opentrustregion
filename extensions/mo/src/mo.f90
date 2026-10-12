@@ -463,9 +463,11 @@ contains
 
         ! calculate the mean-field energy
         if (associated(mo_object%evaluate_dm_cs)) then
-            call mo_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error)
+            call mo_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error, &
+                                          context=mo_object%settings%context)
         else
-            call mo_object%evaluate_dm_os(rot_dm_ao, energy, error=error)
+            call mo_object%evaluate_dm_os(rot_dm_ao, energy, error=error, &
+                                          context=mo_object%settings%context)
         end if
         if (error /= 0) return
 
@@ -508,12 +510,13 @@ contains
             ! get energy, Fock matrix, and response function
             allocate(fock_ao(n_ao, n_ao, n_particle))
             if (associated(mo_object%evaluate_dm_cs)) then
-                call mo_object%evaluate_dm_cs(mo_object%dm_ao(:, :, 1), &
-                                              mo_object%energy, fock_ao(:, :, 1), &
-                                              mo_object%get_response_cs, error)
+                call mo_object%evaluate_dm_cs( &
+                    mo_object%dm_ao(:, :, 1), mo_object%energy, fock_ao(:, :, 1), &
+                    mo_object%get_response_cs, error, mo_object%settings%context)
             else
                 call mo_object%evaluate_dm_os(mo_object%dm_ao, mo_object%energy, &
-                                              fock_ao, mo_object%get_response_os, error)
+                                              fock_ao, mo_object%get_response_os, &
+                                              error, mo_object%settings%context)
             end if
             if (error /= 0) then
                 deallocate(fock_ao)
@@ -602,10 +605,12 @@ contains
         ! get response of Fock matrix to density matrix response
         allocate(fock_response(n_ao, n_ao, mo_object%n_particle))
         if (associated(mo_object%get_response_os)) then
-            call mo_object%get_response_os(dm_response, fock_response, error)
+            call mo_object%get_response_os(dm_response, fock_response, error, &
+                                           mo_object%settings%context)
         else
             call mo_object%get_response_cs(dm_response(:, :, 1), &
-                                           fock_response(:, :, 1), error)
+                                           fock_response(:, :, 1), error, &
+                                           mo_object%settings%context)
         end if
         deallocate(dm_response)
         if (error /= 0) return

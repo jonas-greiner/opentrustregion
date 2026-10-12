@@ -10,14 +10,9 @@ module otr_common_mock
                                hess_x_type, precond_type, precond_pd_type, &
                                get_extra_trial_vectors_type
     use c_interface, only: logger_c_type
-    use, intrinsic :: iso_c_binding, only: c_char, c_ptr
+    use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_associated, c_f_pointer
 
     implicit none
-
-    ! whether the C logging function was called with the test message, which is
-    ! recorded here rather than in a host context since the C settings of the
-    ! extensions do not hand one to their logging function
-    logical :: test_logger = .false.
 
     ! create function pointers to ensure that routines comply with interface
     procedure(obj_func_type), pointer :: mock_obj_func_ptr => mock_obj_func
@@ -142,21 +137,25 @@ contains
     subroutine mock_logger_c(message_c, context_c) bind(C)
         !
         ! this subroutine is a test subroutine for the C logging function, which
-        ! records a call with the test message
+        ! records a call with the test message in the host context
         !
-        use test_reference, only: check_host_context_c
+        use test_reference, only: host_context_type, check_host_context_c
 
         character(kind=c_char), intent(in) :: message_c(*)
         type(c_ptr), intent(in), value :: context_c
 
         character(len=4) :: message
+        type(host_context_type), pointer :: context
 
         ! check host context
         call check_host_context_c(context_c)
 
-        ! record call with test message
+        ! record call with test message in host context
         message = transfer(message_c(1:4), message)
-        if (message == "test") test_logger = .true.
+        if (message == "test" .and. c_associated(context_c)) then
+            call c_f_pointer(context_c, context)
+            context%logger_called = .true.
+        end if
 
     end subroutine mock_logger_c
 

@@ -6,14 +6,13 @@
 
 module otr_s_gek
 
-    use opentrustregion, only: rp, ip, kw_len, pi, settings_type, update_orbs_type, &
-                               hess_x_type
+    use opentrustregion, only: rp, ip, pi, settings_type, update_orbs_type, hess_x_type
 
     implicit none
 
     abstract interface
         subroutine change_reference_type(new_ref, n_points, kappa_list, &
-                                         local_grad_list, grad_list, error)
+                                         local_grad_list, grad_list, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target :: new_ref(:)
@@ -21,8 +20,7 @@ module otr_s_gek
             real(rp), intent(inout), target :: kappa_list(:, :), &
                                                local_grad_list(:, :), grad_list(:, :)
             integer(ip), intent(out) :: error
-
-            real(rp) :: energy
+            class(*), intent(in), pointer :: context
         end subroutine change_reference_type
     end interface
 
@@ -83,9 +81,8 @@ module otr_s_gek
 
 contains
 
-    subroutine update_orbs_s_gek_factory(update_orbs_funptr_in, &
-                                         change_reference_funptr_in, n_param, error, &
-                                         settings, update_orbs_s_gek_funptr)
+    subroutine s_gek_factory(update_orbs_funptr_in, change_reference_funptr_in, &
+                             n_param, error, settings, update_orbs_s_gek_funptr)
         !
         ! this subroutine returns a modified S-GEK orbital updating function
         !
@@ -95,8 +92,8 @@ contains
         procedure(change_reference_type), intent(in), pointer :: &
             change_reference_funptr_in
         integer(ip), intent(in) :: n_param
-        type(s_gek_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
+        type(s_gek_settings_type), intent(in) :: settings
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
 
         type(s_gek_settings_type) :: local_settings
@@ -133,7 +130,7 @@ contains
         ! initialize S-GEK object
         call s_gek_object%init(n_param)
 
-    end subroutine update_orbs_s_gek_factory
+    end subroutine s_gek_factory
 
     subroutine update_orbs_s_gek(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                  context)
@@ -295,7 +292,8 @@ contains
 
         ! move displacement and gradient to current reference
         call change_reference_funptr(kappa, self%n_points, self%kappa_list, &
-                                     self%local_grad_list, self%grad_list, error)
+                                     self%local_grad_list, self%grad_list, error, &
+                                     self%settings%context)
         if (error /= 0) return
 
         ! set Hessian diagonal

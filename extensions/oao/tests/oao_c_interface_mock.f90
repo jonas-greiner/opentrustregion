@@ -115,10 +115,10 @@ contains
             end if
 
             ! test passed density matrix evaluating function
-            test_oao_factory_interface = &
-                test_oao_factory_interface .and. test_evaluate_dm_c_funptr( &
-                    evaluate_dm_c_funptr, 1_ip, "oao_factory_py_interface", &
-                    " by given density matrix evaluating function")
+            if (.not. test_evaluate_dm_c_funptr( &
+                evaluate_dm_c_funptr, 1_ip, "oao_factory_py_interface", &
+                " by given density matrix evaluating function", c_null_ptr)) &
+                test_oao_factory_interface = .false.
 
             ! check if passed number of AOs is correct
             if (n_ao_c /= n_ao) then
@@ -165,10 +165,10 @@ contains
             end if
 
             ! test passed density matrix evaluating function
-            test_oao_factory_interface = &
-                test_oao_factory_interface .and. test_evaluate_dm_c_funptr( &
-                    evaluate_dm_c_funptr, 2_ip, "oao_factory_py_interface", &
-                    " by given density matrix evaluating function")
+            if (.not. test_evaluate_dm_c_funptr( &
+                evaluate_dm_c_funptr, 2_ip, "oao_factory_py_interface", &
+                " by given density matrix evaluating function", c_null_ptr)) &
+                test_oao_factory_interface = .false.
 
         ! number of particles is not correct
         else

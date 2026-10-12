@@ -28,7 +28,7 @@ from pyopentrustregion.tests import (
 from pyopentrustregion.python_interface import c_real, c_int
 from pyopentrustregion.extensions.quasi_newton import (
     QNSettings,
-    update_orbs_qn_factory,
+    qn_factory,
     update_orbs_qn_deconstructor,
 )
 
@@ -45,10 +45,10 @@ fortran_tests = {
         "hess_x_qn_c_wrapper",
         "init_hess_f_wrapper",
         "init_qn_settings_c",
+        "qn_factory_c_wrapper",
         "transport_f_wrapper",
         "update_orbs_qn_c_wrapper",
         "update_orbs_qn_deconstructor_c_wrapper",
-        "update_orbs_qn_factory_c_wrapper",
     ],
 }
 
@@ -141,10 +141,10 @@ class QNPyInterfaceTests(unittest.TestCase):
 
     # replace original library with mock library
     @patch(
-        "pyopentrustregion.python_interface.lib.update_orbs_qn_factory",
-        lib.mock_update_orbs_qn_factory,
+        "pyopentrustregion.python_interface.lib.qn_factory",
+        lib.mock_qn_factory,
     )
-    def test_update_orbs_qn_factory_py_interface(self):
+    def test_qn_factory_py_interface(self):
         """
         this function tests the quasi-Newton orbital updating factory python interface
         """
@@ -159,7 +159,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         self.test_logger = True
 
         # call quasi-Newton orbital updating factory python interface
-        update_orbs_qn = update_orbs_qn_factory(
+        update_orbs_qn = qn_factory(
             self.mock_update_orbs,
             self.mock_transport,
             self.mock_init_hess,
@@ -170,7 +170,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         # check if logger was called correctly
         if not self.test_logger:
             print(
-                " test_update_orbs_qn_factory_py_interface failed: Called logging "
+                " test_qn_factory_py_interface failed: Called logging "
                 "function wrong."
             )
             test_passed = False
@@ -183,7 +183,7 @@ class QNPyInterfaceTests(unittest.TestCase):
             func, hess_x_funptr = update_orbs_qn(kappa, grad, h_diag)
         except RuntimeError:
             print(
-                " test_update_orbs_qn_factory_py_interface failed: Returned "
+                " test_qn_factory_py_interface failed: Returned "
                 "quasi-Newton orbital updating raises error."
             )
             test_passed = False
@@ -191,20 +191,20 @@ class QNPyInterfaceTests(unittest.TestCase):
         # check results
         if func != 3.0:
             print(
-                " test_update_orbs_qn_factory_py_interface failed: Returned function "
+                " test_qn_factory_py_interface failed: Returned function "
                 "value of returned quasi-Newton orbital updating function "
                 "wrong."
             )
             test_passed = False
         if not np.allclose(grad, np.full(n_param, 2.0, dtype=np.float64)):
             print(
-                " test_update_orbs_qn_factory_py_interface failed: Returned gradient "
+                " test_qn_factory_py_interface failed: Returned gradient "
                 "of returned quasi-Newton orbital updating function wrong."
             )
             test_passed = False
         if not np.allclose(h_diag, np.full(n_param, 3.0, dtype=np.float64)):
             print(
-                " test_update_orbs_qn_factory_py_interface failed: Returned "
+                " test_qn_factory_py_interface failed: Returned "
                 "quasi-Newton Hessian diagonal of returned quasi-Newton orbital "
                 "updating function wrong."
             )
@@ -218,7 +218,7 @@ class QNPyInterfaceTests(unittest.TestCase):
             hess_x_funptr(x, hess_x)
         except RuntimeError:
             print(
-                " test_update_orbs_qn_factory_py_interface failed: Returned "
+                " test_qn_factory_py_interface failed: Returned "
                 "quasi-Newton Hessian linear transformation function of returned "
                 "quasi-Newton orbital updating function raises error."
             )
@@ -227,25 +227,48 @@ class QNPyInterfaceTests(unittest.TestCase):
         # check results
         if not np.allclose(hess_x, np.full(n_param, 4.0, dtype=np.float64)):
             print(
-                " test_update_orbs_qn_factory_py_interface failed: Returned Hessian "
+                " test_qn_factory_py_interface failed: Returned Hessian "
                 "linear transformation of returned quasi-Newton orbital updating "
                 "function wrong."
             )
             test_passed = False
 
-        self.assertTrue(
-            c_bool.in_dll(lib, "test_update_orbs_qn_factory_interface").value
-            and test_passed,
-            "test_update_orbs_qn_factory_py_interface failed",
+        # call qn_factory python interface for host callbacks which cannot be called
+        # with the arguments the C interface passes, which have to raise an error
+        # before the Fortran factory is called
+        invalid_cases = (
+            (
+                "transport with a wrong number of arguments",
+                (self.mock_update_orbs, lambda geodesic: None, self.mock_init_hess),
+            ),
+            (
+                "init_hess with a wrong number of arguments",
+                (self.mock_update_orbs, self.mock_transport, lambda: None),
+            ),
         )
-        print(" test_update_orbs_qn_factory_py_interface PASSED")
+        for case, callbacks in invalid_cases:
+            try:
+                qn_factory(*callbacks, n_param, settings)
+                print(
+                    f" test_qn_factory_py_interface failed: {case} did not raise an "
+                    "error."
+                )
+                test_passed = False
+            except TypeError:
+                pass
+
+        self.assertTrue(
+            c_bool.in_dll(lib, "test_qn_factory_interface").value and test_passed,
+            "test_qn_factory_py_interface failed",
+        )
+        print(" test_qn_factory_py_interface PASSED")
 
     # replace original library with mock library
     @patch(
         "pyopentrustregion.python_interface.lib.update_orbs_qn_deconstructor",
         lib.mock_update_orbs_qn_deconstructor,
     )
-    def test_update_orbs_deconstructor_py_interface(self):
+    def test_update_orbs_qn_deconstructor_py_interface(self):
         """
         this function tests the quasi-Newton orbital updating deconstructor python
         interface

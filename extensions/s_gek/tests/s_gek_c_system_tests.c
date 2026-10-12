@@ -70,6 +70,10 @@ bool test_s_gek_settings_init(void) {
                     "NULL.\n");
     ok = false;
   }
+  if (s.context) {
+    fprintf(stderr, "test_s_gek_settings_init failed: Host context should be NULL.\n");
+    ok = false;
+  }
 
   return ok;
 }
