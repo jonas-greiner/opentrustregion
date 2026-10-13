@@ -213,7 +213,6 @@ fortran_tests = {
         "stability_hess_x_f_wrapper",
         "store_optional_c_callbacks",
         "update_orbs_f_wrapper",
-        "warn_uninitialized_settings_c",
     ],
     "opentrustregion_system_tests": [
         "h2o_fb_solver_davidson_ah",
@@ -1879,6 +1878,12 @@ class LegacyPyInterfaceHelpers:
         h_diag[:] = 3 * kappa
 
         return func, self.mock_hess_x
+
+    def mock_obj_func(self, kappa):
+        """
+        this function is a mock function for the objective function
+        """
+        return np.sum(kappa)
 
     def mock_logger(self, message):
         """

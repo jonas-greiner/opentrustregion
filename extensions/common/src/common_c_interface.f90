@@ -13,7 +13,9 @@ module otr_common_c_interface
                            get_extra_trial_vectors_c_type, conv_check_c_type, &
                            conv_check_stability_c_type, logger_c_type
     use otr_common, only: extension_type, extension_level_type, update_orbs_callback, &
-                          hess_x_callback
+                          obj_func_callback, hess_x_callback, precond_callback, &
+                          precond_pd_callback, project_callback, &
+                          get_extra_trial_vectors_callback
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, c_funloc, &
                                            c_loc, c_f_pointer, c_f_procpointer, &
                                            c_associated, c_null_funptr
@@ -71,9 +73,6 @@ module otr_common_c_interface
         type(holder_level_type) :: solver_level, stability_level
     end type
 
-    ! global variables
-    integer(ip) :: n_param
-
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_c_type), pointer :: update_orbs_c_wrapper_ptr => &
         update_orbs_c_wrapper
@@ -110,26 +109,27 @@ contains
 
     end function holder_level
 
-    subroutine setup_extension_holder(holder, update_orbs_c_funptr, obj_func_c_funptr, &
-                                      solver_settings_c, solver_settings, settings, &
-                                      error)
+    subroutine setup_extension_holder(holder, solver_settings_c, solver_settings, &
+                                      settings, error, update_orbs_c_funptr, &
+                                      obj_func_c_funptr)
         !
         ! this subroutine sets up the holder of an extension object for a C factory by
-        ! bundling the host's orbital update and objective function with the callback
-        ! functions and host contexts of the host's C solver settings, which it
-        ! converts to the Fortran solver settings the Fortran factory wires, after
-        ! checking that the holder was not already wired into them
+        ! bundling the callback functions and host contexts of the host's C solver
+        ! settings, which it converts to the Fortran solver settings the Fortran
+        ! factory wires, and, for an object wrapping the host's, the host's orbital
+        ! update and objective function, after checking that the holder was not already
+        ! wired into the settings
         !
         use opentrustregion, only: solver_settings_type, settings_type, verbosity_error
         use c_interface, only: solver_settings_type_c, convert_solver_settings_c
         use otr_common, only: settings_wired_twice_error_msg
 
         type(extension_holder_type), intent(inout), target :: holder
-        type(c_funptr), intent(in) :: update_orbs_c_funptr, obj_func_c_funptr
         type(solver_settings_type_c), intent(in) :: solver_settings_c
         type(solver_settings_type), intent(out) :: solver_settings
         class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
+        type(c_funptr), intent(in), optional :: update_orbs_c_funptr, obj_func_c_funptr
 
         logical :: nested_own
 
@@ -150,10 +150,10 @@ contains
         ! bundle the host's callback functions and convert the solver settings, whose
         ! optional callback functions and host contexts join the bundles of the holder
         holder = extension_holder_type()
-        call c_f_procpointer(cptr=update_orbs_c_funptr, &
-                             fptr=holder%solver_level%callbacks%update_orbs)
-        call c_f_procpointer(cptr=obj_func_c_funptr, &
-                             fptr=holder%solver_level%callbacks%obj_func)
+        if (present(update_orbs_c_funptr)) call c_f_procpointer( &
+            cptr=update_orbs_c_funptr, fptr=holder%solver_level%callbacks%update_orbs)
+        if (present(obj_func_c_funptr)) call c_f_procpointer( &
+            cptr=obj_func_c_funptr, fptr=holder%solver_level%callbacks%obj_func)
         call convert_solver_settings_c(solver_settings_c, solver_settings, &
                                        holder%solver_level%callbacks, &
                                        holder%stability_level%callbacks)
@@ -245,13 +245,15 @@ contains
 
     end subroutine wire_solver_settings_c
 
-    function update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr, &
-                                   context_c) result(error_c) bind(C)
+    recursive function update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
+                                             hess_x_c_funptr, context_c) &
+        result(error_c) bind(C)
         !
         ! this function exposes the orbital update to C hosts, calling it with the
-        ! level of an extension object held at the address it receives as context, and
-        ! returns the C wrapper of the Hessian linear transformation the orbital update
-        ! returns
+        ! level of an extension object held at the address it receives as context, or
+        ! forwarding to the host's C function in the bundle of that level, with its
+        ! host context, for an object that does not perform it, and returns the C
+        ! wrapper of the Hessian linear transformation the orbital update returns
         !
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
@@ -261,6 +263,8 @@ contains
         integer(c_ip) :: error_c
 
         type(holder_level_type), pointer :: held
+        procedure(update_orbs_c_type), pointer :: host_update_orbs
+        type(c_funptr) :: host_hess_x_c_funptr
         class(*), pointer :: context
         procedure(hess_x_type), pointer :: hess_x_funptr
         real(rp) :: func
@@ -277,6 +281,27 @@ contains
         end if
         context => held%level
         n_param = held%level%extension%n_param
+
+        ! forward straight to the host's C function with its host context unless the
+        ! object performs the role itself, keeping the Hessian linear transformation it
+        ! returns in the bundles of both levels, since the stability check calls it too,
+        ! and returning the C wrapper in its place, also if only the object provides one
+        if (.not. held%level%extension%provides%update_orbs) then
+            host_hess_x_c_funptr = c_null_funptr
+            host_update_orbs => held%callbacks%update_orbs
+            error_c = host_update_orbs(kappa_c, func_c, grad_c, h_diag_c, &
+                                       host_hess_x_c_funptr, &
+                                       held%callbacks%host_context)
+            held%callbacks%hess_x => null()
+            if (c_associated(host_hess_x_c_funptr)) call c_f_procpointer( &
+                cptr=host_hess_x_c_funptr, fptr=held%callbacks%hess_x)
+            if (associated(held%callbacks%stability)) &
+                held%callbacks%stability%hess_x => held%callbacks%hess_x
+            if (associated(held%callbacks%hess_x) .or. &
+                held%level%extension%provides%hess_x) &
+                hess_x_c_funptr = c_funloc(hess_x_c_wrapper)
+            return
+        end if
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -307,11 +332,13 @@ contains
 
     end function update_orbs_c_wrapper
 
-    function obj_func_c_wrapper(kappa_c, func_c, context_c) result(error_c) bind(C)
+    recursive function obj_func_c_wrapper(kappa_c, func_c, context_c) result(error_c) &
+        bind(C)
         !
-        ! this function forwards the objective function for C hosts straight to the
-        ! host's C function in the bundle of the level of a holder at the address it
-        ! receives as context, with the host context of the level
+        ! this function exposes the objective function to C hosts, calling it with the
+        ! level of an extension object held at the address it receives as context, or
+        ! forwarding to the host's C function in the bundle of that level, with its
+        ! host context, for an object that does not perform it
         !
         real(c_rp), intent(in), target :: kappa_c(*)
         real(c_rp), intent(out) :: func_c
@@ -320,6 +347,9 @@ contains
 
         type(holder_level_type), pointer :: held
         procedure(obj_func_c_type), pointer :: host_obj_func
+        class(*), pointer :: context
+        real(rp), pointer :: kappa(:)
+        integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
         func_c = 0.0_c_rp
@@ -328,20 +358,41 @@ contains
             error_c = 1
             return
         end if
+        context => held%level
+        n_param = held%level%extension%n_param
 
-        ! call the host's C function with the host context of the level, through a
-        ! local procedure pointer, since gfortran rejects assumed-size arrays as
-        ! arguments of a procedure pointer component
-        host_obj_func => held%callbacks%obj_func
-        error_c = host_obj_func(kappa_c, func_c, held%callbacks%host_context)
+        ! forward straight to the host's C function with its host context unless the
+        ! object performs the role itself
+        if (.not. held%level%extension%provides%obj_func) then
+            host_obj_func => held%callbacks%obj_func
+            error_c = host_obj_func(kappa_c, func_c, held%callbacks%host_context)
+            return
+        end if
+
+        ! convert arguments to Fortran kind
+        if (rp == c_rp) then
+            kappa => kappa_c(:n_param)
+        else
+            allocate(kappa(n_param))
+            kappa = real(kappa_c(:n_param), kind=rp)
+        end if
+
+        ! call the callback function with the level
+        func_c = real(obj_func_callback(kappa, error, context), kind=c_rp)
+
+        ! convert arguments to C kind
+        error_c = int(error, kind=c_ip)
+        if (rp /= c_rp) deallocate(kappa)
 
     end function obj_func_c_wrapper
 
-    function hess_x_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
+    recursive function hess_x_c_wrapper(x_c, hess_x_c, context_c) result(error_c) &
+        bind(C)
         !
         ! this function exposes the Hessian linear transformation to C hosts, calling
         ! it with the level of an extension object held at the address it receives as
-        ! context
+        ! context, or forwarding to the host's C function in the bundle of that level,
+        ! with its host context, for an object that does not perform it
         !
         real(c_rp), intent(in), target :: x_c(*)
         real(c_rp), intent(out), target :: hess_x_c(*)
@@ -349,6 +400,7 @@ contains
         integer(c_ip) :: error_c
 
         type(holder_level_type), pointer :: held
+        procedure(hess_x_c_type), pointer :: host_hess_x
         class(*), pointer :: context
         real(rp), pointer :: x(:), hess_x(:)
         integer(ip) :: n_param, error
@@ -361,6 +413,14 @@ contains
         end if
         context => held%level
         n_param = held%level%extension%n_param
+
+        ! forward straight to the host's C function with its host context unless the
+        ! object performs the role itself
+        if (.not. held%level%extension%provides%hess_x) then
+            host_hess_x => held%callbacks%hess_x
+            error_c = host_hess_x(x_c, hess_x_c, held%callbacks%host_context)
+            return
+        end if
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -383,12 +443,13 @@ contains
 
     end function hess_x_c_wrapper
 
-    function precond_c_wrapper(residual_c, mu_c, precond_residual_c, context_c) &
-        result(error_c) bind(C)
+    recursive function precond_c_wrapper(residual_c, mu_c, precond_residual_c, &
+                                         context_c) result(error_c) bind(C)
         !
-        ! this function forwards the level-shifted preconditioner for C hosts straight
-        ! to the host's C function in the bundle of the level of a holder at the
-        ! address it receives as context, with the host context of the level
+        ! this function exposes the level-shifted preconditioner to C hosts, calling it
+        ! with the level of an extension object held at the address it receives as
+        ! context, or forwarding to the host's C function in the bundle of that level,
+        ! with its host context, for an object that does not perform it
         !
         real(c_rp), intent(in), target :: residual_c(*)
         real(c_rp), intent(in) :: mu_c
@@ -398,6 +459,9 @@ contains
 
         type(holder_level_type), pointer :: held
         procedure(precond_c_type), pointer :: host_precond
+        class(*), pointer :: context
+        real(rp), pointer :: residual(:), precond_residual(:)
+        integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
         held => holder_level(context_c)
@@ -405,22 +469,47 @@ contains
             error_c = 1
             return
         end if
+        context => held%level
+        n_param = held%level%extension%n_param
 
-        ! call the host's C function with the host context of the level, through a
-        ! local procedure pointer, since gfortran rejects assumed-size arrays as
-        ! arguments of a procedure pointer component
-        host_precond => held%callbacks%precond
-        error_c = host_precond(residual_c, mu_c, precond_residual_c, &
-                               held%callbacks%host_context)
+        ! forward straight to the host's C function with its host context unless the
+        ! object performs the role itself
+        if (.not. held%level%extension%provides%precond) then
+            host_precond => held%callbacks%precond
+            error_c = host_precond(residual_c, mu_c, precond_residual_c, &
+                                   held%callbacks%host_context)
+            return
+        end if
+
+        ! convert arguments to Fortran kind
+        if (rp == c_rp) then
+            residual => residual_c(:n_param)
+            precond_residual => precond_residual_c(:n_param)
+        else
+            allocate(residual(n_param), precond_residual(n_param))
+            residual = real(residual_c(:n_param), kind=rp)
+        end if
+
+        ! call the callback function with the level
+        call precond_callback(residual, real(mu_c, kind=rp), precond_residual, error, &
+                              context)
+
+        ! convert arguments to C kind
+        error_c = int(error, kind=c_ip)
+        if (rp /= c_rp) then
+            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
+            deallocate(residual, precond_residual)
+        end if
 
     end function precond_c_wrapper
 
-    function precond_pd_c_wrapper(residual_c, precond_residual_c, context_c) &
+    recursive function precond_pd_c_wrapper(residual_c, precond_residual_c, context_c) &
         result(error_c) bind(C)
         !
-        ! this function forwards the positive-definite preconditioner for C hosts
-        ! straight to the host's C function in the bundle of the level of a holder at
-        ! the address it receives as context, with the host context of the level
+        ! this function exposes the positive-definite preconditioner to C hosts,
+        ! calling it with the level of an extension object held at the address it
+        ! receives as context, or forwarding to the host's C function in the bundle of
+        ! that level, with its host context, for an object that does not perform it
         !
         real(c_rp), intent(in), target :: residual_c(*)
         real(c_rp), intent(out), target :: precond_residual_c(*)
@@ -429,6 +518,9 @@ contains
 
         type(holder_level_type), pointer :: held
         procedure(precond_pd_c_type), pointer :: host_precond_pd
+        class(*), pointer :: context
+        real(rp), pointer :: residual(:), precond_residual(:)
+        integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
         held => holder_level(context_c)
@@ -436,21 +528,45 @@ contains
             error_c = 1
             return
         end if
+        context => held%level
+        n_param = held%level%extension%n_param
 
-        ! call the host's C function with the host context of the level, through a
-        ! local procedure pointer, since gfortran rejects assumed-size arrays as
-        ! arguments of a procedure pointer component
-        host_precond_pd => held%callbacks%precond_pd
-        error_c = &
-            host_precond_pd(residual_c, precond_residual_c, held%callbacks%host_context)
+        ! forward straight to the host's C function with its host context unless the
+        ! object performs the role itself
+        if (.not. held%level%extension%provides%precond_pd) then
+            host_precond_pd => held%callbacks%precond_pd
+            error_c = host_precond_pd(residual_c, precond_residual_c, &
+                                      held%callbacks%host_context)
+            return
+        end if
+
+        ! convert arguments to Fortran kind
+        if (rp == c_rp) then
+            residual => residual_c(:n_param)
+            precond_residual => precond_residual_c(:n_param)
+        else
+            allocate(residual(n_param), precond_residual(n_param))
+            residual = real(residual_c(:n_param), kind=rp)
+        end if
+
+        ! call the callback function with the level
+        call precond_pd_callback(residual, precond_residual, error, context)
+
+        ! convert arguments to C kind
+        error_c = int(error, kind=c_ip)
+        if (rp /= c_rp) then
+            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
+            deallocate(residual, precond_residual)
+        end if
 
     end function precond_pd_c_wrapper
 
-    function project_c_wrapper(vector_c, context_c) result(error_c) bind(C)
+    recursive function project_c_wrapper(vector_c, context_c) result(error_c) bind(C)
         !
-        ! this function forwards the projection for C hosts straight to the host's C
-        ! function in the bundle of the level of a holder at the address it receives as
-        ! context, with the host context of the level
+        ! this function exposes the projection to C hosts, calling it with the level of
+        ! an extension object held at the address it receives as context, or forwarding
+        ! to the host's C function in the bundle of that level, with its host context,
+        ! for an object that does not perform it
         !
         real(c_rp), intent(inout), target :: vector_c(*)
         type(c_ptr), intent(in), value :: context_c
@@ -458,6 +574,9 @@ contains
 
         type(holder_level_type), pointer :: held
         procedure(project_c_type), pointer :: host_project
+        class(*), pointer :: context
+        real(rp), pointer :: vector(:)
+        integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
         held => holder_level(context_c)
@@ -465,21 +584,44 @@ contains
             error_c = 1
             return
         end if
+        context => held%level
+        n_param = held%level%extension%n_param
 
-        ! call the host's C function with the host context of the level, through a
-        ! local procedure pointer, since gfortran rejects assumed-size arrays as
-        ! arguments of a procedure pointer component
-        host_project => held%callbacks%project
-        error_c = host_project(vector_c, held%callbacks%host_context)
+        ! forward straight to the host's C function with its host context unless the
+        ! object performs the role itself
+        if (.not. held%level%extension%provides%project) then
+            host_project => held%callbacks%project
+            error_c = host_project(vector_c, held%callbacks%host_context)
+            return
+        end if
+
+        ! convert arguments to Fortran kind
+        if (rp == c_rp) then
+            vector => vector_c(:n_param)
+        else
+            allocate(vector(n_param))
+            vector = real(vector_c(:n_param), kind=rp)
+        end if
+
+        ! call the callback function with the level
+        call project_callback(vector, error, context)
+
+        ! convert arguments to C kind
+        error_c = int(error, kind=c_ip)
+        if (rp /= c_rp) then
+            vector_c(:n_param) = real(vector, kind=c_rp)
+            deallocate(vector)
+        end if
 
     end function project_c_wrapper
 
-    function get_extra_trial_vectors_c_wrapper( &
+    recursive function get_extra_trial_vectors_c_wrapper( &
         trial_vectors_c, n_extra_trial_vectors_c, context_c) result(error_c) bind(C)
         !
-        ! this function forwards the extra trial vector function for C hosts straight
-        ! to the host's C function in the bundle of the level of a holder at the
-        ! address it receives as context, with the host context of the level
+        ! this function exposes the extra trial vector function to C hosts, calling it
+        ! with the level of an extension object held at the address it receives as
+        ! context, or forwarding to the host's C function in the bundle of that level,
+        ! with its host context, for an object that does not perform it
         !
         real(c_rp), intent(out), target :: trial_vectors_c(*)
         integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
@@ -489,6 +631,9 @@ contains
         type(holder_level_type), pointer :: held
         procedure(get_extra_trial_vectors_c_type), pointer :: &
             host_get_extra_trial_vectors
+        class(*), pointer :: context
+        real(rp), pointer :: trial_vectors(:, :)
+        integer(ip) :: n_param, n_extra_trial_vectors, error
 
         ! find the level of the holder, without which there is nothing to call
         held => holder_level(context_c)
@@ -496,17 +641,42 @@ contains
             error_c = 1
             return
         end if
+        context => held%level
+        n_param = held%level%extension%n_param
 
-        ! call the host's C function with the host context of the level, through a
-        ! local procedure pointer, since gfortran rejects assumed-size arrays as
-        ! arguments of a procedure pointer component
-        host_get_extra_trial_vectors => held%callbacks%get_extra_trial_vectors
-        error_c = host_get_extra_trial_vectors( &
-            trial_vectors_c, n_extra_trial_vectors_c, held%callbacks%host_context)
+        ! forward straight to the host's C function with its host context unless the
+        ! object performs the role itself
+        if (.not. held%level%extension%provides%get_extra_trial_vectors) then
+            host_get_extra_trial_vectors => held%callbacks%get_extra_trial_vectors
+            error_c = host_get_extra_trial_vectors( &
+                trial_vectors_c, n_extra_trial_vectors_c, held%callbacks%host_context)
+            return
+        end if
+        n_extra_trial_vectors = int(n_extra_trial_vectors_c, kind=ip)
+
+        ! convert arguments to Fortran kind
+        if (rp == c_rp) then
+            trial_vectors(1:n_param, 1:n_extra_trial_vectors) => &
+                trial_vectors_c(:n_param * n_extra_trial_vectors)
+        else
+            allocate(trial_vectors(n_param, n_extra_trial_vectors))
+        end if
+
+        ! call the callback function with the level
+        call get_extra_trial_vectors_callback(trial_vectors, error, context)
+
+        ! convert arguments to C kind
+        error_c = int(error, kind=c_ip)
+        if (rp /= c_rp) then
+            trial_vectors_c(:n_param * n_extra_trial_vectors) = reshape( &
+                real(trial_vectors, kind=c_rp), [n_param * n_extra_trial_vectors])
+            deallocate(trial_vectors)
+        end if
 
     end function get_extra_trial_vectors_c_wrapper
 
-    function conv_check_c_wrapper(converged_c, context_c) result(error_c) bind(C)
+    recursive function conv_check_c_wrapper(converged_c, context_c) result(error_c) &
+        bind(C)
         !
         ! this function forwards the convergence check of the solver for C hosts
         ! straight to the host's C function in the bundle of the level of a holder at
@@ -531,8 +701,8 @@ contains
 
     end function conv_check_c_wrapper
 
-    function stability_hess_x_c_wrapper(x_c, hess_x_c, context_c) result(error_c) &
-        bind(C)
+    recursive function stability_hess_x_c_wrapper(x_c, hess_x_c, context_c) &
+        result(error_c) bind(C)
         !
         ! this function forwards the Hessian linear transformation of the stability
         ! check for C hosts straight to the host's C function in the bundle of the
@@ -562,7 +732,8 @@ contains
 
     end function stability_hess_x_c_wrapper
 
-    function approx_hess_x_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
+    recursive function approx_hess_x_c_wrapper(x_c, hess_x_c, context_c) &
+        result(error_c) bind(C)
         !
         ! this function forwards the approximate Hessian linear transformation for C
         ! hosts straight to the host's C function in the bundle of the level of a
@@ -592,8 +763,8 @@ contains
 
     end function approx_hess_x_c_wrapper
 
-    function conv_check_stability_c_wrapper(residual_c, eigval_c, converged_c, &
-                                            context_c) result(error_c) bind(C)
+    recursive function conv_check_stability_c_wrapper( &
+        residual_c, eigval_c, converged_c, context_c) result(error_c) bind(C)
         !
         ! this function forwards the convergence check of the stability check for C
         ! hosts straight to the host's C function in the bundle of the level of a
@@ -626,7 +797,7 @@ contains
 
     end function conv_check_stability_c_wrapper
 
-    subroutine logger_c_wrapper(message_c, context_c) bind(C)
+    recursive subroutine logger_c_wrapper(message_c, context_c) bind(C)
         !
         ! this subroutine forwards the logging function for C hosts straight to the
         ! host's C function in the bundle of the level of a holder at the address it
@@ -649,307 +820,6 @@ contains
         call host_logger(message_c, held%callbacks%host_context)
 
     end subroutine logger_c_wrapper
-
-    function update_orbs_c_wrapper_impl( &
-        update_orbs_before_wrapping, hess_x_before_wrapping_funptr, &
-        hess_x_c_wrapper_funptr, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr, &
-        context_c, update_orbs_orig_c) result(error_c)
-        !
-        ! this function wraps the orbital update subroutine to convert Fortran
-        ! variables to C variables, handing the host context to the Fortran subroutine
-        ! in a callback bundle, together with the host's original orbital update for
-        ! an orbital update that wraps it
-        !
-        use opentrustregion, only: update_orbs_type, hess_x_type
-        use c_interface, only: hess_x_c_type, update_orbs_c_type
-
-        procedure(update_orbs_type), intent(in), pointer :: update_orbs_before_wrapping
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_before_wrapping_funptr
-        procedure(hess_x_c_type) :: hess_x_c_wrapper_funptr
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out) :: func_c
-        real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(inout) :: hess_x_c_funptr
-        type(c_ptr), intent(in) :: context_c
-        procedure(update_orbs_c_type), intent(in), pointer, optional :: &
-            update_orbs_orig_c
-        integer(c_ip) :: error_c
-
-        real(rp) :: func
-        real(rp), pointer :: kappa(:), grad(:), h_diag(:)
-        integer(ip) :: error
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
-
-        ! hand the host context and the original orbital update over as context
-        callbacks%host_context = context_c
-        if (present(update_orbs_orig_c)) callbacks%update_orbs => update_orbs_orig_c
-        context => callbacks
-
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            kappa => kappa_c(:n_param)
-            grad => grad_c(:n_param)
-            h_diag => h_diag_c(:n_param)
-        else
-            allocate(kappa(n_param))
-            allocate(grad(n_param))
-            allocate(h_diag(n_param))
-            kappa = real(kappa_c(:n_param), kind=rp)
-        end if
-
-        ! call update_orbs Fortran function
-        call update_orbs_before_wrapping(kappa, func, grad, h_diag, &
-                                         hess_x_before_wrapping_funptr, error, context)
-
-        ! convert arguments to Fortran kind
-        func_c = real(func, kind=c_rp)
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            grad_c(:n_param) = real(grad, kind=c_rp)
-            h_diag_c(:n_param) = real(h_diag, kind=c_rp)
-            deallocate(kappa)
-            deallocate(grad)
-            deallocate(h_diag)
-        end if
-
-        ! get a C function pointer to the hess_x wrapper function
-        hess_x_c_funptr = c_funloc(hess_x_c_wrapper_funptr)
-
-    end function update_orbs_c_wrapper_impl
-
-    function hess_x_c_wrapper_impl(hess_x_funptr, x_c, hess_x_c, context_c) &
-        result(error_c)
-        !
-        ! this function wraps the Hessian linear transformation to convert Fortran
-        ! variables to C variables, handing the host context to the Fortran subroutine
-        ! in a callback bundle
-        !
-        use opentrustregion, only: hess_x_type
-
-        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
-        real(c_rp), intent(in), target :: x_c(*)
-        real(c_rp), intent(out), target :: hess_x_c(*)
-        type(c_ptr), intent(in) :: context_c
-        integer(c_ip) :: error_c
-
-        real(rp), pointer :: x(:), hess_x(:)
-        integer(ip) :: error
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
-
-        ! hand the host context over as context
-        callbacks%host_context = context_c
-        context => callbacks
-
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            x => x_c(:n_param)
-            hess_x => hess_x_c(:n_param)
-        else
-            allocate(x(n_param))
-            allocate(hess_x(n_param))
-            x = real(x_c(:n_param), kind=rp)
-        end if
-
-        ! call Fortran function
-        call hess_x_funptr(x, hess_x, error, context)
-
-        ! convert arguments to C kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            hess_x_c(:n_param) = real(hess_x, kind=c_rp)
-            deallocate(x)
-            deallocate(hess_x)
-        end if
-
-    end function hess_x_c_wrapper_impl
-
-    function obj_func_c_wrapper_impl(obj_func_before_wrapping, kappa_c, func_c, &
-                                     context_c) result(error_c)
-        !
-        ! this function wraps the objective function subroutine to convert Fortran
-        ! variables to C variables, handing the host context to the Fortran function
-        ! in a callback bundle
-        !
-        use opentrustregion, only: obj_func_type
-
-        procedure(obj_func_type), intent(in), pointer :: obj_func_before_wrapping
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out) :: func_c
-        type(c_ptr), intent(in) :: context_c
-        integer(c_ip) :: error_c
-
-        real(rp) :: func
-        real(rp), pointer :: kappa(:)
-        integer(ip) :: error
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
-
-        ! hand the host context over as context
-        callbacks%host_context = context_c
-        context => callbacks
-
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            kappa => kappa_c(:n_param)
-        else
-            allocate(kappa(n_param))
-            kappa = real(kappa_c(:n_param), kind=rp)
-        end if
-
-        ! call obj_func Fortran function
-        func = obj_func_before_wrapping(kappa, error, context)
-
-        ! convert arguments to Fortran kind
-        func_c = real(func, kind=c_rp)
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            deallocate(kappa)
-        end if
-
-    end function obj_func_c_wrapper_impl
-
-    function precond_c_wrapper_impl(precond_before_wrapping, residual_c, mu_c, &
-                                    precond_residual_c, context_c) result(error_c)
-        !
-        ! this function wraps the level-shifted preconditioner subroutine to convert
-        ! Fortran variables to C variables, handing the host context to the Fortran
-        ! subroutine in a callback bundle
-        !
-        use opentrustregion, only: precond_type
-
-        procedure(precond_type), intent(in), pointer :: precond_before_wrapping
-        real(c_rp), intent(in), target :: residual_c(*)
-        real(c_rp), intent(in) :: mu_c
-        real(c_rp), intent(out), target :: precond_residual_c(*)
-        type(c_ptr), intent(in) :: context_c
-        integer(c_ip) :: error_c
-
-        real(rp) :: mu
-        real(rp), pointer :: residual(:), precond_residual(:)
-        integer(ip) :: error
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
-
-        ! hand the host context over as context
-        callbacks%host_context = context_c
-        context => callbacks
-
-        ! convert arguments to Fortran kind
-        mu = real(mu_c, kind=rp)
-        if (rp == c_rp) then
-            residual => residual_c(:n_param)
-            precond_residual => precond_residual_c(:n_param)
-        else
-            allocate(residual(n_param), precond_residual(n_param))
-            residual = real(residual_c(:n_param), kind=rp)
-        end if
-
-        ! call preconditioner Fortran subroutine
-        call precond_before_wrapping(residual, mu, precond_residual, error, context)
-
-        ! convert arguments to Fortran kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
-            deallocate(residual, precond_residual)
-        end if
-
-    end function precond_c_wrapper_impl
-
-    function precond_pd_c_wrapper_impl(precond_pd_before_wrapping, residual_c, &
-                                       precond_residual_c, context_c) result(error_c)
-        !
-        ! this function wraps the positive-definite preconditioner subroutine to
-        ! convert Fortran variables to C variables, handing the host context to the
-        ! Fortran subroutine in a callback bundle
-        !
-        use opentrustregion, only: precond_pd_type
-
-        procedure(precond_pd_type), intent(in), pointer :: precond_pd_before_wrapping
-        real(c_rp), intent(in), target :: residual_c(*)
-        real(c_rp), intent(out), target :: precond_residual_c(*)
-        type(c_ptr), intent(in) :: context_c
-        integer(c_ip) :: error_c
-
-        real(rp), pointer :: residual(:), precond_residual(:)
-        integer(ip) :: error
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
-
-        ! hand the host context over as context
-        callbacks%host_context = context_c
-        context => callbacks
-
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            residual => residual_c(:n_param)
-            precond_residual => precond_residual_c(:n_param)
-        else
-            allocate(residual(n_param), precond_residual(n_param))
-            residual = real(residual_c(:n_param), kind=rp)
-        end if
-
-        ! call preconditioner Fortran subroutine
-        call precond_pd_before_wrapping(residual, precond_residual, error, context)
-
-        ! convert arguments to Fortran kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
-            deallocate(residual, precond_residual)
-        end if
-
-    end function precond_pd_c_wrapper_impl
-
-    function get_extra_trial_vectors_c_wrapper_impl( &
-        get_extra_trial_vectors_before_wrapping, trial_vectors_c, &
-        n_extra_trial_vectors_c, context_c) result(error_c)
-        !
-        ! this function wraps the extra trial vector subroutine to convert Fortran
-        ! variables to C variables, handing the host context to the Fortran subroutine
-        ! in a callback bundle
-        !
-        use opentrustregion, only: get_extra_trial_vectors_type
-
-        procedure(get_extra_trial_vectors_type), intent(in), pointer :: &
-            get_extra_trial_vectors_before_wrapping
-        real(c_rp), intent(out), target :: trial_vectors_c(*)
-        integer(c_ip), intent(in) :: n_extra_trial_vectors_c
-        type(c_ptr), intent(in) :: context_c
-        integer(c_ip) :: error_c
-
-        real(rp), pointer :: trial_vectors(:, :)
-        integer(ip) :: n_extra_trial_vectors, error
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
-
-        ! hand the host context over as context
-        callbacks%host_context = context_c
-        context => callbacks
-
-        ! convert arguments to Fortran kind
-        n_extra_trial_vectors = int(n_extra_trial_vectors_c, kind=ip)
-        if (rp == c_rp) then
-            call c_f_pointer(c_loc(trial_vectors_c(1)), trial_vectors, &
-                             [n_param, n_extra_trial_vectors])
-        else
-            allocate(trial_vectors(n_param, n_extra_trial_vectors))
-        end if
-
-        ! call extra trial vector Fortran subroutine
-        call get_extra_trial_vectors_before_wrapping(trial_vectors, error, context)
-
-        ! convert arguments to C kind
-        error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            trial_vectors_c(:n_param * n_extra_trial_vectors) = real( &
-                reshape(trial_vectors, [n_param * n_extra_trial_vectors]), kind=c_rp)
-            deallocate(trial_vectors)
-        end if
-
-    end function get_extra_trial_vectors_c_wrapper_impl
 
     subroutine evaluate_dm_f_wrapper_impl(callbacks, dm, energy, get_response, error, &
                                           fock)

@@ -6,7 +6,7 @@
 
 module otr_oao_mock
 
-    use opentrustregion, only: rp, ip, stderr, obj_func_type, project_type
+    use opentrustregion, only: rp, ip, stderr, obj_func_type
     use otr_oao, only: oao_factory_cs, oao_factory_os, oao_deconstructor
     use test_reference, only: tol
     use otr_oao_test_reference, only: ref_oao_settings, operator(/=)
@@ -14,73 +14,32 @@ module otr_oao_mock
     implicit none
 
     logical :: test_passed
-    real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
+
+    ! error the mock factories return
+    integer(ip) :: mock_oao_factory_error = 0
 
     ! create function pointers to ensure that routines comply with interface
     procedure(oao_factory_cs), pointer :: mock_oao_factory_cs_ptr => mock_oao_factory_cs
     procedure(oao_factory_os), pointer :: mock_oao_factory_os_ptr => mock_oao_factory_os
     procedure(oao_deconstructor), pointer :: mock_oao_deconstructor_ptr => &
         mock_oao_deconstructor
-    procedure(project_type), pointer :: mock_project_oao_ptr => mock_project_oao
 
 contains
 
-    subroutine mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                context)
-        !
-        ! this subroutine is a test subroutine for the orbital update function
-        !
-        use opentrustregion, only: hess_x_type
-        use otr_common_mock, only: orig_mock_update_orbs => mock_update_orbs
-
-        real(rp), intent(in), target :: kappa(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call orig_mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                   context)
-
-        dm_ao_3d = 2.0_rp
-
-    end subroutine mock_update_orbs
-
-    subroutine mock_oao_set_solver_settings(solver_settings)
-        !
-        ! this subroutine wires the OAO mock routines into the solver settings
-        !
-        use opentrustregion, only: solver_settings_type
-        use otr_common_mock, only: mock_precond, mock_precond_pd, &
-                                   mock_get_extra_trial_vectors
-
-        type(solver_settings_type), intent(inout) :: solver_settings
-
-        integer(ip) :: error
-
-        if (.not. solver_settings%initialized) call solver_settings%init(error)
-        solver_settings%precond => mock_precond
-        solver_settings%precond_pd => mock_precond_pd
-        solver_settings%project => mock_project_oao
-        solver_settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
-        solver_settings%stability_settings%precond => mock_precond
-        solver_settings%stability_settings%project => mock_project_oao
-        solver_settings%stability_settings%get_extra_trial_vectors => &
-            mock_get_extra_trial_vectors
-
-    end subroutine mock_oao_set_solver_settings
-
     subroutine mock_oao_factory_cs( &
-        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_oao_funptr, &
-        update_orbs_oao_funptr, solver_settings, error, settings)
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
+        update_orbs_oao_funptr, obj_func_oao_funptr, solver_settings, error, settings)
         !
-        ! this function is a test function for the function which returns a modified
-        ! orbital updating function for the closed-shell case
+        ! this function is a test function for the function which returns the orbital
+        ! updating function and objective function for the closed-shell case and wires
+        ! the solver settings, which marks the density matrix of the caller it receives
+        ! in place, returns the error it is set to and otherwise points the context of
+        ! the solver settings at the level of the solver of the OAO object, as the
+        ! factory does
         !
         use opentrustregion, only: update_orbs_type, solver_settings_type
-        use otr_common_mock, only: mock_obj_func
-        use otr_oao, only: oao_settings_type
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func
+        use otr_oao, only: oao_settings_type, oao_object
         use otr_common, only: evaluate_dm_cs_type
         use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
                                              n_ao_ref => n_ao
@@ -89,9 +48,9 @@ contains
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(in) :: settings
 
@@ -145,25 +104,33 @@ contains
                 "settings associated with wrong values."
         end if
 
-        ! set output quantities
-        error = 0
-        obj_func_oao_funptr => mock_obj_func
+        ! mark the density matrix of the caller and set output quantities
+        dm_ao = 2.0_rp
+        error = mock_oao_factory_error
+        update_orbs_oao_funptr => null()
+        obj_func_oao_funptr => null()
+        if (error /= 0) return
+        if (.not. allocated(oao_object)) allocate(oao_object)
+        solver_settings%context => oao_object%solver_level
         update_orbs_oao_funptr => mock_update_orbs
-        call mock_oao_set_solver_settings(solver_settings)
-        dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
+        obj_func_oao_funptr => mock_obj_func
 
     end subroutine mock_oao_factory_cs
 
     subroutine mock_oao_factory_os( &
-        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_oao_funptr, &
-        update_orbs_oao_funptr, solver_settings, error, settings)
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
+        update_orbs_oao_funptr, obj_func_oao_funptr, solver_settings, error, settings)
         !
-        ! this function is a test function for the function which returns a modified
-        ! orbital updating function for the open-shell case
+        ! this function is a test function for the function which returns the orbital
+        ! updating function and objective function for the open-shell case and wires the
+        ! solver settings, which marks the density matrix of the caller it receives in
+        ! place, returns the error it is set to and otherwise points the context of the
+        ! solver settings at the level of the solver of the OAO object, as the factory
+        ! does
         !
         use opentrustregion, only: update_orbs_type, solver_settings_type
-        use otr_common_mock, only: mock_obj_func
-        use otr_oao, only: oao_settings_type
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func
+        use otr_oao, only: oao_settings_type, oao_object
         use otr_common, only: evaluate_dm_os_type
         use otr_common_test_reference, only: test_evaluate_dm_os_funptr, &
                                              n_ao_ref => n_ao
@@ -172,9 +139,9 @@ contains
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(in) :: settings
 
@@ -228,12 +195,16 @@ contains
                 "settings associated with wrong values."
         end if
 
-        ! set output quantities
-        error = 0
-        obj_func_oao_funptr => mock_obj_func
+        ! mark the density matrix of the caller and set output quantities
+        dm_ao = 2.0_rp
+        error = mock_oao_factory_error
+        update_orbs_oao_funptr => null()
+        obj_func_oao_funptr => null()
+        if (error /= 0) return
+        if (.not. allocated(oao_object)) allocate(oao_object)
+        solver_settings%context => oao_object%solver_level
         update_orbs_oao_funptr => mock_update_orbs
-        call mock_oao_set_solver_settings(solver_settings)
-        dm_ao_3d => dm_ao
+        obj_func_oao_funptr => mock_obj_func
 
     end subroutine mock_oao_factory_os
 
@@ -244,19 +215,5 @@ contains
         test_passed = .true.
 
     end subroutine mock_oao_deconstructor
-
-    subroutine mock_project_oao(vector, error, context)
-        !
-        ! this function is a test function for the OAO projection function
-        !
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        vector = 2.0_rp * vector
-
-        error = 0
-
-    end subroutine mock_project_oao
 
 end module otr_oao_mock

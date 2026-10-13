@@ -47,11 +47,13 @@ void init_mo_settings(mo_settings_type *settings);
  * @param n_ao_c                                  Number of AO basis functions
  * @param n_mo_c                                  Number of MOs
  * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback
- * @param obj_func_mo_c_funptr                    Output: wrapped objective function
- *                                                pointer
  * @param update_orbs_mo_c_funptr                 Output: wrapped update_orbs function
  *                                                pointer
- * @param solver_settings_c                       Input/output: solver settings
+ * @param obj_func_mo_c_funptr                    Output: wrapped objective function
+ *                                                pointer
+ * @param solver_settings_c                       Input/output: solver settings, whose
+ *                                                context the returned functions have
+ *                                                to be called with
  * @param settings_c                              MO settings
  * @param orbsym_c                                Irreps of the MOs of every particle
  *                                                channel (size n_mo * n_particle),
@@ -62,8 +64,9 @@ void init_mo_settings(mo_settings_type *settings);
  */
 c_int mo_factory(c_real *mo_coeff_c, const c_real *ao_overlap_c, const c_int *n_occ_c,
                  c_int n_particle_c, c_int n_ao_c, c_int n_mo_c,
-                 evaluate_dm_fp evaluate_dm_c_funptr, obj_func_fp *obj_func_mo_c_funptr,
+                 evaluate_dm_fp evaluate_dm_c_funptr,
                  update_orbs_fp *update_orbs_mo_c_funptr,
+                 obj_func_fp *obj_func_mo_c_funptr,
                  solver_settings_type *solver_settings_c,
                  const mo_settings_type *settings_c, const c_int *orbsym_c);
 

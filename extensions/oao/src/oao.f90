@@ -7,9 +7,7 @@
 module otr_oao
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, precond_type, precond_pd_type, &
-                               project_type, get_extra_trial_vectors_type, &
-                               solver_settings_type
+                               hess_x_type, solver_settings_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
                           orbital_basis_type, evaluate_dm_cs_type, evaluate_dm_os_type
 
@@ -34,30 +32,21 @@ module otr_oao
                                  fock_oo(:, :, :), fock_vv(:, :, :), &
                                  hess_eigvecs(:, :, :), hess_eigvals(:, :)
     contains
+        procedure :: update_orbs => update_orbs_oao
+        procedure :: obj_func => obj_func_oao
+        procedure :: hess_x => hess_x_oao
+        procedure :: project => project_oao
+        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_oao
         procedure :: rotate_orbitals => rotate_orbitals_oao
         procedure :: calculate_grad_h_diag => calculate_grad_h_diag_oao
         procedure :: refresh_hess_eigen => refresh_hess_eigen_oao
         procedure :: rotate_to_hess_eigenbasis => rotate_to_hess_eigenbasis_oao
         procedure :: rotate_from_hess_eigenbasis => rotate_from_hess_eigenbasis_oao
         procedure :: get_hess_eigval_pairs => get_hess_eigval_pairs_oao
-        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_oao
     end type
 
     ! global variables
     type(oao_type), allocatable, target :: oao_object
-
-    ! create function pointers to ensure that routines comply with interface
-    procedure(obj_func_type), pointer :: obj_func_oao_callback_ptr => &
-        obj_func_oao_callback
-    procedure(update_orbs_type), pointer :: update_orbs_oao_callback_ptr => &
-        update_orbs_oao_callback
-    procedure(hess_x_type), pointer :: hess_x_oao_callback_ptr => hess_x_oao_callback
-    procedure(precond_type), pointer :: precond_oao_callback_ptr => precond_oao_callback
-    procedure(precond_pd_type), pointer :: precond_pd_oao_callback_ptr => &
-        precond_pd_oao_callback
-    procedure(project_type), pointer :: project_oao_callback_ptr => project_oao_callback
-    procedure(get_extra_trial_vectors_type), pointer :: &
-        get_extra_trial_vectors_oao_callback_ptr => get_extra_trial_vectors_oao_callback
 
     ! define module procedures for different spin cases
     interface oao_factory
@@ -67,28 +56,39 @@ module otr_oao
 contains
 
     subroutine oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
-                              obj_func_oao_funptr, update_orbs_oao_funptr, &
+                              update_orbs_oao_funptr, obj_func_oao_funptr, &
                               solver_settings, error, settings)
         !
-        ! this function returns a modified OAO orbital updating function for the
-        ! closed-shell case and wires the OAO preconditioners, projection and extra
-        ! trial vectors into the solver settings; the density matrix is updated in
-        ! place, so it has to outlive the calculation
+        ! this function returns the OAO orbital updating function and objective
+        ! function for the closed-shell case and wires the solver settings with the OAO
+        ! object, whose preconditioners, projection and extra trial vectors the solver
+        ! then uses; the density matrix is updated in place, so it has to outlive the
+        ! calculation
         !
+        use otr_common, only: update_orbs_callback, obj_func_callback
+
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(in) :: settings
 
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_oao_funptr => null()
+        obj_func_oao_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(oao_object)) then
+            call oao_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
@@ -100,36 +100,49 @@ contains
         oao_object%evaluate_dm_cs => evaluate_dm_cs
         oao_object%evaluate_dm_os => null()
 
-        ! get pointers to modified function
-        obj_func_oao_funptr => obj_func_oao_callback
-        update_orbs_oao_funptr => update_orbs_oao_callback
+        ! wire the solver settings with the object
+        call oao_object%wire_solver_settings(solver_settings, oao_object%settings, &
+                                             error)
+        if (error /= 0) return
 
-        ! wire the remaining OAO routines into the solver settings
-        call oao_set_solver_settings(solver_settings, error)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_oao_funptr => update_orbs_callback
+        obj_func_oao_funptr => obj_func_callback
 
     end subroutine oao_factory_cs
 
     subroutine oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
-                              obj_func_oao_funptr, update_orbs_oao_funptr, &
+                              update_orbs_oao_funptr, obj_func_oao_funptr, &
                               solver_settings, error, settings)
         !
-        ! this function returns a modified OAO orbital updating function for the
-        ! open-shell case and wires the OAO preconditioners, projection and extra trial
-        ! vectors into the solver settings; the density matrix is updated in place, so
-        ! it has to outlive the calculation
+        ! this function returns the OAO orbital updating function and objective
+        ! function for the open-shell case and wires the solver settings with the OAO
+        ! object, whose preconditioners, projection and extra trial vectors the solver
+        ! then uses; the density matrix is updated in place, so it has to outlive the
+        ! calculation
         !
+        use otr_common, only: update_orbs_callback, obj_func_callback
+
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
-        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(oao_settings_type), intent(in) :: settings
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_oao_funptr => null()
+        obj_func_oao_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(oao_object)) then
+            call oao_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup
         call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
@@ -139,12 +152,14 @@ contains
         oao_object%evaluate_dm_os => evaluate_dm_os
         oao_object%evaluate_dm_cs => null()
 
-        ! get pointers to modified function
-        obj_func_oao_funptr => obj_func_oao_callback
-        update_orbs_oao_funptr => update_orbs_oao_callback
+        ! wire the solver settings with the object
+        call oao_object%wire_solver_settings(solver_settings, oao_object%settings, &
+                                             error)
+        if (error /= 0) return
 
-        ! wire the remaining OAO routines into the solver settings
-        call oao_set_solver_settings(solver_settings, error)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_oao_funptr => update_orbs_callback
+        obj_func_oao_funptr => obj_func_callback
 
     end subroutine oao_factory_os
 
@@ -153,7 +168,7 @@ contains
         ! this subroutine performs common OAO initialization operations
         !
         use opentrustregion, only: warn_uninitialized_settings
-        use otr_common, only: compute_sqrt_and_inv_sqrt
+        use otr_common, only: compute_sqrt_and_inv_sqrt, provided_roles_type
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -179,8 +194,11 @@ contains
         call oao_sanity_check(local_settings, n_particle, n_ao, error)
         if (error /= 0) return
 
-        ! allocate object
+        ! allocate object, which performs every role itself
         if (.not. allocated(oao_object)) allocate(oao_object)
+        oao_object%provides = provided_roles_type( &
+            update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
+            precond_pd=.true., project=.true., get_extra_trial_vectors=.true.)
 
         ! set (potentially new) settings
         oao_object%settings = local_settings
@@ -277,54 +295,11 @@ contains
 
     end subroutine oao_sanity_check
 
-    subroutine oao_set_solver_settings(solver_settings, error)
-        !
-        ! this subroutine wires the OAO preconditioners, projection and extra trial
-        ! vectors into the solver settings and those of its stability check
-        !
-        use opentrustregion, only: warn_uninitialized_settings, &
-                                   settings_uninitialized_warning_msg, &
-                                   stability_settings_uninitialized_warning_msg
-
-        type(solver_settings_type), intent(inout) :: solver_settings
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! initialize the settings and their nested stability check settings if they
-        ! were not initialized, which the solver can no longer detect once the
-        ! callback functions are wired into them, after printing the warning the solver
-        ! would print, regardless of the verbosity, since the default settings would
-        ! silence it
-        if (.not. solver_settings%initialized) then
-            call warn_uninitialized_settings(solver_settings, &
-                                             settings_uninitialized_warning_msg)
-            call solver_settings%init(error)
-            if (error /= 0) return
-        else if (.not. solver_settings%stability_settings%initialized) then
-            call warn_uninitialized_settings( &
-                solver_settings, stability_settings_uninitialized_warning_msg)
-            call solver_settings%stability_settings%init(error)
-            if (error /= 0) return
-        end if
-
-        ! set callback functions of the solver and its stability check
-        solver_settings%precond => precond_oao_callback
-        solver_settings%precond_pd => precond_pd_oao_callback
-        solver_settings%project => project_oao_callback
-        solver_settings%get_extra_trial_vectors => get_extra_trial_vectors_oao_callback
-        solver_settings%stability_settings%precond => precond_oao_callback
-        solver_settings%stability_settings%project => project_oao_callback
-        solver_settings%stability_settings%get_extra_trial_vectors => &
-            get_extra_trial_vectors_oao_callback
-
-    end subroutine oao_set_solver_settings
-
-    function obj_func_oao_callback(kappa, error, context) result(energy)
+    function obj_func_oao(self, kappa, error, context) result(energy)
         !
         ! this function defines the energy evaluation in the OAO basis
         !
+        class(oao_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -336,29 +311,32 @@ contains
         energy = 0.0_rp
 
         ! get rotated density matrix in AO basis
-        allocate(rot_dm_ao(oao_object%n_ao, oao_object%n_ao, oao_object%n_particle))
-        call rotate_dm_ao(kappa, oao_object%dm_oao, oao_object%s_inv_sqrt, rot_dm_ao, &
-                          oao_object%settings, error)
+        allocate(rot_dm_ao(self%n_ao, self%n_ao, self%n_particle))
+        call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, &
+                          self%settings, error)
         if (error /= 0) return
 
         ! calculate the mean-field energy
-        if (associated(oao_object%evaluate_dm_cs)) then
-            call oao_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error, &
-                                           context=oao_object%settings%context)
+        if (associated(self%evaluate_dm_cs)) then
+            call self%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error, &
+                                     context=self%settings%context)
         else
-            call oao_object%evaluate_dm_os(rot_dm_ao, energy, error=error, &
-                                           context=oao_object%settings%context)
+            call self%evaluate_dm_os(rot_dm_ao, energy, error=error, &
+                                     context=self%settings%context)
         end if
         if (error /= 0) return
 
-    end function obj_func_oao_callback
+    end function obj_func_oao
 
-    subroutine update_orbs_oao_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                        error, context)
+    subroutine update_orbs_oao(self, kappa, func, grad, h_diag, hess_x_funptr, error, &
+                               context)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation in the OAO basis
         !
+        use otr_common, only: hess_x_callback
+
+        class(oao_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -374,29 +352,29 @@ contains
 
         ! evaluate at the rotated orbitals, or at the current ones if these have not
         ! been evaluated yet or their response is stale
-        if ((sum(abs(kappa)) > 0.0_rp) .or. oao_object%evaluation_stale .or. &
-            oao_object%response_stale) then
+        if ((sum(abs(kappa)) > 0.0_rp) .or. self%evaluation_stale .or. &
+            self%response_stale) then
             ! number of AOs
-            n_ao = oao_object%n_ao
+            n_ao = self%n_ao
 
             ! number of particles
-            n_particle = oao_object%n_particle
+            n_particle = self%n_particle
 
             ! rotate orbitals, which have not been evaluated until this succeeds
-            oao_object%evaluation_stale = .true.
-            call oao_object%rotate_orbitals(kappa, oao_object%settings, error)
+            self%evaluation_stale = .true.
+            call self%rotate_orbitals(kappa, self%settings, error)
             if (error /= 0) return
 
             ! get energy, Fock matrix, and response function
             allocate(fock_ao(n_ao, n_ao, n_particle))
-            if (associated(oao_object%evaluate_dm_cs)) then
-                call oao_object%evaluate_dm_cs( &
-                    oao_object%dm_ao(:, :, 1), oao_object%energy, fock_ao(:, :, 1), &
-                    oao_object%get_response_cs, error, oao_object%settings%context)
+            if (associated(self%evaluate_dm_cs)) then
+                call self%evaluate_dm_cs(self%dm_ao(:, :, 1), self%energy, &
+                                         fock_ao(:, :, 1), self%get_response_cs, &
+                                         error, self%settings%context)
             else
-                call oao_object%evaluate_dm_os(oao_object%dm_ao, oao_object%energy, &
-                                               fock_ao, oao_object%get_response_os, &
-                                               error, oao_object%settings%context)
+                call self%evaluate_dm_os(self%dm_ao, self%energy, fock_ao, &
+                                         self%get_response_os, error, &
+                                         self%settings%context)
             end if
             if (error /= 0) then
                 deallocate(fock_ao)
@@ -405,24 +383,24 @@ contains
 
             ! calculate gradient, Hessian diagonal and static part of the Hessian from
             ! the Fock matrix in the OAO basis
-            call oao_object%calculate_grad_h_diag( &
-                symmetric_transformation(oao_object%s_inv_sqrt, fock_ao))
+            call self%calculate_grad_h_diag( &
+                symmetric_transformation(self%s_inv_sqrt, fock_ao))
             deallocate(fock_ao)
 
             ! the rotated density matrix and its response have been evaluated
-            oao_object%evaluation_stale = .false.
-            oao_object%response_stale = .false.
+            self%evaluation_stale = .false.
+            self%response_stale = .false.
         end if
 
         ! set outputs
-        func = oao_object%energy
-        grad = oao_object%grad
-        h_diag = oao_object%h_diag
-        hess_x_funptr => hess_x_oao_callback
+        func = self%energy
+        grad = self%grad
+        h_diag = self%h_diag
+        hess_x_funptr => hess_x_callback
 
-    end subroutine update_orbs_oao_callback
+    end subroutine update_orbs_oao
 
-    subroutine hess_x_oao_callback(x, hess_x, error, context)
+    subroutine hess_x_oao(self, x, hess_x, error, context)
         !
         ! this function defines the Hessian linear transformation in the OAO basis, the
         ! static part from the occupied-occupied and virtual-virtual parts of the Fock
@@ -430,6 +408,7 @@ contains
         ! response to the trial vector, projected onto the occupied-virtual and
         ! virtual-occupied subspace
         !
+        class(oao_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -443,18 +422,18 @@ contains
         error = 0
 
         ! number of AOs
-        n_ao = oao_object%n_ao
+        n_ao = self%n_ao
 
         ! number of particles
-        n_particle = oao_object%n_particle
+        n_particle = self%n_particle
 
         ! number of parameters
-        n_param = oao_object%n_param
+        n_param = self%n_param
 
         ! rebuild the response if the density was moved without it being updated, since
         ! the static and response parts would otherwise refer to different points
-        if (oao_object%response_stale) then
-            call oao_object%refresh_response(error)
+        if (self%response_stale) then
+            call self%refresh_response(error)
             if (error /= 0) return
         end if
 
@@ -462,29 +441,28 @@ contains
         x_full = unpack_asymm(x, n_particle, n_ao)
 
         ! get static part
-        hess_x_full = hess_x_static_oao(x_full, oao_object%fock_oo, oao_object%fock_vv)
+        hess_x_full = hess_x_static_oao(x_full, self%fock_oo, self%fock_vv)
 
         ! get density matrix response to trial vector
-        dm_response = project_symm(x_full, oao_object%dm_oao)
+        dm_response = project_symm(x_full, self%dm_oao)
         deallocate(x_full)
 
         ! transform density matrix from OAO basis to AO basis
-        dm_response = symmetric_transformation(oao_object%s_inv_sqrt, dm_response)
+        dm_response = symmetric_transformation(self%s_inv_sqrt, dm_response)
 
         ! get response of Fock matrix to density matrix response
         allocate(fock_response(n_ao, n_ao, n_particle))
-        if (associated(oao_object%get_response_os)) then
-            call oao_object%get_response_os(dm_response, fock_response, error, &
-                                            oao_object%settings%context)
+        if (associated(self%get_response_os)) then
+            call self%get_response_os(dm_response, fock_response, error, &
+                                      self%settings%context)
         else
-            call oao_object%get_response_cs(dm_response(:, :, 1), &
-                                            fock_response(:, :, 1), error, &
-                                            oao_object%settings%context)
+            call self%get_response_cs(dm_response(:, :, 1), fock_response(:, :, 1), &
+                                      error, self%settings%context)
         end if
         if (error /= 0) return
 
         ! transform Fock response to OAO basis
-        fock_response = symmetric_transformation(oao_object%s_inv_sqrt, fock_response)
+        fock_response = symmetric_transformation(self%s_inv_sqrt, fock_response)
 
         ! project the combined static and response contributions onto the
         ! occupied-virtual and virtual-occupied subspace; the static part is already
@@ -492,25 +470,26 @@ contains
         ! Hessian linear transformation is free since the Fock response has to be
         ! projected anyways and the full projection can prevent some numerical leakage
         ! into the redundant subspace
-        hess_x_full = project_asymm(hess_x_full + fock_response, oao_object%dm_oao)
+        hess_x_full = project_asymm(hess_x_full + fock_response, self%dm_oao)
         deallocate(fock_response)
 
         ! pack Hessian linear transformation
-        if (oao_object%n_particle == 1) then
-            hess_x = 4.0_rp * pack_asymm(hess_x_full, oao_object%n_param)
+        if (self%n_particle == 1) then
+            hess_x = 4.0_rp * pack_asymm(hess_x_full, self%n_param)
         else
-            hess_x = 2.0_rp * pack_asymm(hess_x_full, oao_object%n_param)
+            hess_x = 2.0_rp * pack_asymm(hess_x_full, self%n_param)
         end if
         deallocate(hess_x_full)
 
-    end subroutine hess_x_oao_callback
+    end subroutine hess_x_oao
 
-    subroutine project_oao_callback(vector, error, context)
+    subroutine project_oao(self, vector, error, context)
         !
         ! this subroutine discards the redundant occupied-occupied and virtual-virtual
         ! rotations from a vector describing an orbital rotation in-place, retaining
         ! only its occupied-virtual and virtual-occupied contributions
         !
+        class(oao_type), intent(inout) :: self
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -521,62 +500,17 @@ contains
         error = 0
 
         ! unpack vector
-        vector_full = unpack_asymm(vector, oao_object%n_particle, oao_object%n_ao)
+        vector_full = unpack_asymm(vector, self%n_particle, self%n_ao)
 
         ! project vector onto occupied-virtual and virtual-occupied subspace
-        projected_vector_full = project_asymm(vector_full, oao_object%dm_oao)
+        projected_vector_full = project_asymm(vector_full, self%dm_oao)
         deallocate(vector_full)
 
         ! pack vector
         vector = pack_asymm(projected_vector_full, size(vector, kind=ip))
         deallocate(projected_vector_full)
 
-    end subroutine project_oao_callback
-
-    subroutine precond_oao_callback(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine defines a level-shifted preconditioner based on the exact
-        ! eigendecomposition of the static part of the Hessian
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call oao_object%precond(residual, mu, precond_residual, oao_object%settings, &
-                                error)
-
-    end subroutine precond_oao_callback
-
-    subroutine precond_pd_oao_callback(residual, precond_residual, error, context)
-        !
-        ! this subroutine defines the positive-definite preconditioner based on the
-        ! exact eigendecomposition of the static part of the Hessian
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call oao_object%precond_pd(residual, precond_residual, oao_object%settings, &
-                                   error)
-
-    end subroutine precond_pd_oao_callback
-
-    subroutine get_extra_trial_vectors_oao_callback(trial_vectors, error, context)
-        !
-        ! this subroutine returns the extra trial vectors of the OAO basis for the
-        ! solver's initial trial space
-        !
-        real(rp), intent(out), target :: trial_vectors(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call oao_object%get_extra_trial_vectors(trial_vectors, oao_object%settings, &
-                                                error)
-
-    end subroutine get_extra_trial_vectors_oao_callback
+    end subroutine project_oao
 
     subroutine init_oao_settings(self, error)
         !
@@ -892,7 +826,7 @@ contains
 
     end function get_hess_eigval_pairs_oao
 
-    subroutine get_extra_trial_vectors_oao(self, trial_vectors, settings, error)
+    subroutine get_extra_trial_vectors_oao(self, trial_vectors, error, context)
         !
         ! this subroutine returns curvature-informed extra trial vectors for the
         ! solver's initial trial space: the orbital rotations between those
@@ -900,9 +834,9 @@ contains
         ! eigenvalue sums are most negative
         !
         class(oao_type), intent(inout) :: self
-        real(rp), intent(out) :: trial_vectors(:, :)
-        class(settings_type), intent(in) :: settings
+        real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         integer(ip) :: n_ao, n_particle, i, j, k, idx
         real(rp), allocatable :: eigval_pairs(:), dm_eigvecs(:, :)
@@ -918,7 +852,7 @@ contains
         n_particle = self%n_particle
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(settings, error)
+        call self%refresh_hess_eigen(self%settings, error)
         if (error /= 0) return
 
         ! determine which eigenvectors span the occupied space; the eigenspaces of the

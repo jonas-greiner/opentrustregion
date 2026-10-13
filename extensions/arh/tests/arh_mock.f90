@@ -17,6 +17,9 @@ module otr_arh_mock
 
     logical :: test_passed
 
+    ! error the mock factories return
+    integer(ip) :: mock_arh_factory_error = 0
+
     ! create function pointers to ensure that routines comply with interface
     procedure(arh_factory_mo_cs), pointer :: mock_arh_factory_mo_cs_ptr => &
         mock_arh_factory_mo_cs
@@ -31,38 +34,32 @@ module otr_arh_mock
 
 contains
 
-    subroutine mock_arh_set_solver_settings(solver_settings, project)
+    subroutine mock_arh_wire_solver_settings(solver_settings, mo_basis)
         !
-        ! this subroutine wires the mock routines and, if given, a projection into the
-        ! solver settings and asks for the Hessian refresh and the raised micro
-        ! iteration limit, as the ARH factories do
+        ! this subroutine points the context of the solver settings at the level of the
+        ! solver of the ARH object for the given orbital basis, which it allocates if
+        ! necessary, and asks for the Hessian refresh and the raised micro iteration
+        ! limit, as the ARH factories do
         !
-        use opentrustregion, only: solver_settings_type, project_type
-        use otr_arh, only: arh_n_micro
-        use otr_common_mock, only: mock_precond, mock_precond_pd, &
-                                   mock_get_extra_trial_vectors
+        use opentrustregion, only: solver_settings_type
+        use otr_arh, only: arh_object, arh_mo_type, arh_oao_type, arh_n_micro
 
-        type(solver_settings_type), intent(inout) :: solver_settings
-        procedure(project_type), optional :: project
+        type(solver_settings_type), intent(inout), target :: solver_settings
+        logical, intent(in) :: mo_basis
 
-        integer(ip) :: error
-
-        if (.not. solver_settings%initialized) call solver_settings%init(error)
-        solver_settings%precond => mock_precond
-        solver_settings%precond_pd => mock_precond_pd
-        solver_settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
-        solver_settings%stability_settings%precond => mock_precond
-        solver_settings%stability_settings%get_extra_trial_vectors => &
-            mock_get_extra_trial_vectors
-        if (present(project)) then
-            solver_settings%project => project
-            solver_settings%stability_settings%project => project
+        if (.not. allocated(arh_object)) then
+            if (mo_basis) then
+                allocate(arh_mo_type :: arh_object)
+            else
+                allocate(arh_oao_type :: arh_object)
+            end if
         end if
+        solver_settings%context => arh_object%solver_level
         solver_settings%refresh_hess = .true.
         solver_settings%hess_symm = .false.
         solver_settings%n_micro = arh_n_micro
 
-    end subroutine mock_arh_set_solver_settings
+    end subroutine mock_arh_wire_solver_settings
 
     subroutine check_factory_mo_input(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
                                       n_mo, settings, orbsym)
@@ -163,27 +160,30 @@ contains
     end subroutine check_factory_mo_input
 
     subroutine mock_arh_factory_mo_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                      n_mo, evaluate_dm_funptr, obj_func_arh_funptr, &
-                                      update_orbs_arh_funptr, solver_settings, error, &
-                                      settings, orbsym)
+                                      n_mo, evaluate_dm_funptr, &
+                                      update_orbs_arh_funptr, obj_func_arh_funptr, &
+                                      solver_settings, error, settings, orbsym)
         !
-        ! this function is a test function for the function which returns a modified
-        ! orbital updating function for the closed-shell case with the orbitals
-        ! parameterized in the MO basis
+        ! this function is a test function for the function which returns the orbital
+        ! updating function and objective function for the closed-shell case with the
+        ! orbitals parameterized in the MO basis and wires the solver settings, which
+        ! marks the MO coefficients of the caller it receives in place, returns the
+        ! error it is set to and otherwise points the context of the solver settings at
+        ! the level of the solver of the ARH object and adjusts them, as the factory
+        ! does
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_settings_type, evaluate_dm_cs_type
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr
-        use otr_common_mock, only: mock_obj_func
-        use otr_mo_mock, only: mock_update_orbs, mo_coeff_3d
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ, n_particle, n_ao, n_mo
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:)
@@ -207,37 +207,43 @@ contains
             "non-linear potential contributions", settings%context)) &
             test_passed = .false.
 
-        ! set output quantities
-        error = 0
-        obj_func_arh_funptr => mock_obj_func
+        ! mark the MO coefficients of the caller and set output quantities
+        mo_coeff = 2.0_rp
+        error = mock_arh_factory_error
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+        if (error /= 0) return
+        call mock_arh_wire_solver_settings(solver_settings, .true.)
         update_orbs_arh_funptr => mock_update_orbs
-        call mock_arh_set_solver_settings(solver_settings)
-        mo_coeff_3d(1:n_ao, 1:n_mo, 1:1) => mo_coeff
+        obj_func_arh_funptr => mock_obj_func
 
     end subroutine mock_arh_factory_mo_cs
 
     subroutine mock_arh_factory_mo_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                      n_mo, evaluate_dm_funptr, obj_func_arh_funptr, &
-                                      update_orbs_arh_funptr, solver_settings, error, &
-                                      settings, orbsym)
+                                      n_mo, evaluate_dm_funptr, &
+                                      update_orbs_arh_funptr, obj_func_arh_funptr, &
+                                      solver_settings, error, settings, orbsym)
         !
-        ! this function is a test function for the function which returns a modified
-        ! orbital updating function for the open-shell case with the orbitals
-        ! parameterized in the MO basis
+        ! this function is a test function for the function which returns the orbital
+        ! updating function and objective function for the open-shell case with the
+        ! orbitals parameterized in the MO basis and wires the solver settings, which
+        ! marks the MO coefficients of the caller it receives in place, returns the
+        ! error it is set to and otherwise points the context of the solver settings at
+        ! the level of the solver of the ARH object and adjusts them, as the factory
+        ! does
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_settings_type, evaluate_dm_os_type
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr
-        use otr_common_mock, only: mock_obj_func
-        use otr_mo_mock, only: mock_update_orbs, mo_coeff_3d
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
@@ -256,36 +262,43 @@ contains
             "non-linear potential contributions", settings%context)) &
             test_passed = .false.
 
-        ! set output quantities
-        error = 0
-        obj_func_arh_funptr => mock_obj_func
+        ! mark the MO coefficients of the caller and set output quantities
+        mo_coeff = 2.0_rp
+        error = mock_arh_factory_error
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+        if (error /= 0) return
+        call mock_arh_wire_solver_settings(solver_settings, .true.)
         update_orbs_arh_funptr => mock_update_orbs
-        call mock_arh_set_solver_settings(solver_settings)
-        mo_coeff_3d => mo_coeff
+        obj_func_arh_funptr => mock_obj_func
 
     end subroutine mock_arh_factory_mo_os
 
     subroutine mock_arh_factory_oao_cs( &
-        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, obj_func_arh_funptr, &
-        update_orbs_arh_funptr, solver_settings, error, settings)
+        dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
+        update_orbs_arh_funptr, obj_func_arh_funptr, solver_settings, error, settings)
         !
-        ! this function is a test function for the function which returns a modified
-        ! orbital updating function for the closed-shell case
+        ! this function is a test function for the function which returns the orbital
+        ! updating function and objective function for the closed-shell case with the
+        ! orbitals parameterized in the OAO basis and wires the solver settings, which
+        ! marks the density matrix of the caller it receives in place, returns the
+        ! error it is set to and otherwise points the context of the solver settings at
+        ! the level of the solver of the ARH object and adjusts them, as the factory
+        ! does
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: arh_settings_type, evaluate_dm_cs_type
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr, operator(/=)
-        use otr_common_mock, only: mock_obj_func
-        use otr_oao_mock, only: mock_update_orbs, mock_project_oao, dm_ao_3d
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_common_test_reference, only: n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
@@ -341,36 +354,43 @@ contains
                 "optional settings associated with wrong values."
         end if
 
-        ! set output quantities
-        error = 0
-        obj_func_arh_funptr => mock_obj_func
+        ! mark the density matrix of the caller and set output quantities
+        dm_ao = 2.0_rp
+        error = mock_arh_factory_error
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+        if (error /= 0) return
+        call mock_arh_wire_solver_settings(solver_settings, .false.)
         update_orbs_arh_funptr => mock_update_orbs
-        call mock_arh_set_solver_settings(solver_settings, mock_project_oao)
-        dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
+        obj_func_arh_funptr => mock_obj_func
 
     end subroutine mock_arh_factory_oao_cs
 
     subroutine mock_arh_factory_oao_os( &
         dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os_funptr, &
-        obj_func_arh_funptr, update_orbs_arh_funptr, solver_settings, error, settings)
+        update_orbs_arh_funptr, obj_func_arh_funptr, solver_settings, error, settings)
         !
-        ! this function is a test function for the function which returns a modified
-        ! orbital updating function for the open-shell case
+        ! this function is a test function for the function which returns the orbital
+        ! updating function and objective function for the open-shell case with the
+        ! orbitals parameterized in the OAO basis and wires the solver settings, which
+        ! marks the density matrix of the caller it receives in place, returns the
+        ! error it is set to and otherwise points the context of the solver settings at
+        ! the level of the solver of the ARH object and adjusts them, as the factory
+        ! does
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use otr_arh, only: evaluate_dm_os_type, arh_settings_type
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr, operator(/=)
-        use otr_common_mock, only: mock_obj_func
-        use otr_oao_mock, only: mock_update_orbs, mock_project_oao, dm_ao_3d
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_common_test_reference, only: n_ao_ref => n_ao
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
@@ -426,12 +446,15 @@ contains
                 "optional settings associated with wrong values."
         end if
 
-        ! set output quantities
-        error = 0
-        obj_func_arh_funptr => mock_obj_func
+        ! mark the density matrix of the caller and set output quantities
+        dm_ao = 2.0_rp
+        error = mock_arh_factory_error
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+        if (error /= 0) return
+        call mock_arh_wire_solver_settings(solver_settings, .false.)
         update_orbs_arh_funptr => mock_update_orbs
-        call mock_arh_set_solver_settings(solver_settings, mock_project_oao)
-        dm_ao_3d => dm_ao
+        obj_func_arh_funptr => mock_obj_func
 
     end subroutine mock_arh_factory_oao_os
 

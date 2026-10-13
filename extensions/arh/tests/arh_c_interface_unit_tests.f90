@@ -8,10 +8,10 @@ module otr_arh_c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol, tol_c
+    use test_reference, only: tol
     use otr_arh_c_interface, only: evaluate_dm_c_type
     use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_ptr, c_funptr, &
-                                           c_funloc, c_f_procpointer, c_null_ptr
+                                           c_funloc, c_f_procpointer, c_loc
 
     implicit none
 
@@ -111,42 +111,35 @@ contains
         ! parameterized in the MO basis for the closed- and the open-shell case,
         ! without and with irreps of the MOs
         !
-        use otr_arh_c_interface, only: arh_settings_type_c, arh_factory_mo_cs, &
-                                       arh_factory_mo_os, arh_factory_mo_c_wrapper, &
-                                       update_orbs_arh_before_wrapping
+        use opentrustregion, only: default_solver_settings
+        use c_interface, only: solver_settings_type_c, assignment(=)
+        use otr_arh, only: arh_object, arh_n_micro
+        use otr_arh_c_interface, only: arh_callbacks, arh_settings_type_c, &
+                                       arh_factory_mo_cs, arh_factory_mo_os, &
+                                       arh_factory_mo_c_wrapper, arh_holder
         use otr_arh_mock, only: mock_arh_factory_mo_cs, mock_arh_factory_mo_os, &
-                                test_passed
-        use otr_mo_mock, only: mo_coeff_3d, mock_update_orbs, orbsym_passed
-        use otr_arh, only: arh_n_micro
+                                mock_arh_factory_error, test_passed
+        use otr_mo_mock, only: orbsym_passed
+        use otr_mo_c_interface, only: update_orbs_mo_c_wrapper
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
         use otr_mo_test_reference, only: mo_coeff_pattern, n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c, &
                                              shell_names
-        use c_interface_unit_tests, only: mock_project
-        use test_reference, only: &
-            get_reference_solver_values, unset_callbacks, check_obj_func_c_funptr, &
-            check_update_orbs_c_funptr, check_precond_c_funptr, &
-            check_precond_pd_c_funptr, check_get_extra_trial_vectors_c_funptr, &
-            ref_solver_settings, operator(/=), n_param_ref => n_param, &
-            arm_host_context_c, host_context, host_context_reached
-        use otr_mo_c_interface, only: &
-            obj_func_mo_before_wrapping, precond_mo_before_wrapping, &
-            precond_pd_mo_before_wrapping, get_extra_trial_vectors_mo_before_wrapping
-        use otr_common_mock, only: mock_logger_c, mock_obj_func, mock_precond, &
-                                   mock_precond_pd, mock_get_extra_trial_vectors
-        use otr_common_c_interface, only: n_param_global => n_param
-        use otr_mo_unit_tests, only: ref_count_mo_params
-        use c_interface, only: solver_settings_type_c
+        use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
+        use otr_common_mock, only: mock_logger_c
+        use test_reference, only: host_context_type, arm_host_context_c, host_context, &
+                                  host_context_reached
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), mo_coeff_c(:, :, :)
-        type(c_funptr) :: evaluate_dm_c_funptr, obj_func_c_funptr, update_orbs_c_funptr
+        type(c_funptr) :: evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr
         type(arh_settings_type_c) :: settings_c
         type(solver_settings_type_c) :: solver_settings_c
         integer(c_ip) :: n_particle_c, error_c, n_mo_c, n_occ_c(n_particle)
         integer(c_ip), allocatable :: orbsym_c(:)
-        integer(ip) :: irreps(n_mo, n_particle), n_param_expected, i_call, i_sym
+        integer(ip) :: irreps(n_mo, n_particle), i_call, i_sym
         logical :: with_irreps
         character(len=:), allocatable :: case_name
+        type(host_context_type), target :: other_host_context
 
         ! assume tests pass
         test_arh_factory_mo_c_wrapper = .true.
@@ -156,7 +149,7 @@ contains
         arh_factory_mo_os => mock_arh_factory_mo_os
 
         ! dimensions differ between AOs and MOs and occupations between the spin
-        ! channels, so that the shapes and the number of parameters are checked
+        ! channels, so that the shapes are checked
         n_mo_c = int(n_mo, kind=c_ip)
         n_occ_c = int(n_occ, kind=c_ip)
 
@@ -187,27 +180,12 @@ contains
             end if
 
             ! arm the host context of the ARH settings, which the logging and density
-            ! matrix evaluating functions receive, and initialize the global number of
-            ! parameters and solver settings, uninitialized for the closed-shell case
-            ! and, for the open-shell case, set to reference values with a projection
-            ! supplied by the caller, which have to be kept
+            ! matrix evaluating functions receive
             call arm_host_context_c(settings_c%context)
-            n_param_global = -1
-            if (n_particle_c == 1) then
-                solver_settings_c%initialized = .false._c_bool
-            else
-                call get_reference_solver_values(solver_settings_c)
-                call unset_callbacks(solver_settings_c)
-                solver_settings_c%context = c_null_ptr
-                solver_settings_c%stability_settings%context = c_null_ptr
-                solver_settings_c%project = c_funloc(mock_project)
-                solver_settings_c%stability_settings%project = c_funloc(mock_project)
-            end if
+            solver_settings_c = default_solver_settings
 
             ! set the irreps of the MOs passed to the wrapper, which an unallocated
-            ! array passes as absent, and the expected number of parameters, the
-            ! occupied-virtual pairs of the same irrep, with all MOs in one irrep if no
-            ! irreps are passed
+            ! array passes as absent
             irreps = 0
             if (allocated(orbsym_c)) deallocate(orbsym_c)
             if (with_irreps) then
@@ -216,18 +194,13 @@ contains
                 orbsym_c = int( &
                     reshape(irreps(:, :n_particle_c), [n_mo * n_particle_c]), kind=c_ip)
             end if
-            n_param_expected = ref_count_mo_params(n_occ(:n_particle_c), &
-                                                   irreps(:, :n_particle_c))
 
-            ! clear the callback slots, which only the factory call may set
-            nullify(obj_func_mo_before_wrapping, update_orbs_arh_before_wrapping, &
-                    precond_mo_before_wrapping, precond_pd_mo_before_wrapping, &
-                    get_extra_trial_vectors_mo_before_wrapping)
-
-            ! call ARH MO factory C wrapper
+            ! call ARH factory C wrapper
+            test_passed = .false.
+            mock_arh_factory_error = 0
             error_c = arh_factory_mo_c_wrapper( &
                 mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
-                evaluate_dm_c_funptr, obj_func_c_funptr, update_orbs_c_funptr, &
+                evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
                 solver_settings_c, settings_c, orbsym_c)
 
             ! check if the mock factory received the correct input and called the
@@ -259,128 +232,83 @@ contains
                     "error code wrong for the "//case_name//" case."
             end if
 
-            ! check if the callback slots point to the returned and wired functions,
-            ! without which calling these below would crash
-            if (.not. ( &
-                associated(obj_func_mo_before_wrapping, mock_obj_func) .and. &
-                associated(update_orbs_arh_before_wrapping, mock_update_orbs) .and. &
-                associated(precond_mo_before_wrapping, mock_precond) .and. &
-                associated(precond_pd_mo_before_wrapping, mock_precond_pd) .and. &
-                associated(get_extra_trial_vectors_mo_before_wrapping, &
-                           mock_get_extra_trial_vectors))) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Callback "// &
-                    "slots not set for the "//case_name//" case."
-                nullify(mo_coeff_3d)
-                return
-            end if
-
-            ! determine if the number of parameters of the MO basis, the number of
-            ! occupied-virtual pairs of the same irrep of all particle channels, was set
-            if (n_param_global /= n_param_expected) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Number of "// &
-                    "parameters not set for the "//case_name//" case."
-            end if
-
-            ! determine if the solver settings are initialized and set as the factory
-            ! sets them, without a projection wired but with the projection supplied by
-            ! the caller, and if initialized solver settings apart from the micro
-            ! iteration limit were kept
-            if (.not. solver_settings_c%initialized) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Solver "// &
-                    "settings not initialized for the "//case_name//" case."
-            end if
-            if (.not. solver_settings_c%refresh_hess) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Hessian "// &
-                    "refresh not requested for the "//case_name//" case."
-            end if
-            if (solver_settings_c%hess_symm) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Symmetry "// &
-                    "of the approximate Hessian not passed on for the "//case_name// &
-                    " case."
-            end if
-            if (solver_settings_c%n_micro /= arh_n_micro) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Micro "// &
-                    "iteration limit not passed on for the "//case_name//" case."
-            end if
-            if ((c_associated(solver_settings_c%project) .or. &
-                 c_associated(solver_settings_c%stability_settings%project)) .neqv. &
-                n_particle_c == 2) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Projection "// &
-                    "wired or projection supplied by the caller not kept for the "// &
-                    case_name//" case."
-            end if
-            if (n_particle_c == 2) then
-                solver_settings_c%n_micro = int(ref_solver_settings%n_micro, kind=c_ip)
-                if (solver_settings_c /= ref_solver_settings) then
-                    test_arh_factory_mo_c_wrapper = .false.
-                    write(stderr, *) "test_arh_factory_mo_c_wrapper failed: "// &
-                        "Initialized solver settings not kept for the "//case_name// &
-                        " case."
-                end if
-            end if
-
-            ! test the returned and wired functions for the reference number of
-            ! parameters of the wrapper tests
-            n_param_global = n_param_ref
-            test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. check_obj_func_c_funptr( &
-                    obj_func_c_funptr, "arh_factory_mo_c_wrapper", " by returned "// &
-                    "objective function for the "//case_name//" case", c_null_ptr)
-            test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. check_update_orbs_c_funptr( &
-                    update_orbs_c_funptr, "arh_factory_mo_c_wrapper", &
-                    " by returned orbital updating function for the "//case_name// &
-                    " case", c_null_ptr)
-
-            ! check if the MO coefficients passed from C were rotated in place by the
-            ! returned orbital updating function
-            if (any(abs(mo_coeff_c - 2.0_c_rp) > tol_c)) then
+            ! check that the factory received the MO coefficients of the caller in
+            ! place, unless the kinds differ and the object updates a copy
+            if (rp == c_rp .and. any(abs(mo_coeff_c - 2.0_c_rp) > tol)) then
                 test_arh_factory_mo_c_wrapper = .false.
                 write(stderr, *) "test_arh_factory_mo_c_wrapper failed: MO "// &
-                    "coefficients not updated correctly by returned orbital "// &
-                    "updating function for the "//case_name//" case."
+                    "coefficients of the caller not passed in place for the "// &
+                    case_name//" case."
             end if
-            deallocate(mo_coeff_c)
 
-            ! test functions wired into the solver and stability check settings
-            test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. check_precond_c_funptr( &
-                    solver_settings_c%precond, "arh_factory_mo_c_wrapper", &
-                    " by wired level-shifted preconditioner function for the "// &
-                    case_name//" case", c_null_ptr)
-            test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. check_precond_pd_c_funptr( &
-                    solver_settings_c%precond_pd, "arh_factory_mo_c_wrapper", &
-                    " by wired positive-definite preconditioner function for the "// &
-                    case_name//" case", c_null_ptr)
-            test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. &
-                check_get_extra_trial_vectors_c_funptr( &
-                    solver_settings_c%get_extra_trial_vectors, &
-                    "arh_factory_mo_c_wrapper", " by wired extra trial vector "// &
-                    "function for the "//case_name//" case", c_null_ptr)
-            test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. check_precond_c_funptr( &
-                    solver_settings_c%stability_settings%precond, &
-                    "arh_factory_mo_c_wrapper", " by wired stability check "// &
-                    "level-shifted preconditioner function for "// &
-                    "the "//case_name//" case", c_null_ptr)
-            test_arh_factory_mo_c_wrapper = &
-                test_arh_factory_mo_c_wrapper .and. &
-                check_get_extra_trial_vectors_c_funptr( &
-                    solver_settings_c%stability_settings%get_extra_trial_vectors, &
-                    "arh_factory_mo_c_wrapper", " by wired stability check extra "// &
-                    "trial vector function for the "//case_name//" case", c_null_ptr)
+            ! check that the factory returned the C wrappers of the object, wired the
+            ! solver settings with its holder and adjusted them to the approximate
+            ! Hessian
+            if (.not. check_c_factory_wiring("arh_factory_mo_c_wrapper", arh_holder, &
+                                             arh_object, update_orbs_c_funptr, &
+                                             obj_func_c_funptr, solver_settings_c, &
+                                             c_funloc(update_orbs_mo_c_wrapper))) &
+                test_arh_factory_mo_c_wrapper = .false.
+            if (.not. solver_settings_c%refresh_hess .or. &
+                solver_settings_c%n_micro /= arh_n_micro .or. &
+                solver_settings_c%hess_symm) then
+                test_arh_factory_mo_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Solver "// &
+                    "settings not adjusted to the approximate Hessian for the "// &
+                    case_name//" case."
+            end if
+
+            ! call the factory with the solver settings it wired and another host
+            ! context, which has to produce an error without calling the factory,
+            ! returning functions or replacing the bundle holding the callback functions
+            ! of the object
+            settings_c%context = c_loc(other_host_context)
+            error_c = arh_factory_mo_c_wrapper( &
+                mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
+                evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
+                solver_settings_c, settings_c, orbsym_c)
+            if (error_c == 0 .or. c_associated(update_orbs_c_funptr) .or. &
+                c_associated(obj_func_c_funptr) .or. .not. c_associated( &
+                    arh_callbacks%host_context, c_loc(host_context))) then
+                test_arh_factory_mo_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Solver "// &
+                    "settings the holder was wired into not refused before the "// &
+                    "object was changed for the "//case_name//" case."
+            end if
+
+            ! call the factory for the initial MO coefficients with a mock factory
+            ! which produces an error, which has to be returned without functions or
+            ! writing back the solver settings or changing the holder or the bundle of
+            ! the object
+            mo_coeff_c = mo_coeff_pattern(n_ao_c, n_mo_c, n_particle_c, 0.0_c_rp)
+            solver_settings_c = default_solver_settings
+            update_orbs_c_funptr = c_funloc(mock_logger_c)
+            obj_func_c_funptr = c_funloc(mock_logger_c)
+            mock_arh_factory_error = 1
+            error_c = arh_factory_mo_c_wrapper( &
+                mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
+                evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
+                solver_settings_c, settings_c, orbsym_c)
+            mock_arh_factory_error = 0
+            if (error_c /= 1 .or. c_associated(update_orbs_c_funptr) .or. &
+                c_associated(obj_func_c_funptr) .or. &
+                c_associated(solver_settings_c%context)) then
+                test_arh_factory_mo_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Error of "// &
+                    "the factory not passed on for the "//case_name//" case."
+            end if
+            if (.not. associated(arh_holder%solver_level%level, &
+                                 arh_object%solver_level) .or. &
+                .not. c_associated(arh_callbacks%host_context, c_loc(host_context))) &
+                then
+                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Holder or "// &
+                    "callback functions of the object not restored after an error "// &
+                    "of the factory for the "//case_name//" case."
+                test_arh_factory_mo_c_wrapper = .false.
+            end if
         end do
         deallocate(ao_overlap_c)
-        nullify(mo_coeff_3d)
+        if (allocated(arh_object)) deallocate(arh_object)
 
     end function test_arh_factory_mo_c_wrapper
 
@@ -389,37 +317,29 @@ contains
         ! this function tests the C wrapper for the ARH factory for orbitals
         ! parameterized in the OAO basis for the closed- and the open-shell case
         !
-        use otr_arh_c_interface, only: arh_settings_type_c, arh_factory_oao_cs, &
-                                       arh_factory_oao_os, arh_factory_oao_c_wrapper, &
-                                       update_orbs_arh_before_wrapping
+        use opentrustregion, only: default_solver_settings
+        use c_interface, only: solver_settings_type_c, assignment(=)
+        use otr_arh, only: arh_object, arh_n_micro
+        use otr_arh_c_interface, only: arh_callbacks, arh_settings_type_c, &
+                                       arh_factory_oao_cs, arh_factory_oao_os, &
+                                       arh_factory_oao_c_wrapper, arh_holder
         use otr_arh_mock, only: mock_arh_factory_oao_cs, mock_arh_factory_oao_os, &
-                                test_passed
-        use otr_oao_mock, only: dm_ao_3d, mock_update_orbs, mock_project_oao
-        use otr_arh, only: arh_n_micro
+                                mock_arh_factory_error, test_passed
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
+        use otr_oao_c_interface, only: update_orbs_oao_c_wrapper
         use otr_common_test_reference, only: n_ao, n_particle, n_ao_c, shell_names
-        use test_reference, only: &
-            get_reference_solver_values, unset_callbacks, check_obj_func_c_funptr, &
-            check_update_orbs_c_funptr, check_precond_c_funptr, &
-            check_precond_pd_c_funptr, check_project_c_funptr, &
-            check_get_extra_trial_vectors_c_funptr, ref_solver_settings, operator(/=), &
-            n_param_ref => n_param, arm_host_context_c, host_context, &
-            host_context_reached
-        use otr_oao_c_interface, only: &
-            obj_func_oao_before_wrapping, precond_oao_before_wrapping, &
-            precond_pd_oao_before_wrapping, &
-            get_extra_trial_vectors_oao_before_wrapping, project_oao_before_wrapping
-        use otr_common_mock, only: mock_logger_c, mock_obj_func, mock_precond, &
-                                   mock_precond_pd, mock_get_extra_trial_vectors
-        use otr_common_c_interface, only: n_param_global => n_param
-        use c_interface, only: solver_settings_type_c
+        use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
+        use otr_common_mock, only: mock_logger_c
+        use test_reference, only: host_context_type, arm_host_context_c, host_context, &
+                                  host_context_reached
 
         real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_c(:, :, :)
-        type(c_funptr) :: evaluate_dm_c_funptr, obj_func_c_funptr, update_orbs_c_funptr
+        type(c_funptr) :: evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr
         type(arh_settings_type_c) :: settings_c
         type(solver_settings_type_c) :: solver_settings_c
         integer(c_ip) :: n_particle_c, error_c
         character(len=:), allocatable :: case_name
+        type(host_context_type), target :: other_host_context
 
         ! assume tests pass
         test_arh_factory_oao_c_wrapper = .true.
@@ -437,14 +357,13 @@ contains
         settings_c%logger = c_funloc(mock_logger_c)
 
         ! both spin cases pass through the same C wrapper
-        do n_particle_c = 1, n_particle
+        do n_particle_c = 1, int(n_particle, kind=c_ip)
             case_name = trim(shell_names(n_particle_c))
 
-            ! initialize density matrix
+            ! initialize density matrix and get C function pointer to the density
+            ! matrix evaluating function of the spin case
             allocate(dm_ao_c(n_ao, n_ao, n_particle_c))
             dm_ao_c = 1.0_c_rp
-
-            ! get C function pointers to Fortran functions
             if (n_particle_c == 1) then
                 evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_cs)
             else
@@ -452,31 +371,16 @@ contains
             end if
 
             ! arm the host context of the ARH settings, which the logging and density
-            ! matrix evaluating functions receive, and initialize the global number of
-            ! parameters and solver settings, uninitialized for the closed-shell case
-            ! and set to reference values, which have to be kept, for the open-shell
-            ! case
+            ! matrix evaluating functions receive
             call arm_host_context_c(settings_c%context)
-            n_param_global = -1
-            if (n_particle_c == 1) then
-                solver_settings_c%initialized = .false._c_bool
-            else
-                call get_reference_solver_values(solver_settings_c)
-                call unset_callbacks(solver_settings_c)
-                solver_settings_c%context = c_null_ptr
-                solver_settings_c%stability_settings%context = c_null_ptr
-            end if
+            solver_settings_c = default_solver_settings
 
-            ! clear the callback slots, which only the factory call may set
-            nullify(obj_func_oao_before_wrapping, update_orbs_arh_before_wrapping, &
-                    precond_oao_before_wrapping, precond_pd_oao_before_wrapping, &
-                    get_extra_trial_vectors_oao_before_wrapping, &
-                    project_oao_before_wrapping)
-
-            ! call ARH OAO factory C wrapper
+            ! call ARH factory C wrapper
+            test_passed = .false.
+            mock_arh_factory_error = 0
             error_c = arh_factory_oao_c_wrapper( &
                 dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-                obj_func_c_funptr, update_orbs_c_funptr, solver_settings_c, settings_c)
+                update_orbs_c_funptr, obj_func_c_funptr, solver_settings_c, settings_c)
 
             ! check if the mock factory received the correct input and called the
             ! logging function
@@ -502,129 +406,82 @@ contains
                     "error code wrong for the "//case_name//" case."
             end if
 
-            ! check if the callback slots point to the returned and wired functions,
-            ! without which calling these below would crash
-            if (.not. ( &
-                associated(obj_func_oao_before_wrapping, mock_obj_func) .and. &
-                associated(update_orbs_arh_before_wrapping, mock_update_orbs) .and. &
-                associated(precond_oao_before_wrapping, mock_precond) .and. &
-                associated(precond_pd_oao_before_wrapping, mock_precond_pd) .and. &
-                associated(get_extra_trial_vectors_oao_before_wrapping, &
-                           mock_get_extra_trial_vectors) .and. &
-                associated(project_oao_before_wrapping, mock_project_oao))) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Callback "// &
-                    "slots not set for the "//case_name//" case."
-                nullify(dm_ao_3d)
-                return
-            end if
-
-            ! determine if the number of parameters of the OAO basis was set
-            if (n_param_global /= n_particle_c * n_ao * (n_ao - 1) / 2) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Number of "// &
-                    "parameters not set for the "//case_name//" case."
-            end if
-
-            ! determine if the solver settings are initialized and set as the factory
-            ! sets them, and if initialized solver settings apart from the micro
-            ! iteration limit were kept
-            if (.not. solver_settings_c%initialized) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Solver "// &
-                    "settings not initialized for the "//case_name//" case."
-            end if
-            if (.not. solver_settings_c%refresh_hess) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Hessian "// &
-                    "refresh not requested for the "//case_name//" case."
-            end if
-            if (solver_settings_c%hess_symm) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Symmetry "// &
-                    "of the approximate Hessian not passed on for the "//case_name// &
-                    " case."
-            end if
-            if (solver_settings_c%n_micro /= arh_n_micro) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Micro "// &
-                    "iteration limit not passed on for the "//case_name//" case."
-            end if
-            if (n_particle_c == 2) then
-                solver_settings_c%n_micro = int(ref_solver_settings%n_micro, kind=c_ip)
-                if (solver_settings_c /= ref_solver_settings) then
-                    test_arh_factory_oao_c_wrapper = .false.
-                    write(stderr, *) "test_arh_factory_oao_c_wrapper failed: "// &
-                        "Initialized solver settings not kept for the "//case_name// &
-                        " case."
-                end if
-            end if
-
-            ! test the returned and wired functions for the reference number of
-            ! parameters of the wrapper tests
-            n_param_global = n_param_ref
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. check_obj_func_c_funptr( &
-                    obj_func_c_funptr, "arh_factory_oao_c_wrapper", " by returned "// &
-                    "objective function for the "//case_name//" case", c_null_ptr)
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. check_update_orbs_c_funptr( &
-                    update_orbs_c_funptr, "arh_factory_oao_c_wrapper", &
-                    " by returned orbital updating function for the "//case_name// &
-                    " case", c_null_ptr)
-
-            ! check if the density matrix was updated by the returned orbital updating
-            ! function
-            if (any(abs(dm_ao_c - 2.0_c_rp) > tol)) then
+            ! check that the factory received the density matrix of the caller in place,
+            ! unless the kinds differ and the object updates a copy
+            if (rp == c_rp .and. any(abs(dm_ao_c - 2.0_c_rp) > tol)) then
                 test_arh_factory_oao_c_wrapper = .false.
                 write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Density "// &
-                    "matrix not updated correctly by returned orbital updating "// &
-                    "function for the "//case_name//" case."
+                    "matrix of the caller not passed in place for the "//case_name// &
+                    " case."
+            end if
+
+            ! check that the factory returned the C wrappers of the object, wired the
+            ! solver settings with its holder and adjusted them to the approximate
+            ! Hessian
+            if (.not. check_c_factory_wiring("arh_factory_oao_c_wrapper", arh_holder, &
+                                             arh_object, update_orbs_c_funptr, &
+                                             obj_func_c_funptr, solver_settings_c, &
+                                             c_funloc(update_orbs_oao_c_wrapper))) &
+                test_arh_factory_oao_c_wrapper = .false.
+            if (.not. solver_settings_c%refresh_hess .or. &
+                solver_settings_c%n_micro /= arh_n_micro .or. &
+                solver_settings_c%hess_symm) then
+                test_arh_factory_oao_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Solver "// &
+                    "settings not adjusted to the approximate Hessian for the "// &
+                    case_name//" case."
+            end if
+
+            ! call the factory with the solver settings it wired and another host
+            ! context, which has to produce an error without calling the factory,
+            ! returning functions or replacing the bundle holding the callback functions
+            ! of the object
+            settings_c%context = c_loc(other_host_context)
+            error_c = arh_factory_oao_c_wrapper( &
+                dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
+                update_orbs_c_funptr, obj_func_c_funptr, solver_settings_c, settings_c)
+            if (error_c == 0 .or. c_associated(update_orbs_c_funptr) .or. &
+                c_associated(obj_func_c_funptr) .or. .not. c_associated( &
+                    arh_callbacks%host_context, c_loc(host_context))) then
+                test_arh_factory_oao_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Solver "// &
+                    "settings the holder was wired into not refused before the "// &
+                    "object was changed for the "//case_name//" case."
+            end if
+
+            ! call the factory for the initial density matrix with a mock factory which
+            ! produces an error, which has to be returned without functions or writing
+            ! back the solver settings or changing the holder or the bundle of the
+            ! object
+            dm_ao_c = 1.0_c_rp
+            solver_settings_c = default_solver_settings
+            update_orbs_c_funptr = c_funloc(mock_logger_c)
+            obj_func_c_funptr = c_funloc(mock_logger_c)
+            mock_arh_factory_error = 1
+            error_c = arh_factory_oao_c_wrapper( &
+                dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
+                update_orbs_c_funptr, obj_func_c_funptr, solver_settings_c, settings_c)
+            mock_arh_factory_error = 0
+            if (error_c /= 1 .or. c_associated(update_orbs_c_funptr) .or. &
+                c_associated(obj_func_c_funptr) .or. &
+                c_associated(solver_settings_c%context)) then
+                test_arh_factory_oao_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Error of "// &
+                    "the factory not passed on for the "//case_name//" case."
+            end if
+            if (.not. associated(arh_holder%solver_level%level, &
+                                 arh_object%solver_level) .or. &
+                .not. c_associated(arh_callbacks%host_context, c_loc(host_context))) &
+                then
+                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Holder or "// &
+                    "callback functions of the object not restored after an error "// &
+                    "of the factory for the "//case_name//" case."
+                test_arh_factory_oao_c_wrapper = .false.
             end if
             deallocate(dm_ao_c)
-
-            ! test functions wired into the solver and stability check settings
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. check_precond_c_funptr( &
-                    solver_settings_c%precond, "arh_factory_oao_c_wrapper", &
-                    " by wired level-shifted preconditioner function for the "// &
-                    case_name//" case", c_null_ptr)
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. check_precond_pd_c_funptr( &
-                    solver_settings_c%precond_pd, "arh_factory_oao_c_wrapper", &
-                    " by wired positive-definite preconditioner function for the "// &
-                    case_name//" case", c_null_ptr)
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. check_project_c_funptr( &
-                    solver_settings_c%project, "arh_factory_oao_c_wrapper", &
-                    " by wired projection function for the "//case_name//" case", &
-                    c_null_ptr)
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. &
-                check_get_extra_trial_vectors_c_funptr( &
-                    solver_settings_c%get_extra_trial_vectors, &
-                    "arh_factory_oao_c_wrapper", " by wired extra trial vector "// &
-                    "function for the "//case_name//" case", c_null_ptr)
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. check_precond_c_funptr( &
-                    solver_settings_c%stability_settings%precond, &
-                    "arh_factory_oao_c_wrapper", " by wired stability check "// &
-                    "level-shifted preconditioner function for "// &
-                    "the "//case_name//" case", c_null_ptr)
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. check_project_c_funptr( &
-                    solver_settings_c%stability_settings%project, &
-                    "arh_factory_oao_c_wrapper", " by wired stability check "// &
-                    "projection function for the "//case_name//" case", c_null_ptr)
-            test_arh_factory_oao_c_wrapper = &
-                test_arh_factory_oao_c_wrapper .and. &
-                check_get_extra_trial_vectors_c_funptr( &
-                    solver_settings_c%stability_settings%get_extra_trial_vectors, &
-                    "arh_factory_oao_c_wrapper", " by wired stability check extra "// &
-                    "trial vector function for the "//case_name//" case", c_null_ptr)
         end do
         deallocate(ao_overlap_c)
-        nullify(dm_ao_3d)
+        if (allocated(arh_object)) deallocate(arh_object)
 
     end function test_arh_factory_oao_c_wrapper
 
@@ -722,50 +579,6 @@ contains
             test_evaluate_dm_os_f_wrapper = .false.
 
     end function test_evaluate_dm_os_f_wrapper
-
-    logical(c_bool) function test_update_orbs_arh_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the ARH orbital update
-        !
-        use otr_common_c_interface, only: n_param_global => n_param
-        use otr_arh_c_interface, only: update_orbs_arh_before_wrapping, &
-                                       update_orbs_arh_c_wrapper
-        use otr_common_mock, only: mock_update_orbs
-        use test_reference, only: check_update_orbs_c_funptr, n_param
-
-        ! set global number of parameters for assumed size arrays
-        n_param_global = n_param
-
-        ! inject mock subroutine
-        update_orbs_arh_before_wrapping => mock_update_orbs
-
-        ! test orbital updating function
-        test_update_orbs_arh_c_wrapper = check_update_orbs_c_funptr( &
-            c_funloc(update_orbs_arh_c_wrapper), "update_orbs_arh_c_wrapper", "", &
-            c_null_ptr)
-
-    end function test_update_orbs_arh_c_wrapper
-
-    logical(c_bool) function test_hess_x_arh_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the ARH Hessian linear transformation
-        !
-        use otr_common_c_interface, only: n_param_global => n_param
-        use otr_arh_c_interface, only: hess_x_arh_before_wrapping, hess_x_arh_c_wrapper
-        use otr_common_mock, only: mock_hess_x
-        use test_reference, only: check_hess_x_c_funptr, n_param
-
-        ! set global number of parameters for assumed size arrays
-        n_param_global = n_param
-
-        ! inject mock subroutine
-        hess_x_arh_before_wrapping => mock_hess_x
-
-        ! test orbital updating function
-        test_hess_x_arh_c_wrapper = check_hess_x_c_funptr( &
-            c_funloc(hess_x_arh_c_wrapper), "hess_x_arh_c_wrapper", "", c_null_ptr)
-
-    end function test_hess_x_arh_c_wrapper
 
     logical(c_bool) function test_init_arh_settings_c() bind(C)
         !

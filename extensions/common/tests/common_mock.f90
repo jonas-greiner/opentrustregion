@@ -6,8 +6,8 @@
 
 module otr_common_mock
 
-    use opentrustregion, only: rp, ip, stderr, obj_func_type, update_orbs_type, &
-                               hess_x_type, precond_type, precond_pd_type, &
+    use opentrustregion, only: rp, ip, obj_func_type, update_orbs_type, hess_x_type, &
+                               precond_type, precond_pd_type, &
                                get_extra_trial_vectors_type
     use c_interface, only: logger_c_type
     use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_associated, c_f_pointer
@@ -24,11 +24,40 @@ module otr_common_mock
         mock_get_extra_trial_vectors_ptr => mock_get_extra_trial_vectors
     procedure(logger_c_type), pointer :: mock_logger_c_ptr => mock_logger_c
 
+    ! name of the mock host callback function called last, so that tests can check to
+    ! which host callback function a callback function forwarded
+    character(len=40) :: host_called = ""
+
 contains
+
+    function record_host_call(name, context) result(error)
+        !
+        ! this function records the call of a mock host callback function, checks the
+        ! host context it received and returns the error code the test set in it
+        !
+        use test_reference, only: host_context_type, check_host_context
+
+        character(len=*), intent(in) :: name
+        class(*), intent(in), pointer :: context
+        integer(ip) :: error
+
+        host_called = name
+        call check_host_context(context)
+        error = 0
+        if (associated(context)) then
+            select type (context)
+            class is (host_context_type)
+                error = int(context%mock_error, kind=ip)
+            end select
+        end if
+
+    end function record_host_call
 
     function mock_obj_func(kappa, error, context) result(func)
         !
-        ! this function is a test function for the objective function
+        ! this function is a test function for the objective function, which records
+        ! its call, checks the host context it receives and returns the error code set
+        ! in it
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -37,14 +66,16 @@ contains
 
         func = sum(kappa)
 
-        error = 0
+        error = record_host_call("obj_func", context)
 
     end function mock_obj_func
 
     subroutine mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                 context)
         !
-        ! this subroutine is a test subroutine for the orbital update function
+        ! this subroutine is a test subroutine for the orbital update function, which
+        ! records its call, checks the host context it receives and returns the error
+        ! code set in it
         !
         use opentrustregion, only: hess_x_type
 
@@ -63,14 +94,15 @@ contains
 
         hess_x_funptr => mock_hess_x
 
-        error = 0
+        error = record_host_call("update_orbs", context)
 
     end subroutine mock_update_orbs
 
     subroutine mock_hess_x(x, hess_x, error, context)
         !
         ! this subroutine is a test subroutine for the Hessian linear transformation
-        ! function
+        ! function, which records its call, checks the host context it receives and
+        ! returns the error code set in it
         !
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
@@ -79,14 +111,15 @@ contains
 
         hess_x = 4 * x
 
-        error = 0
+        error = record_host_call("hess_x", context)
 
     end subroutine mock_hess_x
 
     subroutine mock_precond(residual, mu, precond_residual, error, context)
         !
         ! this subroutine is a test subroutine for the level-shifted preconditioner
-        ! function
+        ! function, which records its call, checks the host context it receives and
+        ! returns the error code set in it
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -96,14 +129,15 @@ contains
 
         precond_residual = mu * residual
 
-        error = 0
+        error = record_host_call("precond", context)
 
     end subroutine mock_precond
 
     subroutine mock_precond_pd(residual, precond_residual, error, context)
         !
         ! this subroutine is a test subroutine for the positive-definite preconditioner
-        ! function
+        ! function, which records its call, checks the host context it receives and
+        ! returns the error code set in it
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
@@ -112,13 +146,15 @@ contains
 
         precond_residual = 3.0_rp * residual
 
-        error = 0
+        error = record_host_call("precond_pd", context)
 
     end subroutine mock_precond_pd
 
     subroutine mock_get_extra_trial_vectors(trial_vectors, error, context)
         !
-        ! this subroutine is a test subroutine for the extra trial vector function
+        ! this subroutine is a test subroutine for the extra trial vector function,
+        ! which records its call, checks the host context it receives and returns the
+        ! error code set in it
         !
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
@@ -130,7 +166,7 @@ contains
             trial_vectors(:, i) = real(i, kind=rp)
         end do
 
-        error = 0
+        error = record_host_call("get_extra_trial_vectors", context)
 
     end subroutine mock_get_extra_trial_vectors
 

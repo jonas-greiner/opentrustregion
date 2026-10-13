@@ -15,6 +15,11 @@ module otr_common_c_interface_unit_tests
 
     implicit none
 
+    ! whether the extension object of a test of the C wrappers of its roles performs
+    ! the role itself or leaves it to the host
+    character(len=*), parameter :: role_case_names(2) = &
+        [character(len=23) :: "performing the role", "not performing the role"]
+
     ! create function pointers to ensure that routines comply with interface
     procedure(evaluate_dm_c_type), pointer :: &
         mock_evaluate_dm_cs_ptr => mock_evaluate_dm_cs, &
@@ -180,6 +185,142 @@ contains
 
     end subroutine arm_holder_level
 
+    subroutine setup_mock_extension_holder(holder, extension, i_level)
+        !
+        ! this subroutine sets up a holder of the levels of a mock extension whose level
+        ! of the solver (1) or of the stability check (2) holds the armed host context
+        ! with an error code in its bundle, while the bundle of the other level holds
+        ! none, and whose bundle of the solver refers to that of the stability check, so
+        ! that a C wrapper calling the object's role or the host's C function with the
+        ! wrong level is detected, and clears the role the object recorded
+        !
+        use otr_common_c_interface, only: extension_holder_type
+        use otr_common_unit_tests, only: mock_extension_type
+        use test_reference, only: host_context
+
+        type(extension_holder_type), intent(out), target :: holder
+        type(mock_extension_type), intent(inout), target :: extension
+        integer(ip), intent(in) :: i_level
+
+        call arm_holder_level(holder, i_level)
+        host_context%mock_error = 3
+        holder%solver_level%level => extension%solver_level
+        holder%stability_level%level => extension%stability_level
+        holder%solver_level%callbacks%stability => holder%stability_level%callbacks
+        extension%called_role = ""
+
+    end subroutine setup_mock_extension_holder
+
+    function check_c_factory_wiring( &
+        test_name, holder, extension, update_orbs_c_funptr, obj_func_c_funptr, &
+        solver_settings_c, update_orbs_c_wrapper_funptr) result(test_passed)
+        !
+        ! this function checks that the C wrapper of a factory returned the C wrappers
+        ! of the orbital update, the given one or otherwise the shared one, and of the
+        ! objective function and wrote the solver settings back with the address of the
+        ! level of the solver of its holder as context, which has to hold the levels of
+        ! the extension object
+        !
+        use c_interface, only: solver_settings_type_c
+        use otr_common, only: extension_type
+        use otr_common_c_interface, only: extension_holder_type, &
+                                          update_orbs_c_wrapper, obj_func_c_wrapper
+
+        character(len=*), intent(in) :: test_name
+        type(extension_holder_type), intent(in), target :: holder
+        class(extension_type), intent(in), target :: extension
+        type(c_funptr), intent(in) :: update_orbs_c_funptr, obj_func_c_funptr
+        type(solver_settings_type_c), intent(in) :: solver_settings_c
+        type(c_funptr), intent(in), optional :: update_orbs_c_wrapper_funptr
+        logical :: test_passed
+
+        type(c_funptr) :: expected_update_orbs_c_funptr
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! the factory returns the shared C wrapper of the orbital update unless another
+        ! one is given
+        expected_update_orbs_c_funptr = c_funloc(update_orbs_c_wrapper)
+        if (present(update_orbs_c_wrapper_funptr)) &
+            expected_update_orbs_c_funptr = update_orbs_c_wrapper_funptr
+
+        if (.not. c_associated(update_orbs_c_funptr, &
+                               expected_update_orbs_c_funptr) .or. &
+            .not. c_associated(obj_func_c_funptr, c_funloc(obj_func_c_wrapper))) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: C wrappers of the object not returned."
+            test_passed = .false.
+        end if
+        if (.not. c_associated(solver_settings_c%context, &
+                               c_loc(holder%solver_level)) .or. &
+            .not. associated(holder%solver_level%level, extension%solver_level) .or. &
+            .not. associated(holder%stability_level%level, extension%stability_level)) &
+            then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Solver settings not wired with the holder of the object."
+            test_passed = .false.
+        end if
+
+    end function check_c_factory_wiring
+
+    function check_role_c_wrapper(test_name, extension, role, i_case, i_level, &
+                                  error_c) result(passed)
+        !
+        ! this function checks that a C wrapper of a role, called with the address of
+        ! the level of the solver (1) or of the stability check (2) in a holder of a
+        ! mock extension, called the role of the object with the level for an object
+        ! performing it (case 1) and otherwise the host's C function with the host
+        ! context of the level (case 2), and passed on the error of the one it called
+        !
+        use otr_common_unit_tests, only: mock_extension_type, check_role_called, &
+                                         level_context, level_names
+        use test_reference, only: host_context_reached
+
+        character(len=*), intent(in) :: test_name, role
+        type(mock_extension_type), intent(in), target :: extension
+        integer(ip), intent(in) :: i_case, i_level
+        integer(c_ip), intent(in) :: error_c
+        logical :: passed
+
+        class(*), pointer :: level
+        character(len=:), allocatable :: case_name
+
+        ! assume tests pass
+        passed = .true.
+
+        ! name the level and the case in the messages
+        case_name = "the "//trim(level_names(i_level))//" of an object "// &
+                    trim(role_case_names(i_case))
+
+        ! the object's role has to be called with the level if the object performs it
+        ! and the host's C function with the host context of the level otherwise
+        if (i_case == 1) then
+            level => level_context(extension, i_level)
+            if (.not. check_role_called(test_name, extension, role, level, case_name)) &
+                passed = .false.
+        else
+            if (extension%called_role /= "") then
+                write(stderr, *) "test_"//test_name//" failed: Role "//role// &
+                    " of the object called for "//case_name//"."
+                passed = .false.
+            end if
+            if (.not. host_context_reached(test_name)) then
+                write(stderr, *) "test_"//test_name//" failed: Host's C function "// &
+                    "not called with the host context for "//case_name//"."
+                passed = .false.
+            end if
+        end if
+
+        ! the error of the one called has to be passed on
+        if (error_c /= 3) then
+            write(stderr, *) "test_"//test_name//" failed: Error not passed on for "// &
+                case_name//"."
+            passed = .false.
+        end if
+
+    end function check_role_c_wrapper
+
     logical(c_bool) function test_holder_level() bind(C)
         !
         ! this function tests the function which returns the level of a holder at the
@@ -292,9 +433,9 @@ contains
             if (i_case == 10) settings_c%initialized = .false.
             holder%solver_level%level => extension%solver_level
 
-            call setup_extension_holder(holder, c_funloc(mock_update_orbs), &
-                                        c_funloc(mock_obj_func), settings_c, &
-                                        solver_settings, settings, error)
+            call setup_extension_holder(holder, settings_c, solver_settings, settings, &
+                                        error, c_funloc(mock_update_orbs), &
+                                        c_funloc(mock_obj_func))
             if (error /= 0) then
                 write(stderr, *) "test_setup_extension_holder failed: Produced "// &
                     "error "//trim(case_names(i_case))//"."
@@ -336,6 +477,18 @@ contains
             end if
         end do
 
+        ! set up the holder for an object which wraps no orbital update or objective
+        ! function of the host, whose bundle has to hold neither
+        call get_reference_solver_values(settings_c)
+        call setup_extension_holder(holder, settings_c, solver_settings, settings, &
+                                    error)
+        if (error /= 0 .or. associated(holder%solver_level%callbacks%update_orbs) .or. &
+            associated(holder%solver_level%callbacks%obj_func)) then
+            write(stderr, *) "test_setup_extension_holder failed: Holder set up "// &
+                "wrong without the host's orbital update and objective function."
+            test_setup_extension_holder = .false.
+        end if
+
         ! set up the holder with C solver settings or nested settings that the holder
         ! was already wired into, which has to produce an error and leave the holder
         ! untouched
@@ -349,9 +502,9 @@ contains
             end if
             holder%solver_level%level => extension%solver_level
             log_context%log_message = ""
-            call setup_extension_holder(holder, c_funloc(mock_update_orbs), &
-                                        c_funloc(mock_obj_func), settings_c, &
-                                        solver_settings, settings, error)
+            call setup_extension_holder(holder, settings_c, solver_settings, settings, &
+                                        error, c_funloc(mock_update_orbs), &
+                                        c_funloc(mock_obj_func))
             if (error == 0) then
                 write(stderr, *) "test_setup_extension_holder failed: No error "// &
                     "returned for settings the holder was wired into."
@@ -461,12 +614,16 @@ contains
         !
         ! this function tests the C wrapper of the orbital update, which calls the
         ! callback function with the level of an extension object held at the address
-        ! it receives as context and returns the C wrapper of the Hessian linear
-        ! transformation
+        ! it receives as context, or the host's C function for an object that does not
+        ! perform it, whose Hessian linear transformation it keeps in the bundles of
+        ! both levels, and returns the C wrapper of the Hessian linear transformation
         !
+        use c_interface_unit_tests, only: mock_update_orbs, &
+                                          mock_update_orbs_no_hess_x, mock_hess_x
         use otr_common_c_interface, only: extension_holder_type, &
                                           update_orbs_c_wrapper, hess_x_c_wrapper
-        use otr_common_unit_tests, only: mock_extension_type, check_role_called
+        use otr_common_unit_tests, only: mock_extension_type
+        use test_reference, only: host_context_reached
 
         type(mock_extension_type), target :: extension
         type(extension_holder_type), target :: holder
@@ -474,67 +631,117 @@ contains
                       h_diag_c(n_param + 1)
         type(c_funptr) :: hess_x_c_funptr
         integer(c_ip) :: error_c
+        integer(ip) :: i_case
+        character(len=*), parameter :: no_hess_x_case_names(3) = &
+            [character(len=53) :: "an object returning none", "a host returning none", &
+             "a host returning none to an object performing its own"]
 
         ! assume tests pass
         test_update_orbs_c_wrapper = .true.
 
-        ! hold the level of the solver and set up a step, with arrays one element
-        ! longer than the number of parameters, of which only these may be read and
-        ! written
+        ! set up the extension and a step, with arrays one element longer than the
+        ! number of parameters, of which only these may be read and written
         extension%n_param = n_param
         extension%solver_level%extension => extension
-        holder%solver_level%level => extension%solver_level
-        call random_number(kappa_c)
-        grad_c = -1.0_c_rp
-        h_diag_c = -1.0_c_rp
-
-        ! call the orbital update and determine if it calls the orbital update of the
-        ! object and returns its results and error and the C wrapper of the Hessian
-        ! linear transformation
+        extension%stability_level%extension => extension
         extension%mock_error = 3
-        error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                        hess_x_c_funptr, c_loc(holder%solver_level))
-        if (.not. check_role_called("update_orbs_c_wrapper", extension, &
-                                    "update_orbs")) test_update_orbs_c_wrapper = .false.
-        if (error_c /= 3) then
-            write(stderr, *) "test_update_orbs_c_wrapper failed: Error of the "// &
-                "object not passed on."
-            test_update_orbs_c_wrapper = .false.
-        end if
-        if (abs(func_c - sum(kappa_c(:n_param))) > tol_c .or. &
-            any(abs(grad_c(:n_param) - 2.0_c_rp * kappa_c(:n_param)) > tol_c) .or. &
-            any(abs(h_diag_c(:n_param) - 3.0_c_rp * kappa_c(:n_param)) > tol_c)) then
-            write(stderr, *) "test_update_orbs_c_wrapper failed: Results of the "// &
-                "object not returned."
-            test_update_orbs_c_wrapper = .false.
-        end if
-        if (abs(grad_c(n_param + 1) + 1.0_c_rp) > tol_c .or. &
-            abs(h_diag_c(n_param + 1) + 1.0_c_rp) > tol_c) then
-            write(stderr, *) "test_update_orbs_c_wrapper failed: Arrays written "// &
-                "beyond the number of parameters."
-            test_update_orbs_c_wrapper = .false.
-        end if
-        if (.not. c_associated(hess_x_c_funptr, c_funloc(hess_x_c_wrapper))) then
-            write(stderr, *) "test_update_orbs_c_wrapper failed: C wrapper of the "// &
-                "Hessian linear transformation not returned."
-            test_update_orbs_c_wrapper = .false.
-        end if
+        call random_number(kappa_c)
 
-        ! call the orbital update of an object which returns no Hessian linear
-        ! transformation, no C wrapper may be returned
-        extension%return_hess_x = .false.
-        error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                        hess_x_c_funptr, c_loc(holder%solver_level))
-        if (c_associated(hess_x_c_funptr)) then
-            write(stderr, *) "test_update_orbs_c_wrapper failed: C wrapper of the "// &
-                "Hessian linear transformation returned although the object "// &
-                "returned none."
-            test_update_orbs_c_wrapper = .false.
-        end if
+        ! call the orbital update of an object that performs it and of one that does
+        ! not, whose holder bundles the host's, with the address of the level of the
+        ! solver, the only level that calls it, and determine if it calls the object's
+        ! or the host's, returns its results and error and the C wrapper of the Hessian
+        ! linear transformation and keeps the host's in the bundles of both levels
+        do i_case = 1, 2
+            extension%provides%update_orbs = i_case == 1
+            call setup_mock_extension_holder(holder, extension, 1_ip)
+            holder%solver_level%callbacks%update_orbs => mock_update_orbs
+            grad_c = -1.0_c_rp
+            h_diag_c = -1.0_c_rp
+            error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
+                                            hess_x_c_funptr, c_loc(holder%solver_level))
+            if (.not. check_role_c_wrapper("update_orbs_c_wrapper", extension, &
+                                           "update_orbs", i_case, 1_ip, error_c)) &
+                test_update_orbs_c_wrapper = .false.
+            if (abs(func_c - sum(kappa_c(:n_param))) > tol_c .or. &
+                any(abs(grad_c(:n_param) - 2.0_c_rp * kappa_c(:n_param)) > tol_c) .or. &
+                any(abs(h_diag_c(:n_param) - 3.0_c_rp * kappa_c(:n_param)) > tol_c)) &
+                then
+                write(stderr, *) "test_update_orbs_c_wrapper failed: Results not "// &
+                    "returned for an object "//trim(role_case_names(i_case))//"."
+                test_update_orbs_c_wrapper = .false.
+            end if
+            if (abs(grad_c(n_param + 1) + 1.0_c_rp) > tol_c .or. &
+                abs(h_diag_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+                write(stderr, *) "test_update_orbs_c_wrapper failed: Arrays "// &
+                    "written beyond the number of parameters for an object "// &
+                    trim(role_case_names(i_case))//"."
+                test_update_orbs_c_wrapper = .false.
+            end if
+            if (.not. c_associated(hess_x_c_funptr, c_funloc(hess_x_c_wrapper))) then
+                write(stderr, *) "test_update_orbs_c_wrapper failed: C wrapper of "// &
+                    "the Hessian linear transformation not returned for an object "// &
+                    trim(role_case_names(i_case))//"."
+                test_update_orbs_c_wrapper = .false.
+            end if
+            if (i_case == 2 .and. .not. ( &
+                associated(holder%solver_level%callbacks%hess_x, mock_hess_x) .and. &
+                associated(holder%stability_level%callbacks%hess_x, mock_hess_x))) then
+                write(stderr, *) "test_update_orbs_c_wrapper failed: Hessian "// &
+                    "linear transformation of the host not kept in the bundles of "// &
+                    "both levels."
+                test_update_orbs_c_wrapper = .false.
+            end if
+        end do
+
+        ! call the orbital update of an object that performs it and returns no Hessian
+        ! linear transformation, and of one that does not, whose host returns none,
+        ! without and with a Hessian linear transformation of the object itself, after
+        ! leaving one of an earlier orbital update in the bundles, and determine if a C
+        ! wrapper is returned only where a Hessian linear transformation can be called
+        ! and the host's earlier one discarded, and that the host's orbital update is
+        ! called with the host context and its error passed on
+        do i_case = 1, size(no_hess_x_case_names)
+            extension%provides%update_orbs = i_case == 1
+            extension%provides%hess_x = i_case == 3
+            extension%return_hess_x = i_case /= 1
+            call setup_mock_extension_holder(holder, extension, 1_ip)
+            holder%solver_level%callbacks%update_orbs => mock_update_orbs_no_hess_x
+            holder%solver_level%callbacks%hess_x => mock_hess_x
+            holder%stability_level%callbacks%hess_x => mock_hess_x
+            error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
+                                            hess_x_c_funptr, c_loc(holder%solver_level))
+            if (error_c /= 3) then
+                write(stderr, *) "test_update_orbs_c_wrapper failed: Error not "// &
+                    "passed on for "//trim(no_hess_x_case_names(i_case))//"."
+                test_update_orbs_c_wrapper = .false.
+            end if
+            if (i_case > 1) then
+                if (.not. host_context_reached("update_orbs_c_wrapper")) then
+                    write(stderr, *) "test_update_orbs_c_wrapper failed: Host's C "// &
+                        "function not called with the host context for "// &
+                        trim(no_hess_x_case_names(i_case))//"."
+                    test_update_orbs_c_wrapper = .false.
+                end if
+            end if
+            if (c_associated(hess_x_c_funptr) .neqv. i_case == 3) then
+                write(stderr, *) "test_update_orbs_c_wrapper failed: C wrapper of "// &
+                    "the Hessian linear transformation returned wrongly for "// &
+                    trim(no_hess_x_case_names(i_case))//"."
+                test_update_orbs_c_wrapper = .false.
+            end if
+            if (i_case > 1 .and. &
+                (associated(holder%solver_level%callbacks%hess_x) .or. &
+                 associated(holder%stability_level%callbacks%hess_x))) then
+                write(stderr, *) "test_update_orbs_c_wrapper failed: Earlier "// &
+                    "Hessian linear transformation of the host kept for "// &
+                    trim(no_hess_x_case_names(i_case))//"."
+                test_update_orbs_c_wrapper = .false.
+            end if
+        end do
 
         ! call the orbital update without a holder, which has to produce an error and
         ! no Hessian linear transformation
-        extension%return_hess_x = .true.
         error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                         hess_x_c_funptr, c_null_ptr)
         if (error_c == 0) then
@@ -552,52 +759,55 @@ contains
 
     logical(c_bool) function test_obj_func_c_wrapper() bind(C)
         !
-        ! this function tests the C wrapper of the objective function, which forwards
-        ! to the host's C function in the bundle of the level of a holder at the
-        ! address it receives as context
+        ! this function tests the C wrapper of the objective function, which calls the
+        ! callback function with the level of an extension object held at the address
+        ! it receives as context, or the host's C function for an object that does not
+        ! perform it
         !
         use c_interface_unit_tests, only: mock_obj_func
         use otr_common_c_interface, only: extension_holder_type, obj_func_c_wrapper
-        use otr_common_unit_tests, only: level_names
-        use test_reference, only: host_context, host_context_reached
+        use otr_common_unit_tests, only: mock_extension_type, level_names
 
+        type(mock_extension_type), target :: extension
         type(extension_holder_type), target :: holder
-        real(c_rp) :: kappa_c(n_param), func_c
+        real(c_rp) :: kappa_c(n_param + 1), func_c
         integer(c_ip) :: error_c
-        integer(ip) :: i_level
+        integer(ip) :: i_case, i_level
 
         ! assume tests pass
         test_obj_func_c_wrapper = .true.
 
-        ! set up a step
+        ! set up the extension and arrays one element longer than the number of
+        ! parameters, of which only these may be read and written
+        extension%n_param = n_param
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
+        extension%mock_error = 3
         call random_number(kappa_c)
 
-        ! call the objective function with the addresses of the levels of the solver
-        ! and of the stability check of a holder, whose bundles both hold the host's
-        ! objective function but only the bundle of the level called holds the host
-        ! context, and determine if it forwards to the host's objective function with
-        ! that host context and returns its results and error
-        do i_level = 1, 2
-            call arm_holder_level(holder, i_level)
-            holder%solver_level%callbacks%obj_func => mock_obj_func
-            holder%stability_level%callbacks%obj_func => mock_obj_func
-            host_context%mock_error = 3
-            error_c = obj_func_c_wrapper(kappa_c, func_c, &
-                                         holder_level_context(holder, i_level))
-            if (error_c /= 3) then
-                write(stderr, *) "test_obj_func_c_wrapper failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
-                test_obj_func_c_wrapper = .false.
-            end if
-            if (abs(func_c - sum(kappa_c)) > tol_c) then
-                write(stderr, *) "test_obj_func_c_wrapper failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
-                test_obj_func_c_wrapper = .false.
-            end if
-            if (.not. host_context_reached("obj_func_c_wrapper")) &
-                test_obj_func_c_wrapper = .false.
+        ! call the objective function of an object that performs it and of one that
+        ! does not, whose holder bundles the host's, with the addresses of the levels
+        ! of the solver and of the stability check in the holder and determine if it
+        ! calls the object's with the level or the host's with the host context of the
+        ! level and returns its result and error
+        do i_case = 1, 2
+            extension%provides%obj_func = i_case == 1
+            do i_level = 1, 2
+                call setup_mock_extension_holder(holder, extension, i_level)
+                holder%solver_level%callbacks%obj_func => mock_obj_func
+                holder%stability_level%callbacks%obj_func => mock_obj_func
+                error_c = obj_func_c_wrapper(kappa_c, func_c, &
+                                             holder_level_context(holder, i_level))
+                if (.not. check_role_c_wrapper("obj_func_c_wrapper", extension, &
+                                               "obj_func", i_case, i_level, error_c)) &
+                    test_obj_func_c_wrapper = .false.
+                if (abs(func_c - sum(kappa_c(:n_param))) > tol_c) then
+                    write(stderr, *) "test_obj_func_c_wrapper failed: Result not "// &
+                        "returned for the "//trim(level_names(i_level))// &
+                        " of an object "//trim(role_case_names(i_case))//"."
+                    test_obj_func_c_wrapper = .false.
+                end if
+            end do
         end do
 
         ! call the objective function without a holder, which has to produce an error
@@ -614,57 +824,62 @@ contains
         !
         ! this function tests the C wrapper of the Hessian linear transformation, which
         ! calls the callback function with the level of an extension object held at the
-        ! address it receives as context
+        ! address it receives as context, or the host's C function for an object that
+        ! does not perform it
         !
+        use c_interface_unit_tests, only: mock_hess_x
         use otr_common_c_interface, only: extension_holder_type, hess_x_c_wrapper
-        use otr_common_unit_tests, only: mock_extension_type, check_role_called, &
-                                         level_names
+        use otr_common_unit_tests, only: mock_extension_type, level_names
 
         type(mock_extension_type), target :: extension
         type(extension_holder_type), target :: holder
         real(c_rp) :: x_c(n_param + 1), hess_x_c(n_param + 1)
         integer(c_ip) :: error_c
-        integer(ip) :: i_level
+        integer(ip) :: i_case, i_level
 
         ! assume tests pass
         test_hess_x_c_wrapper = .true.
 
-        ! hold the levels of the extension and set up arrays one element longer than
-        ! the number of parameters, of which only these may be read and written
+        ! set up the extension and arrays one element longer than the number of
+        ! parameters, of which only these may be read and written
         extension%n_param = n_param
         extension%solver_level%extension => extension
         extension%stability_level%extension => extension
-        holder%solver_level%level => extension%solver_level
-        holder%stability_level%level => extension%stability_level
+        extension%mock_error = 3
         call random_number(x_c)
 
-        ! call the Hessian linear transformation with the addresses of the levels of
-        ! the solver and of the stability check in the holder, which both call it, and
-        ! determine if it calls that of the object and returns its result and error
-        extension%mock_error = 3
-        do i_level = 1, 2
-            extension%called_role = ""
-            hess_x_c = -1.0_c_rp
-            error_c = hess_x_c_wrapper(x_c, hess_x_c, &
-                                       holder_level_context(holder, i_level))
-            if (.not. check_role_called("hess_x_c_wrapper", extension, "hess_x")) &
-                test_hess_x_c_wrapper = .false.
-            if (error_c /= 3) then
-                write(stderr, *) "test_hess_x_c_wrapper failed: Error of the "// &
-                    "object not passed on for the "//trim(level_names(i_level))//"."
-                test_hess_x_c_wrapper = .false.
-            end if
-            if (any(abs(hess_x_c(:n_param) - 4.0_c_rp * x_c(:n_param)) > tol_c)) then
-                write(stderr, *) "test_hess_x_c_wrapper failed: Result of the "// &
-                    "object not returned for the "//trim(level_names(i_level))//"."
-                test_hess_x_c_wrapper = .false.
-            end if
-            if (abs(hess_x_c(n_param + 1) + 1.0_c_rp) > tol_c) then
-                write(stderr, *) "test_hess_x_c_wrapper failed: Array written "// &
-                    "beyond the number of parameters for the "// &
-                    trim(level_names(i_level))//"."
-                test_hess_x_c_wrapper = .false.
-            end if
+        ! call the Hessian linear transformation of an object that performs it and of
+        ! one that does not, whose holder bundles the host's, with the addresses of the
+        ! levels of the solver and of the stability check in the holder and determine
+        ! if it calls the object's with the level or the host's with the host context
+        ! of the level and returns its result and error
+        do i_case = 1, 2
+            extension%provides%hess_x = i_case == 1
+            do i_level = 1, 2
+                call setup_mock_extension_holder(holder, extension, i_level)
+                holder%solver_level%callbacks%hess_x => mock_hess_x
+                holder%stability_level%callbacks%hess_x => mock_hess_x
+                hess_x_c = -1.0_c_rp
+                error_c = hess_x_c_wrapper(x_c, hess_x_c, &
+                                           holder_level_context(holder, i_level))
+                if (.not. check_role_c_wrapper("hess_x_c_wrapper", extension, &
+                                               "hess_x", i_case, i_level, error_c)) &
+                    test_hess_x_c_wrapper = .false.
+                if (any(abs(hess_x_c(:n_param) - 4.0_c_rp * x_c(:n_param)) > tol_c)) &
+                    then
+                    write(stderr, *) "test_hess_x_c_wrapper failed: Result not "// &
+                        "returned for the "//trim(level_names(i_level))// &
+                        " of an object "//trim(role_case_names(i_case))//"."
+                    test_hess_x_c_wrapper = .false.
+                end if
+                if (abs(hess_x_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+                    write(stderr, *) "test_hess_x_c_wrapper failed: Array written "// &
+                        "beyond the number of parameters for the "// &
+                        trim(level_names(i_level))//" of an object "// &
+                        trim(role_case_names(i_case))//"."
+                    test_hess_x_c_wrapper = .false.
+                end if
+            end do
         end do
 
         ! call the Hessian linear transformation without a holder, which has to produce
@@ -681,54 +896,67 @@ contains
     logical(c_bool) function test_precond_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper of the level-shifted preconditioner, which
-        ! forwards to the host's C function in the bundle of the level of a holder at
-        ! the address it receives as context
+        ! calls the callback function with the level of an extension object held at the
+        ! address it receives as context, or the host's C function for an object that
+        ! does not perform it
         !
         use c_interface_unit_tests, only: mock_precond
         use otr_common_c_interface, only: extension_holder_type, precond_c_wrapper
-        use otr_common_unit_tests, only: level_names
-        use test_reference, only: host_context, host_context_reached
+        use otr_common_unit_tests, only: mock_extension_type, level_names
 
+        type(mock_extension_type), target :: extension
         type(extension_holder_type), target :: holder
-        real(c_rp) :: residual_c(n_param), precond_residual_c(n_param)
+        real(c_rp) :: residual_c(n_param + 1), precond_residual_c(n_param + 1)
         integer(c_ip) :: error_c
-        integer(ip) :: i_level
+        integer(ip) :: i_case, i_level
 
         ! assume tests pass
         test_precond_c_wrapper = .true.
 
-        ! set up a residual
+        ! set up the extension and arrays one element longer than the number of
+        ! parameters, of which only these may be read and written
+        extension%n_param = n_param
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
+        extension%mock_error = 3
         call random_number(residual_c)
 
-        ! call the preconditioner with the addresses of the levels of the solver and of
-        ! the stability check of a holder, whose bundles both hold the host's
-        ! preconditioner but only the bundle of the level called holds the host
-        ! context, and determine if it forwards to the host's preconditioner with that
-        ! host context and returns its results and error
-        do i_level = 1, 2
-            call arm_holder_level(holder, i_level)
-            holder%solver_level%callbacks%precond => mock_precond
-            holder%stability_level%callbacks%precond => mock_precond
-            host_context%mock_error = 3
-            error_c = precond_c_wrapper(residual_c, 2.0_c_rp, precond_residual_c, &
-                                        holder_level_context(holder, i_level))
-            if (error_c /= 3) then
-                write(stderr, *) "test_precond_c_wrapper failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
-                test_precond_c_wrapper = .false.
-            end if
-            if (any(abs(precond_residual_c - 2.0_c_rp * residual_c) > tol_c)) then
-                write(stderr, *) "test_precond_c_wrapper failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
-                test_precond_c_wrapper = .false.
-            end if
-            if (.not. host_context_reached("precond_c_wrapper")) &
-                test_precond_c_wrapper = .false.
+        ! call the level-shifted preconditioner of an object that performs it and of
+        ! one that does not, whose holder bundles the host's, with the addresses of the
+        ! levels of the solver and of the stability check in the holder and determine
+        ! if it calls the object's with the level or the host's with the host context
+        ! of the level and returns its result and error
+        do i_case = 1, 2
+            extension%provides%precond = i_case == 1
+            do i_level = 1, 2
+                call setup_mock_extension_holder(holder, extension, i_level)
+                holder%solver_level%callbacks%precond => mock_precond
+                holder%stability_level%callbacks%precond => mock_precond
+                precond_residual_c = -1.0_c_rp
+                error_c = precond_c_wrapper(residual_c, 2.0_c_rp, precond_residual_c, &
+                                            holder_level_context(holder, i_level))
+                if (.not. check_role_c_wrapper("precond_c_wrapper", extension, &
+                                               "precond", i_case, i_level, error_c)) &
+                    test_precond_c_wrapper = .false.
+                if (any(abs(precond_residual_c(:n_param) - &
+                            2.0_c_rp * residual_c(:n_param)) > tol_c)) then
+                    write(stderr, *) "test_precond_c_wrapper failed: Result not "// &
+                        "returned for the "//trim(level_names(i_level))// &
+                        " of an object "//trim(role_case_names(i_case))//"."
+                    test_precond_c_wrapper = .false.
+                end if
+                if (abs(precond_residual_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+                    write(stderr, *) "test_precond_c_wrapper failed: Array written "// &
+                        "beyond the number of parameters for the "// &
+                        trim(level_names(i_level))//" of an object "// &
+                        trim(role_case_names(i_case))//"."
+                    test_precond_c_wrapper = .false.
+                end if
+            end do
         end do
 
-        ! call the preconditioner without a holder, which has to produce an error
+        ! call the level-shifted preconditioner without a holder, which has to produce
+        ! an error
         error_c = &
             precond_c_wrapper(residual_c, 2.0_c_rp, precond_residual_c, c_null_ptr)
         if (error_c == 0) then
@@ -742,54 +970,67 @@ contains
     logical(c_bool) function test_precond_pd_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper of the positive-definite preconditioner,
-        ! which forwards to the host's C function in the bundle of the level of a
-        ! holder at the address it receives as context
+        ! which calls the callback function with the level of an extension object held
+        ! at the address it receives as context, or the host's C function for an object
+        ! that does not perform it
         !
         use c_interface_unit_tests, only: mock_precond_pd
         use otr_common_c_interface, only: extension_holder_type, precond_pd_c_wrapper
-        use otr_common_unit_tests, only: level_names
-        use test_reference, only: host_context, host_context_reached
+        use otr_common_unit_tests, only: mock_extension_type, level_names
 
+        type(mock_extension_type), target :: extension
         type(extension_holder_type), target :: holder
-        real(c_rp) :: residual_c(n_param), precond_residual_c(n_param)
+        real(c_rp) :: residual_c(n_param + 1), precond_residual_c(n_param + 1)
         integer(c_ip) :: error_c
-        integer(ip) :: i_level
+        integer(ip) :: i_case, i_level
 
         ! assume tests pass
         test_precond_pd_c_wrapper = .true.
 
-        ! set up a residual
+        ! set up the extension and arrays one element longer than the number of
+        ! parameters, of which only these may be read and written
+        extension%n_param = n_param
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
+        extension%mock_error = 3
         call random_number(residual_c)
 
-        ! call the preconditioner with the addresses of the levels of the solver and of
-        ! the stability check of a holder, whose bundles both hold the host's
-        ! preconditioner but only the bundle of the level called holds the host
-        ! context, and determine if it forwards to the host's preconditioner with that
-        ! host context and returns its results and error
-        do i_level = 1, 2
-            call arm_holder_level(holder, i_level)
-            holder%solver_level%callbacks%precond_pd => mock_precond_pd
-            holder%stability_level%callbacks%precond_pd => mock_precond_pd
-            host_context%mock_error = 3
-            error_c = precond_pd_c_wrapper(residual_c, precond_residual_c, &
-                                           holder_level_context(holder, i_level))
-            if (error_c /= 3) then
-                write(stderr, *) "test_precond_pd_c_wrapper failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
-                test_precond_pd_c_wrapper = .false.
-            end if
-            if (any(abs(precond_residual_c - 3.0_c_rp * residual_c) > tol_c)) then
-                write(stderr, *) "test_precond_pd_c_wrapper failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
-                test_precond_pd_c_wrapper = .false.
-            end if
-            if (.not. host_context_reached("precond_pd_c_wrapper")) &
-                test_precond_pd_c_wrapper = .false.
+        ! call the positive-definite preconditioner of an object that performs it and
+        ! of one that does not, whose holder bundles the host's, with the addresses of
+        ! the levels of the solver and of the stability check in the holder and
+        ! determine if it calls the object's with the level or the host's with the host
+        ! context of the level and returns its result and error
+        do i_case = 1, 2
+            extension%provides%precond_pd = i_case == 1
+            do i_level = 1, 2
+                call setup_mock_extension_holder(holder, extension, i_level)
+                holder%solver_level%callbacks%precond_pd => mock_precond_pd
+                holder%stability_level%callbacks%precond_pd => mock_precond_pd
+                precond_residual_c = -1.0_c_rp
+                error_c = precond_pd_c_wrapper(residual_c, precond_residual_c, &
+                                               holder_level_context(holder, i_level))
+                if (.not. check_role_c_wrapper( &
+                    "precond_pd_c_wrapper", extension, "precond_pd", i_case, i_level, &
+                    error_c)) test_precond_pd_c_wrapper = .false.
+                if (any(abs(precond_residual_c(:n_param) - &
+                            3.0_c_rp * residual_c(:n_param)) > tol_c)) then
+                    write(stderr, *) "test_precond_pd_c_wrapper failed: Result not "// &
+                        "returned for the "//trim(level_names(i_level))// &
+                        " of an object "//trim(role_case_names(i_case))//"."
+                    test_precond_pd_c_wrapper = .false.
+                end if
+                if (abs(precond_residual_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+                    write(stderr, *) "test_precond_pd_c_wrapper failed: Array "// &
+                        "written beyond the number of parameters for the "// &
+                        trim(level_names(i_level))//" of an object "// &
+                        trim(role_case_names(i_case))//"."
+                    test_precond_pd_c_wrapper = .false.
+                end if
+            end do
         end do
 
-        ! call the preconditioner without a holder, which has to produce an error
+        ! call the positive-definite preconditioner without a holder, which has to
+        ! produce an error
         error_c = precond_pd_c_wrapper(residual_c, precond_residual_c, c_null_ptr)
         if (error_c == 0) then
             write(stderr, *) "test_precond_pd_c_wrapper failed: No error produced "// &
@@ -801,53 +1042,63 @@ contains
 
     logical(c_bool) function test_project_c_wrapper() bind(C)
         !
-        ! this function tests the C wrapper of the projection, which forwards to the
-        ! host's C function in the bundle of the level of a holder at the address it
-        ! receives as context
+        ! this function tests the C wrapper of the projection, which calls the callback
+        ! function with the level of an extension object held at the address it receives
+        ! as context, or the host's C function for an object that does not perform it
         !
         use c_interface_unit_tests, only: mock_project
         use otr_common_c_interface, only: extension_holder_type, project_c_wrapper
-        use otr_common_unit_tests, only: level_names
-        use test_reference, only: host_context, host_context_reached
+        use otr_common_unit_tests, only: mock_extension_type, level_names
 
+        type(mock_extension_type), target :: extension
         type(extension_holder_type), target :: holder
-        real(c_rp) :: vector_c(n_param), projected_c(n_param)
+        real(c_rp) :: vector_c(n_param + 1), projected_c(n_param + 1)
         integer(c_ip) :: error_c
-        integer(ip) :: i_level
+        integer(ip) :: i_case, i_level
 
         ! assume tests pass
         test_project_c_wrapper = .true.
 
-        ! set up a vector
+        ! set up the extension and arrays one element longer than the number of
+        ! parameters, of which only these may be read and written
+        extension%n_param = n_param
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
+        extension%mock_error = 3
         call random_number(vector_c)
 
-        ! call the projection with the addresses of the levels of the solver and of the
-        ! stability check of a holder, whose bundles both hold the host's projection
-        ! but only the bundle of the level called holds the host context, and determine
-        ! if it forwards to the host's projection with that host context and returns
-        ! its results and error
-        do i_level = 1, 2
-            call arm_holder_level(holder, i_level)
-            holder%solver_level%callbacks%project => mock_project
-            holder%stability_level%callbacks%project => mock_project
-            host_context%mock_error = 3
-            projected_c = vector_c
-            error_c = project_c_wrapper(projected_c, &
-                                        holder_level_context(holder, i_level))
-            if (error_c /= 3) then
-                write(stderr, *) "test_project_c_wrapper failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
-                test_project_c_wrapper = .false.
-            end if
-            if (any(abs(projected_c - 2.0_c_rp * vector_c) > tol_c)) then
-                write(stderr, *) "test_project_c_wrapper failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
-                test_project_c_wrapper = .false.
-            end if
-            if (.not. host_context_reached("project_c_wrapper")) &
-                test_project_c_wrapper = .false.
+        ! call the projection of an object that performs it and of one that does not,
+        ! whose holder bundles the host's, with the addresses of the levels of the
+        ! solver and of the stability check in the holder and determine if it calls the
+        ! object's with the level or the host's with the host context of the level and
+        ! returns its result and error
+        do i_case = 1, 2
+            extension%provides%project = i_case == 1
+            do i_level = 1, 2
+                call setup_mock_extension_holder(holder, extension, i_level)
+                holder%solver_level%callbacks%project => mock_project
+                holder%stability_level%callbacks%project => mock_project
+                projected_c = vector_c
+                error_c = project_c_wrapper(projected_c, &
+                                            holder_level_context(holder, i_level))
+                if (.not. check_role_c_wrapper("project_c_wrapper", extension, &
+                                               "project", i_case, i_level, error_c)) &
+                    test_project_c_wrapper = .false.
+                if (any(abs(projected_c(:n_param) - 2.0_c_rp * vector_c(:n_param)) > &
+                        tol_c)) then
+                    write(stderr, *) "test_project_c_wrapper failed: Result not "// &
+                        "returned for the "//trim(level_names(i_level))// &
+                        " of an object "//trim(role_case_names(i_case))//"."
+                    test_project_c_wrapper = .false.
+                end if
+                if (abs(projected_c(n_param + 1) - vector_c(n_param + 1)) > tol_c) then
+                    write(stderr, *) "test_project_c_wrapper failed: Array written "// &
+                        "beyond the number of parameters for the "// &
+                        trim(level_names(i_level))//" of an object "// &
+                        trim(role_case_names(i_case))//"."
+                    test_project_c_wrapper = .false.
+                end if
+            end do
         end do
 
         ! call the projection without a holder, which has to produce an error
@@ -863,52 +1114,68 @@ contains
     logical(c_bool) function test_get_extra_trial_vectors_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper of the extra trial vector function, which
-        ! forwards to the host's C function in the bundle of the level of a holder at
-        ! the address it receives as context
+        ! calls the callback function with the level of an extension object held at the
+        ! address it receives as context, or the host's C function for an object that
+        ! does not perform it
         !
         use c_interface_unit_tests, only: mock_get_extra_trial_vectors
         use otr_common_c_interface, only: extension_holder_type, &
                                           get_extra_trial_vectors_c_wrapper
-        use otr_common_unit_tests, only: level_names
-        use test_reference, only: host_context, host_context_reached
+        use otr_common_unit_tests, only: mock_extension_type, level_names
 
+        type(mock_extension_type), target :: extension
         type(extension_holder_type), target :: holder
-        real(c_rp) :: trial_vectors_c(2 * n_param)
+        real(c_rp) :: trial_vectors_c(2 * n_param + 1)
         integer(c_ip) :: error_c
-        integer(ip) :: i_level
+        integer(ip) :: i_case, i_level
 
         ! assume tests pass
         test_get_extra_trial_vectors_c_wrapper = .true.
 
-        ! call the extra trial vector function with the addresses of the levels of the
-        ! solver and of the stability check of a holder, whose bundles both hold the
-        ! host's extra trial vector function but only the bundle of the level called
-        ! holds the host context, and determine if it forwards to the host's extra
-        ! trial vector function with that host context and returns its results and
-        ! error
-        do i_level = 1, 2
-            call arm_holder_level(holder, i_level)
-            holder%solver_level%callbacks%get_extra_trial_vectors => &
-                mock_get_extra_trial_vectors
-            holder%stability_level%callbacks%get_extra_trial_vectors => &
-                mock_get_extra_trial_vectors
-            host_context%mock_error = 3
-            error_c = get_extra_trial_vectors_c_wrapper( &
-                trial_vectors_c, 2_c_ip, holder_level_context(holder, i_level))
-            if (error_c /= 3) then
-                write(stderr, *) "test_get_extra_trial_vectors_c_wrapper failed: "// &
-                    "Error of the host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
-                test_get_extra_trial_vectors_c_wrapper = .false.
-            end if
-            if (any(abs(trial_vectors_c(n_param + 1:) - 2.0_c_rp) > tol_c)) then
-                write(stderr, *) "test_get_extra_trial_vectors_c_wrapper failed: "// &
-                    "Result of the host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
-                test_get_extra_trial_vectors_c_wrapper = .false.
-            end if
-            if (.not. host_context_reached("get_extra_trial_vectors_c_wrapper")) &
-                test_get_extra_trial_vectors_c_wrapper = .false.
+        ! set up the extension and arrays one element longer than the number of
+        ! parameters, of which only these may be read and written
+        extension%n_param = n_param
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
+        extension%mock_error = 3
+
+        ! call the extra trial vector function of an object that performs it and of one
+        ! that does not, whose holder bundles the host's, with the addresses of the
+        ! levels of the solver and of the stability check in the holder and determine
+        ! if it calls the object's with the level or the host's with the host context
+        ! of the level and returns its result and error
+        do i_case = 1, 2
+            extension%provides%get_extra_trial_vectors = i_case == 1
+            do i_level = 1, 2
+                call setup_mock_extension_holder(holder, extension, i_level)
+                holder%solver_level%callbacks%get_extra_trial_vectors => &
+                    mock_get_extra_trial_vectors
+                holder%stability_level%callbacks%get_extra_trial_vectors => &
+                    mock_get_extra_trial_vectors
+                trial_vectors_c = -1.0_c_rp
+                error_c = get_extra_trial_vectors_c_wrapper( &
+                    trial_vectors_c, 2_c_ip, holder_level_context(holder, i_level))
+                if (.not. check_role_c_wrapper("get_extra_trial_vectors_c_wrapper", &
+                                               extension, "get_extra_trial_vectors", &
+                                               i_case, i_level, error_c)) &
+                    test_get_extra_trial_vectors_c_wrapper = .false.
+                if (any( &
+                    abs(trial_vectors_c(n_param + 1:2 * n_param) - 2.0_c_rp) > tol_c)) &
+                    then
+                    write(stderr, *) "test_get_extra_trial_vectors_c_wrapper "// &
+                        "failed: Result not returned for the "// &
+                        trim(level_names(i_level))//" of an object "// &
+                        trim(role_case_names(i_case))//"."
+                    test_get_extra_trial_vectors_c_wrapper = .false.
+                end if
+                if (abs(trial_vectors_c(2 * n_param + 1) + 1.0_c_rp) > tol_c) then
+                    write(stderr, *) "test_get_extra_trial_vectors_c_wrapper "// &
+                        "failed: Array written beyond the number of parameters for "// &
+                        "the "//trim(level_names(i_level))//" of an object "// &
+                        trim(role_case_names(i_case))//"."
+                    test_get_extra_trial_vectors_c_wrapper = .false.
+                end if
+            end do
         end do
 
         ! call the extra trial vector function without a holder, which has to produce

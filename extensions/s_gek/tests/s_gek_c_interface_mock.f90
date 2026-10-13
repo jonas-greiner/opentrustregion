@@ -32,40 +32,33 @@ module otr_s_gek_c_interface_mock
 contains
 
     function mock_s_gek_factory_c_wrapper( &
-        update_orbs_orig_c_funptr, change_reference_c_funptr, n_param_c, settings_c, &
-        update_orbs_s_gek_c_funptr) result(error_c) bind(C, name="mock_s_gek_factory")
+        n_param_c, update_orbs_c_funptr, obj_func_c_funptr, change_reference_c_funptr, &
+        update_orbs_s_gek_c_funptr, obj_func_s_gek_c_funptr, solver_settings_c, &
+        settings_c) result(error_c) bind(C, name="mock_s_gek_factory")
         !
         ! this subroutine is a mock routine for the S-GEK orbital updating factory C
         ! wrapper subroutine
         !
         use, intrinsic :: iso_c_binding, only: c_null_ptr
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
-        use c_interface, only: logger_c_type
-        use test_reference, only: check_update_orbs_c_funptr, n_param
+        use c_interface, only: logger_c_type, solver_settings_type_c
+        use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
+                                  n_param
         use otr_s_gek_test_reference, only: test_change_reference_c_funptr, operator(/=)
-        use c_interface_unit_tests, only: mock_update_orbs
+        use otr_common_c_interface_mock, only: &
+            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c
 
-        type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
-                                             change_reference_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
+        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
+                                             change_reference_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_s_gek_c_funptr, &
+                                       obj_func_s_gek_c_funptr
+        type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(s_gek_settings_type_c), intent(in) :: settings_c
-        type(c_funptr), intent(out) :: update_orbs_s_gek_c_funptr
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr
         character(len=:), allocatable, target :: message
-
-        ! test passed orbital update function
-        if (.not. check_update_orbs_c_funptr( &
-            update_orbs_orig_c_funptr, "s_gek_factory_py_interface", &
-            " by given orbital updating function", c_null_ptr)) &
-            test_s_gek_factory_interface = .false.
-
-        ! test passed change reference function
-        if (.not. test_change_reference_c_funptr( &
-            change_reference_c_funptr, "s_gek_factory_py_interface", &
-            " by given change reference function", c_null_ptr)) &
-            test_s_gek_factory_interface = .false.
 
         ! check if passed number of parameters is correct
         if (n_param_c /= n_param) then
@@ -73,6 +66,22 @@ contains
                 "number of parameters wrong."
             test_s_gek_factory_interface = .false.
         end if
+
+        ! test passed orbital update function
+        if (.not. check_update_orbs_c_funptr( &
+            update_orbs_c_funptr, "s_gek_factory_py_interface", " by given orbital "// &
+            "updating function", c_null_ptr)) test_s_gek_factory_interface = .false.
+
+        ! test passed objective function
+        if (.not. check_obj_func_c_funptr( &
+            obj_func_c_funptr, "s_gek_factory_py_interface", " by given objective "// &
+            "function", c_null_ptr)) test_s_gek_factory_interface = .false.
+
+        ! test passed change reference function
+        if (.not. test_change_reference_c_funptr( &
+            change_reference_c_funptr, "s_gek_factory_py_interface", &
+            " by given change reference function", c_null_ptr)) &
+            test_s_gek_factory_interface = .false.
 
         ! get Fortran pointer to passed logging function and call it
         message = "test"//c_null_char
@@ -86,8 +95,14 @@ contains
             test_s_gek_factory_interface = .false.
         end if
 
-        ! set function pointer to mock S-GEK orbital updating function
-        update_orbs_s_gek_c_funptr = c_funloc(mock_update_orbs)
+        ! check the passed solver settings and wire them
+        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
+                                              "s_gek_factory_py_interface")) &
+            test_s_gek_factory_interface = .false.
+
+        ! set function pointers to the mock functions of the level of the solver
+        update_orbs_s_gek_c_funptr = c_funloc(mock_level_update_orbs)
+        obj_func_s_gek_c_funptr = c_funloc(mock_level_obj_func)
 
         ! set return arguments
         error_c = 0

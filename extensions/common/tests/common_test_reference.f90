@@ -592,6 +592,8 @@ contains
             (associated(host%obj_func, expected%obj_func) .or. &
              .not. (associated(host%obj_func) .or. &
                     associated(expected%obj_func))) .and. &
+            (associated(host%hess_x, expected%hess_x) .or. &
+             .not. (associated(host%hess_x) .or. associated(expected%hess_x))) .and. &
             (associated(host%precond, expected%precond) .or. &
              .not. (associated(host%precond) .or. associated(expected%precond))) .and. &
             (associated(host%precond_pd, expected%precond_pd) .or. &

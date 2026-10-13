@@ -6,9 +6,9 @@
 
 module otr_s_gek_c_interface
 
-    use opentrustregion, only: ip, rp, update_orbs_type, hess_x_type
-    use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
-                           hess_x_c_type
+    use opentrustregion, only: ip, rp, update_orbs_type, obj_func_type
+    use c_interface, only: c_ip, c_rp, c_callbacks_type
+    use otr_common_c_interface, only: extension_holder_type
     use otr_s_gek, only: &
         change_reference_type, standard_s_gek_factory => s_gek_factory, &
         standard_update_orbs_s_gek_deconstructor => update_orbs_s_gek_deconstructor
@@ -46,11 +46,9 @@ module otr_s_gek_c_interface
     ! factory call that sets it
     type(s_gek_c_callbacks_type), target :: s_gek_callbacks
 
-    ! define procedure pointer which will point to the Fortran procedures
-    procedure(update_orbs_c_type), pointer :: &
-        update_orbs_orig_s_gek_before_wrapping => null()
-    procedure(update_orbs_type), pointer :: update_orbs_s_gek_before_wrapping => null()
-    procedure(hess_x_type), pointer :: hess_x_s_gek_before_wrapping => null()
+    ! holder of the S-GEK object for C hosts, whose levels are the contexts of the C
+    ! callback functions the factory returns and wires into the C solver settings
+    type(extension_holder_type), target :: s_gek_holder
 
     ! derived type for S-GEK settings
     type, bind(C) :: s_gek_settings_type_c
@@ -68,10 +66,6 @@ module otr_s_gek_c_interface
     ! create function pointers to ensure that routines comply with interface
     procedure(change_reference_type), pointer :: change_reference_f_wrapper_ptr => &
         change_reference_f_wrapper
-    procedure(update_orbs_c_type), pointer :: update_orbs_s_gek_c_wrapper_ptr => &
-        update_orbs_s_gek_c_wrapper
-    procedure(hess_x_c_type), pointer :: hess_x_s_gek_c_wrapper_ptr => &
-        hess_x_s_gek_c_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -82,67 +76,107 @@ module otr_s_gek_c_interface
 contains
 
     function s_gek_factory_c_wrapper( &
-        update_orbs_orig_c_funptr, change_reference_c_funptr, n_param_c, settings_c, &
-        update_orbs_s_gek_c_funptr) result(error_c) bind(C, name="s_gek_factory")
+        n_param_c, update_orbs_c_funptr, obj_func_c_funptr, change_reference_c_funptr, &
+        update_orbs_s_gek_c_funptr, obj_func_s_gek_c_funptr, solver_settings_c, &
+        settings_c) result(error_c) bind(C, name="s_gek_factory")
         !
-        ! this subroutine wraps the factory function for the subroutine to convert C
-        ! variables to Fortran variables
+        ! this function wraps the S-GEK factory for C hosts, whose orbital update,
+        ! objective function and C solver settings it hands to the holder of the S-GEK
+        ! object, and writes the solver settings the factory wired back into the C
+        ! solver settings
         !
-        use otr_s_gek, only: s_gek_settings_type
-        use c_interface, only: update_orbs_f_wrapper
-        use otr_common_c_interface, only: n_param
+        use opentrustregion, only: solver_settings_type
+        use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
+                               obj_func_f_wrapper
+        use otr_s_gek, only: s_gek_settings_type, s_gek_object
+        use otr_common_c_interface, only: setup_extension_holder, &
+                                          wire_solver_settings_c, &
+                                          update_orbs_c_wrapper, obj_func_c_wrapper
 
-        type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
-                                             change_reference_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
+        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
+                                             change_reference_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_s_gek_c_funptr, &
+                                       obj_func_s_gek_c_funptr
+        type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(s_gek_settings_type_c), intent(in) :: settings_c
-        type(c_funptr), intent(out) :: update_orbs_s_gek_c_funptr
         integer(c_ip) :: error_c
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
                                                 update_orbs_s_gek_funptr
+        procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_s_gek_funptr
         procedure(change_reference_type), pointer :: change_reference_funptr
+        type(solver_settings_type) :: solver_settings
         type(s_gek_settings_type) :: settings
+        type(s_gek_c_callbacks_type), target :: callbacks
+        type(extension_holder_type) :: previous_holder
+        type(s_gek_c_callbacks_type) :: previous_callbacks
         integer(ip) :: error
 
-        ! associate the input C function pointers to Fortran procedure pointers
-        call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
-                             fptr=update_orbs_orig_s_gek_before_wrapping)
-
-        ! associate procedure pointer to wrapper function
-        ! the orbital update which wraps the original one calls it through the C
-        ! wrapper of the core, which finds it in the callback bundle the returned
-        ! orbital update hands over as context
-        update_orbs_funptr => update_orbs_f_wrapper
-        change_reference_funptr => change_reference_f_wrapper
-
-        ! convert number of parameters to Fortran kind and store globally to access
-        ! assumed size arrays passed from C to Fortran
-        n_param = int(n_param_c, kind=ip)
+        ! no functions are returned unless the factory succeeds
+        update_orbs_s_gek_c_funptr = c_null_funptr
+        obj_func_s_gek_c_funptr = c_null_funptr
 
         ! convert settings and hand the change of reference function and the logging
-        ! function with the host context of initialized settings to their wrappers in
-        ! the bundle held by the module, which the settings point to
+        ! function with the host context of initialized settings to their wrappers in a
+        ! bundle, which the settings point to
         settings = settings_c
-        s_gek_callbacks = s_gek_c_callbacks_type()
         call c_f_procpointer(cptr=change_reference_c_funptr, &
-                             fptr=s_gek_callbacks%change_reference)
+                             fptr=callbacks%change_reference)
         if (settings_c%initialized) then
-            if (c_associated(settings_c%logger)) call c_f_procpointer( &
-                cptr=settings_c%logger, fptr=s_gek_callbacks%logger)
-            s_gek_callbacks%host_context = settings_c%context
+            if (c_associated(settings_c%logger)) &
+                call c_f_procpointer(cptr=settings_c%logger, fptr=callbacks%logger)
+            callbacks%host_context = settings_c%context
         end if
+        settings%context => callbacks
+
+        ! keep the holder and the bundle held by the module, which are restored if the
+        ! factory fails after the holder was set up, so that the functions an earlier
+        ! call returned keep working
+        previous_holder = s_gek_holder
+        previous_callbacks = s_gek_callbacks
+
+        ! set up the holder with the host's orbital update and objective function and
+        ! convert the solver settings, unless the holder was already wired into these
+        call setup_extension_holder(s_gek_holder, solver_settings_c, solver_settings, &
+                                    settings, error, update_orbs_c_funptr, &
+                                    obj_func_c_funptr)
+        if (error /= 0) then
+            error_c = int(error, kind=c_ip)
+            return
+        end if
+
+        ! the bundle held by the module, in which the wrappers of the callback functions
+        ! find them, takes over the bundle only once the holder accepted the solver
+        ! settings, so that refused settings leave the callback functions of an object
+        ! in use unchanged
+        s_gek_callbacks = callbacks
         settings%context => s_gek_callbacks
 
+        ! the factory reaches the host's callback functions through the core's
+        ! wrappers, which find them in the bundles of the holder
+        update_orbs_funptr => update_orbs_f_wrapper
+        obj_func_funptr => obj_func_f_wrapper
+        change_reference_funptr => change_reference_f_wrapper
+
         ! call factory function
-        call s_gek_factory(update_orbs_funptr, change_reference_funptr, n_param, &
-                           error, settings, update_orbs_s_gek_funptr)
+        call s_gek_factory(int(n_param_c, kind=ip), update_orbs_funptr, &
+                           obj_func_funptr, change_reference_funptr, &
+                           update_orbs_s_gek_funptr, obj_func_s_gek_funptr, &
+                           solver_settings, error, settings)
 
-        ! associate the global procedure pointer to the Fortran function pointer
-        update_orbs_s_gek_before_wrapping => update_orbs_s_gek_funptr
-
-        ! get a C function pointer to the C wrapper function
-        update_orbs_s_gek_c_funptr = c_funloc(update_orbs_s_gek_c_wrapper)
+        ! write the wired solver settings back and return the C wrappers of the orbital
+        ! update and the objective function of the object, or restore the holder and
+        ! the bundle held by the module if the factory failed
+        if (error == 0) then
+            call wire_solver_settings_c(s_gek_holder, s_gek_object, solver_settings, &
+                                        solver_settings_c)
+            update_orbs_s_gek_c_funptr = c_funloc(update_orbs_c_wrapper)
+            obj_func_s_gek_c_funptr = c_funloc(obj_func_c_wrapper)
+        else
+            s_gek_holder = previous_holder
+            s_gek_callbacks = previous_callbacks
+        end if
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
@@ -204,46 +238,6 @@ contains
         end if
 
     end subroutine change_reference_f_wrapper
-
-    function update_orbs_s_gek_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                         hess_x_c_funptr, context_c) result(error_c) &
-        bind(C)
-        !
-        ! this function wraps the orbital update subroutine to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: update_orbs_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out) :: func_c
-        real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(inout) :: hess_x_c_funptr
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = update_orbs_c_wrapper_impl( &
-            update_orbs_s_gek_before_wrapping, hess_x_s_gek_before_wrapping, &
-            hess_x_s_gek_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, &
-            hess_x_c_funptr, context_c, update_orbs_orig_s_gek_before_wrapping)
-
-    end function update_orbs_s_gek_c_wrapper
-
-    function hess_x_s_gek_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
-        !
-        ! this function wraps the Hessian linear transformation to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: hess_x_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: x_c(*)
-        real(c_rp), intent(out), target :: hess_x_c(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = hess_x_c_wrapper_impl(hess_x_s_gek_before_wrapping, x_c, hess_x_c, &
-                                        context_c)
-
-    end function hess_x_s_gek_c_wrapper
 
     subroutine init_s_gek_settings_c(settings_c) bind(C, name="init_s_gek_settings")
         !

@@ -26,11 +26,13 @@ module otr_common
 
     ! callback functions and host context a factory found at one level of the solver
     ! settings before it wired its own, to which the callback functions it wired
-    ! forward the roles its extension does not provide
+    ! forward the roles its extension does not provide, together with the Hessian
+    ! linear transformation the host's orbital update returned last
     type :: host_record_type
         class(*), pointer :: context => null()
         procedure(update_orbs_type), pointer, nopass :: update_orbs => null()
         procedure(obj_func_type), pointer, nopass :: obj_func => null()
+        procedure(hess_x_type), pointer, nopass :: hess_x => null()
         procedure(precond_type), pointer, nopass :: precond => null()
         procedure(precond_pd_type), pointer, nopass :: precond_pd => null()
         procedure(project_type), pointer, nopass :: project => null()
@@ -53,40 +55,36 @@ module otr_common
         type(host_record_type) :: host
     end type
 
-    ! object of an extension, holding the number of parameters and the levels of the
-    ! solver and of its stability check, whose type-bound procedures perform the roles
-    ! every extension provides
+    ! roles an extension object performs itself, which have to be exactly those whose
+    ! type-bound procedures its type overrides: the C wrappers of the other roles
+    ! forward straight to the host's C functions, and the factory wires the role
+    ! callback functions of the roles of the solver settings it performs also where the
+    ! host provided none
+    type :: provided_roles_type
+        logical :: update_orbs = .false., obj_func = .false., hess_x = .false., &
+                   precond = .false., precond_pd = .false., project = .false., &
+                   get_extra_trial_vectors = .false.
+    end type
+
+    ! object of an extension, holding the number of parameters, the levels of the
+    ! solver and of its stability check and the roles it performs itself, whose
+    ! type-bound procedures perform its roles, by default forwarding to the host record
+    ! of the level they receive as context
     type, abstract :: extension_type
         integer(ip) :: n_param
         type(extension_level_type) :: solver_level, stability_level
+        type(provided_roles_type) :: provides
     contains
-        procedure(update_orbs_extension_type), deferred :: update_orbs
-        procedure(hess_x_extension_type), deferred :: hess_x
+        procedure :: update_orbs => update_orbs_extension
+        procedure :: obj_func => obj_func_extension
+        procedure :: hess_x => hess_x_extension
+        procedure :: precond => precond_extension
+        procedure :: precond_pd => precond_pd_extension
+        procedure :: project => project_extension
+        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_extension
+        procedure :: check_unwired => check_unwired_extension
         procedure :: wire_solver_settings => wire_solver_settings_extension
     end type
-
-    abstract interface
-        subroutine update_orbs_extension_type(self, kappa, func, grad, h_diag, &
-                                              hess_x_funptr, error)
-            import :: extension_type, hess_x_type, rp, ip
-
-            class(extension_type), intent(inout) :: self
-            real(rp), intent(in), target :: kappa(:)
-            real(rp), intent(out) :: func
-            real(rp), intent(out), target :: grad(:), h_diag(:)
-            procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-            integer(ip), intent(out) :: error
-        end subroutine update_orbs_extension_type
-
-        subroutine hess_x_extension_type(self, x, hess_x, error)
-            import :: extension_type, rp, ip
-
-            class(extension_type), intent(inout) :: self
-            real(rp), intent(in), target :: x(:)
-            real(rp), intent(out), target :: hess_x(:)
-            integer(ip), intent(out) :: error
-        end subroutine hess_x_extension_type
-    end interface
 
     ! error message for solver settings an extension object has already been wired
     ! into, whose callback functions would forward to the object itself
@@ -169,17 +167,17 @@ module otr_common
         end subroutine evaluate_dm_os_type
     end interface
 
-    ! orbital basis in which the orbital rotations are parameterized, holding the
-    ! quantities every basis has together with the density matrix evaluating functions
-    ! and the response functions they return, with which the basis evaluates the exact
-    ! Hessian, whose type-bound procedures perform the operations every basis provides:
-    ! moving the current orbitals, the gradient and Hessian diagonal at the current
-    ! density, the response at the current density, and the eigendecomposition of the
-    ! static part of the Hessian with the preconditioners and extra trial vectors built
-    ! from it
-    type, abstract :: orbital_basis_type
+    ! orbital basis in which the orbital rotations are parameterized, an extension
+    ! object holding the quantities every basis has together with the density matrix
+    ! evaluating functions and the response functions they return, with which the basis
+    ! evaluates the exact Hessian, whose type-bound procedures perform the operations
+    ! every basis provides: moving the current orbitals, the gradient and Hessian
+    ! diagonal at the current density, the response at the current density, and the
+    ! eigendecomposition of the static part of the Hessian with the preconditioners and
+    ! extra trial vectors built from it
+    type, abstract, extends(extension_type) :: orbital_basis_type
         type(orbital_settings_type) :: settings
-        integer(ip) :: n_ao, n_param, n_particle
+        integer(ip) :: n_ao, n_particle
         real(rp) :: energy
         real(rp), pointer, contiguous :: dm_ao(:, :, :) => null()
         real(rp), allocatable :: grad(:), h_diag(:)
@@ -198,8 +196,6 @@ module otr_common
         procedure(rotate_hess_eigenbasis_basis_type), deferred :: &
             rotate_from_hess_eigenbasis
         procedure(get_hess_eigval_pairs_basis_type), deferred :: get_hess_eigval_pairs
-        procedure(get_extra_trial_vectors_basis_type), deferred :: &
-            get_extra_trial_vectors
         procedure :: refresh_response => refresh_response_orbital_basis
         procedure :: precond => precond_orbital_basis
         procedure :: precond_pd => precond_pd_orbital_basis
@@ -245,16 +241,6 @@ module otr_common
             class(orbital_basis_type), intent(in) :: self
             real(rp), allocatable :: eigval_pairs(:)
         end function get_hess_eigval_pairs_basis_type
-
-        subroutine get_extra_trial_vectors_basis_type(self, trial_vectors, settings, &
-                                                      error)
-            import :: orbital_basis_type, settings_type, rp, ip
-
-            class(orbital_basis_type), intent(inout) :: self
-            real(rp), intent(out) :: trial_vectors(:, :)
-            class(settings_type), intent(in) :: settings
-            integer(ip), intent(out) :: error
-        end subroutine get_extra_trial_vectors_basis_type
     end interface
 
 contains
@@ -286,43 +272,60 @@ contains
 
     end subroutine init_orbital_settings
 
-    subroutine wire_solver_settings_extension(self, update_orbs, obj_func, &
-                                              solver_settings, settings, error)
+    subroutine check_unwired_extension(self, solver_settings, settings, error)
         !
-        ! this subroutine saves the host's orbital update and objective function and
-        ! the callback functions and host contexts of the solver settings and their
-        ! stability check settings in the host records of the levels of the object, and
-        ! wires the role callback function of every role the host provided into the
-        ! settings, with the level as their context, after initializing settings that
-        ! were not initialized with the warning the solver would print, which it can no
-        ! longer detect once the callback functions are wired into them
+        ! this subroutine produces an error for solver settings the object already
+        ! wired, whose callback functions wired with it would forward to themselves,
+        ! which the factories check before they change any state
         !
-        use opentrustregion, only: solver_settings_type, verbosity_error, &
-                                   init_uninitialized_settings, inherit_solver_callbacks
+        use opentrustregion, only: solver_settings_type, verbosity_error
 
-        class(extension_type), intent(inout), target :: self
-        procedure(update_orbs_type), intent(in), pointer :: update_orbs
-        procedure(obj_func_type), intent(in), pointer :: obj_func
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        class(extension_type), intent(in), target :: self
+        type(solver_settings_type), intent(in) :: solver_settings
         class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
-
-        type(stability_settings_type), pointer :: nested
-        type(solver_settings_type) :: inherited
-        logical :: nested_own
 
         ! initialize error flag
         error = 0
 
-        ! settings already wired by the object would let the callback functions wired
-        ! with it forward to themselves
-        nested => solver_settings%stability_settings
-        if (associated(solver_settings%context, self%solver_level) .or. &
-            associated(nested%context, self%stability_level)) then
+        ! the context of settings the object wired is one of its levels
+        if (associated(solver_settings%context, self%solver_level) .or. associated( &
+            solver_settings%stability_settings%context, self%stability_level)) then
             call settings%log(settings_wired_twice_error_msg, verbosity_error, .true.)
             error = 1
-            return
         end if
+
+    end subroutine check_unwired_extension
+
+    subroutine wire_solver_settings_extension(self, solver_settings, settings, error, &
+                                              update_orbs, obj_func)
+        !
+        ! this subroutine saves the callback functions and host contexts of the solver
+        ! settings and their stability check settings and, for an object wrapping the
+        ! host's, the host's orbital update and objective function in the host records
+        ! of the levels of the object, and wires the role callback function of every
+        ! role the host provided or the object performs into the settings, with the
+        ! level as their context, after initializing settings that were not initialized
+        ! with the warning the solver would print, which it can no longer detect once
+        ! the callback functions are wired into them
+        !
+        use opentrustregion, only: solver_settings_type, init_uninitialized_settings, &
+                                   inherit_solver_callbacks
+
+        class(extension_type), intent(inout), target :: self
+        type(solver_settings_type), intent(inout), target :: solver_settings
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+        procedure(update_orbs_type), intent(in), pointer, optional :: update_orbs
+        procedure(obj_func_type), intent(in), pointer, optional :: obj_func
+
+        type(stability_settings_type), pointer :: nested
+        type(solver_settings_type) :: inherited
+        logical :: wire_nested
+
+        ! refuse settings the object already wired
+        call self%check_unwired(solver_settings, settings, error)
+        if (error /= 0) return
 
         ! initialize the settings or their stability check settings if they were not
         ! initialized, as the solver would, which can no longer detect these once the
@@ -336,8 +339,8 @@ contains
         self%solver_level%extension => self
         associate (host => self%solver_level%host)
             host%context => solver_settings%context
-            host%update_orbs => update_orbs
-            host%obj_func => obj_func
+            if (present(update_orbs)) host%update_orbs => update_orbs
+            if (present(obj_func)) host%obj_func => obj_func
             host%precond => solver_settings%precond
             host%precond_pd => solver_settings%precond_pd
             host%project => solver_settings%project
@@ -368,20 +371,23 @@ contains
             host%conv_check_stability => stability%conv_check
         end associate
 
-        ! wire the role callback functions of the roles the host provided into the
-        ! solver settings, leaving the others unset, since some change the algorithm by
-        ! being set
+        ! wire the role callback functions of the roles the host provided or the object
+        ! performs into the solver settings, leaving the others unset, since some change
+        ! the algorithm by being set
         solver_settings%context => self%solver_level
-        associate (host => self%solver_level%host)
+        associate (host => self%solver_level%host, provides => self%provides)
             solver_settings%precond => null()
-            if (associated(host%precond)) solver_settings%precond => precond_callback
+            if (associated(host%precond) .or. provides%precond) &
+                solver_settings%precond => precond_callback
             solver_settings%precond_pd => null()
-            if (associated(host%precond_pd)) &
+            if (associated(host%precond_pd) .or. provides%precond_pd) &
                 solver_settings%precond_pd => precond_pd_callback
             solver_settings%project => null()
-            if (associated(host%project)) solver_settings%project => project_callback
+            if (associated(host%project) .or. provides%project) &
+                solver_settings%project => project_callback
             solver_settings%get_extra_trial_vectors => null()
-            if (associated(host%get_extra_trial_vectors)) &
+            if (associated(host%get_extra_trial_vectors) .or. &
+                provides%get_extra_trial_vectors) &
                 solver_settings%get_extra_trial_vectors => &
                 get_extra_trial_vectors_callback
             solver_settings%conv_check => null()
@@ -396,22 +402,29 @@ contains
 
         ! stability check settings which provide nothing of their own inherit the
         ! callback functions and context of the solver, which forward with the host
-        ! context of the solver as before, and are left untouched, while the others are
-        ! wired like the solver settings with the level of the stability check as
-        ! context
-        nested_own = associated(nested%context) .or. associated(nested%precond) .or. &
-                     associated(nested%project) .or. associated(nested%logger) .or. &
-                     associated(nested%get_extra_trial_vectors) .or. &
-                     associated(nested%approx_hess_x) .or. associated(nested%conv_check)
-        if (.not. nested_own) return
+        ! context of the solver as before, and are left untouched unless the object
+        ! performs a role of the stability check, since it does not inherit the extra
+        ! trial vectors, while the others are wired like the solver settings with the
+        ! level of the stability check as context
+        nested => solver_settings%stability_settings
+        wire_nested = associated(nested%context) .or. associated(nested%precond) .or. &
+                      associated(nested%project) .or. associated(nested%logger) .or. &
+                      associated(nested%get_extra_trial_vectors) .or. &
+                      associated(nested%approx_hess_x) .or. &
+                      associated(nested%conv_check) .or. self%provides%precond .or. &
+                      self%provides%project .or. self%provides%get_extra_trial_vectors
+        if (.not. wire_nested) return
         nested%context => self%stability_level
-        associate (host => self%stability_level%host)
+        associate (host => self%stability_level%host, provides => self%provides)
             nested%precond => null()
-            if (associated(host%precond)) nested%precond => precond_callback
+            if (associated(host%precond) .or. provides%precond) &
+                nested%precond => precond_callback
             nested%project => null()
-            if (associated(host%project)) nested%project => project_callback
+            if (associated(host%project) .or. provides%project) &
+                nested%project => project_callback
             nested%get_extra_trial_vectors => null()
-            if (associated(host%get_extra_trial_vectors)) &
+            if (associated(host%get_extra_trial_vectors) .or. &
+                provides%get_extra_trial_vectors) &
                 nested%get_extra_trial_vectors => get_extra_trial_vectors_callback
             nested%approx_hess_x => null()
             if (associated(host%approx_hess_x)) &
@@ -424,6 +437,163 @@ contains
         end associate
 
     end subroutine wire_solver_settings_extension
+
+    recursive subroutine update_orbs_extension(self, kappa, func, grad, h_diag, &
+                                               hess_x_funptr, error, context)
+        !
+        ! this subroutine performs the host's orbital update saved in the level of the
+        ! object it receives as context, with the host context of the level, for an
+        ! extension that does not provide its own, keeps the Hessian linear
+        ! transformation it returns in the host records of both levels, since the
+        ! stability check calls it too, and returns the role callback function in its
+        ! place, also if only the object provides one
+        !
+        class(extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        type(extension_level_type), pointer :: level
+        procedure(hess_x_type), pointer :: host_hess_x_funptr
+
+        ! call the host's orbital update
+        level => extension_level(context)
+        host_hess_x_funptr => null()
+        call level%host%update_orbs(kappa, func, grad, h_diag, host_hess_x_funptr, &
+                                    error, level%host%context)
+
+        ! keep the host's Hessian linear transformation and return the role callback
+        ! function, through which the solver reaches it with the level as context
+        self%solver_level%host%hess_x => host_hess_x_funptr
+        self%stability_level%host%hess_x => host_hess_x_funptr
+        hess_x_funptr => null()
+        if (associated(host_hess_x_funptr) .or. self%provides%hess_x) &
+            hess_x_funptr => hess_x_callback
+
+    end subroutine update_orbs_extension
+
+    recursive function obj_func_extension(self, kappa, error, context) result(func)
+        !
+        ! this function evaluates the host's objective function saved in the level of
+        ! the object it receives as context, with the host context of the level, for an
+        ! extension that does not provide its own
+        !
+        class(extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: kappa(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        type(extension_level_type), pointer :: level
+
+        level => extension_level(context)
+        func = level%host%obj_func(kappa, error, level%host%context)
+
+    end function obj_func_extension
+
+    recursive subroutine hess_x_extension(self, x, hess_x, error, context)
+        !
+        ! this subroutine performs the Hessian linear transformation the host's orbital
+        ! update returned last, saved in the level of the object it receives as
+        ! context, with the host context of the level, for an extension that does not
+        ! provide its own
+        !
+        class(extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        type(extension_level_type), pointer :: level
+
+        level => extension_level(context)
+        call level%host%hess_x(x, hess_x, error, level%host%context)
+
+    end subroutine hess_x_extension
+
+    recursive subroutine precond_extension(self, residual, mu, precond_residual, &
+                                           error, context)
+        !
+        ! this subroutine applies the host's level-shifted preconditioner saved in the
+        ! level of the object it receives as context, with the host context of the
+        ! level, for an extension that does not provide its own
+        !
+        class(extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        type(extension_level_type), pointer :: level
+
+        level => extension_level(context)
+        call level%host%precond(residual, mu, precond_residual, error, &
+                                level%host%context)
+
+    end subroutine precond_extension
+
+    recursive subroutine precond_pd_extension(self, residual, precond_residual, error, &
+                                              context)
+        !
+        ! this subroutine applies the host's positive-definite preconditioner saved in
+        ! the level of the object it receives as context, with the host context of the
+        ! level, for an extension that does not provide its own
+        !
+        class(extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        type(extension_level_type), pointer :: level
+
+        level => extension_level(context)
+        call level%host%precond_pd(residual, precond_residual, error, &
+                                   level%host%context)
+
+    end subroutine precond_pd_extension
+
+    recursive subroutine project_extension(self, vector, error, context)
+        !
+        ! this subroutine applies the host's projection saved in the level of the
+        ! object it receives as context, with the host context of the level, for an
+        ! extension that does not provide its own
+        !
+        class(extension_type), intent(inout) :: self
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        type(extension_level_type), pointer :: level
+
+        level => extension_level(context)
+        call level%host%project(vector, error, level%host%context)
+
+    end subroutine project_extension
+
+    recursive subroutine get_extra_trial_vectors_extension(self, trial_vectors, error, &
+                                                           context)
+        !
+        ! this subroutine returns the extra trial vectors of the host's function saved
+        ! in the level of the object it receives as context, with the host context of
+        ! the level, for an extension that does not provide its own
+        !
+        class(extension_type), intent(inout) :: self
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        type(extension_level_type), pointer :: level
+
+        level => extension_level(context)
+        call level%host%get_extra_trial_vectors(trial_vectors, error, &
+                                                level%host%context)
+
+    end subroutine get_extra_trial_vectors_extension
 
     function extension_level(context) result(level)
         !
@@ -443,8 +613,8 @@ contains
 
     end function extension_level
 
-    subroutine update_orbs_callback(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                    context)
+    recursive subroutine update_orbs_callback(kappa, func, grad, h_diag, &
+                                              hess_x_funptr, error, context)
         !
         ! this subroutine performs the orbital update of the extension object whose
         ! level it receives as context
@@ -466,15 +636,14 @@ contains
             return
         end if
         call level%extension%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
-                                         error)
+                                         error, context)
 
     end subroutine update_orbs_callback
 
-    function obj_func_callback(kappa, error, context) result(func)
+    recursive function obj_func_callback(kappa, error, context) result(func)
         !
-        ! this function evaluates the host's objective function saved in the level of
-        ! an extension object it receives as context, with the host context of the
-        ! level
+        ! this function evaluates the objective function of the extension object whose
+        ! level it receives as context
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -489,11 +658,11 @@ contains
             error = 1
             return
         end if
-        func = level%host%obj_func(kappa, error, level%host%context)
+        func = level%extension%obj_func(kappa, error, context)
 
     end function obj_func_callback
 
-    subroutine hess_x_callback(x, hess_x, error, context)
+    recursive subroutine hess_x_callback(x, hess_x, error, context)
         !
         ! this subroutine performs the Hessian linear transformation of the extension
         ! object whose level it receives as context
@@ -510,15 +679,15 @@ contains
             error = 1
             return
         end if
-        call level%extension%hess_x(x, hess_x, error)
+        call level%extension%hess_x(x, hess_x, error, context)
 
     end subroutine hess_x_callback
 
-    subroutine precond_callback(residual, mu, precond_residual, error, context)
+    recursive subroutine precond_callback(residual, mu, precond_residual, error, &
+                                          context)
         !
-        ! this subroutine applies the host's level-shifted preconditioner saved in the
-        ! level of an extension object it receives as context, with the host context of
-        ! the level
+        ! this subroutine applies the level-shifted preconditioner of the extension
+        ! object whose level it receives as context
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -533,16 +702,14 @@ contains
             error = 1
             return
         end if
-        call level%host%precond(residual, mu, precond_residual, error, &
-                                level%host%context)
+        call level%extension%precond(residual, mu, precond_residual, error, context)
 
     end subroutine precond_callback
 
-    subroutine precond_pd_callback(residual, precond_residual, error, context)
+    recursive subroutine precond_pd_callback(residual, precond_residual, error, context)
         !
-        ! this subroutine applies the host's positive-definite preconditioner saved in
-        ! the level of an extension object it receives as context, with the host
-        ! context of the level
+        ! this subroutine applies the positive-definite preconditioner of the extension
+        ! object whose level it receives as context
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
@@ -556,15 +723,14 @@ contains
             error = 1
             return
         end if
-        call level%host%precond_pd(residual, precond_residual, error, &
-                                   level%host%context)
+        call level%extension%precond_pd(residual, precond_residual, error, context)
 
     end subroutine precond_pd_callback
 
-    subroutine project_callback(vector, error, context)
+    recursive subroutine project_callback(vector, error, context)
         !
-        ! this subroutine applies the host's projection saved in the level of an
-        ! extension object it receives as context, with the host context of the level
+        ! this subroutine applies the projection of the extension object whose level it
+        ! receives as context
         !
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
@@ -577,15 +743,14 @@ contains
             error = 1
             return
         end if
-        call level%host%project(vector, error, level%host%context)
+        call level%extension%project(vector, error, context)
 
     end subroutine project_callback
 
-    subroutine get_extra_trial_vectors_callback(trial_vectors, error, context)
+    recursive subroutine get_extra_trial_vectors_callback(trial_vectors, error, context)
         !
-        ! this subroutine returns the extra trial vectors of the host's function saved
-        ! in the level of an extension object it receives as context, with the host
-        ! context of the level
+        ! this subroutine returns the extra trial vectors of the extension object whose
+        ! level it receives as context
         !
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
@@ -598,12 +763,11 @@ contains
             error = 1
             return
         end if
-        call level%host%get_extra_trial_vectors(trial_vectors, error, &
-                                                level%host%context)
+        call level%extension%get_extra_trial_vectors(trial_vectors, error, context)
 
     end subroutine get_extra_trial_vectors_callback
 
-    function conv_check_callback(error, context) result(converged)
+    recursive function conv_check_callback(error, context) result(converged)
         !
         ! this function checks the convergence of the solver with the host's
         ! convergence check saved in the level of an extension object it receives as
@@ -625,7 +789,7 @@ contains
 
     end function conv_check_callback
 
-    subroutine stability_hess_x_callback(x, hess_x, error, context)
+    recursive subroutine stability_hess_x_callback(x, hess_x, error, context)
         !
         ! this subroutine performs the host's Hessian linear transformation of the
         ! stability check saved in the level of an extension object it receives as
@@ -647,7 +811,7 @@ contains
 
     end subroutine stability_hess_x_callback
 
-    subroutine approx_hess_x_callback(x, hess_x, error, context)
+    recursive subroutine approx_hess_x_callback(x, hess_x, error, context)
         !
         ! this subroutine performs the host's approximate Hessian linear transformation
         ! saved in the level of an extension object it receives as context, with the
@@ -669,7 +833,7 @@ contains
 
     end subroutine approx_hess_x_callback
 
-    function conv_check_stability_callback(residual, eigval, error, context) &
+    recursive function conv_check_stability_callback(residual, eigval, error, context) &
         result(converged)
         !
         ! this function checks the convergence of the stability check with the host's
@@ -695,7 +859,7 @@ contains
 
     end function conv_check_stability_callback
 
-    subroutine logger_callback(message, context)
+    recursive subroutine logger_callback(message, context)
         !
         ! this subroutine logs a message with the host's logging function saved in the
         ! level of an extension object it receives as context, with the host context of
@@ -742,17 +906,18 @@ contains
 
     end subroutine refresh_response_orbital_basis
 
-    subroutine precond_orbital_basis(self, residual, mu, precond_residual, settings, &
-                                     error)
+    subroutine precond_orbital_basis(self, residual, mu, precond_residual, error, &
+                                     context)
         !
         ! this subroutine applies a level-shifted preconditioner based on the exact
         ! eigendecomposition of the static part of the Hessian of the orbital basis
         !
         class(orbital_basis_type), intent(inout) :: self
-        real(rp), intent(in) :: residual(:), mu
-        real(rp), intent(out) :: precond_residual(:)
-        class(settings_type), intent(in) :: settings
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
 
@@ -760,7 +925,7 @@ contains
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(settings, error)
+        call self%refresh_hess_eigen(self%settings, error)
         if (error /= 0) return
 
         ! rotate residual into the eigenbasis of the static Hessian part
@@ -777,18 +942,18 @@ contains
 
     end subroutine precond_orbital_basis
 
-    subroutine precond_pd_orbital_basis(self, residual, precond_residual, settings, &
-                                        error)
+    subroutine precond_pd_orbital_basis(self, residual, precond_residual, error, &
+                                        context)
         !
         ! this subroutine applies the positive-definite preconditioner based on the
         ! exact eigendecomposition of the static part of the Hessian of the orbital
         ! basis
         !
         class(orbital_basis_type), intent(inout) :: self
-        real(rp), intent(in) :: residual(:)
-        real(rp), intent(out) :: precond_residual(:)
-        class(settings_type), intent(in) :: settings
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(rp), allocatable :: rotated_residual(:), eigval_pairs(:)
 
@@ -796,7 +961,7 @@ contains
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(settings, error)
+        call self%refresh_hess_eigen(self%settings, error)
         if (error /= 0) return
 
         ! rotate residual into the eigenbasis of the static Hessian part

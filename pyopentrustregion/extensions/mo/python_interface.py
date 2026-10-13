@@ -33,6 +33,7 @@ from pyopentrustregion.extensions.common.python_interface import (
     UpdateOrbsPyInterface,
     attach_wired_callbacks,
     check_callback_arguments,
+    detach_python_callbacks,
 )
 
 if TYPE_CHECKING:
@@ -223,11 +224,11 @@ def mo_factory(
     settings: MOSettings,
     orbsym: Optional[Union[Sequence[int], np.ndarray]] = None,
 ) -> Tuple[
-    Callable[[np.ndarray], float],
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    Callable[[np.ndarray], float],
 ]:
     # check the MO irreps, MO coefficients and overlap matrix against the dimensions
     # and determine if closed-shell or open-shell formalism is used
@@ -264,6 +265,11 @@ def mo_factory(
         exception,
     )
 
+    # the factory keeps calling the callback functions of the solver settings it wires,
+    # so those the solver built from the Python functions of the settings are removed
+    # first, the solver builds them anew
+    detach_python_callbacks(solver_settings)
+
     if not hasattr(lib, "mo_factory"):
         raise RuntimeError(
             "Please reinstall the package with: "
@@ -280,16 +286,16 @@ def mo_factory(
         c_int,
         c_int,
         evaluate_dm_interface_type,
-        POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
+        POINTER(obj_func_interface_type),
         POINTER(SolverSettingsC),
         POINTER(MOSettingsC),
         POINTER(c_int),
     ]
 
     # call Fortran function
-    obj_func_mo_funptr = obj_func_interface_type()
     update_orbs_mo_funptr = update_orbs_interface_type()
+    obj_func_mo_funptr = obj_func_interface_type()
     error = lib.mo_factory(
         mo_coeff_ptr,
         ao_overlap_ptr,
@@ -298,8 +304,8 @@ def mo_factory(
         n_ao,
         n_mo,
         evaluate_dm_interface,
-        byref(obj_func_mo_funptr),
         byref(update_orbs_mo_funptr),
+        byref(obj_func_mo_funptr),
         byref(solver_settings.settings_c),
         byref(settings.settings_c),
         orbsym_c,
@@ -318,13 +324,9 @@ def mo_factory(
     # attach the routines the factory has wired into the solver settings
     attach_wired_callbacks(solver_settings, exception)
 
+    # the returned functions are called with the context the factory has written into
+    # the solver settings, through which they reach the object
     return (
-        ObjFuncMOPyInterface(
-            obj_func_funptr=obj_func_mo_funptr,
-            evaluate_dm_interface=evaluate_dm_interface,
-            _otr_exception=exception,
-            mo_coeff_buffer=mo_coeff_buffer,
-        ),
         UpdateOrbsMOPyInterface(
             update_orbs_funptr=update_orbs_mo_funptr,
             _otr_exception=exception,
@@ -334,6 +336,14 @@ def mo_factory(
             },
             mo_coeff=None if in_place else mo_coeff,
             mo_coeff_buffer=None if in_place else mo_coeff_buffer,
+            context=solver_settings.settings_c.context,
+        ),
+        ObjFuncMOPyInterface(
+            obj_func_funptr=obj_func_mo_funptr,
+            saved_objects={"evaluate_dm_interface": evaluate_dm_interface},
+            _otr_exception=exception,
+            mo_coeff_buffer=mo_coeff_buffer,
+            context=solver_settings.settings_c.context,
         ),
     )
 

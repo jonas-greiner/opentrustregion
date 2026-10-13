@@ -31,6 +31,7 @@ from pyopentrustregion.extensions.common.python_interface import (
     UpdateOrbsPyInterface,
     attach_wired_callbacks,
     check_callback_arguments,
+    detach_python_callbacks,
 )
 
 if TYPE_CHECKING:
@@ -114,11 +115,11 @@ def oao_factory(
     solver_settings: SolverSettings,
     settings: OAOSettings,
 ) -> Tuple[
-    Callable[[np.ndarray], float],
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    Callable[[np.ndarray], float],
 ]:
     # check the density and overlap matrices against the dimensions and determine if
     # closed-shell or open-shell formalism is used
@@ -152,6 +153,11 @@ def oao_factory(
         exception,
     )
 
+    # the factory keeps calling the callback functions of the solver settings it wires,
+    # so those the solver built from the Python functions of the settings are removed
+    # first, the solver builds them anew
+    detach_python_callbacks(solver_settings)
+
     if not hasattr(lib, "oao_factory"):
         raise RuntimeError(
             "Please reinstall the package with: "
@@ -166,23 +172,23 @@ def oao_factory(
         c_int,
         c_int,
         evaluate_dm_interface_type,
-        POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
+        POINTER(obj_func_interface_type),
         POINTER(SolverSettingsC),
         POINTER(OAOSettingsC),
     ]
 
     # call Fortran function
-    obj_func_oao_funptr = obj_func_interface_type()
     update_orbs_oao_funptr = update_orbs_interface_type()
+    obj_func_oao_funptr = obj_func_interface_type()
     error = lib.oao_factory(
         dm_ao_ptr,
         ao_overlap_ptr,
         n_particle,
         n_ao,
         evaluate_dm_interface,
-        byref(obj_func_oao_funptr),
         byref(update_orbs_oao_funptr),
+        byref(obj_func_oao_funptr),
         byref(solver_settings.settings_c),
         byref(settings.settings_c),
     )
@@ -200,18 +206,22 @@ def oao_factory(
     # attach the routines the factory has wired into the solver settings
     attach_wired_callbacks(solver_settings, exception)
 
+    # the returned functions are called with the context the factory has written into
+    # the solver settings, through which they reach the object
     return (
-        ObjFuncPyInterface(
-            obj_func_funptr=obj_func_oao_funptr,
-            evaluate_dm_interface=evaluate_dm_interface,
-            _otr_exception=exception,
-        ),
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_oao_funptr,
             _otr_exception=exception,
             saved_objects={
                 "evaluate_dm_interface": evaluate_dm_interface,
             },
+            context=solver_settings.settings_c.context,
+        ),
+        ObjFuncPyInterface(
+            obj_func_funptr=obj_func_oao_funptr,
+            saved_objects={"evaluate_dm_interface": evaluate_dm_interface},
+            _otr_exception=exception,
+            context=solver_settings.settings_c.context,
         ),
     )
 

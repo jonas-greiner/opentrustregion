@@ -20,7 +20,6 @@ from unittest.mock import patch
 from pyopentrustregion.tests import (
     lib,
     n_param,
-    n_extra_trial_vectors,
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
@@ -38,7 +37,11 @@ from pyopentrustregion.extensions.arh import (
     arh_factory_oao,
     arh_deconstructor,
 )
-from pyopentrustregion.extensions.common.tests import n_ao
+from pyopentrustregion.extensions.common.tests import (
+    n_ao,
+    setup_wired_solver_settings,
+    check_wired_solver_settings,
+)
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory
 from pyopentrustregion.extensions.mo.tests import (
     MOPyInterfaceTests,
@@ -78,13 +81,13 @@ fortran_tests = {
         "cross_symmetrize",
         "density_in_history",
         "factorize_history",
-        "get_extra_trial_vectors_arh_callback",
+        "get_extra_trial_vectors_arh",
         "get_low_rank_hess_factors",
         "get_ms_a_inv",
         "get_ms_a_inv_jk_cs",
         "get_ms_a_inv_jk_os",
         "get_ms_jk_inv",
-        "hess_x_arh_callback",
+        "hess_x_arh",
         "hess_x_static_arh_mo",
         "hess_x_static_arh_oao",
         "history_channel_rows_arh_mo",
@@ -97,12 +100,13 @@ fortran_tests = {
         "init_arh_settings",
         "inv_hess_x_arh",
         "median",
-        "obj_func_arh_callback",
+        "obj_func_arh",
         "packed_channel_rows_arh_mo",
         "packed_channel_rows_arh_oao",
-        "precond_arh_callback",
-        "precond_pd_arh_callback",
+        "precond_arh",
+        "precond_pd_arh",
         "prepend",
+        "project_arh_oao",
         "rebase_dirs",
         "rebuild_stale_hess_model",
         "resolvable_residual",
@@ -113,7 +117,7 @@ fortran_tests = {
         "to_history_basis_arh_mo",
         "to_history_basis_arh_oao",
         "truncated_eigval_inv",
-        "update_orbs_arh_callback",
+        "update_orbs_arh",
     ],
     "arh_c_interface_tests": [
         "arh_deconstructor_c_wrapper",
@@ -123,9 +127,7 @@ fortran_tests = {
         "assign_arh_f_c",
         "evaluate_dm_cs_f_wrapper",
         "evaluate_dm_os_f_wrapper",
-        "hess_x_arh_c_wrapper",
         "init_arh_settings_c",
-        "update_orbs_arh_c_wrapper",
     ],
 }
 
@@ -290,18 +292,11 @@ class ARHPyInterfaceTests(unittest.TestCase):
             # initialize logging boolean
             self.test_logger = True
 
-            # initialize solver settings object, without a projection for the
-            # closed-shell cases and with a projection supplied by the caller, which
-            # has to be kept, for the open-shell cases, already passed on as a C
-            # callback by a previous solver call
-            solver_settings = SolverSettings()
-            caller_project = None if n_particle == 1 else lambda vector: None
-            solver_settings.project = caller_project
-            solver_settings.stability_settings.project = caller_project
-            solver_settings.set_optional_callbacks(n_param, {})
+            # initialize solver settings object
+            solver_settings, python_functions = setup_wired_solver_settings()
 
             # call ARH MO factory python interface
-            obj_func_arh, update_orbs_arh = arh_factory_mo(
+            update_orbs_arh, obj_func_arh = arh_factory_mo(
                 mo_coeff,
                 ao_overlap,
                 n_occ[0] if n_particle == 1 else n_occ[:n_particle],
@@ -324,31 +319,10 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
-            # determine if the ARH routines are wired into the solver settings without
-            # a projection
-            if any(
-                callback is None
-                for callback in (
-                    solver_settings.precond,
-                    solver_settings.precond_pd,
-                    solver_settings.get_extra_trial_vectors,
-                    solver_settings.stability_settings.precond,
-                    solver_settings.stability_settings.get_extra_trial_vectors,
-                )
+            # check the solver settings the factory wired
+            if not check_wired_solver_settings(
+                solver_settings, python_functions, "arh_factory_mo_py_interface"
             ):
-                print(
-                    " test_arh_factory_mo_py_interface failed: ARH routines not wired "
-                    f"into solver settings for the {case} case."
-                )
-                test_passed = False
-            if (
-                solver_settings.project is not caller_project
-                or solver_settings.stability_settings.project is not caller_project
-            ):
-                print(
-                    " test_arh_factory_mo_py_interface failed: Projection wired or "
-                    f"projection supplied by the caller replaced for the {case} case."
-                )
                 test_passed = False
             if not solver_settings.refresh_hess or solver_settings.hess_symm:
                 print(
@@ -439,44 +413,6 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
-            # call wired ARH level-shifted preconditioner function
-            residual = np.full(n_param, 1.0, dtype=np.float64)
-            precond_residual = np.empty(n_param, dtype=np.float64)
-            mu = 5.0
-            solver_settings.precond(residual, mu, precond_residual)
-            if not np.allclose(precond_residual, mu):
-                print(
-                    " test_arh_factory_mo_py_interface failed: Returned "
-                    "preconditioned residual of wired ARH level-shifted "
-                    f"preconditioner function wrong for the {case} case."
-                )
-                test_passed = False
-
-            # call wired ARH positive-definite preconditioner function
-            precond_pd_residual = np.empty(n_param, dtype=np.float64)
-            solver_settings.precond_pd(residual, precond_pd_residual)
-            if not np.allclose(precond_pd_residual, 3.0):
-                print(
-                    " test_arh_factory_mo_py_interface failed: Returned "
-                    "preconditioned residual of wired ARH positive-definite "
-                    f"preconditioner function wrong for the {case} case."
-                )
-                test_passed = False
-
-            # call wired ARH extra trial vector function
-            trial_vectors = np.empty((n_extra_trial_vectors, n_param), dtype=np.float64)
-            solver_settings.get_extra_trial_vectors(trial_vectors)
-            if not np.allclose(
-                trial_vectors,
-                np.arange(1, n_extra_trial_vectors + 1, dtype=np.float64)[:, None],
-            ):
-                print(
-                    " test_arh_factory_mo_py_interface failed: Returned trial "
-                    "vectors of wired ARH extra trial vector function wrong for "
-                    f"the {case} case."
-                )
-                test_passed = False
-
         # call the MO factory and then the ARH MO factory python interface for the same
         # row-major MO coefficients, as PySCF does, which have to share the buffer the
         # library rotates, since the MO object only points to the buffer of the latest
@@ -496,7 +432,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 n_ao,
                 n_mo,
                 self.mock_evaluate_dm,
-                SolverSettings(),
+                setup_wired_solver_settings()[0],
                 mo_settings,
             )
         returned_arh = arh_factory_mo(
@@ -507,7 +443,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             n_ao,
             n_mo,
             self.mock_arh_evaluate_dm,
-            SolverSettings(),
+            setup_wired_solver_settings()[0],
             settings,
         )
         if not mo_mock_passed.value or not mock_passed.value:
@@ -518,7 +454,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             test_passed = False
         mo_mock_passed.value = True
         mock_passed.value = True
-        if returned_mo[0].mo_coeff_buffer is not returned_arh[0].mo_coeff_buffer:
+        if returned_mo[1].mo_coeff_buffer is not returned_arh[1].mo_coeff_buffer:
             print(
                 " test_arh_factory_mo_py_interface failed: Buffer of the MO "
                 "coefficients not shared between the MO and the ARH MO factory for the "
@@ -731,10 +667,10 @@ class ARHPyInterfaceTests(unittest.TestCase):
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
         # initialize solver settings object
-        solver_settings = SolverSettings()
+        solver_settings, python_functions = setup_wired_solver_settings()
 
         # call ARH factory python interface
-        obj_func_arh, update_orbs_arh = arh_factory_oao(
+        update_orbs_arh, obj_func_arh = arh_factory_oao(
             dm_ao,
             ao_overlap,
             1,
@@ -744,22 +680,17 @@ class ARHPyInterfaceTests(unittest.TestCase):
             settings,
         )
 
-        # determine if the ARH routines are wired into the solver settings
-        if any(
-            callback is None
-            for callback in (
-                solver_settings.precond,
-                solver_settings.precond_pd,
-                solver_settings.project,
-                solver_settings.get_extra_trial_vectors,
-                solver_settings.stability_settings.precond,
-                solver_settings.stability_settings.project,
-                solver_settings.stability_settings.get_extra_trial_vectors,
-            )
+        # check the solver settings the factory wired
+        if not check_wired_solver_settings(
+            solver_settings, python_functions, "arh_factory_oao_py_interface"
         ):
+            test_passed = False
+
+        # check that the factory received the density matrix in place
+        if not np.allclose(dm_ao, np.full(2 * (n_ao,), 2.0, dtype=np.float64)):
             print(
-                " test_arh_factory_oao_py_interface failed: ARH routines not wired "
-                "into solver settings."
+                " test_arh_factory_oao_py_interface failed: Density matrix not passed "
+                "in place."
             )
             test_passed = False
         if not solver_settings.refresh_hess:
@@ -820,14 +751,6 @@ class ARHPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
-        # check if density matrix was updated
-        if not np.allclose(dm_ao, np.full(2 * (n_ao,), 2.0, dtype=np.float64)):
-            print(
-                " test_arh_factory_oao_py_interface failed: Density matrix not updated "
-                "correctly."
-            )
-            test_passed = False
-
         # check results
         if func != 3.0:
             print(
@@ -870,69 +793,6 @@ class ARHPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
-        # call wired ARH projection function
-        vector = np.full(n_param, 1.0, dtype=np.float64)
-        try:
-            solver_settings.project(vector)
-        except RuntimeError:
-            print(
-                " test_arh_factory_oao_py_interface failed: Wired ARH projection "
-                "function raises error."
-            )
-            test_passed = False
-
-        # check results
-        if not np.allclose(vector, np.full(n_param, 2.0, dtype=np.float64)):
-            print(
-                " test_arh_factory_oao_py_interface failed: Returned projected vector "
-                "of wired ARH projection function wrong."
-            )
-            test_passed = False
-
-        # call wired ARH level-shifted preconditioner function
-        residual = np.full(n_param, 1.0, dtype=np.float64)
-        precond_residual = np.empty(n_param, dtype=np.float64)
-        mu = 5.0
-        try:
-            solver_settings.precond(residual, mu, precond_residual)
-        except RuntimeError:
-            print(
-                " test_arh_factory_oao_py_interface failed: Wired ARH level-shifted "
-                "preconditioner function raises error."
-            )
-            test_passed = False
-
-        # check results
-        if not np.allclose(precond_residual, np.full(n_param, mu, dtype=np.float64)):
-            print(
-                " test_arh_factory_oao_py_interface failed: Returned preconditioned "
-                "residual of wired ARH level-shifted preconditioner function "
-                "wrong."
-            )
-            test_passed = False
-
-        # call wired ARH positive-definite preconditioner function
-        precond_pd_residual = np.empty(n_param, dtype=np.float64)
-        try:
-            solver_settings.precond_pd(residual, precond_pd_residual)
-        except RuntimeError:
-            print(
-                " test_arh_factory_oao_py_interface failed: Wired ARH "
-                "positive-definite preconditioner function raises error."
-            )
-            test_passed = False
-
-        # check results
-        if not np.allclose(
-            precond_pd_residual, np.full(n_param, 3.0, dtype=np.float64)
-        ):
-            print(
-                " test_arh_factory_oao_py_interface failed: Returned preconditioned "
-                "residual of wired ARH positive-definite preconditioner function "
-                "wrong."
-            )
-            test_passed = False
-
         # number of particles
         n_particle = 2
 
@@ -946,7 +806,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             n_particle,
             n_ao,
             self.mock_arh_evaluate_dm,
-            SolverSettings(),
+            setup_wired_solver_settings()[0],
             settings,
         )
 

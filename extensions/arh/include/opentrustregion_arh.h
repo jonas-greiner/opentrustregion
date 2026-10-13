@@ -59,9 +59,10 @@ void init_arh_settings(arh_settings_type *settings);
  * @param n_ao_c                     Number of AO basis functions
  * @param n_mo_c                     Number of MOs
  * @param evaluate_dm_c_funptr       Density matrix evaluating callback
- * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
  * @param update_orbs_arh_c_funptr   Output: wrapped update_orbs function pointer
- * @param solver_settings_c          Input/output: solver settings
+ * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
+ * @param solver_settings_c          Input/output: solver settings, whose context
+ *                                   the returned functions have to be called with
  * @param settings_c                 ARH settings
  * @param orbsym_c                   Irreps of the MOs of every particle channel (size
  *                                   n_mo * n_particle), or NULL if all MOs belong to
@@ -72,8 +73,8 @@ void init_arh_settings(arh_settings_type *settings);
 c_int arh_factory_mo(c_real *mo_coeff_c, const c_real *ao_overlap_c,
                      const c_int *n_occ_c, c_int n_particle_c, c_int n_ao_c,
                      c_int n_mo_c, arh_evaluate_dm_fp evaluate_dm_c_funptr,
-                     obj_func_fp *obj_func_arh_c_funptr,
                      update_orbs_fp *update_orbs_arh_c_funptr,
+                     obj_func_fp *obj_func_arh_c_funptr,
                      solver_settings_type *solver_settings_c,
                      const arh_settings_type *settings_c, const c_int *orbsym_c);
 
@@ -86,17 +87,18 @@ c_int arh_factory_mo(c_real *mo_coeff_c, const c_real *ao_overlap_c,
  * @param n_particle_c               Number of particles
  * @param n_ao_c                     Number of AO basis functions
  * @param evaluate_dm_c_funptr       Density matrix evaluating callback
- * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
  * @param update_orbs_arh_c_funptr   Output: wrapped update_orbs function pointer
- * @param solver_settings_c          Input/output: solver settings
+ * @param obj_func_arh_c_funptr      Output: wrapped objective function pointer
+ * @param solver_settings_c          Input/output: solver settings, whose context
+ *                                   the returned functions have to be called with
  * @param settings_c                 ARH settings
  *
  * @return                           Integer error code from Fortran
  */
 c_int arh_factory_oao(c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
                       c_int n_ao_c, arh_evaluate_dm_fp evaluate_dm_c_funptr,
-                      obj_func_fp *obj_func_arh_c_funptr,
                       update_orbs_fp *update_orbs_arh_c_funptr,
+                      obj_func_fp *obj_func_arh_c_funptr,
                       solver_settings_type *solver_settings_c,
                       const arh_settings_type *settings_c);
 

@@ -8,6 +8,7 @@ module otr_qn
 
     use opentrustregion, only: rp, ip, kw_len, settings_type, update_orbs_type, &
                                hess_x_type
+    use otr_common, only: extension_type, provided_roles_type
 
     implicit none
 
@@ -52,11 +53,13 @@ module otr_qn
         "Quasi-Newton settings were not initialized. All quasi-Newton settings are "// &
         "set to default values"
 
-    type, abstract :: updating_type
+    type, abstract, extends(extension_type) :: updating_type
         real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:)
         integer(ip) :: n_points = 0
         type(qn_settings_type) :: settings
     contains
+        procedure :: update_orbs => update_orbs_qn
+        procedure :: hess_x => hess_x_qn
         procedure :: init
         procedure :: add
         procedure(skip_add_interface), deferred :: skip_add
@@ -88,36 +91,45 @@ module otr_qn
     class(updating_type), pointer :: update_object => null()
     type(sr1_updating_type), target :: sr1_object
     type(bfgs_updating_type), target :: bfgs_object
-    procedure(update_orbs_type), pointer :: update_orbs_orig_funptr => null()
     procedure(hess_x_type), pointer :: hess_x_qn_funptr => null()
     procedure(transport_type), pointer :: transport_funptr => null()
     procedure(init_hess_type), pointer :: init_hess_funptr => null()
 
-    ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_type), pointer :: update_orbs_qn_ptr => update_orbs_qn
-
 contains
 
-    subroutine qn_factory(update_orbs_funptr_in, transport_funptr_in, &
-                          init_hess_funptr_in, n_param, error, settings, &
-                          update_orbs_qn_funptr)
+    subroutine qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                          transport_funptr_in, init_hess_funptr_in, &
+                          update_orbs_qn_funptr, obj_func_qn_funptr, solver_settings, &
+                          error, settings)
         !
-        ! this subroutine returns a modified quasi-Newton orbital updating function
+        ! this subroutine returns the quasi-Newton orbital updating function, which
+        ! wraps the host's, and the objective function, and wires the solver settings
+        ! with the quasi-Newton object, through which the host's callback functions
+        ! keep receiving the host context
         !
-        use opentrustregion, only: verbosity_error, warn_uninitialized_settings
+        use opentrustregion, only: solver_settings_type, obj_func_type, &
+                                   verbosity_error, warn_uninitialized_settings
+        use otr_common, only: update_orbs_callback, obj_func_callback
 
-        procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr_in
+        integer(ip), intent(in) :: n_param
+        procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
+        procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         procedure(transport_type), intent(in), pointer :: transport_funptr_in
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr_in
-        integer(ip), intent(in) :: n_param
+        procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_qn_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(qn_settings_type), intent(in) :: settings
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
 
         type(qn_settings_type) :: local_settings
+        class(updating_type), pointer :: object
+        procedure(hess_x_type), pointer :: hess_x_funptr
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_qn_funptr => null()
+        obj_func_qn_funptr => null()
 
         ! work on a copy of the settings, which is initialized if they were not, after
         ! printing a warning regardless of the verbosity, since the default settings
@@ -131,13 +143,14 @@ contains
         end if
 
         ! get object for quasi-Newton and corresponding Hessian linear transformation
-        ! function
+        ! function, which the module points to only once the object wired the solver
+        ! settings, so that refused settings leave the object in use unchanged
         if (local_settings%hess_update_scheme == "sr1") then
-            update_object => sr1_object
-            hess_x_qn_funptr => sr1_hess_x_fun
+            object => sr1_object
+            hess_x_funptr => sr1_hess_x_fun
         else if (local_settings%hess_update_scheme == "bfgs") then
-            update_object => bfgs_object
-            hess_x_qn_funptr => bfgs_hess_x_fun
+            object => bfgs_object
+            hess_x_funptr => bfgs_hess_x_fun
         else
             call local_settings%log("Quasi-Newton updating scheme not implemented.", &
                                     verbosity_error, .true.)
@@ -145,14 +158,20 @@ contains
             return
         end if
 
-        ! set settings
-        update_object%settings = local_settings
+        ! refuse solver settings the object already wired before changing any state
+        call object%check_unwired(solver_settings, local_settings, error)
+        if (error /= 0) return
 
-        ! initialize updating object
-        call update_object%init(n_param)
+        ! initialize the object
+        call object%init(n_param, local_settings)
 
-        ! set pointer to original orbital updating function
-        update_orbs_orig_funptr => update_orbs_funptr_in
+        ! wire the solver settings with the object, which saves the host's orbital
+        ! update, objective function, callback functions and host contexts
+        call object%wire_solver_settings(solver_settings, local_settings, error, &
+                                         update_orbs_funptr, obj_func_funptr)
+        if (error /= 0) return
+        update_object => object
+        hess_x_qn_funptr => hess_x_funptr
 
         ! set pointer to transport function
         transport_funptr => transport_funptr_in
@@ -160,15 +179,23 @@ contains
         ! set pointer to Hessian initialization function
         init_hess_funptr => init_hess_funptr_in
 
-        ! get pointer to modified orbital updating function
-        update_orbs_qn_funptr => update_orbs_qn
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_qn_funptr => update_orbs_callback
+        obj_func_qn_funptr => obj_func_callback
 
     end subroutine qn_factory
 
-    subroutine update_orbs_qn(kappa, func, grad, h_diag, hess_x_funptr, error, context)
+    subroutine update_orbs_qn(self, kappa, func, grad, h_diag, hess_x_funptr, error, &
+                              context)
         !
-        ! this subroutine is a modified quasi-Newton orbital updating function
+        ! this subroutine is the quasi-Newton orbital updating function, which updates
+        ! the orbitals with the host's orbital update and host context, replaces the
+        ! Hessian linear transformation the host returns by the quasi-Newton one and
+        ! adds the new point to the history
         !
+        use otr_common, only: hess_x_callback
+
+        class(updating_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -180,20 +207,41 @@ contains
         error = 0
 
         ! update orbitals
-        call update_orbs_orig_funptr(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     context)
+        call self%solver_level%host%update_orbs(kappa, func, grad, h_diag, &
+                                                hess_x_funptr, error, &
+                                                self%solver_level%host%context)
         if (error /= 0) return
 
-        ! get pointer to modified Hessian linear transformation function
-        hess_x_funptr => hess_x_qn_funptr
+        ! get pointer to the quasi-Newton Hessian linear transformation of the object
+        hess_x_funptr => hess_x_callback
 
         ! add new step
         if (sum(abs(kappa)) > 0.0_rp) then
-            call update_object%add(kappa, grad, error)
+            call self%add(kappa, grad, error)
             if (error /= 0) return
         end if
 
     end subroutine update_orbs_qn
+
+    subroutine hess_x_qn(self, x, hess_x, error, context)
+        !
+        ! this subroutine is the quasi-Newton Hessian linear transformation of the
+        ! updating scheme of the object
+        !
+        class(updating_type), intent(inout) :: self
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(*), pointer :: no_context
+
+        ! the Hessian linear transformation of the updating scheme reads the history of
+        ! the scheme's object and needs no context
+        no_context => null()
+        call hess_x_qn_funptr(x, hess_x, error, no_context)
+
+    end subroutine hess_x_qn
 
     subroutine init_qn_settings(self, error)
         !
@@ -292,15 +340,22 @@ contains
 
     end subroutine add
 
-    subroutine init(self, n_param)
+    subroutine init(self, n_param, settings)
         !
-        ! this subroutine initializes an updating object
+        ! this subroutine initializes an updating object with the given settings
         !
         class(updating_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
+        type(qn_settings_type), intent(in) :: settings
 
         ! start from an empty object so that nothing of an earlier setup survives
         call self%clear()
+
+        ! set the roles the object performs itself, the orbital update and the Hessian
+        ! linear transformation, the settings and the number of parameters
+        self%provides = provided_roles_type(update_orbs=.true., hess_x=.true.)
+        self%settings = settings
+        self%n_param = n_param
 
         ! allocate arrays
         allocate(self%kappa_list(n_param, self%settings%max_points), &

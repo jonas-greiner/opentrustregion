@@ -45,21 +45,29 @@ void init_s_gek_settings(s_gek_settings_type *settings);
 /**
  * Fortran-callable S-GEK factory interface.
  *
- * @param update_orbs_orig_c_funptr               C pointer to original update_orbs
- *                                                callback
+ * @param n_param_c                               Number of parameters
+ * @param update_orbs_c_funptr                    C pointer to update_orbs callback
+ * @param obj_func_c_funptr                       C pointer to obj_func callback
  * @param change_reference_c_funptr               C pointer to change of reference
  *                                                callback
- * @param n_param_c                               Number of parameters
- * @param settings_c                              S-GEK settings
  * @param update_orbs_s_gek_c_funptr              Output: wrapped update_orbs function
  *                                                pointer
+ * @param obj_func_s_gek_c_funptr                 Output: wrapped objective function
+ *                                                pointer
+ * @param solver_settings_c                       Input/output: solver settings, whose
+ *                                                context the returned functions have
+ *                                                to be called with
+ * @param settings_c                              S-GEK settings
  *
  * @return                                        Integer error code from Fortran
  */
-c_int s_gek_factory(update_orbs_fp update_orbs_orig_c_funptr,
-                    change_reference_fp change_reference_c_funptr, c_int n_param_c,
-                    const s_gek_settings_type *settings_c,
-                    update_orbs_fp *update_orbs_s_gek_c_funptr);
+c_int s_gek_factory(c_int n_param_c, update_orbs_fp update_orbs_c_funptr,
+                    obj_func_fp obj_func_c_funptr,
+                    change_reference_fp change_reference_c_funptr,
+                    update_orbs_fp *update_orbs_s_gek_c_funptr,
+                    obj_func_fp *obj_func_s_gek_c_funptr,
+                    solver_settings_type *solver_settings_c,
+                    const s_gek_settings_type *settings_c);
 
 /**
  * Fortran-callable S-GEK deconstructor.

@@ -6,9 +6,9 @@
 
 module otr_arh_c_interface
 
-    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
-    use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
-                           hess_x_c_type
+    use opentrustregion, only: ip, rp, kw_len, obj_func_type, update_orbs_type
+    use c_interface, only: c_ip, c_rp, c_callbacks_type
+    use otr_common_c_interface, only: extension_holder_type
     use otr_arh, only: standard_arh_factory_mo_cs => arh_factory_mo_cs, &
                        standard_arh_factory_mo_os => arh_factory_mo_os, &
                        standard_arh_factory_oao_cs => arh_factory_oao_cs, &
@@ -48,9 +48,9 @@ module otr_arh_c_interface
     ! outlive the factory call that sets it
     type(arh_c_callbacks_type), target :: arh_callbacks
 
-    ! define procedure pointer which will point to the Fortran procedures
-    procedure(update_orbs_type), pointer :: update_orbs_arh_before_wrapping => null()
-    procedure(hess_x_type), pointer :: hess_x_arh_before_wrapping => null()
+    ! holder of the ARH object for C hosts, whose levels are the contexts of the C
+    ! callback functions the factories return and wire into the C solver settings
+    type(extension_holder_type), target :: arh_holder
 
     ! derived type for ARH settings
     type, bind(C) :: arh_settings_type_c
@@ -77,10 +77,6 @@ module otr_arh_c_interface
         evaluate_dm_os_f_wrapper
     procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_f_wrapper_ptr => &
         evaluate_dm_cs_f_wrapper
-    procedure(update_orbs_c_type), pointer :: update_orbs_arh_c_wrapper_ptr => &
-        update_orbs_arh_c_wrapper
-    procedure(hess_x_c_type), pointer :: hess_x_arh_c_wrapper_ptr => &
-        hess_x_arh_c_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -92,29 +88,30 @@ contains
 
     function arh_factory_mo_c_wrapper(mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, &
                                       n_ao_c, n_mo_c, evaluate_dm_c_funptr, &
-                                      obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
+                                      update_orbs_arh_c_funptr, obj_func_arh_c_funptr, &
                                       solver_settings_c, settings_c, orbsym_c) &
         result(error_c) bind(C, name="arh_factory_mo")
         !
-        ! this subroutine wraps the factory function for orbitals parameterized in the
-        ! MO basis to convert C variables to Fortran variables
+        ! this function wraps the ARH factory for orbitals parameterized in the MO
+        ! basis for C hosts, whose C solver settings it hands to the holder of the ARH
+        ! object, and writes the solver settings the factory wired back into the C
+        ! solver settings
         !
-        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
-        use otr_arh, only: arh_settings_type
-        use otr_mo, only: obj_func_type, count_mo_params
-        use otr_mo_c_interface, only: mo_coeff_3d_c, obj_func_mo_before_wrapping, &
-                                      obj_func_mo_c_wrapper, mo_set_solver_settings_c
-        use otr_common_c_interface, only: n_param
+        use otr_arh, only: arh_settings_type, arh_object
+        use otr_common_c_interface, only: setup_extension_holder, &
+                                          wire_solver_settings_c, obj_func_c_wrapper
+        use otr_mo_c_interface, only: mo_coeff_3d_c, update_orbs_mo_c_wrapper
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in) :: n_occ_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c, n_mo_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_arh_c_funptr, obj_func_arh_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(arh_settings_type_c), intent(in) :: settings_c
-        type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
 
@@ -123,12 +120,19 @@ contains
         real(rp), pointer :: ao_overlap(:, :)
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
-        procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+        procedure(obj_func_type), pointer :: obj_func_arh_funptr
         type(solver_settings_type) :: solver_settings
         type(arh_settings_type) :: settings
+        type(arh_c_callbacks_type), target :: callbacks
+        type(extension_holder_type) :: previous_holder
+        type(arh_c_callbacks_type) :: previous_callbacks
         integer(ip) :: n_particle, n_ao, n_mo, error
         integer(ip), allocatable :: n_occ(:), orbsym(:, :), orbsym_1d(:)
+
+        ! no functions are returned unless the factory succeeds
+        update_orbs_arh_c_funptr = c_null_funptr
+        obj_func_arh_c_funptr = c_null_funptr
 
         ! convert dimensions to Fortran kind
         n_particle = int(n_particle_c, kind=ip)
@@ -156,14 +160,14 @@ contains
             end if
             call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
         else
-            call c_f_pointer(c_loc(mo_coeff_c(1)), mo_coeff_3d_c, &
-                             [n_ao, n_mo, n_particle])
             if (n_particle == 1) then
                 allocate(mo_coeff_2d(n_ao, n_mo))
-                mo_coeff_2d = real(mo_coeff_3d_c(:, :, 1), kind=rp)
+                mo_coeff_2d = reshape(real(mo_coeff_c(:n_ao * n_mo), kind=rp), &
+                                      [n_ao, n_mo])
             else
                 allocate(mo_coeff_3d(n_ao, n_mo, n_particle))
-                mo_coeff_3d = real(mo_coeff_3d_c, kind=rp)
+                mo_coeff_3d = reshape(real(mo_coeff_c(:n_ao * n_mo * n_particle), &
+                                           kind=rp), [n_ao, n_mo, n_particle])
             end if
             allocate(ao_overlap(n_ao, n_ao))
             ao_overlap = reshape(real(ao_overlap_c(:n_ao**2), kind=rp), [n_ao, n_ao])
@@ -178,55 +182,66 @@ contains
 
         ! convert settings and hand the density matrix evaluating function and the
         ! logging function with the host context of initialized settings to their
-        ! wrappers in the bundle held by the module, which the settings point to
+        ! wrappers in a bundle, which the settings point to
         settings = settings_c
-        arh_callbacks = arh_c_callbacks_type()
-        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=arh_callbacks%evaluate_dm)
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=callbacks%evaluate_dm)
         if (settings_c%initialized) then
             if (c_associated(settings_c%logger)) &
-                call c_f_procpointer(cptr=settings_c%logger, fptr=arh_callbacks%logger)
-            arh_callbacks%host_context = settings_c%context
+                call c_f_procpointer(cptr=settings_c%logger, fptr=callbacks%logger)
+            callbacks%host_context = settings_c%context
         end if
-        settings%context => arh_callbacks
+        settings%context => callbacks
 
-        ! the factory wires its routines into Fortran solver settings, which start
-        ! from the defaults since only the wired routines are copied into the C solver
-        ! settings, which are initialized there
-        solver_settings = default_solver_settings
+        ! keep the holder and the bundle held by the module, which are restored if the
+        ! factory fails after the holder was set up, so that the functions an earlier
+        ! call returned keep working
+        previous_holder = arh_holder
+        previous_callbacks = arh_callbacks
+
+        ! set up the holder and convert the solver settings, unless the holder was
+        ! already wired into these
+        call setup_extension_holder(arh_holder, solver_settings_c, solver_settings, &
+                                    settings, error)
+        if (error /= 0) then
+            error_c = int(error, kind=c_ip)
+            return
+        end if
+
+        ! the bundle held by the module, in which the wrappers of the callback functions
+        ! find them, takes over the bundle only once the holder accepted the solver
+        ! settings, so that refused settings leave the callback functions of an object
+        ! in use unchanged
+        arh_callbacks = callbacks
+        settings%context => arh_callbacks
 
         ! call factory function
         if (n_particle == 1) then
             call arh_factory_mo_cs(mo_coeff_2d, ao_overlap, n_occ(1), n_particle, &
                                    n_ao, n_mo, evaluate_dm_cs_funptr, &
-                                   obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                   update_orbs_arh_funptr, obj_func_arh_funptr, &
                                    solver_settings, error, settings, orbsym_1d)
         else
             call arh_factory_mo_os(mo_coeff_3d, ao_overlap, n_occ, n_particle, n_ao, &
-                                   n_mo, evaluate_dm_os_funptr, obj_func_arh_funptr, &
-                                   update_orbs_arh_funptr, solver_settings, error, &
-                                   settings, orbsym)
+                                   n_mo, evaluate_dm_os_funptr, &
+                                   update_orbs_arh_funptr, obj_func_arh_funptr, &
+                                   solver_settings, error, settings, orbsym)
         end if
 
-        ! calculate the number of parameters of a successful setup and store it
-        ! globally to access assumed size arrays passed from C to Fortran
-        if (error == 0) n_param = count_mo_params(n_occ, n_mo, orbsym)
-
-        ! associate the global procedure pointers to the Fortran function pointers
-        obj_func_mo_before_wrapping => obj_func_arh_funptr
-        update_orbs_arh_before_wrapping => update_orbs_arh_funptr
-
-        ! get a C function pointer to the C wrapper functions
-        obj_func_arh_c_funptr = c_funloc(obj_func_mo_c_wrapper)
-        update_orbs_arh_c_funptr = c_funloc(update_orbs_arh_c_wrapper)
-
-        ! copy the solver settings
+        ! write the wired solver settings back and return the C wrappers of the orbital
+        ! update of the orbital basis, which copies the orbitals back to the host's
+        ! array if the object updates a copy of them, and of the objective function of
+        ! the object, or restore the holder and the bundle held by the module if the
+        ! factory failed
         if (error == 0) then
-            call mo_set_solver_settings_c(solver_settings, solver_settings_c)
-            solver_settings_c%refresh_hess = &
-                logical(solver_settings%refresh_hess, kind=c_bool)
-            solver_settings_c%n_micro = int(solver_settings%n_micro, kind=c_ip)
-            solver_settings_c%hess_symm = &
-                logical(solver_settings%hess_symm, kind=c_bool)
+            call wire_solver_settings_c(arh_holder, arh_object, solver_settings, &
+                                        solver_settings_c)
+            update_orbs_arh_c_funptr = c_funloc(update_orbs_mo_c_wrapper)
+            obj_func_arh_c_funptr = c_funloc(obj_func_c_wrapper)
+            if (rp /= c_rp) call c_f_pointer(c_loc(mo_coeff_c(1)), mo_coeff_3d_c, &
+                                             [n_ao, n_mo, n_particle])
+        else
+            arh_holder = previous_holder
+            arh_callbacks = previous_callbacks
         end if
 
         ! convert return arguments to C kind
@@ -236,27 +251,28 @@ contains
 
     function arh_factory_oao_c_wrapper( &
         dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-        obj_func_arh_c_funptr, update_orbs_arh_c_funptr, solver_settings_c, &
+        update_orbs_arh_c_funptr, obj_func_arh_c_funptr, solver_settings_c, &
         settings_c) result(error_c) bind(C, name="arh_factory_oao")
         !
-        ! this subroutine wraps the factory function for orbitals parameterized in the
-        ! OAO basis to convert C variables to Fortran variables
+        ! this function wraps the ARH factory for orbitals parameterized in the OAO
+        ! basis for C hosts, whose C solver settings it hands to the holder of the ARH
+        ! object, and writes the solver settings the factory wired back into the C
+        ! solver settings
         !
-        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
-        use otr_arh, only: arh_settings_type
-        use otr_oao, only: obj_func_type
-        use otr_oao_c_interface, only: dm_ao_3d_c, obj_func_oao_before_wrapping, &
-                                       obj_func_oao_c_wrapper, oao_set_solver_settings_c
-        use otr_common_c_interface, only: n_param
+        use otr_arh, only: arh_settings_type, arh_object
+        use otr_common_c_interface, only: setup_extension_holder, &
+                                          wire_solver_settings_c, obj_func_c_wrapper
+        use otr_oao_c_interface, only: dm_ao_3d_c, update_orbs_oao_c_wrapper
 
         real(c_rp), intent(inout), target :: dm_ao_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_arh_c_funptr, obj_func_arh_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(arh_settings_type_c), intent(in) :: settings_c
-        type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
         integer(c_ip) :: error_c
 
         real(rp), pointer, contiguous :: dm_ao_2d(:, :)
@@ -264,17 +280,22 @@ contains
         real(rp), pointer :: ao_overlap(:, :)
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
-        procedure(obj_func_type), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+        procedure(obj_func_type), pointer :: obj_func_arh_funptr
         type(solver_settings_type) :: solver_settings
         type(arh_settings_type) :: settings
+        type(arh_c_callbacks_type), target :: callbacks
+        type(extension_holder_type) :: previous_holder
+        type(arh_c_callbacks_type) :: previous_callbacks
         integer(ip) :: n_particle, n_ao, error
 
-        ! convert dimensions to Fortran kind, calculate number of parameters and store
-        ! it globally to access assumed size arrays passed from C to Fortran
+        ! no functions are returned unless the factory succeeds
+        update_orbs_arh_c_funptr = c_null_funptr
+        obj_func_arh_c_funptr = c_null_funptr
+
+        ! convert dimensions to Fortran kind
         n_particle = int(n_particle_c, kind=ip)
         n_ao = int(n_ao_c, kind=ip)
-        n_param = n_particle * n_ao * (n_ao - 1) / 2
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -285,7 +306,6 @@ contains
             end if
             call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
         else
-            call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, [n_ao, n_ao, n_particle])
             if (n_particle == 1) then
                 allocate(dm_ao_2d(n_ao, n_ao))
                 dm_ao_2d = reshape(real(dm_ao_c(:n_ao_c**2), kind=rp), [n_ao, n_ao])
@@ -307,51 +327,66 @@ contains
 
         ! convert settings and hand the density matrix evaluating function and the
         ! logging function with the host context of initialized settings to their
-        ! wrappers in the bundle held by the module, which the settings point to
+        ! wrappers in a bundle, which the settings point to
         settings = settings_c
-        arh_callbacks = arh_c_callbacks_type()
-        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=arh_callbacks%evaluate_dm)
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=callbacks%evaluate_dm)
         if (settings_c%initialized) then
             if (c_associated(settings_c%logger)) &
-                call c_f_procpointer(cptr=settings_c%logger, fptr=arh_callbacks%logger)
-            arh_callbacks%host_context = settings_c%context
+                call c_f_procpointer(cptr=settings_c%logger, fptr=callbacks%logger)
+            callbacks%host_context = settings_c%context
         end if
-        settings%context => arh_callbacks
+        settings%context => callbacks
 
-        ! the factory wires its routines into Fortran solver settings, which start
-        ! from the defaults since only the wired routines are copied into the C solver
-        ! settings, which are initialized there
-        solver_settings = default_solver_settings
+        ! keep the holder and the bundle held by the module, which are restored if the
+        ! factory fails after the holder was set up, so that the functions an earlier
+        ! call returned keep working
+        previous_holder = arh_holder
+        previous_callbacks = arh_callbacks
+
+        ! set up the holder and convert the solver settings, unless the holder was
+        ! already wired into these
+        call setup_extension_holder(arh_holder, solver_settings_c, solver_settings, &
+                                    settings, error)
+        if (error /= 0) then
+            error_c = int(error, kind=c_ip)
+            return
+        end if
+
+        ! the bundle held by the module, in which the wrappers of the callback functions
+        ! find them, takes over the bundle only once the holder accepted the solver
+        ! settings, so that refused settings leave the callback functions of an object
+        ! in use unchanged
+        arh_callbacks = callbacks
+        settings%context => arh_callbacks
 
         ! call factory function
         if (n_particle == 1) then
             call arh_factory_oao_cs(dm_ao_2d, ao_overlap, n_particle, n_ao, &
-                                    evaluate_dm_cs_funptr, obj_func_arh_funptr, &
-                                    update_orbs_arh_funptr, solver_settings, error, &
+                                    evaluate_dm_cs_funptr, update_orbs_arh_funptr, &
+                                    obj_func_arh_funptr, solver_settings, error, &
                                     settings)
         else
             call arh_factory_oao_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
-                                    evaluate_dm_os_funptr, obj_func_arh_funptr, &
-                                    update_orbs_arh_funptr, solver_settings, error, &
+                                    evaluate_dm_os_funptr, update_orbs_arh_funptr, &
+                                    obj_func_arh_funptr, solver_settings, error, &
                                     settings)
         end if
 
-        ! associate the global procedure pointers to the Fortran function pointers
-        obj_func_oao_before_wrapping => obj_func_arh_funptr
-        update_orbs_arh_before_wrapping => update_orbs_arh_funptr
-
-        ! get a C function pointer to the C wrapper functions
-        obj_func_arh_c_funptr = c_funloc(obj_func_oao_c_wrapper)
-        update_orbs_arh_c_funptr = c_funloc(update_orbs_arh_c_wrapper)
-
-        ! copy the solver settings
+        ! write the wired solver settings back and return the C wrappers of the orbital
+        ! update of the orbital basis, which copies the orbitals back to the host's
+        ! array if the object updates a copy of them, and of the objective function of
+        ! the object, or restore the holder and the bundle held by the module if the
+        ! factory failed
         if (error == 0) then
-            call oao_set_solver_settings_c(solver_settings, solver_settings_c)
-            solver_settings_c%refresh_hess = &
-                logical(solver_settings%refresh_hess, kind=c_bool)
-            solver_settings_c%n_micro = int(solver_settings%n_micro, kind=c_ip)
-            solver_settings_c%hess_symm = &
-                logical(solver_settings%hess_symm, kind=c_bool)
+            call wire_solver_settings_c(arh_holder, arh_object, solver_settings, &
+                                        solver_settings_c)
+            update_orbs_arh_c_funptr = c_funloc(update_orbs_oao_c_wrapper)
+            obj_func_arh_c_funptr = c_funloc(obj_func_c_wrapper)
+            if (rp /= c_rp) call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, &
+                                             [n_ao, n_ao, n_particle])
+        else
+            arh_holder = previous_holder
+            arh_callbacks = previous_callbacks
         end if
 
         ! convert return arguments to C kind
@@ -457,60 +492,6 @@ contains
         end if
 
     end subroutine evaluate_dm_os_f_wrapper
-
-    function update_orbs_arh_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                       hess_x_c_funptr, context_c) result(error_c) &
-        bind(C)
-        !
-        ! this function wraps the orbital update subroutine to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: update_orbs_c_wrapper_impl
-        use otr_oao_c_interface, only: dm_ao_3d_c
-        use otr_mo_c_interface, only: mo_coeff_3d_c
-        use otr_arh, only: arh_object, arh_mo_type
-
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out) :: func_c
-        real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(inout) :: hess_x_c_funptr
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = update_orbs_c_wrapper_impl( &
-            update_orbs_arh_before_wrapping, hess_x_arh_before_wrapping, &
-            hess_x_arh_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr, &
-            context_c)
-
-        ! update the rotated orbitals passed from C if they could not be rotated in
-        ! place
-        if (rp /= c_rp) then
-            select type (arh => arh_object)
-            type is (arh_mo_type)
-                mo_coeff_3d_c = real(arh%mo_coeff, kind=c_rp)
-            class default
-                dm_ao_3d_c = real(arh_object%orbitals%dm_ao, kind=c_rp)
-            end select
-        end if
-
-    end function update_orbs_arh_c_wrapper
-
-    function hess_x_arh_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
-        !
-        ! this function wraps the Hessian linear transformation to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: hess_x_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: x_c(*)
-        real(c_rp), intent(out), target :: hess_x_c(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = &
-            hess_x_c_wrapper_impl(hess_x_arh_before_wrapping, x_c, hess_x_c, context_c)
-
-    end function hess_x_arh_c_wrapper
 
     subroutine init_arh_settings_c(settings_c) bind(C, name="init_arh_settings")
         !

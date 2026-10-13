@@ -7,8 +7,7 @@
 module otr_mo
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, precond_type, precond_pd_type, &
-                               get_extra_trial_vectors_type, solver_settings_type
+                               hess_x_type, solver_settings_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
                           orbital_basis_type, channel_rows, evaluate_dm_cs_type, &
                           evaluate_dm_os_type
@@ -47,30 +46,21 @@ module otr_mo
         real(rp), allocatable :: ao_overlap(:, :)
         type(mo_channel_type), allocatable :: mo_channels(:)
     contains
+        procedure :: update_orbs => update_orbs_mo
+        procedure :: obj_func => obj_func_mo
+        procedure :: hess_x => hess_x_mo
+        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_mo
         procedure :: rotate_orbitals => rotate_orbitals_mo
         procedure :: calculate_grad_h_diag => calculate_grad_h_diag_mo
         procedure :: refresh_hess_eigen => refresh_hess_eigen_mo
         procedure :: rotate_to_hess_eigenbasis => rotate_to_hess_eigenbasis_mo
         procedure :: rotate_from_hess_eigenbasis => rotate_from_hess_eigenbasis_mo
         procedure :: get_hess_eigval_pairs => get_hess_eigval_pairs_mo
-        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_mo
         final :: finalize_mo
     end type
 
     ! global variables
     type(mo_type), allocatable, target :: mo_object
-
-    ! create function pointers to ensure that routines comply with interface
-    procedure(obj_func_type), pointer :: obj_func_mo_callback_ptr => &
-        obj_func_mo_callback
-    procedure(update_orbs_type), pointer :: update_orbs_mo_callback_ptr => &
-        update_orbs_mo_callback
-    procedure(hess_x_type), pointer :: hess_x_mo_callback_ptr => hess_x_mo_callback
-    procedure(precond_type), pointer :: precond_mo_callback_ptr => precond_mo_callback
-    procedure(precond_pd_type), pointer :: precond_pd_mo_callback_ptr => &
-        precond_pd_mo_callback
-    procedure(get_extra_trial_vectors_type), pointer :: &
-        get_extra_trial_vectors_mo_callback_ptr => get_extra_trial_vectors_mo_callback
 
     ! define module procedures for different spin cases
     interface mo_factory
@@ -80,23 +70,27 @@ module otr_mo
 contains
 
     subroutine mo_factory_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                             evaluate_dm_cs, obj_func_mo_funptr, &
-                             update_orbs_mo_funptr, solver_settings, error, settings, &
+                             evaluate_dm_cs, update_orbs_mo_funptr, &
+                             obj_func_mo_funptr, solver_settings, error, settings, &
                              orbsym)
         !
-        ! this function returns a modified MO orbital updating function for the
-        ! closed-shell case and wires the MO preconditioners and extra trial vectors
-        ! into the solver settings; the MO coefficients are rotated in place, so they
-        ! have to outlive the calculation; if the irreps of the MOs are given, only the
-        ! occupied-virtual rotations between orbitals of the same irrep are parameters
+        ! this function returns the MO orbital updating function and objective function
+        ! for the closed-shell case and wires the solver settings with the MO object,
+        ! whose preconditioners and extra trial vectors the solver then uses, while the
+        ! projection is left to the caller, since the parameters are non-redundant; the
+        ! MO coefficients are rotated in place, so they have to outlive the
+        ! calculation; if the irreps of the MOs are given, only the occupied-virtual
+        ! rotations between orbitals of the same irrep are parameters
         !
+        use otr_common, only: update_orbs_callback, obj_func_callback
+
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ, n_particle, n_ao, n_mo
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(obj_func_type), intent(out), pointer :: obj_func_mo_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_mo_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_mo_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(mo_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:)
@@ -104,8 +98,16 @@ contains
         real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
         integer(ip), allocatable :: orbsym_2d(:, :)
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_mo_funptr => null()
+        obj_func_mo_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(mo_object)) then
+            call mo_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup, passing the irreps of the MOs only if they are given
         mo_coeff_3d(1:size(mo_coeff, 1), 1:size(mo_coeff, 2), 1:1) => mo_coeff
@@ -119,40 +121,53 @@ contains
         mo_object%evaluate_dm_cs => evaluate_dm_cs
         mo_object%evaluate_dm_os => null()
 
-        ! get pointers to modified function
-        obj_func_mo_funptr => obj_func_mo_callback
-        update_orbs_mo_funptr => update_orbs_mo_callback
+        ! wire the solver settings with the object
+        call mo_object%wire_solver_settings(solver_settings, mo_object%settings, error)
+        if (error /= 0) return
 
-        ! wire the remaining MO routines into the solver settings
-        call mo_set_solver_settings(solver_settings, error)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_mo_funptr => update_orbs_callback
+        obj_func_mo_funptr => obj_func_callback
 
     end subroutine mo_factory_cs
 
     subroutine mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                             evaluate_dm_os, obj_func_mo_funptr, &
-                             update_orbs_mo_funptr, solver_settings, error, settings, &
+                             evaluate_dm_os, update_orbs_mo_funptr, &
+                             obj_func_mo_funptr, solver_settings, error, settings, &
                              orbsym)
         !
-        ! this function returns a modified MO orbital updating function for the
-        ! open-shell case and wires the MO preconditioners and extra trial vectors into
-        ! the solver settings; the MO coefficients are rotated in place, so they have
-        ! to outlive the calculation; if the irreps of the MOs of every particle
-        ! channel are given, only the occupied-virtual rotations between orbitals of
-        ! the same irrep are parameters
+        ! this function returns the MO orbital updating function and objective function
+        ! for the open-shell case and wires the solver settings with the MO object,
+        ! whose preconditioners and extra trial vectors the solver then uses, while the
+        ! projection is left to the caller, since the parameters are non-redundant; the
+        ! MO coefficients are rotated in place, so they have to outlive the
+        ! calculation; if the irreps of the MOs of every particle channel are given,
+        ! only the occupied-virtual rotations between orbitals of the same irrep are
+        ! parameters
         !
+        use otr_common, only: update_orbs_callback, obj_func_callback
+
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
-        procedure(obj_func_type), intent(out), pointer :: obj_func_mo_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_mo_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_mo_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(mo_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_mo_funptr => null()
+        obj_func_mo_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(mo_object)) then
+            call mo_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup
         call mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
@@ -163,12 +178,13 @@ contains
         mo_object%evaluate_dm_os => evaluate_dm_os
         mo_object%evaluate_dm_cs => null()
 
-        ! get pointers to modified function
-        obj_func_mo_funptr => obj_func_mo_callback
-        update_orbs_mo_funptr => update_orbs_mo_callback
+        ! wire the solver settings with the object
+        call mo_object%wire_solver_settings(solver_settings, mo_object%settings, error)
+        if (error /= 0) return
 
-        ! wire the remaining MO routines into the solver settings
-        call mo_set_solver_settings(solver_settings, error)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_mo_funptr => update_orbs_callback
+        obj_func_mo_funptr => obj_func_callback
 
     end subroutine mo_factory_os
 
@@ -178,6 +194,7 @@ contains
         ! this subroutine performs common MO initialization operations
         !
         use opentrustregion, only: warn_uninitialized_settings
+        use otr_common, only: provided_roles_type
 
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -215,8 +232,11 @@ contains
             allocate(irreps(n_mo, n_particle), source=0_ip)
         end if
 
-        ! allocate object
+        ! allocate object, which performs every role but the projection itself
         if (.not. allocated(mo_object)) allocate(mo_object)
+        mo_object%provides = provided_roles_type( &
+            update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
+            precond_pd=.true., get_extra_trial_vectors=.true.)
 
         ! set (potentially new) settings
         mo_object%settings = local_settings
@@ -396,53 +416,11 @@ contains
 
     end subroutine mo_sanity_check
 
-    subroutine mo_set_solver_settings(solver_settings, error)
-        !
-        ! this subroutine wires the MO preconditioners and extra trial vectors into the
-        ! solver settings and those of its stability check; since the parameters of the
-        ! MO basis are non-redundant, the projection is left to the caller
-        !
-        use opentrustregion, only: warn_uninitialized_settings, &
-                                   settings_uninitialized_warning_msg, &
-                                   stability_settings_uninitialized_warning_msg
-
-        type(solver_settings_type), intent(inout) :: solver_settings
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! initialize the settings and their nested stability check settings if they
-        ! were not initialized, which the solver can no longer detect once the
-        ! callback functions are wired into them, after printing the warning the solver
-        ! would print, regardless of the verbosity, since the default settings would
-        ! silence it
-        if (.not. solver_settings%initialized) then
-            call warn_uninitialized_settings(solver_settings, &
-                                             settings_uninitialized_warning_msg)
-            call solver_settings%init(error)
-            if (error /= 0) return
-        else if (.not. solver_settings%stability_settings%initialized) then
-            call warn_uninitialized_settings( &
-                solver_settings, stability_settings_uninitialized_warning_msg)
-            call solver_settings%stability_settings%init(error)
-            if (error /= 0) return
-        end if
-
-        ! set callback functions of the solver and its stability check
-        solver_settings%precond => precond_mo_callback
-        solver_settings%precond_pd => precond_pd_mo_callback
-        solver_settings%get_extra_trial_vectors => get_extra_trial_vectors_mo_callback
-        solver_settings%stability_settings%precond => precond_mo_callback
-        solver_settings%stability_settings%get_extra_trial_vectors => &
-            get_extra_trial_vectors_mo_callback
-
-    end subroutine mo_set_solver_settings
-
-    function obj_func_mo_callback(kappa, error, context) result(energy)
+    function obj_func_mo(self, kappa, error, context) result(energy)
         !
         ! this function defines the energy evaluation in the MO basis
         !
+        class(mo_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -454,31 +432,33 @@ contains
         energy = 0.0_rp
 
         ! get rotated density matrix in AO basis without moving the current orbitals
-        allocate(rot_mo_coeff, mold=mo_object%mo_coeff)
-        allocate(rot_dm_ao, mold=mo_object%dm_ao)
-        call rotate_mo_coeff(kappa, mo_object%mo_coeff, mo_object%ao_overlap, &
-                             mo_object%mo_channels, rot_mo_coeff, rot_dm_ao, &
-                             mo_object%settings, error)
+        allocate(rot_mo_coeff, mold=self%mo_coeff)
+        allocate(rot_dm_ao, mold=self%dm_ao)
+        call rotate_mo_coeff(kappa, self%mo_coeff, self%ao_overlap, self%mo_channels, &
+                             rot_mo_coeff, rot_dm_ao, self%settings, error)
         if (error /= 0) return
 
         ! calculate the mean-field energy
-        if (associated(mo_object%evaluate_dm_cs)) then
-            call mo_object%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error, &
-                                          context=mo_object%settings%context)
+        if (associated(self%evaluate_dm_cs)) then
+            call self%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error, &
+                                     context=self%settings%context)
         else
-            call mo_object%evaluate_dm_os(rot_dm_ao, energy, error=error, &
-                                          context=mo_object%settings%context)
+            call self%evaluate_dm_os(rot_dm_ao, energy, error=error, &
+                                     context=self%settings%context)
         end if
         if (error /= 0) return
 
-    end function obj_func_mo_callback
+    end function obj_func_mo
 
-    subroutine update_orbs_mo_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                       error, context)
+    subroutine update_orbs_mo(self, kappa, func, grad, h_diag, hess_x_funptr, error, &
+                              context)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation in the MO basis
         !
+        use otr_common, only: hess_x_callback
+
+        class(mo_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -494,29 +474,29 @@ contains
 
         ! evaluate at the rotated orbitals, or at the current ones if these have not
         ! been evaluated yet or their response is stale
-        if ((sum(abs(kappa)) > 0.0_rp) .or. mo_object%evaluation_stale .or. &
-            mo_object%response_stale) then
+        if ((sum(abs(kappa)) > 0.0_rp) .or. self%evaluation_stale .or. &
+            self%response_stale) then
             ! number of AOs
-            n_ao = mo_object%n_ao
+            n_ao = self%n_ao
 
             ! number of particles
-            n_particle = mo_object%n_particle
+            n_particle = self%n_particle
 
             ! rotate orbitals, which have not been evaluated until this succeeds
-            mo_object%evaluation_stale = .true.
-            call mo_object%rotate_orbitals(kappa, mo_object%settings, error)
+            self%evaluation_stale = .true.
+            call self%rotate_orbitals(kappa, self%settings, error)
             if (error /= 0) return
 
             ! get energy, Fock matrix, and response function
             allocate(fock_ao(n_ao, n_ao, n_particle))
-            if (associated(mo_object%evaluate_dm_cs)) then
-                call mo_object%evaluate_dm_cs( &
-                    mo_object%dm_ao(:, :, 1), mo_object%energy, fock_ao(:, :, 1), &
-                    mo_object%get_response_cs, error, mo_object%settings%context)
+            if (associated(self%evaluate_dm_cs)) then
+                call self%evaluate_dm_cs(self%dm_ao(:, :, 1), self%energy, &
+                                         fock_ao(:, :, 1), self%get_response_cs, &
+                                         error, self%settings%context)
             else
-                call mo_object%evaluate_dm_os(mo_object%dm_ao, mo_object%energy, &
-                                              fock_ao, mo_object%get_response_os, &
-                                              error, mo_object%settings%context)
+                call self%evaluate_dm_os(self%dm_ao, self%energy, fock_ao, &
+                                         self%get_response_os, error, &
+                                         self%settings%context)
             end if
             if (error /= 0) then
                 deallocate(fock_ao)
@@ -525,23 +505,23 @@ contains
 
             ! calculate gradient, Hessian diagonal and static part of the Hessian from
             ! the Fock matrix in the AO basis
-            call mo_object%calculate_grad_h_diag(fock_ao)
+            call self%calculate_grad_h_diag(fock_ao)
             deallocate(fock_ao)
 
             ! the rotated orbitals and their response have been evaluated
-            mo_object%evaluation_stale = .false.
-            mo_object%response_stale = .false.
+            self%evaluation_stale = .false.
+            self%response_stale = .false.
         end if
 
         ! set outputs
-        func = mo_object%energy
-        grad = mo_object%grad
-        h_diag = mo_object%h_diag
-        hess_x_funptr => hess_x_mo_callback
+        func = self%energy
+        grad = self%grad
+        h_diag = self%h_diag
+        hess_x_funptr => hess_x_callback
 
-    end subroutine update_orbs_mo_callback
+    end subroutine update_orbs_mo
 
-    subroutine hess_x_mo_callback(x, hess_x, error, context)
+    subroutine hess_x_mo(self, x, hess_x, error, context)
         !
         ! this function defines the Hessian linear transformation in the MO basis, the
         ! static part from the occupied-occupied and virtual-virtual blocks of the Fock
@@ -549,12 +529,13 @@ contains
         ! displacement C_o X C_v^T + C_v X^T C_o^T of the occupied-virtual block X of
         ! every particle channel, transformed back to the occupied-virtual block
         !
+        class(mo_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        integer(ip) :: n_ao, n_occ, n_virt, i, rows(2, mo_object%n_particle)
+        integer(ip) :: n_ao, n_occ, n_virt, i, rows(2, self%n_particle)
         real(rp) :: shell_scale
         real(rp), allocatable :: x_block(:, :), temp(:, :), dm_response(:, :, :), &
                                  fock_response(:, :, :), hess_x_block(:, :)
@@ -564,38 +545,38 @@ contains
         error = 0
 
         ! number of AOs
-        n_ao = mo_object%n_ao
+        n_ao = self%n_ao
 
         ! set scaling factor for closed- and open-shell systems
-        shell_scale = merge(4.0_rp, 2.0_rp, mo_object%n_particle == 1)
+        shell_scale = merge(4.0_rp, 2.0_rp, self%n_particle == 1)
 
         ! rows of every particle channel in the parameter vector
-        rows = mo_param_rows(mo_object%mo_channels)
+        rows = mo_param_rows(self%mo_channels)
 
         ! rebuild the response if the orbitals were moved without it being updated,
         ! since the static and response parts would otherwise refer to different points
-        if (mo_object%response_stale) then
-            call mo_object%refresh_response(error)
+        if (self%response_stale) then
+            call self%refresh_response(error)
             if (error /= 0) return
         end if
 
         ! get static part
-        hess_x = hess_x_static_mo(x, mo_object%mo_channels)
+        hess_x = hess_x_static_mo(x, self%mo_channels)
 
         ! get density matrix response to trial vector in the AO basis for every
         ! particle channel, before the response of the Fock matrix couples them
-        allocate(dm_response(n_ao, n_ao, mo_object%n_particle))
+        allocate(dm_response(n_ao, n_ao, self%n_particle))
         dm_response = 0.0_rp
-        do i = 1, mo_object%n_particle
-            n_occ = mo_object%mo_channels(i)%n_occ
-            n_virt = mo_object%mo_channels(i)%n_virt
+        do i = 1, self%n_particle
+            n_occ = self%mo_channels(i)%n_occ
+            n_virt = self%mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
-            x_block = unpack_ov(x(rows(1, i):rows(2, i)), mo_object%mo_channels(i))
+            x_block = unpack_ov(x(rows(1, i):rows(2, i)), self%mo_channels(i))
             allocate(temp(n_occ, n_ao))
             call dgemm("N", "T", n_occ, n_ao, n_virt, 1.0_rp, x_block, n_occ, &
-                       mo_object%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, temp, n_occ)
+                       self%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, temp, n_occ)
             call dgemm("N", "N", n_ao, n_ao, n_occ, 1.0_rp, &
-                       mo_object%mo_coeff(:, :n_occ, i), n_ao, temp, n_occ, 0.0_rp, &
+                       self%mo_coeff(:, :n_occ, i), n_ao, temp, n_occ, 0.0_rp, &
                        dm_response(:, :, i), n_ao)
             dm_response(:, :, i) = dm_response(:, :, i) + &
                                    transpose(dm_response(:, :, i))
@@ -603,81 +584,37 @@ contains
         end do
 
         ! get response of Fock matrix to density matrix response
-        allocate(fock_response(n_ao, n_ao, mo_object%n_particle))
-        if (associated(mo_object%get_response_os)) then
-            call mo_object%get_response_os(dm_response, fock_response, error, &
-                                           mo_object%settings%context)
+        allocate(fock_response(n_ao, n_ao, self%n_particle))
+        if (associated(self%get_response_os)) then
+            call self%get_response_os(dm_response, fock_response, error, &
+                                      self%settings%context)
         else
-            call mo_object%get_response_cs(dm_response(:, :, 1), &
-                                           fock_response(:, :, 1), error, &
-                                           mo_object%settings%context)
+            call self%get_response_cs(dm_response(:, :, 1), fock_response(:, :, 1), &
+                                      error, self%settings%context)
         end if
         deallocate(dm_response)
         if (error /= 0) return
 
         ! add the occupied-virtual block of the Fock matrix response in the MO basis
-        do i = 1, mo_object%n_particle
-            n_occ = mo_object%mo_channels(i)%n_occ
-            n_virt = mo_object%mo_channels(i)%n_virt
+        do i = 1, self%n_particle
+            n_occ = self%mo_channels(i)%n_occ
+            n_virt = self%mo_channels(i)%n_virt
             if (n_occ == 0 .or. n_virt == 0) cycle
             allocate(temp(n_occ, n_ao), hess_x_block(n_occ, n_virt))
             call dgemm("T", "N", n_occ, n_ao, n_ao, 1.0_rp, &
-                       mo_object%mo_coeff(:, :n_occ, i), n_ao, fock_response(:, :, i), &
+                       self%mo_coeff(:, :n_occ, i), n_ao, fock_response(:, :, i), &
                        n_ao, 0.0_rp, temp, n_occ)
             call dgemm("N", "N", n_occ, n_virt, n_ao, 1.0_rp, temp, n_occ, &
-                       mo_object%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, &
-                       hess_x_block, n_occ)
+                       self%mo_coeff(:, n_occ + 1:, i), n_ao, 0.0_rp, hess_x_block, &
+                       n_occ)
             hess_x(rows(1, i):rows(2, i)) = &
                 hess_x(rows(1, i):rows(2, i)) + &
-                shell_scale * pack_ov(hess_x_block, mo_object%mo_channels(i))
+                shell_scale * pack_ov(hess_x_block, self%mo_channels(i))
             deallocate(temp, hess_x_block)
         end do
         deallocate(fock_response)
 
-    end subroutine hess_x_mo_callback
-
-    subroutine precond_mo_callback(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine defines a level-shifted preconditioner based on the exact
-        ! eigendecomposition of the static part of the Hessian
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call mo_object%precond(residual, mu, precond_residual, mo_object%settings, &
-                               error)
-
-    end subroutine precond_mo_callback
-
-    subroutine precond_pd_mo_callback(residual, precond_residual, error, context)
-        !
-        ! this subroutine defines the positive-definite preconditioner based on the
-        ! exact eigendecomposition of the static part of the Hessian
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call mo_object%precond_pd(residual, precond_residual, mo_object%settings, error)
-
-    end subroutine precond_pd_mo_callback
-
-    subroutine get_extra_trial_vectors_mo_callback(trial_vectors, error, context)
-        !
-        ! this subroutine returns the extra trial vectors of the MO basis for the
-        ! solver's initial trial space
-        !
-        real(rp), intent(out), target :: trial_vectors(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call mo_object%get_extra_trial_vectors(trial_vectors, mo_object%settings, error)
-
-    end subroutine get_extra_trial_vectors_mo_callback
+    end subroutine hess_x_mo
 
     subroutine init_mo_settings(self, error)
         !
@@ -957,7 +894,7 @@ contains
 
     end function get_hess_eigval_pairs_mo
 
-    subroutine get_extra_trial_vectors_mo(self, trial_vectors, settings, error)
+    subroutine get_extra_trial_vectors_mo(self, trial_vectors, error, context)
         !
         ! this subroutine returns extra trial vectors for the MO basis along the
         ! eigenvectors of the static Hessian part with the most negative eigenvalues,
@@ -965,15 +902,15 @@ contains
         ! the most negative orbital energy differences
         !
         class(mo_type), intent(inout) :: self
-        real(rp), intent(out) :: trial_vectors(:, :)
-        class(settings_type), intent(in) :: settings
+        real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         ! initialize error flag
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(settings, error)
+        call self%refresh_hess_eigen(self%settings, error)
         if (error /= 0) return
 
         ! fill the requested slots with the rotations belonging to the most negative

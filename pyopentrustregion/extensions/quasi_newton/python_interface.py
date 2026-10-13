@@ -18,16 +18,23 @@ from pyopentrustregion.python_interface import (
     callback_type,
     CallbackInterface,
     update_orbs_interface_type,
+    obj_func_interface_type,
     logger_interface_type,
     UpdateOrbsInterface,
+    ObjFuncInterface,
     LoggerInterface,
     adopt_collector,
     Settings,
+    SolverSettings,
+    SolverSettingsC,
     auto_bind_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
+    ObjFuncPyInterface,
     UpdateOrbsPyInterface,
+    attach_wired_callbacks,
     check_callback_arguments,
+    detach_python_callbacks,
 )
 
 if TYPE_CHECKING:
@@ -130,22 +137,27 @@ class InitHessInterface(CallbackInterface):
 
 
 def qn_factory(
+    n_param: int,
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    obj_func: Callable[[np.ndarray], float],
     transport: TransportType,
     init_hess: InitHessType,
-    n_param: int,
+    solver_settings: SolverSettings,
     settings: QNSettings,
-) -> Callable[
-    [np.ndarray, np.ndarray, np.ndarray],
-    Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+) -> Tuple[
+    Callable[
+        [np.ndarray, np.ndarray, np.ndarray],
+        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+    ],
+    Callable[[np.ndarray], float],
 ]:
-    # collector for exceptions raised inside the wrapped user callback; adopted from
-    # update_orbs when it is itself factory-produced so a whole chain of factories
-    # shares one, and handed to solver through the returned object
-    exception = adopt_collector(update_orbs)
+    # collector for exceptions raised inside the wrapped user callbacks; adopted from
+    # update_orbs or obj_func when these are themselves factory-produced so a whole
+    # chain of factories shares one, and handed to solver through the returned objects
+    exception = adopt_collector(update_orbs, obj_func)
 
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
@@ -153,6 +165,9 @@ def qn_factory(
     check_callback_arguments(init_hess, "init_hess", ("vector",))
     update_orbs_interface = update_orbs_interface_type(
         UpdateOrbsInterface(update_orbs, n_param, exception)
+    )
+    obj_func_interface = obj_func_interface_type(
+        ObjFuncInterface(obj_func, n_param, exception)
     )
     transport_interface = transport_interface_type(
         TransportInterface(transport, n_param, exception)
@@ -172,6 +187,11 @@ def qn_factory(
         exception,
     )
 
+    # the factory keeps calling the callback functions of the solver settings it wires,
+    # so those the solver built from the Python functions of the settings are removed
+    # first, the solver builds them anew
+    detach_python_callbacks(solver_settings)
+
     if not hasattr(lib, "qn_factory"):
         raise RuntimeError(
             "Please reinstall the package with: "
@@ -181,23 +201,30 @@ def qn_factory(
     # define result and argument types
     lib.qn_factory.restype = c_int
     lib.qn_factory.argtypes = [
+        c_int,
         update_orbs_interface_type,
+        obj_func_interface_type,
         transport_interface_type,
         init_hess_interface_type,
-        c_int,
-        POINTER(QNSettingsC),
         POINTER(update_orbs_interface_type),
+        POINTER(obj_func_interface_type),
+        POINTER(SolverSettingsC),
+        POINTER(QNSettingsC),
     ]
 
     # call Fortran function
     update_orbs_qn_funptr = update_orbs_interface_type()
+    obj_func_qn_funptr = obj_func_interface_type()
     error = lib.qn_factory(
+        n_param,
         update_orbs_interface,
+        obj_func_interface,
         transport_interface,
         init_hess_interface,
-        n_param,
+        byref(update_orbs_qn_funptr),
+        byref(obj_func_qn_funptr),
+        byref(solver_settings.settings_c),
         byref(settings.settings_c),
-        update_orbs_qn_funptr,
     )
 
     if error:
@@ -210,14 +237,30 @@ def qn_factory(
                 f"OpenTrustRegion quasi-Newton factory produced error (code {error})."
             )
 
-    return UpdateOrbsPyInterface(
-        update_orbs_funptr=update_orbs_qn_funptr,
-        _otr_exception=exception,
-        saved_objects={
-            "update_orbs_interface": update_orbs_interface,
-            "transport_interface": transport_interface,
-            "init_hess_interface": init_hess_interface,
-        },
+    # attach the routines the factory has wired into the solver settings
+    attach_wired_callbacks(solver_settings, exception)
+
+    # the returned functions are called with the context the factory has written into
+    # the solver settings, through which they reach the quasi-Newton object
+    saved_objects = {
+        "update_orbs_interface": update_orbs_interface,
+        "obj_func_interface": obj_func_interface,
+        "transport_interface": transport_interface,
+        "init_hess_interface": init_hess_interface,
+    }
+    return (
+        UpdateOrbsPyInterface(
+            update_orbs_funptr=update_orbs_qn_funptr,
+            saved_objects=saved_objects,
+            _otr_exception=exception,
+            context=solver_settings.settings_c.context,
+        ),
+        ObjFuncPyInterface(
+            obj_func_funptr=obj_func_qn_funptr,
+            saved_objects=saved_objects,
+            _otr_exception=exception,
+            context=solver_settings.settings_c.context,
+        ),
     )
 
 

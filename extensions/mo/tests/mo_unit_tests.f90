@@ -610,13 +610,13 @@ contains
 
     logical(c_bool) function test_mo_factory_cs() bind(C)
         !
-        ! this function tests the subroutine which returns the modified MO orbital
-        ! updating function for the closed-shell case
+        ! this function tests the subroutine which returns the MO orbital updating
+        ! function and objective function for the closed-shell case and wires the solver
+        ! settings with the MO object
         !
-        use otr_mo, only: mo_factory_cs, mo_object, mo_settings_type, &
-                          obj_func_mo_callback_ptr, update_orbs_mo_callback_ptr, &
-                          precond_mo_callback_ptr
-        use otr_common, only: evaluate_dm_cs_type
+        use otr_mo, only: mo_factory_cs, mo_object, mo_settings_type
+        use otr_common, only: evaluate_dm_cs_type, update_orbs_callback, &
+                              obj_func_callback, precond_callback
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
@@ -630,9 +630,9 @@ contains
         integer(ip) :: i_sym, error
         type(mo_settings_type) :: settings
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
-        procedure(obj_func_type), pointer :: obj_func_mo_funptr
         procedure(update_orbs_type), pointer :: update_orbs_mo_funptr
-        type(solver_settings_type) :: solver_settings
+        procedure(obj_func_type), pointer :: obj_func_mo_funptr
+        type(solver_settings_type), target :: solver_settings
 
         ! assume tests pass
         test_mo_factory_cs = .true.
@@ -656,8 +656,8 @@ contains
 
         ! call routine and determine if an error is produced
         call mo_factory_cs(mo_coeff, ao_overlap, n_occ(1), n_particle, n_ao, n_mo, &
-                           evaluate_dm_funptr, obj_func_mo_funptr, &
-                           update_orbs_mo_funptr, solver_settings, error, settings)
+                           evaluate_dm_funptr, update_orbs_mo_funptr, &
+                           obj_func_mo_funptr, solver_settings, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_mo_factory_cs failed: Produced error."
             test_mo_factory_cs = .false.
@@ -700,30 +700,45 @@ contains
         end if
 
         ! determine if returned function pointers point to the correct routines
-        if (.not. associated(obj_func_mo_funptr, obj_func_mo_callback_ptr)) then
+        if (.not. associated(obj_func_mo_funptr, obj_func_callback)) then
             write(stderr, *) "test_mo_factory_cs failed: Returned objective "// &
                 "function is wrong."
             test_mo_factory_cs = .false.
         end if
-        if (.not. associated(update_orbs_mo_funptr, update_orbs_mo_callback_ptr)) then
+        if (.not. associated(update_orbs_mo_funptr, update_orbs_callback)) then
             write(stderr, *) "test_mo_factory_cs failed: Returned orbital updating "// &
                 "function is wrong."
             test_mo_factory_cs = .false.
         end if
 
-        ! determine if the MO routines are wired into the solver settings
-        if (.not. associated(solver_settings%precond, precond_mo_callback_ptr)) then
-            write(stderr, *) "test_mo_factory_cs failed: MO routines not wired "// &
-                "into solver settings."
+        ! determine if the solver settings are wired with the MO object, which the test
+        ! of the wiring covers otherwise
+        if (.not. associated(solver_settings%precond, precond_callback) .or. &
+            .not. associated(solver_settings%context, mo_object%solver_level)) then
+            write(stderr, *) "test_mo_factory_cs failed: Solver settings not wired "// &
+                "with the MO object."
+            test_mo_factory_cs = .false.
+        end if
+
+        ! call routine again with the solver settings it wired, which has to be refused
+        ! before the object is set up anew, which resets its evaluation state
+        mo_object%evaluation_stale = .false.
+        call mo_factory_cs(mo_coeff, ao_overlap, n_occ(1), n_particle, n_ao, n_mo, &
+                           evaluate_dm_funptr, update_orbs_mo_funptr, &
+                           obj_func_mo_funptr, solver_settings, error, settings)
+        if (error == 0 .or. mo_object%evaluation_stale) then
+            write(stderr, *) "test_mo_factory_cs failed: Solver settings the "// &
+                "object wired not refused before the object is changed."
             test_mo_factory_cs = .false.
         end if
 
         ! call routine again with the irreps of the MOs of the symmetric closed-shell
         ! occupation case and determine if they reach the single particle channel
         i_sym = findloc(case_names, "closed-shell with symmetry", dim=1, kind=ip)
+        call setup_settings(solver_settings)
         call mo_factory_cs(mo_coeff, ao_overlap, n_occ(1), n_particle, n_ao, n_mo, &
-                           evaluate_dm_funptr, obj_func_mo_funptr, &
-                           update_orbs_mo_funptr, solver_settings, error, settings, &
+                           evaluate_dm_funptr, update_orbs_mo_funptr, &
+                           obj_func_mo_funptr, solver_settings, error, settings, &
                            case_irreps(:, 1, i_sym))
         if (error /= 0) then
             write(stderr, *) "test_mo_factory_cs failed: Produced error with irreps."
@@ -738,13 +753,13 @@ contains
 
     logical(c_bool) function test_mo_factory_os() bind(C)
         !
-        ! this function tests the subroutine which returns the modified MO orbital
-        ! updating function for the open-shell case
+        ! this function tests the subroutine which returns the MO orbital updating
+        ! function and objective function for the open-shell case and wires the solver
+        ! settings with the MO object
         !
-        use otr_mo, only: mo_factory_os, mo_object, mo_settings_type, &
-                          obj_func_mo_callback_ptr, update_orbs_mo_callback_ptr, &
-                          precond_mo_callback_ptr
-        use otr_common, only: evaluate_dm_os_type
+        use otr_mo, only: mo_factory_os, mo_object, mo_settings_type
+        use otr_common, only: evaluate_dm_os_type, update_orbs_callback, &
+                              obj_func_callback, precond_callback
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_settings_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
@@ -756,9 +771,9 @@ contains
         integer(ip) :: i_sym, error
         type(mo_settings_type) :: settings
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_funptr
-        procedure(obj_func_type), pointer :: obj_func_mo_funptr
         procedure(update_orbs_type), pointer :: update_orbs_mo_funptr
-        type(solver_settings_type) :: solver_settings
+        procedure(obj_func_type), pointer :: obj_func_mo_funptr
+        type(solver_settings_type), target :: solver_settings
 
         ! assume tests pass
         test_mo_factory_os = .true.
@@ -781,8 +796,8 @@ contains
 
         ! call routine and determine if an error is produced
         call mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                           evaluate_dm_funptr, obj_func_mo_funptr, &
-                           update_orbs_mo_funptr, solver_settings, error, settings)
+                           evaluate_dm_funptr, update_orbs_mo_funptr, &
+                           obj_func_mo_funptr, solver_settings, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_mo_factory_os failed: Produced error."
             test_mo_factory_os = .false.
@@ -809,30 +824,45 @@ contains
         end if
 
         ! determine if returned function pointers point to the correct routines
-        if (.not. associated(obj_func_mo_funptr, obj_func_mo_callback_ptr)) then
+        if (.not. associated(obj_func_mo_funptr, obj_func_callback)) then
             write(stderr, *) "test_mo_factory_os failed: Returned objective "// &
                 "function is wrong."
             test_mo_factory_os = .false.
         end if
-        if (.not. associated(update_orbs_mo_funptr, update_orbs_mo_callback_ptr)) then
+        if (.not. associated(update_orbs_mo_funptr, update_orbs_callback)) then
             write(stderr, *) "test_mo_factory_os failed: Returned orbital updating "// &
                 "function is wrong."
             test_mo_factory_os = .false.
         end if
 
-        ! determine if the MO routines are wired into the solver settings
-        if (.not. associated(solver_settings%precond, precond_mo_callback_ptr)) then
-            write(stderr, *) "test_mo_factory_os failed: MO routines not wired "// &
-                "into solver settings."
+        ! determine if the solver settings are wired with the MO object, which the test
+        ! of the wiring covers otherwise
+        if (.not. associated(solver_settings%precond, precond_callback) .or. &
+            .not. associated(solver_settings%context, mo_object%solver_level)) then
+            write(stderr, *) "test_mo_factory_os failed: Solver settings not wired "// &
+                "with the MO object."
+            test_mo_factory_os = .false.
+        end if
+
+        ! call routine again with the solver settings it wired, which has to be refused
+        ! before the object is set up anew, which resets its evaluation state
+        mo_object%evaluation_stale = .false.
+        call mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                           evaluate_dm_funptr, update_orbs_mo_funptr, &
+                           obj_func_mo_funptr, solver_settings, error, settings)
+        if (error == 0 .or. mo_object%evaluation_stale) then
+            write(stderr, *) "test_mo_factory_os failed: Solver settings the "// &
+                "object wired not refused before the object is changed."
             test_mo_factory_os = .false.
         end if
 
         ! call routine again with the irreps of the MOs of the symmetric open-shell
         ! occupation case and determine if they reach every particle channel
         i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
+        call setup_settings(solver_settings)
         call mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                           evaluate_dm_funptr, obj_func_mo_funptr, &
-                           update_orbs_mo_funptr, solver_settings, error, settings, &
+                           evaluate_dm_funptr, update_orbs_mo_funptr, &
+                           obj_func_mo_funptr, solver_settings, error, settings, &
                            case_irreps(:, :, i_sym))
         if (error /= 0) then
             write(stderr, *) "test_mo_factory_os failed: Produced error with irreps."
@@ -1217,6 +1247,15 @@ contains
                     "stored for the "//case_name//"."
                 passed = .false.
             end if
+            if (.not. all([mo_object%provides%update_orbs, &
+                           mo_object%provides%obj_func, mo_object%provides%hess_x, &
+                           mo_object%provides%precond, mo_object%provides%precond_pd, &
+                           mo_object%provides%get_extra_trial_vectors]) .or. &
+                mo_object%provides%project) then
+                write(stderr, *) "test_mo_factory_common failed: Roles the object "// &
+                    "performs itself wrong for the "//case_name//"."
+                passed = .false.
+            end if
 
         end function check_mo_object
 
@@ -1405,157 +1444,13 @@ contains
 
     end function test_mo_sanity_check
 
-    logical(c_bool) function test_mo_set_solver_settings() bind(C)
-        !
-        ! this function tests the subroutine which wires the MO preconditioners and
-        ! extra trial vectors into the solver settings
-        !
-        use otr_mo, only: mo_set_solver_settings, precond_mo_callback_ptr, &
-                          precond_pd_mo_callback_ptr, &
-                          get_extra_trial_vectors_mo_callback_ptr
-        use opentrustregion, only: solver_settings_type, default_solver_settings, &
-                                   default_stability_settings, &
-                                   settings_uninitialized_warning_msg, &
-                                   stability_settings_uninitialized_warning_msg
-        use opentrustregion_unit_tests, only: setup_settings, test_context_type
-        use test_reference, only: ref_solver_settings, operator(/=)
-
-        type(solver_settings_type) :: solver_settings
-        integer(ip) :: i_case, error
-        character(len=:), allocatable :: case_name
-        type(test_context_type), target :: context
-
-        ! assume tests pass
-        test_mo_set_solver_settings = .true.
-
-        ! wire the MO routines into uninitialized settings, which have to be
-        ! initialized to their defaults, and into settings initialized to the reference
-        ! values with a projection of the caller, which have to be kept
-        do i_case = 1, 2
-            if (i_case == 1) then
-                case_name = "for uninitialized settings"
-                call setup_settings(solver_settings, context)
-                solver_settings%initialized = .false.
-            else
-                case_name = "for initialized settings"
-                solver_settings = ref_solver_settings
-                solver_settings%project => mock_project
-                solver_settings%stability_settings%project => mock_project
-            end if
-            call mo_set_solver_settings(solver_settings, error)
-            if (error /= 0) then
-                write(stderr, *) "test_mo_set_solver_settings failed: Produced "// &
-                    "error "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (.not. solver_settings%initialized) then
-                write(stderr, *) "test_mo_set_solver_settings failed: Settings not "// &
-                    "initialized "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (i_case == 1 .and. index( &
-                context%log_message, " "//settings_uninitialized_warning_msg) == 0) then
-                write(stderr, *) "test_mo_set_solver_settings failed: Warning not "// &
-                    "printed "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (i_case == 1 .and. solver_settings /= default_solver_settings) then
-                write(stderr, *) "test_mo_set_solver_settings failed: Settings not "// &
-                    "set to their defaults "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (i_case == 2 .and. solver_settings /= ref_solver_settings) then
-                write(stderr, *) "test_mo_set_solver_settings failed: Settings not "// &
-                    "kept "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (.not. (associated( &
-                solver_settings%precond, precond_mo_callback_ptr) .and. associated( &
-                    solver_settings%precond_pd, precond_pd_mo_callback_ptr) .and. &
-                associated(solver_settings%get_extra_trial_vectors, &
-                           get_extra_trial_vectors_mo_callback_ptr))) then
-                write(stderr, *) "test_mo_set_solver_settings failed: MO routines "// &
-                    "not wired into solver settings "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (.not. ( &
-                associated(solver_settings%stability_settings%precond, &
-                           precond_mo_callback_ptr) .and. &
-                associated(solver_settings%stability_settings%get_extra_trial_vectors, &
-                           get_extra_trial_vectors_mo_callback_ptr))) then
-                write(stderr, *) "test_mo_set_solver_settings failed: MO routines "// &
-                    "not wired into stability check settings "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (i_case == 1 .and. &
-                (associated(solver_settings%project) .or. &
-                 associated(solver_settings%stability_settings%project))) then
-                write(stderr, *) "test_mo_set_solver_settings failed: Projection "// &
-                    "wired into settings "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-            if (i_case == 2 .and. .not. ( &
-                associated(solver_settings%project, mock_project) .and. associated( &
-                    solver_settings%stability_settings%project, mock_project))) then
-                write(stderr, *) "test_mo_set_solver_settings failed: Projection "// &
-                    "of the caller not kept "//case_name//"."
-                test_mo_set_solver_settings = .false.
-            end if
-        end do
-
-        ! wire the MO routines into initialized settings whose stability check
-        ! settings were not initialized, which the solver could no longer detect once
-        ! the routines are wired into them, so that these have to be initialized with
-        ! the warning the solver would print, through the logging function of the
-        ! solver settings, which have to be kept
-        call setup_settings(solver_settings, context)
-        solver_settings%stability_settings%initialized = .false.
-        call mo_set_solver_settings(solver_settings, error)
-        if (error /= 0 .or. .not. associated(solver_settings%logger)) then
-            write(stderr, *) "test_mo_set_solver_settings failed: Produced error "// &
-                "or settings not kept for uninitialized stability check settings."
-            test_mo_set_solver_settings = .false.
-        end if
-        if (solver_settings%stability_settings /= default_stability_settings .or. &
-            .not. associated(solver_settings%stability_settings%precond, &
-                             precond_mo_callback_ptr)) then
-            write(stderr, *) "test_mo_set_solver_settings failed: Stability check "// &
-                "settings not initialized to their defaults with the MO routines "// &
-                "wired into them."
-            test_mo_set_solver_settings = .false.
-        end if
-        if (index(context%log_message, &
-                  " "//stability_settings_uninitialized_warning_msg) == 0) then
-            write(stderr, *) "test_mo_set_solver_settings failed: Warning not "// &
-                "printed for uninitialized stability check settings."
-            test_mo_set_solver_settings = .false.
-        end if
-
-    contains
-
-        subroutine mock_project(vector, error_out, context)
-            !
-            ! this subroutine is a mock projection of the caller, which leaves the
-            ! vector unchanged
-            !
-            real(rp), intent(inout), target :: vector(:)
-            integer(ip), intent(out) :: error_out
-            class(*), intent(in), pointer :: context
-
-            error_out = 0
-            vector = vector
-
-        end subroutine mock_project
-
-    end function test_mo_set_solver_settings
-
-    logical(c_bool) function test_obj_func_mo_callback() bind(C)
+    logical(c_bool) function test_obj_func_mo() bind(C)
         !
         ! this function tests the function which defines the energy evaluation in the
         ! MO basis
         !
         use test_reference, only: no_context, arm_host_context, host_context_reached
-        use otr_mo, only: obj_func_mo_callback, mo_object
+        use otr_mo, only: mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, &
@@ -1571,7 +1466,7 @@ contains
         character(len=:), allocatable :: case_name
 
         ! assume tests pass
-        test_obj_func_mo_callback = .true.
+        test_obj_func_mo = .true.
 
         ! initialize random orthonormal MO coefficients in a non-orthonormal AO basis
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -1599,28 +1494,28 @@ contains
             ! the current density matrix
             kappa = 0.0_rp
             mock_requests = [integer(ip) :: ]
-            energy = obj_func_mo_callback(kappa, error, no_context)
+            energy = mo_object%obj_func(kappa, error, no_context)
             if (error /= 0) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Produced error "// &
-                    "without an orbital rotation for the "//case_name//" case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Produced error without "// &
+                    "an orbital rotation for the "//case_name//" case."
+                test_obj_func_mo = .false.
             end if
             if (abs(energy - sum(mo_object%dm_ao)) > tol) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Incorrect "// &
-                    "energy without an orbital rotation for the "//case_name//" case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Incorrect energy "// &
+                    "without an orbital rotation for the "//case_name//" case."
+                test_obj_func_mo = .false.
             end if
             if (size(mock_requests) /= 1) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Density matrix "// &
+                write(stderr, *) "test_obj_func_mo failed: Density matrix "// &
                     "evaluating function not called exactly once for the "// &
                     case_name//" case."
-                test_obj_func_mo_callback = .false.
+                test_obj_func_mo = .false.
             end if
             if (any(mock_requests /= 0)) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Incorrect "// &
-                    "outputs requested from density matrix evaluating function for "// &
-                    "the "//case_name//" case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Incorrect outputs "// &
+                    "requested from density matrix evaluating function for the "// &
+                    case_name//" case."
+                test_obj_func_mo = .false.
             end if
 
             ! call routine with an orbital rotation and determine if only the energy of
@@ -1638,54 +1533,52 @@ contains
             end do
             dm_ao_start = mo_object%dm_ao
             mock_requests = [integer(ip) :: ]
-            energy = obj_func_mo_callback(kappa, error, no_context)
+            energy = mo_object%obj_func(kappa, error, no_context)
             if (error /= 0) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Produced error "// &
-                    "for an orbital rotation for the "//case_name//" case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Produced error for an "// &
+                    "orbital rotation for the "//case_name//" case."
+                test_obj_func_mo = .false.
             end if
             if (abs(energy - expected_energy) > tol) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Incorrect "// &
-                    "energy for an orbital rotation for the "//case_name//" case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Incorrect energy for an "// &
+                    "orbital rotation for the "//case_name//" case."
+                test_obj_func_mo = .false.
             end if
             if (size(mock_requests) /= 1 .or. any(mock_requests /= 0)) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Incorrect "// &
-                    "outputs requested from density matrix evaluating function for "// &
-                    "an orbital rotation for the "//case_name//" case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Incorrect outputs "// &
+                    "requested from density matrix evaluating function for an "// &
+                    "orbital rotation for the "//case_name//" case."
+                test_obj_func_mo = .false.
             end if
             if (norm2(mo_coeff - mo_coeff_start) > tol) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Current "// &
-                    "orbitals changed by an orbital rotation for the "//case_name// &
-                    " case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Current orbitals "// &
+                    "changed by an orbital rotation for the "//case_name//" case."
+                test_obj_func_mo = .false.
             end if
             if (norm2(mo_object%dm_ao - dm_ao_start) > tol) then
-                write(stderr, *) "test_obj_func_mo_callback failed: Current "// &
-                    "density matrix changed by an orbital rotation for the "// &
-                    case_name//" case."
-                test_obj_func_mo_callback = .false.
+                write(stderr, *) "test_obj_func_mo failed: Current density matrix "// &
+                    "changed by an orbital rotation for the "//case_name//" case."
+                test_obj_func_mo = .false.
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("obj_func_mo_callback")) &
-                test_obj_func_mo_callback = .false.
+            if (.not. host_context_reached("obj_func_mo")) test_obj_func_mo = .false.
 
             ! deallocate MO object
             deallocate(mo_object, kappa)
         end do
 
-    end function test_obj_func_mo_callback
+    end function test_obj_func_mo
 
-    logical(c_bool) function test_update_orbs_mo_callback() bind(C)
+    logical(c_bool) function test_update_orbs_mo() bind(C)
         !
         ! this function tests the subroutine which defines the energy, gradient and
         ! Hessian diagonal evaluation in the MO basis, for the closed-shell and the
         ! open-shell case
         !
         use test_reference, only: no_context, arm_host_context, host_context_reached
-        use otr_mo, only: update_orbs_mo_callback, mo_object, hess_x_mo_callback_ptr
+        use otr_mo, only: mo_object
+        use otr_common, only: hess_x_callback
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo
@@ -1705,7 +1598,7 @@ contains
         procedure(hess_x_type), pointer :: hess_x_funptr
 
         ! assume tests pass
-        test_update_orbs_mo_callback = .true.
+        test_update_orbs_mo = .true.
 
         ! initialize a non-orthonormal AO basis
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -1738,11 +1631,11 @@ contains
             kappa = 0.0_rp
             mo_object%response_stale = .false.
             if (.not. check_update_orbs_mo_stage(1_ip, "starting orbitals")) &
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             if (abs(func - sum(mo_object%dm_ao)) > tol) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Incorrect "// &
-                    "energy for the "//case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Incorrect energy for "// &
+                    "the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
             do i = 1, n_particle
                 fock_mo = ref_mo_transform( &
@@ -1751,21 +1644,21 @@ contains
                           fock_mo(:n_occ(i), :n_occ(i))) > tol .or. &
                     norm2(mo_object%mo_channels(i)%fock_vv - &
                           fock_mo(n_occ(i) + 1:, n_occ(i) + 1:)) > tol) then
-                    write(stderr, *) "test_update_orbs_mo_callback failed: Static "// &
-                        "Hessian part not built from the Fock matrix in the MO "// &
-                        "basis for the "//case_name//" case."
-                    test_update_orbs_mo_callback = .false.
+                    write(stderr, *) "test_update_orbs_mo failed: Static Hessian "// &
+                        "part not built from the Fock matrix in the MO basis for "// &
+                        "the "//case_name//" case."
+                    test_update_orbs_mo = .false.
                 end if
             end do
             if (norm2(grad - mo_object%grad) > tol) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Gradient "// &
-                    "not returned for the "//case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Gradient not "// &
+                    "returned for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
             if (norm2(h_diag - mo_object%h_diag) > tol) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Hessian "// &
-                    "diagonal not returned for the "//case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Hessian diagonal not "// &
+                    "returned for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
             if (n_particle == 1) then
                 response_set = &
@@ -1775,21 +1668,20 @@ contains
                     associated(mo_object%get_response_os, mock_get_response_os)
             end if
             if (.not. response_set) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Response "// &
-                    "function not stored for the "//case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Response function "// &
+                    "not stored for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
-            if (.not. associated(hess_x_funptr, hess_x_mo_callback_ptr)) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Returned "// &
-                    "Hessian linear transformation is wrong for the "//case_name// &
-                    " case."
-                test_update_orbs_mo_callback = .false.
+            if (.not. associated(hess_x_funptr, hess_x_callback)) then
+                write(stderr, *) "test_update_orbs_mo failed: Returned Hessian "// &
+                    "linear transformation is wrong for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
             if (mo_object%evaluation_stale) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Evaluation "// &
-                    "still marked stale after the quantities were computed for the "// &
+                write(stderr, *) "test_update_orbs_mo failed: Evaluation still "// &
+                    "marked stale after the quantities were computed for the "// &
                     case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             end if
 
             ! call routine again without an orbital rotation after clearing the outputs
@@ -1800,24 +1692,22 @@ contains
             grad = 0.0_rp
             h_diag = 0.0_rp
             if (.not. check_update_orbs_mo_stage(1_ip, "evaluated orbitals")) &
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             if (abs(func) > tol) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Stored "// &
-                    "energy not returned for evaluated orbitals for the "//case_name// &
-                    " case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Stored energy not "// &
+                    "returned for evaluated orbitals for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
             if (norm2(grad - mo_object%grad) > tol) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Stored "// &
-                    "gradient not returned for evaluated orbitals for the "// &
-                    case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Stored gradient not "// &
+                    "returned for evaluated orbitals for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
             if (norm2(h_diag - mo_object%h_diag) > tol) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Stored "// &
-                    "Hessian diagonal not returned for evaluated orbitals for the "// &
+                write(stderr, *) "test_update_orbs_mo failed: Stored Hessian "// &
+                    "diagonal not returned for evaluated orbitals for the "// &
                     case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             end if
 
             ! mark the response as stale, as an approximate-Hessian extension such as
@@ -1826,12 +1716,11 @@ contains
             ! an evaluation and clears the flag
             mo_object%response_stale = .true.
             if (.not. check_update_orbs_mo_stage(2_ip, "a stale response")) &
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             if (mo_object%response_stale) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Response "// &
-                    "still marked stale after being recomputed for the "//case_name// &
-                    " case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Response still "// &
+                    "marked stale after being recomputed for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
 
             ! mark the evaluation as stale, as the factory does for new starting
@@ -1839,12 +1728,11 @@ contains
             ! this forces an evaluation and clears the flag
             mo_object%evaluation_stale = .true.
             if (.not. check_update_orbs_mo_stage(3_ip, "a stale evaluation")) &
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             if (mo_object%evaluation_stale) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Evaluation "// &
-                    "still marked stale after being recomputed for the "//case_name// &
-                    " case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Evaluation still "// &
+                    "marked stale after being recomputed for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
 
             ! call routine with an orbital rotation whose evaluation fails and
@@ -1856,19 +1744,19 @@ contains
                 mo_object%evaluate_dm_os => mock_evaluate_dm_failing_os
             end if
             kappa = 0.1_rp
-            call update_orbs_mo_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                         error, no_context)
+            call mo_object%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                       error, no_context)
             if (error == 0) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Error of "// &
-                    "the density matrix evaluating function not passed on for the "// &
-                    case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Error of the density "// &
+                    "matrix evaluating function not passed on for the "//case_name// &
+                    " case."
+                test_update_orbs_mo = .false.
             end if
             if (.not. mo_object%evaluation_stale) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Evaluation "// &
-                    "not marked stale after a failed evaluation for the "//case_name// &
+                write(stderr, *) "test_update_orbs_mo failed: Evaluation not "// &
+                    "marked stale after a failed evaluation for the "//case_name// &
                     " case."
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             end if
             if (n_particle == 1) then
                 mo_object%evaluate_dm_cs => mock_evaluate_dm_cs
@@ -1882,34 +1770,33 @@ contains
             ! Fock matrix and the response function
             mo_coeff_start = mo_object%mo_coeff
             if (.not. check_update_orbs_mo_stage(4_ip, "an orbital rotation")) &
-                test_update_orbs_mo_callback = .false.
+                test_update_orbs_mo = .false.
             if (norm2(mo_object%mo_coeff - ref_rotate_mo_coeff( &
                 kappa, mo_coeff_start, mo_object%mo_channels)) > tol) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Orbitals "// &
-                    "not rotated correctly by an orbital rotation for the "// &
-                    case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Orbitals not rotated "// &
+                    "correctly by an orbital rotation for the "//case_name//" case."
+                test_update_orbs_mo = .false.
             end if
             do i = 1, n_particle
                 if (norm2(mo_object%dm_ao(:, :, i) - matmul( &
                     mo_object%mo_coeff(:, :n_occ(i), i), &
                     transpose(mo_object%mo_coeff(:, :n_occ(i), i)))) > tol) then
-                    write(stderr, *) "test_update_orbs_mo_callback failed: Density "// &
-                        "matrix not moved consistently with the orbitals for the "// &
+                    write(stderr, *) "test_update_orbs_mo failed: Density matrix "// &
+                        "not moved consistently with the orbitals for the "// &
                         case_name//" case."
-                    test_update_orbs_mo_callback = .false.
+                    test_update_orbs_mo = .false.
                 end if
             end do
             if (any(mock_requests /= 3)) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Incorrect "// &
-                    "outputs requested from density matrix evaluating function for "// &
-                    "the "//case_name//" case."
-                test_update_orbs_mo_callback = .false.
+                write(stderr, *) "test_update_orbs_mo failed: Incorrect outputs "// &
+                    "requested from density matrix evaluating function for the "// &
+                    case_name//" case."
+                test_update_orbs_mo = .false.
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("update_orbs_mo_callback")) &
-                test_update_orbs_mo_callback = .false.
+            if (.not. host_context_reached("update_orbs_mo")) &
+                test_update_orbs_mo = .false.
 
             ! deallocate MO object and case arrays
             deallocate(mo_object, kappa, grad, h_diag)
@@ -1924,7 +1811,6 @@ contains
             ! and if the density matrix evaluating function has been called the
             ! expected number of times in total
             !
-            use test_reference, only: no_context
             integer(ip), intent(in) :: n_calls
             character(len=*), intent(in) :: stage
             logical :: passed
@@ -1934,31 +1820,31 @@ contains
 
             ! call routine and determine if it produces an error and if the density
             ! matrix evaluating function was called the expected number of times
-            call update_orbs_mo_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                         error, no_context)
+            call mo_object%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                       error, no_context)
             if (error /= 0) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Produced "// &
-                    "error for "//stage//" for the "//case_name//" case."
+                write(stderr, *) "test_update_orbs_mo failed: Produced error for "// &
+                    stage//" for the "//case_name//" case."
                 passed = .false.
             end if
             if (size(mock_requests) /= n_calls) then
-                write(stderr, *) "test_update_orbs_mo_callback failed: Density "// &
-                    "matrix evaluating function not called the expected number of "// &
-                    "times for "//stage//" for the "//case_name//" case."
+                write(stderr, *) "test_update_orbs_mo failed: Density matrix "// &
+                    "evaluating function not called the expected number of times "// &
+                    "for "//stage//" for the "//case_name//" case."
                 passed = .false.
             end if
 
         end function check_update_orbs_mo_stage
 
-    end function test_update_orbs_mo_callback
+    end function test_update_orbs_mo
 
-    logical(c_bool) function test_hess_x_mo_callback() bind(C)
+    logical(c_bool) function test_hess_x_mo() bind(C)
         !
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the MO basis
         !
         use test_reference, only: no_context, arm_host_context, host_context_reached
-        use otr_mo, only: hess_x_mo_callback, mo_object
+        use otr_mo, only: mo_object
         use opentrustregion_unit_tests, only: setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
@@ -1980,7 +1866,7 @@ contains
         character(len=:), allocatable :: case_name
 
         ! assume tests pass
-        test_hess_x_mo_callback = .true.
+        test_hess_x_mo = .true.
 
         ! generate random orthonormal MO coefficients in a non-orthonormal AO basis, so
         ! that the MO coefficients differ from their inverse and the density matrix
@@ -2017,21 +1903,20 @@ contains
             expected_hess_x = ref_hess_x_mo(x, mo_object%mo_channels, &
                                             mo_coeff(:, :, :n_particle), &
                                             mock_response_factor)
-            call hess_x_mo_callback(x, hess_x, error, no_context)
+            call mo_object%hess_x(x, hess_x, error, no_context)
             if (error /= 0) then
-                write(stderr, *) "test_hess_x_mo_callback failed: Produced error "// &
-                    "for the "//case_name//" case."
-                test_hess_x_mo_callback = .false.
+                write(stderr, *) "test_hess_x_mo failed: Produced error for the "// &
+                    case_name//" case."
+                test_hess_x_mo = .false.
             end if
             if (norm2(hess_x - expected_hess_x) > tol) then
-                write(stderr, *) "test_hess_x_mo_callback failed: Incorrect "// &
-                    "Hessian linear transformation for the "//case_name//" case."
-                test_hess_x_mo_callback = .false.
+                write(stderr, *) "test_hess_x_mo failed: Incorrect Hessian linear "// &
+                    "transformation for the "//case_name//" case."
+                test_hess_x_mo = .false.
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("hess_x_mo_callback")) &
-                test_hess_x_mo_callback = .false.
+            if (.not. host_context_reached("hess_x_mo")) test_hess_x_mo = .false.
 
             deallocate(mo_object, x, hess_x)
         end do
@@ -2052,37 +1937,35 @@ contains
         expected_hess_x = &
             ref_hess_x_mo(x, mo_object%mo_channels, mo_coeff, mock_response_factor)
         mock_requests = [integer(ip) :: ]
-        call hess_x_mo_callback(x, hess_x, error, no_context)
+        call mo_object%hess_x(x, hess_x, error, no_context)
         if (error /= 0) then
-            write(stderr, *) "test_hess_x_mo_callback failed: Produced error while "// &
+            write(stderr, *) "test_hess_x_mo failed: Produced error while "// &
                 "refreshing a stale response."
-            test_hess_x_mo_callback = .false.
+            test_hess_x_mo = .false.
         end if
         if (size(mock_requests) /= 1) then
-            write(stderr, *) "test_hess_x_mo_callback failed: Stale response was "// &
-                "not refreshed."
-            test_hess_x_mo_callback = .false.
+            write(stderr, *) "test_hess_x_mo failed: Stale response was not refreshed."
+            test_hess_x_mo = .false.
         end if
         if (any(mock_requests /= 2)) then
-            write(stderr, *) "test_hess_x_mo_callback failed: Incorrect outputs "// &
-                "requested from density matrix evaluating function while "// &
-                "refreshing a stale response."
-            test_hess_x_mo_callback = .false.
+            write(stderr, *) "test_hess_x_mo failed: Incorrect outputs requested "// &
+                "from density matrix evaluating function while refreshing a stale "// &
+                "response."
+            test_hess_x_mo = .false.
         end if
         if (mo_object%response_stale) then
-            write(stderr, *) "test_hess_x_mo_callback failed: Response still "// &
-                "marked stale after being refreshed."
-            test_hess_x_mo_callback = .false.
+            write(stderr, *) "test_hess_x_mo failed: Response still marked stale "// &
+                "after being refreshed."
+            test_hess_x_mo = .false.
         end if
         if (norm2(hess_x - expected_hess_x) > tol) then
-            write(stderr, *) "test_hess_x_mo_callback failed: Incorrect Hessian "// &
-                "linear transformation with a refreshed response."
-            test_hess_x_mo_callback = .false.
+            write(stderr, *) "test_hess_x_mo failed: Incorrect Hessian linear "// &
+                "transformation with a refreshed response."
+            test_hess_x_mo = .false.
         end if
 
         ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("hess_x_mo_callback")) &
-            test_hess_x_mo_callback = .false.
+        if (.not. host_context_reached("hess_x_mo")) test_hess_x_mo = .false.
 
         ! deallocate MO object
         deallocate(mo_object, x, hess_x)
@@ -2115,20 +1998,20 @@ contains
             allocate(x(mo_object%n_param), hess_x(mo_object%n_param))
             call random_number(x)
             x = x - 0.5_rp
-            call hess_x_mo_callback(x, hess_x, error, no_context)
+            call mo_object%hess_x(x, hess_x, error, no_context)
             if (error /= 0) then
-                write(stderr, *) "test_hess_x_mo_callback failed: Produced error "// &
-                    "for the quadratic model energy for the "//case_name//" case."
-                test_hess_x_mo_callback = .false.
+                write(stderr, *) "test_hess_x_mo failed: Produced error for the "// &
+                    "quadratic model energy for the "//case_name//" case."
+                test_hess_x_mo = .false.
             end if
             second_diff = (model_energy(step * x) - 2.0_rp * &
                            model_energy(0.0_rp * x) + model_energy(-step * x)) / step**2
             if (abs(dot_product(x, hess_x) - second_diff) > &
                 fd_tol * max(1.0_rp, abs(second_diff))) then
-                write(stderr, *) "test_hess_x_mo_callback failed: Hessian linear "// &
+                write(stderr, *) "test_hess_x_mo failed: Hessian linear "// &
                     "transformation does not match the finite difference of the "// &
                     "quadratic model energy for the "//case_name//" case."
-                test_hess_x_mo_callback = .false.
+                test_hess_x_mo = .false.
             end if
             deallocate(mo_object, x, hess_x)
         end do
@@ -2207,147 +2090,7 @@ contains
 
         end subroutine mock_get_stale_response_os
 
-    end function test_hess_x_mo_callback
-
-    logical(c_bool) function test_precond_mo_callback() bind(C)
-        !
-        ! this function tests the subroutine which defines a level-shifted
-        ! preconditioner of the MO basis, which applies the one of the orbital basis to
-        ! the MO object
-        !
-        use test_reference, only: no_context
-        use otr_mo, only: precond_mo_callback, mo_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_occ
-
-        real(rp), parameter :: mu = 0.3_rp
-
-        real(rp), allocatable :: residual(:), precond_residual(:)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_precond_mo_callback = .true.
-
-        ! set up the MO object with an eigendecomposition whose eigenvalue pairs, the
-        ! open-shell differences 2 (e_v - e_o), shifted by the level shift are all 2,
-        ! so that the preconditioner of the orbital basis halves the residual
-        call setup_minimal_mo_object(n_occ)
-        call setup_settings(mo_object%settings)
-        call setup_identity_mo_eigenbasis(0.0_rp, (2.0_rp + mu) / 2.0_rp)
-        allocate(residual(mo_object%n_param), precond_residual(mo_object%n_param))
-        call random_number(residual)
-
-        ! call routine and determine if the residual is halved
-        call precond_mo_callback(residual, mu, precond_residual, error, no_context)
-        if (error /= 0) then
-            write(stderr, *) "test_precond_mo_callback failed: Produced error."
-            test_precond_mo_callback = .false.
-        end if
-        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
-            write(stderr, *) "test_precond_mo_callback failed: Incorrect "// &
-                "preconditioned residual."
-            test_precond_mo_callback = .false.
-        end if
-
-        ! deallocate MO object
-        deallocate(mo_object)
-
-    end function test_precond_mo_callback
-
-    logical(c_bool) function test_precond_pd_mo_callback() bind(C)
-        !
-        ! this function tests the subroutine which defines the positive-definite
-        ! preconditioner of the MO basis, which applies the one of the orbital basis to
-        ! the MO object
-        !
-        use test_reference, only: no_context
-        use otr_mo, only: precond_pd_mo_callback, mo_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_occ
-
-        real(rp), allocatable :: residual(:), precond_residual(:)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_precond_pd_mo_callback = .true.
-
-        ! set up the MO object with an eigendecomposition whose eigenvalue pairs, the
-        ! open-shell differences 2 (e_v - e_o), are all -2, so that the
-        ! positive-definite preconditioner of the orbital basis, which divides by their
-        ! magnitudes, halves the residual, unlike the level-shifted one
-        call setup_minimal_mo_object(n_occ)
-        call setup_settings(mo_object%settings)
-        call setup_identity_mo_eigenbasis(1.0_rp, 0.0_rp)
-        allocate(residual(mo_object%n_param), precond_residual(mo_object%n_param))
-        call random_number(residual)
-
-        ! call routine and determine if the residual is halved
-        call precond_pd_mo_callback(residual, precond_residual, error, no_context)
-        if (error /= 0) then
-            write(stderr, *) "test_precond_pd_mo_callback failed: Produced error."
-            test_precond_pd_mo_callback = .false.
-        end if
-        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
-            write(stderr, *) "test_precond_pd_mo_callback failed: Incorrect "// &
-                "preconditioned residual."
-            test_precond_pd_mo_callback = .false.
-        end if
-
-        ! deallocate MO object
-        deallocate(mo_object)
-
-    end function test_precond_pd_mo_callback
-
-    logical(c_bool) function test_get_extra_trial_vectors_mo_callback() bind(C)
-        !
-        ! this function tests the subroutine which returns the extra trial vectors of
-        ! the MO basis for the solver's initial trial space
-        !
-        use test_reference, only: no_context
-        use otr_mo, only: get_extra_trial_vectors_mo_callback, mo_object
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_test_reference, only: n_occ
-
-        integer(ip), parameter :: n_extra = 2
-
-        real(rp), allocatable :: trial_vectors(:, :), expected(:, :)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_get_extra_trial_vectors_mo_callback = .true.
-
-        ! set up the MO object with an eigendecomposition in the MO basis itself whose
-        ! only negative eigenvalue pair belongs to the first occupied and the first
-        ! virtual orbital of the first particle channel, at packed index 1, so that the
-        ! first extra trial vector is the unit vector along it and the second vanishes
-        call setup_minimal_mo_object(n_occ)
-        call setup_settings(mo_object%settings)
-        call setup_identity_mo_eigenbasis(0.0_rp, 1.0_rp)
-        mo_object%mo_channels(1)%occ_eigvals(1) = 1.5_rp
-        mo_object%mo_channels(1)%virt_eigvals(2) = 2.0_rp
-        allocate(trial_vectors(mo_object%n_param, n_extra), &
-                 expected(mo_object%n_param, n_extra))
-        expected = 0.0_rp
-        expected(1, 1) = 1.0_rp
-
-        ! call routine and determine if the extra trial vectors of the MO basis are
-        ! returned
-        call get_extra_trial_vectors_mo_callback(trial_vectors, error, no_context)
-        if (error /= 0) then
-            write(stderr, *) "test_get_extra_trial_vectors_mo_callback failed: "// &
-                "Produced error."
-            test_get_extra_trial_vectors_mo_callback = .false.
-        end if
-        if (norm2(trial_vectors - expected) > tol) then
-            write(stderr, *) "test_get_extra_trial_vectors_mo_callback failed: "// &
-                "Incorrect extra trial vectors."
-            test_get_extra_trial_vectors_mo_callback = .false.
-        end if
-
-        ! deallocate MO object
-        deallocate(mo_object)
-
-    end function test_get_extra_trial_vectors_mo_callback
+    end function test_hess_x_mo
 
     logical(c_bool) function test_init_mo_settings() bind(C)
         !
@@ -2824,15 +2567,14 @@ contains
         ! the most negative eigenvalue pairs of the static part of the Hessian for the
         ! MO basis
         !
-        use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_object
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_occ
         use opentrustregion_unit_tests, only: setup_settings
+        use test_reference, only: no_context
 
         integer(ip), parameter :: n_extra = 3
 
-        type(orbital_settings_type) :: settings
         real(rp), allocatable :: trial_vectors(:, :), expected(:, :), pairs(:), &
                                  unit_vector(:)
         integer(ip) :: error, i, j, k, ivec, min_idx
@@ -2840,12 +2582,10 @@ contains
         ! assume tests pass
         test_get_extra_trial_vectors_mo = .true.
 
-        ! setup settings object
-        call setup_settings(settings)
-
         ! set orbital energies with exactly two negative pairs in the first channel and
         ! none in the second, so that the last requested vector has to vanish
         call setup_minimal_mo_object(n_occ)
+        call setup_settings(mo_object%settings)
         mo_object%mo_channels(1)%occ_eigvals = [-1.0_rp, 2.0_rp]
         mo_object%mo_channels(1)%virt_eigvals = [0.5_rp, 1.5_rp]
         mo_object%mo_channels(2)%occ_eigvals = [-3.0_rp]
@@ -2874,7 +2614,7 @@ contains
 
         ! call routine and determine if the trial vectors are correct
         allocate(trial_vectors(mo_object%n_param, n_extra))
-        call mo_object%get_extra_trial_vectors(trial_vectors, settings, error)
+        call mo_object%get_extra_trial_vectors(trial_vectors, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Produced error."
             test_get_extra_trial_vectors_mo = .false.
@@ -2905,7 +2645,7 @@ contains
             expected(min_idx, ivec) = 1.0_rp
             pairs(min_idx) = huge(1.0_rp)
         end do
-        call mo_object%get_extra_trial_vectors(trial_vectors, settings, error)
+        call mo_object%get_extra_trial_vectors(trial_vectors, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Produced "// &
                 "error for a stale eigendecomposition."

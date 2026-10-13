@@ -7,14 +7,14 @@
 module otr_oao_c_interface_mock
 
     use opentrustregion, only: ip, stderr
-    use c_interface, only: c_rp, c_ip, update_orbs_c_type
+    use c_interface, only: c_rp, c_ip
     use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c, &
                                    oao_deconstructor_c_wrapper
     use otr_oao_test_reference, only: ref_oao_settings
     use otr_common_test_reference, only: n_particle, n_ao
     use test_reference, only: n_param
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
-                                           c_funloc, c_null_char, c_f_pointer, c_loc
+    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+                                           c_funloc, c_null_char
 
     implicit none
 
@@ -22,8 +22,6 @@ module otr_oao_c_interface_mock
                                 test_oao_deconstructor_interface = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_c_type), pointer :: mock_update_orbs_oao_ptr => &
-        mock_update_orbs_oao
     procedure(oao_factory_c_wrapper), pointer :: mock_oao_factory_c_wrapper_ptr => &
         mock_oao_factory_c_wrapper
     procedure(init_oao_settings_c), pointer :: mock_init_oao_settings_c_ptr => &
@@ -33,72 +31,34 @@ module otr_oao_c_interface_mock
 
 contains
 
-    function mock_update_orbs_oao(kappa, func, grad, h_diag, hess_x_c_funptr, &
-                                  context_c) result(error) bind(C)
-        !
-        ! this function is a test function for the orbital update C function
-        !
-        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
-        use otr_oao_c_interface, only: dm_ao_3d_c
-
-        real(c_rp), intent(in), target :: kappa(*)
-        real(c_rp), intent(out) :: func
-        real(c_rp), intent(out), target :: grad(*), h_diag(*)
-        type(c_funptr), intent(inout) :: hess_x_c_funptr
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        error = &
-            mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr, context_c)
-
-        dm_ao_3d_c = 2.0_c_rp
-
-    end function mock_update_orbs_oao
-
     function mock_oao_factory_c_wrapper( &
         dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-        obj_func_oao_c_funptr, update_orbs_oao_c_funptr, solver_settings_c, &
+        update_orbs_oao_c_funptr, obj_func_oao_c_funptr, solver_settings_c, &
         settings_c) result(error_c) bind(C, name="mock_oao_factory")
         !
         ! this subroutine is a mock routine for the OAO orbital updating factory C
         ! wrapper subroutine
         !
         use, intrinsic :: iso_c_binding, only: c_null_ptr
-        use opentrustregion, only: default_solver_settings
-        use otr_oao_c_interface, only: oao_settings_type_c, dm_ao_3d_c
-        use c_interface, only: obj_func_c_type, update_orbs_c_type, precond_c_type, &
-                               precond_pd_c_type, project_c_type, logger_c_type, &
-                               get_extra_trial_vectors_c_type, solver_settings_type_c, &
-                               assignment(=)
+        use otr_oao_c_interface, only: oao_settings_type_c
+        use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: operator(/=)
         use otr_common_test_reference, only: test_evaluate_dm_c_funptr
-        use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
-                                          mock_precond_pd, mock_project, &
-                                          mock_get_extra_trial_vectors
+        use otr_common_c_interface_mock, only: &
+            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c
 
         real(c_rp), intent(inout), target :: dm_ao_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
-        type(c_funptr), intent(out) :: obj_func_oao_c_funptr, update_orbs_oao_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_oao_c_funptr, obj_func_oao_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(oao_settings_type_c), intent(in) :: settings_c
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr
         character(len=:), allocatable, target :: message
-        procedure(obj_func_c_type), pointer :: obj_func_oao_funptr
-        procedure(update_orbs_c_type), pointer :: update_orbs_oao_funptr
-        procedure(precond_c_type), pointer :: precond_oao_funptr
-        procedure(precond_pd_c_type), pointer :: precond_pd_oao_funptr
-        procedure(project_c_type), pointer :: project_oao_funptr
-        procedure(get_extra_trial_vectors_c_type), pointer :: &
-            get_extra_trial_vectors_oao_funptr
-
-        ! set global pointer to density matrix so that it can be accessed in the mock
-        ! orbital updating function
-        call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, [n_ao_c, n_ao_c, n_particle_c])
 
         ! closed-shell case
         if (n_particle_c == 1) then
@@ -139,22 +99,6 @@ contains
                 test_oao_factory_interface = .false.
             end if
 
-            ! set function pointers to mock to OAO mock functions and set solver
-            ! settings
-            obj_func_oao_c_funptr = c_funloc(mock_obj_func)
-            update_orbs_oao_c_funptr = c_funloc(mock_update_orbs_oao)
-            if (.not. solver_settings_c%initialized) &
-                solver_settings_c = default_solver_settings
-            solver_settings_c%precond = c_funloc(mock_precond)
-            solver_settings_c%precond_pd = c_funloc(mock_precond_pd)
-            solver_settings_c%project = c_funloc(mock_project)
-            solver_settings_c%get_extra_trial_vectors = &
-                c_funloc(mock_get_extra_trial_vectors)
-            solver_settings_c%stability_settings%precond = c_funloc(mock_precond)
-            solver_settings_c%stability_settings%project = c_funloc(mock_project)
-            solver_settings_c%stability_settings%get_extra_trial_vectors = &
-                c_funloc(mock_get_extra_trial_vectors)
-
         ! open-shell case
         else if (n_particle_c == 2) then
             ! check passed arrays
@@ -177,6 +121,16 @@ contains
             test_oao_factory_interface = .false.
 
         end if
+
+        ! mark the density matrix of the caller, which the factory receives in place,
+        ! check the passed solver settings and wire them, and set function pointers to
+        ! the mock functions of the level of the solver
+        dm_ao_c(:n_ao_c**2 * n_particle_c) = 2.0_c_rp
+        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
+                                              "oao_factory_py_interface")) &
+            test_oao_factory_interface = .false.
+        update_orbs_oao_c_funptr = c_funloc(mock_level_update_orbs)
+        obj_func_oao_c_funptr = c_funloc(mock_level_obj_func)
 
         ! set return arguments
         error_c = 0

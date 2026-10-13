@@ -33,6 +33,7 @@ from pyopentrustregion.extensions.common.python_interface import (
     UpdateOrbsPyInterface,
     attach_wired_callbacks,
     check_callback_arguments,
+    detach_python_callbacks,
 )
 from pyopentrustregion.extensions.mo.python_interface import (
     check_mo_coeff,
@@ -171,11 +172,11 @@ def arh_factory_mo(
     settings: ARHSettings,
     orbsym: Optional[Union[Sequence[int], np.ndarray]] = None,
 ) -> Tuple[
-    Callable[[np.ndarray], float],
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    Callable[[np.ndarray], float],
 ]:
     # check the MO irreps, MO coefficients and overlap matrix against the dimensions
     # and determine if closed-shell or open-shell formalism is used
@@ -216,6 +217,11 @@ def arh_factory_mo(
         exception,
     )
 
+    # the factory keeps calling the callback functions of the solver settings it wires,
+    # so those the solver built from the Python functions of the settings are removed
+    # first, the solver builds them anew
+    detach_python_callbacks(solver_settings)
+
     if not hasattr(lib, "arh_factory_mo"):
         raise RuntimeError(
             "Please reinstall the package with: "
@@ -232,16 +238,16 @@ def arh_factory_mo(
         c_int,
         c_int,
         arh_evaluate_dm_interface_type,
-        POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
+        POINTER(obj_func_interface_type),
         POINTER(SolverSettingsC),
         POINTER(ARHSettingsC),
         POINTER(c_int),
     ]
 
     # call Fortran function
-    obj_func_arh_funptr = obj_func_interface_type()
     update_orbs_arh_funptr = update_orbs_interface_type()
+    obj_func_arh_funptr = obj_func_interface_type()
     error = lib.arh_factory_mo(
         mo_coeff_ptr,
         ao_overlap_ptr,
@@ -250,8 +256,8 @@ def arh_factory_mo(
         n_ao,
         n_mo,
         evaluate_dm_interface,
-        byref(obj_func_arh_funptr),
         byref(update_orbs_arh_funptr),
+        byref(obj_func_arh_funptr),
         byref(solver_settings.settings_c),
         byref(settings.settings_c),
         orbsym_c,
@@ -270,13 +276,9 @@ def arh_factory_mo(
     # attach the routines the factory has wired into the solver settings
     attach_wired_callbacks(solver_settings, exception)
 
+    # the returned functions are called with the context the factory has written into
+    # the solver settings, through which they reach the object
     return (
-        ObjFuncMOPyInterface(
-            obj_func_funptr=obj_func_arh_funptr,
-            evaluate_dm_interface=evaluate_dm_interface,
-            _otr_exception=exception,
-            mo_coeff_buffer=mo_coeff_buffer,
-        ),
         UpdateOrbsMOPyInterface(
             update_orbs_funptr=update_orbs_arh_funptr,
             _otr_exception=exception,
@@ -286,6 +288,14 @@ def arh_factory_mo(
             },
             mo_coeff=None if in_place else mo_coeff,
             mo_coeff_buffer=None if in_place else mo_coeff_buffer,
+            context=solver_settings.settings_c.context,
+        ),
+        ObjFuncMOPyInterface(
+            obj_func_funptr=obj_func_arh_funptr,
+            saved_objects={"evaluate_dm_interface": evaluate_dm_interface},
+            _otr_exception=exception,
+            mo_coeff_buffer=mo_coeff_buffer,
+            context=solver_settings.settings_c.context,
         ),
     )
 
@@ -299,11 +309,11 @@ def arh_factory_oao(
     solver_settings: SolverSettings,
     settings: ARHSettings,
 ) -> Tuple[
-    Callable[[np.ndarray], float],
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    Callable[[np.ndarray], float],
 ]:
     # check the density and overlap matrices against the dimensions and determine if
     # closed-shell or open-shell formalism is used
@@ -341,6 +351,11 @@ def arh_factory_oao(
         exception,
     )
 
+    # the factory keeps calling the callback functions of the solver settings it wires,
+    # so those the solver built from the Python functions of the settings are removed
+    # first, the solver builds them anew
+    detach_python_callbacks(solver_settings)
+
     if not hasattr(lib, "arh_factory_oao"):
         raise RuntimeError(
             "Please reinstall the package with: "
@@ -355,23 +370,23 @@ def arh_factory_oao(
         c_int,
         c_int,
         arh_evaluate_dm_interface_type,
-        POINTER(obj_func_interface_type),
         POINTER(update_orbs_interface_type),
+        POINTER(obj_func_interface_type),
         POINTER(SolverSettingsC),
         POINTER(ARHSettingsC),
     ]
 
     # call Fortran function
-    obj_func_arh_funptr = obj_func_interface_type()
     update_orbs_arh_funptr = update_orbs_interface_type()
+    obj_func_arh_funptr = obj_func_interface_type()
     error = lib.arh_factory_oao(
         dm_ao_ptr,
         ao_overlap_ptr,
         n_particle,
         n_ao,
         evaluate_dm_interface,
-        byref(obj_func_arh_funptr),
         byref(update_orbs_arh_funptr),
+        byref(obj_func_arh_funptr),
         byref(solver_settings.settings_c),
         byref(settings.settings_c),
     )
@@ -389,18 +404,22 @@ def arh_factory_oao(
     # attach the routines the factory has wired into the solver settings
     attach_wired_callbacks(solver_settings, exception)
 
+    # the returned functions are called with the context the factory has written into
+    # the solver settings, through which they reach the object
     return (
-        ObjFuncPyInterface(
-            obj_func_funptr=obj_func_arh_funptr,
-            evaluate_dm_interface=evaluate_dm_interface,
-            _otr_exception=exception,
-        ),
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_arh_funptr,
             _otr_exception=exception,
             saved_objects={
                 "evaluate_dm_interface": evaluate_dm_interface,
             },
+            context=solver_settings.settings_c.context,
+        ),
+        ObjFuncPyInterface(
+            obj_func_funptr=obj_func_arh_funptr,
+            saved_objects={"evaluate_dm_interface": evaluate_dm_interface},
+            _otr_exception=exception,
+            context=solver_settings.settings_c.context,
         ),
     )
 
@@ -413,11 +432,11 @@ arh_factory_signatures = (
 
 
 def arh_factory(*args: Any, **kwargs: Any) -> Tuple[
-    Callable[[np.ndarray], float],
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    Callable[[np.ndarray], float],
 ]:
     # select the orbital basis from the arguments, like the generic arh_factory of the
     # Fortran interface: the arguments of arh_factory_oao (an AO density matrix) select

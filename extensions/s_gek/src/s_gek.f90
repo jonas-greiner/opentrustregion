@@ -7,6 +7,7 @@
 module otr_s_gek
 
     use opentrustregion, only: rp, ip, pi, settings_type, update_orbs_type, hess_x_type
+    use otr_common, only: extension_type, provided_roles_type
 
     implicit none
 
@@ -40,17 +41,19 @@ module otr_s_gek
         "S-GEK settings were not initialized. All S-GEK settings are set to "// &
         "default values"
 
-    type :: s_gek_type
+    type, extends(extension_type) :: s_gek_type
         real(rp), allocatable :: kappa_list(:, :), disp_list(:, :), obj_func_list(:), &
                                  grad_list(:, :), local_grad_list(:, :), y_list(:, :), &
                                  h_diag(:), char_length(:), transform_matrix(:, :), &
                                  kriging_weights(:), hess(:, :), subspace(:, :), &
                                  actual_disp_list(:, :), actual_grad_list(:, :), &
                                  actual_hess_approx(:, :), actual_trans_kappa_list(:, :)
-        integer(ip) :: n_points, n_param, n_covariance, n_space
+        integer(ip) :: n_points, n_covariance, n_space
         real(rp) :: loosen_factor
         type(s_gek_settings_type) :: settings
     contains
+        procedure :: update_orbs => update_orbs_s_gek
+        procedure :: hess_x => hess_x_s_gek
         procedure :: init => init_s_gek
         procedure :: add => add_s_gek
         procedure :: clear => clear_s_gek
@@ -60,9 +63,7 @@ module otr_s_gek
     end type
 
     ! global variables
-    type(s_gek_type) :: s_gek_object
-    procedure(update_orbs_type), pointer :: update_orbs_orig_funptr => null()
-    procedure(hess_x_type), pointer :: hess_x_s_gek_funptr => null()
+    type(s_gek_type), target :: s_gek_object
     procedure(change_reference_type), pointer :: change_reference_funptr => null()
 
     ! bias
@@ -76,30 +77,38 @@ module otr_s_gek
                            angle_upper_thres = cos(20.0_rp * pi / 180.0_rp), &
                            loosen_step = 0.5_rp * (1.0_rp + sqrt(5.0_rp))
 
-    ! create function pointers to ensure that routines comply with interface
-    procedure(update_orbs_type), pointer :: update_orbs_s_gek_ptr => update_orbs_s_gek
-
 contains
 
-    subroutine s_gek_factory(update_orbs_funptr_in, change_reference_funptr_in, &
-                             n_param, error, settings, update_orbs_s_gek_funptr)
+    subroutine s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                             change_reference_funptr_in, update_orbs_s_gek_funptr, &
+                             obj_func_s_gek_funptr, solver_settings, error, settings)
         !
-        ! this subroutine returns a modified S-GEK orbital updating function
+        ! this subroutine returns the S-GEK orbital updating function, which wraps the
+        ! host's, and the objective function, and wires the solver settings with the
+        ! S-GEK object, through which the host's callback functions keep receiving the
+        ! host context
         !
-        use opentrustregion, only: warn_uninitialized_settings
+        use opentrustregion, only: solver_settings_type, obj_func_type, &
+                                   warn_uninitialized_settings
+        use otr_common, only: update_orbs_callback, obj_func_callback
 
-        procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr_in
+        integer(ip), intent(in) :: n_param
+        procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
+        procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         procedure(change_reference_type), intent(in), pointer :: &
             change_reference_funptr_in
-        integer(ip), intent(in) :: n_param
+        procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_s_gek_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(s_gek_settings_type), intent(in) :: settings
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
 
         type(s_gek_settings_type) :: local_settings
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_s_gek_funptr => null()
+        obj_func_s_gek_funptr => null()
 
         ! work on a copy of the settings, which is initialized if they were not, after
         ! printing a warning regardless of the verbosity, since the default settings
@@ -112,31 +121,39 @@ contains
             if (error /= 0) return
         end if
 
-        ! set settings
-        s_gek_object%settings = local_settings
+        ! refuse solver settings the object already wired before changing any state
+        call s_gek_object%check_unwired(solver_settings, local_settings, error)
+        if (error /= 0) return
 
-        ! set pointer to original orbital updating function
-        update_orbs_orig_funptr => update_orbs_funptr_in
+        ! initialize the object
+        call s_gek_object%init(n_param, local_settings)
+
+        ! wire the solver settings with the object, which saves the host's orbital
+        ! update, objective function, callback functions and host contexts
+        call s_gek_object%wire_solver_settings(solver_settings, local_settings, error, &
+                                               update_orbs_funptr, obj_func_funptr)
+        if (error /= 0) return
 
         ! set pointer to change of reference function
         change_reference_funptr => change_reference_funptr_in
 
-        ! get pointer to modified orbital updating function
-        update_orbs_s_gek_funptr => update_orbs_s_gek
-
-        ! get Hessian linear transformation function
-        hess_x_s_gek_funptr => hess_x_s_gek
-
-        ! initialize S-GEK object
-        call s_gek_object%init(n_param)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_s_gek_funptr => update_orbs_callback
+        obj_func_s_gek_funptr => obj_func_callback
 
     end subroutine s_gek_factory
 
-    subroutine update_orbs_s_gek(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 context)
+    subroutine update_orbs_s_gek(self, kappa, func, grad, h_diag, hess_x_funptr, &
+                                 error, context)
         !
-        ! this subroutine is a modified S-GEK orbital updating function
+        ! this subroutine is the S-GEK orbital updating function, which updates the
+        ! orbitals with the host's orbital update and host context, replaces the
+        ! Hessian linear transformation the host returns by the S-GEK one and adds the
+        ! new point to the history
         !
+        use otr_common, only: hess_x_callback
+
+        class(s_gek_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -150,20 +167,40 @@ contains
         error = 0
 
         ! update orbitals
-        call update_orbs_orig_funptr(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     context)
+        call self%solver_level%host%update_orbs(kappa, func, grad, h_diag, &
+                                                hess_x_funptr, error, &
+                                                self%solver_level%host%context)
         if (error /= 0) return
 
-        ! get pointer to modified Hessian linear transformation function
-        hess_x_funptr => hess_x_s_gek_funptr
+        ! get pointer to the S-GEK Hessian linear transformation of the object
+        hess_x_funptr => hess_x_callback
 
         ! add new step
         if (sum(abs(kappa)) > 0.0_rp) then
-            call s_gek_object%add(kappa, func, grad, h_diag, error)
+            call self%add(kappa, func, grad, h_diag, error)
             if (error /= 0) return
         end if
 
     end subroutine update_orbs_s_gek
+
+    subroutine hess_x_s_gek(self, x, hess_x, error, context)
+        !
+        ! this subroutine is the S-GEK Hessian linear transformation of the object
+        !
+        class(s_gek_type), intent(inout) :: self
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(*), pointer :: no_context
+
+        ! the S-GEK Hessian linear transformation reads the S-GEK object and needs no
+        ! context
+        no_context => null()
+        call s_gek_hess_x_fun(x, hess_x, error, no_context)
+
+    end subroutine hess_x_s_gek
 
     subroutine init_s_gek_settings(self, error)
         !
@@ -199,15 +236,21 @@ contains
 
     end subroutine update_orbs_s_gek_deconstructor
 
-    subroutine init_s_gek(self, n_param)
+    subroutine init_s_gek(self, n_param, settings)
         !
-        ! this subroutine initializes the S-GEK object
+        ! this subroutine initializes the S-GEK object with the given settings
         !
         class(s_gek_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
+        type(s_gek_settings_type), intent(in) :: settings
 
         ! start from an empty object so that nothing of an earlier setup survives
         call self%clear()
+
+        ! set the roles the object performs itself, the orbital update and the Hessian
+        ! linear transformation, and the settings
+        self%provides = provided_roles_type(update_orbs=.true., hess_x=.true.)
+        self%settings = settings
 
         ! initialize dimensions
         self%n_points = 0
@@ -522,7 +565,7 @@ contains
 
     end subroutine clear_s_gek
 
-    subroutine hess_x_s_gek(x, hess_x, error, context)
+    subroutine s_gek_hess_x_fun(x, hess_x, error, context)
         !
         ! this subroutine is a modified S-GEK Hessian linear transformation function
         !
@@ -567,7 +610,7 @@ contains
 
         deallocate(actual_x, actual_hess_x)
 
-    end subroutine hess_x_s_gek
+    end subroutine s_gek_hess_x_fun
 
     subroutine setup_kriging(self, kappa_list, grad_list, obj_func_list, &
                              approx_hessian, error)

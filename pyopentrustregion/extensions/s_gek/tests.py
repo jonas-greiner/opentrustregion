@@ -25,11 +25,15 @@ from pyopentrustregion.tests import (
     print_separator,
     LegacyPyInterfaceHelpers,
 )
-from pyopentrustregion.python_interface import c_real, c_int
+from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
 from pyopentrustregion.extensions.s_gek import (
     SGEKSettings,
     s_gek_factory,
     update_orbs_s_gek_deconstructor,
+)
+from pyopentrustregion.extensions.common.tests import (
+    setup_wired_solver_settings,
+    check_wired_solver_settings,
 )
 
 if NUMPY_AVAILABLE:
@@ -43,10 +47,8 @@ fortran_tests = {
         "assign_s_gek_c_f",
         "assign_s_gek_f_c",
         "change_reference_f_wrapper",
-        "hess_x_s_gek_c_wrapper",
         "init_s_gek_settings_c",
         "s_gek_factory_c_wrapper",
-        "update_orbs_s_gek_c_wrapper",
         "update_orbs_s_gek_deconstructor_c_wrapper",
     ],
 }
@@ -119,6 +121,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
 
     mock_update_orbs = LegacyPyInterfaceHelpers.mock_update_orbs
     mock_hess_x = LegacyPyInterfaceHelpers.mock_hess_x
+    mock_obj_func = LegacyPyInterfaceHelpers.mock_obj_func
 
     def mock_change_reference(self, new_ref, kappa_list, local_grad_list, grad_list):
         """
@@ -148,16 +151,22 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         # initialize test flag
         test_passed = True
 
-        # initialize settings object
+        # initialize settings objects
         settings = SGEKSettings()
         self.assign_ref_to_settings(settings)
+        solver_settings, python_functions = setup_wired_solver_settings()
 
         # initialize logging boolean
         self.test_logger = True
 
         # call S-GEK orbital updating factory python interface
-        update_orbs_s_gek = s_gek_factory(
-            self.mock_update_orbs, self.mock_change_reference, n_param, settings
+        update_orbs_s_gek, obj_func_s_gek = s_gek_factory(
+            n_param,
+            self.mock_update_orbs,
+            self.mock_obj_func,
+            self.mock_change_reference,
+            solver_settings,
+            settings,
         )
 
         # check if logger was called correctly
@@ -231,14 +240,39 @@ class SGEKPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        # call returned objective function
+        try:
+            func = obj_func_s_gek(kappa)
+        except RuntimeError:
+            print(
+                " test_s_gek_factory_py_interface failed: Returned objective "
+                "function raises error."
+            )
+            test_passed = False
+        else:
+            if func != 3.0:
+                print(
+                    " test_s_gek_factory_py_interface failed: Returned function value "
+                    "of returned objective function wrong."
+                )
+                test_passed = False
+
+        # check the solver settings the factory wired
+        if not check_wired_solver_settings(
+            solver_settings, python_functions, "s_gek_factory_py_interface"
+        ):
+            test_passed = False
+
         # call s_gek_factory python interface for a host callback which cannot be
         # called with the arguments the C interface passes, which has to raise an error
         # before the Fortran factory is called
         try:
             s_gek_factory(
-                self.mock_update_orbs,
-                lambda new_ref, kappa_list, local_grad_list: None,
                 n_param,
+                self.mock_update_orbs,
+                self.mock_obj_func,
+                lambda new_ref, kappa_list, local_grad_list: None,
+                SolverSettings(),
                 settings,
             )
             print(

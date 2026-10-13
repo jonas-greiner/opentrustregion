@@ -561,9 +561,12 @@ contains
 
     end subroutine copy_state_to_c
 
-    subroutine update_orbs_f_wrapper(kappa, func, grad, h_diag, hess_x, error, context)
+    recursive subroutine update_orbs_f_wrapper(kappa, func, grad, h_diag, hess_x, &
+                                               error, context)
         !
-        ! this subroutine exposes a C-implemented orbital update function to Fortran
+        ! this subroutine exposes a C-implemented orbital update function to Fortran,
+        ! recursively since the orbital update of an extension object the solver calls
+        ! through it for C hosts can call the host's through it too
         !
         use opentrustregion, only: hess_x_type
 
@@ -1036,33 +1039,6 @@ contains
         deallocate(message_c)
 
     end subroutine logger_f_wrapper
-
-    subroutine warn_uninitialized_settings_c(logger_c_funptr, context_c, message)
-        !
-        ! this subroutine prints the warning that settings were not initialized through
-        ! a C logging function with the host context or on stderr without one,
-        ! regardless of the verbosity, since the default settings which replace
-        ! settings that were not initialized would silence it
-        !
-        use opentrustregion, only: stderr
-
-        type(c_funptr), intent(in) :: logger_c_funptr
-        type(c_ptr), intent(in) :: context_c
-        character(len=*), intent(in) :: message
-
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
-
-        if (c_associated(logger_c_funptr)) then
-            call c_f_procpointer(cptr=logger_c_funptr, fptr=callbacks%logger)
-            callbacks%host_context = context_c
-            context => callbacks
-            call logger_f_wrapper(" "//message, context)
-        else
-            write(stderr, '(A)') " "//message
-        end if
-
-    end subroutine warn_uninitialized_settings_c
 
     subroutine init_solver_settings_c(settings) bind(C, name="init_solver_settings")
         !

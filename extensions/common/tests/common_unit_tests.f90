@@ -13,10 +13,6 @@ module otr_common_unit_tests
 
     implicit none
 
-    ! name of the mock host callback function which the roles of an extension forwarded
-    ! to last
-    character(len=40) :: host_called = ""
-
     ! names of the levels of an extension object, that of the solver and that of its
     ! stability check
     character(len=15), parameter :: level_names(2) = &
@@ -43,16 +39,23 @@ module otr_common_unit_tests
     real(rp), parameter :: mock_response_factor = 2.0_rp
 
     ! mock extension for testing the routines which dispatch to an extension object:
-    ! its orbital update and Hessian linear transformation record their name and return
-    ! the results of the shared mocks with the error code the test sets, and the
-    ! orbital update returns no Hessian linear transformation if the test disables it
+    ! its roles record their name and the context they received and return what the
+    ! shared mocks of the host's callback functions return, computed here, since these
+    ! record a call of the host, with the error code the test sets, and the orbital
+    ! update returns no Hessian linear transformation if the test disables it
     type, extends(extension_type) :: mock_extension_type
         character(len=40) :: called_role = ""
+        class(*), pointer :: role_context => null()
         logical :: return_hess_x = .true.
         integer(ip) :: mock_error = 0
     contains
         procedure :: update_orbs => update_orbs_mock_extension
+        procedure :: obj_func => obj_func_mock_extension
         procedure :: hess_x => hess_x_mock_extension
+        procedure :: precond => precond_mock_extension
+        procedure :: precond_pd => precond_pd_mock_extension
+        procedure :: project => project_mock_extension
+        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_mock_extension
     end type
 
     ! mock orbital basis for testing the operations every orbital basis shares, such as
@@ -63,45 +66,23 @@ module otr_common_unit_tests
     type, extends(orbital_basis_type) :: mock_orbital_basis_type
         real(rp), allocatable :: eigvecs(:, :), eigval_pairs(:), static_eigval_pairs(:)
     contains
+        procedure :: update_orbs => mock_basis_update_orbs
+        procedure :: hess_x => mock_basis_hess_x
         procedure :: rotate_orbitals => mock_rotate_orbitals
         procedure :: calculate_grad_h_diag => mock_calculate_grad_h_diag
         procedure :: refresh_hess_eigen => mock_refresh_hess_eigen
         procedure :: rotate_to_hess_eigenbasis => mock_rotate_to_hess_eigenbasis
         procedure :: rotate_from_hess_eigenbasis => mock_rotate_from_hess_eigenbasis
         procedure :: get_hess_eigval_pairs => mock_get_hess_eigval_pairs
-        procedure :: get_extra_trial_vectors => mock_get_extra_trial_vectors
     end type
 
 contains
 
-    function record_host_call(name, context) result(error)
+    subroutine mock_host_update_orbs_no_hess_x(kappa, func, grad, h_diag, &
+                                               hess_x_funptr, error, context)
         !
-        ! this function records the call of a mock host callback function, checks the
-        ! host context it received and returns the error code the test set in it
-        !
-        use test_reference, only: host_context_type, check_host_context
-
-        character(len=*), intent(in) :: name
-        class(*), intent(in), pointer :: context
-        integer(ip) :: error
-
-        host_called = name
-        call check_host_context(context)
-        error = 0
-        if (associated(context)) then
-            select type (context)
-            class is (host_context_type)
-                error = int(context%mock_error, kind=ip)
-            end select
-        end if
-
-    end function record_host_call
-
-    subroutine mock_host_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     context)
-        !
-        ! this subroutine is a mock host orbital update function, which records its
-        ! call in addition to the shared mock
+        ! this subroutine is a mock host orbital update function which returns no
+        ! Hessian linear transformation
         !
         use opentrustregion, only: hess_x_type
         use otr_common_mock, only: mock_update_orbs
@@ -114,50 +95,17 @@ contains
         class(*), intent(in), pointer :: context
 
         call mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, context)
-        error = record_host_call("update_orbs", context)
+        hess_x_funptr => null()
 
-    end subroutine mock_host_update_orbs
+    end subroutine mock_host_update_orbs_no_hess_x
 
-    function mock_host_obj_func(kappa, error, context) result(func)
+    subroutine mock_host_stability_precond(residual, mu, precond_residual, error, &
+                                           context)
         !
-        ! this function is a mock host objective function, which records its call in
-        ! addition to the shared mock
+        ! this subroutine is a mock host level-shifted preconditioner of the stability
+        ! check, which behaves like the solver's but is a different function
         !
-        use otr_common_mock, only: mock_obj_func
-
-        real(rp), intent(in), target :: kappa(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        func = mock_obj_func(kappa, error, context)
-        error = record_host_call("obj_func", context)
-
-    end function mock_host_obj_func
-
-    subroutine mock_host_hess_x(x, hess_x, error, context)
-        !
-        ! this subroutine is a mock host Hessian linear transformation, which records
-        ! its call in addition to the shared mock
-        !
-        use otr_common_mock, only: mock_hess_x
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call mock_hess_x(x, hess_x, error, context)
-        error = record_host_call("hess_x", context)
-
-    end subroutine mock_host_hess_x
-
-    subroutine mock_host_precond(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine is a mock host level-shifted preconditioner of the solver,
-        ! which records its call in addition to the shared mock
-        !
-        use otr_common_mock, only: mock_precond
+        use otr_common_mock, only: mock_precond, host_called
 
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -166,48 +114,16 @@ contains
         class(*), intent(in), pointer :: context
 
         call mock_precond(residual, mu, precond_residual, error, context)
-        error = record_host_call("precond", context)
-
-    end subroutine mock_host_precond
-
-    subroutine mock_host_stability_precond(residual, mu, precond_residual, error, &
-                                           context)
-        !
-        ! this subroutine is a mock host level-shifted preconditioner of the stability
-        ! check, which behaves like the solver's but is a different function
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call mock_host_precond(residual, mu, precond_residual, error, context)
         host_called = "stability_precond"
 
     end subroutine mock_host_stability_precond
-
-    subroutine mock_host_precond_pd(residual, precond_residual, error, context)
-        !
-        ! this subroutine is a mock host positive-definite preconditioner, which
-        ! records its call in addition to the shared mock
-        !
-        use otr_common_mock, only: mock_precond_pd
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call mock_precond_pd(residual, precond_residual, error, context)
-        error = record_host_call("precond_pd", context)
-
-    end subroutine mock_host_precond_pd
 
     subroutine mock_host_project(vector, error, context)
         !
         ! this subroutine is a mock host projection of the solver
         !
+        use otr_common_mock, only: record_host_call
+
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -222,6 +138,8 @@ contains
         ! this subroutine is a mock host projection of the stability check, which
         ! behaves like the solver's but is a different function
         !
+        use otr_common_mock, only: host_called
+
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -231,34 +149,19 @@ contains
 
     end subroutine mock_host_stability_project
 
-    subroutine mock_host_get_extra_trial_vectors(trial_vectors, error, context)
-        !
-        ! this subroutine is a mock host extra trial vector function of the solver,
-        ! which records its call in addition to the shared mock
-        !
-        use otr_common_mock, only: &
-            shared_mock_get_extra_trial_vectors => mock_get_extra_trial_vectors
-
-        real(rp), intent(out), target :: trial_vectors(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call shared_mock_get_extra_trial_vectors(trial_vectors, error, context)
-        error = record_host_call("get_extra_trial_vectors", context)
-
-    end subroutine mock_host_get_extra_trial_vectors
-
     subroutine mock_host_stability_get_extra_trial_vectors(trial_vectors, error, &
                                                            context)
         !
         ! this subroutine is a mock host extra trial vector function of the stability
         ! check, which behaves like the solver's but is a different function
         !
+        use otr_common_mock, only: mock_get_extra_trial_vectors, host_called
+
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        call mock_host_get_extra_trial_vectors(trial_vectors, error, context)
+        call mock_get_extra_trial_vectors(trial_vectors, error, context)
         host_called = "stability_get_extra_trial_vectors"
 
     end subroutine mock_host_stability_get_extra_trial_vectors
@@ -267,6 +170,8 @@ contains
         !
         ! this function is a mock host convergence check of the solver
         !
+        use otr_common_mock, only: record_host_call
+
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
         logical :: converged
@@ -282,6 +187,8 @@ contains
         ! this function is a mock host convergence check of the stability check, which
         ! reports convergence for a positive eigenvalue
         !
+        use otr_common_mock, only: record_host_call
+
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: eigval
         integer(ip), intent(out) :: error
@@ -298,12 +205,14 @@ contains
         ! this subroutine is a mock host Hessian linear transformation of the stability
         ! check, which behaves like the solver's but is a different function
         !
+        use otr_common_mock, only: mock_hess_x, host_called
+
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        call mock_host_hess_x(x, hess_x, error, context)
+        call mock_hess_x(x, hess_x, error, context)
         host_called = "stability_hess_x"
 
     end subroutine mock_host_stability_hess_x
@@ -314,12 +223,14 @@ contains
         ! which behaves like the Hessian linear transformation but is a different
         ! function
         !
+        use otr_common_mock, only: mock_hess_x, host_called
+
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        call mock_host_hess_x(x, hess_x, error, context)
+        call mock_hess_x(x, hess_x, error, context)
         host_called = "approx_hess_x"
 
     end subroutine mock_host_approx_hess_x
@@ -330,6 +241,7 @@ contains
         ! the message to the log of the test context
         !
         use opentrustregion_unit_tests, only: logger
+        use otr_common_mock, only: host_called
 
         character(len=*), intent(in) :: message
         class(*), intent(in), pointer :: context
@@ -344,6 +256,8 @@ contains
         ! this subroutine is a mock host logging function of the stability check, which
         ! behaves like the solver's but is a different function
         !
+        use otr_common_mock, only: host_called
+
         character(len=*), intent(in) :: message
         class(*), intent(in), pointer :: context
 
@@ -353,14 +267,13 @@ contains
     end subroutine mock_host_stability_logger
 
     subroutine update_orbs_mock_extension(self, kappa, func, grad, h_diag, &
-                                          hess_x_funptr, error)
+                                          hess_x_funptr, error, context)
         !
         ! this subroutine is the orbital update of the mock extension, which records
-        ! its call in addition to the shared mock
+        ! its call and context and returns what the shared mock returns
         !
         use opentrustregion, only: hess_x_type
-        use otr_common_mock, only: mock_update_orbs
-        use test_reference, only: no_context
+        use otr_common_mock, only: mock_hess_x
 
         class(mock_extension_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
@@ -368,33 +281,138 @@ contains
         real(rp), intent(out), target :: grad(:), h_diag(:)
         procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         self%called_role = "update_orbs"
-        call mock_update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                              no_context)
+        self%role_context => context
+        func = sum(kappa)
+        grad = 2.0_rp * kappa
+        h_diag = 3.0_rp * kappa
+        hess_x_funptr => mock_hess_x
         if (.not. self%return_hess_x) hess_x_funptr => null()
         error = self%mock_error
 
     end subroutine update_orbs_mock_extension
 
-    subroutine hess_x_mock_extension(self, x, hess_x, error)
+    subroutine hess_x_mock_extension(self, x, hess_x, error, context)
         !
         ! this subroutine is the Hessian linear transformation of the mock extension,
-        ! which records its call in addition to the shared mock
+        ! which records its call and context and returns what the shared mock returns
         !
-        use otr_common_mock, only: mock_hess_x
-        use test_reference, only: no_context
 
         class(mock_extension_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         self%called_role = "hess_x"
-        call mock_hess_x(x, hess_x, error, no_context)
+        self%role_context => context
+        hess_x = 4.0_rp * x
         error = self%mock_error
 
     end subroutine hess_x_mock_extension
+
+    function obj_func_mock_extension(self, kappa, error, context) result(func)
+        !
+        ! this function is the objective function of the mock extension, which records
+        ! its call and context and returns what the shared mock returns
+        !
+
+        class(mock_extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: kappa(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        self%called_role = "obj_func"
+        self%role_context => context
+        func = sum(kappa)
+        error = self%mock_error
+
+    end function obj_func_mock_extension
+
+    subroutine precond_mock_extension(self, residual, mu, precond_residual, error, &
+                                      context)
+        !
+        ! this subroutine is the level-shifted preconditioner of the mock extension,
+        ! which records its call and context and returns what the shared mock returns
+        !
+
+        class(mock_extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(in) :: mu
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        self%called_role = "precond"
+        self%role_context => context
+        precond_residual = mu * residual
+        error = self%mock_error
+
+    end subroutine precond_mock_extension
+
+    subroutine precond_pd_mock_extension(self, residual, precond_residual, error, &
+                                         context)
+        !
+        ! this subroutine is the positive-definite preconditioner of the mock
+        ! extension, which records its call and context and returns the results of the
+        ! shared mock
+        !
+
+        class(mock_extension_type), intent(inout) :: self
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        self%called_role = "precond_pd"
+        self%role_context => context
+        precond_residual = 3.0_rp * residual
+        error = self%mock_error
+
+    end subroutine precond_pd_mock_extension
+
+    subroutine project_mock_extension(self, vector, error, context)
+        !
+        ! this subroutine is the projection of the mock extension, which records its
+        ! call and context and doubles the vector
+        !
+        class(mock_extension_type), intent(inout) :: self
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        self%called_role = "project"
+        self%role_context => context
+        vector = 2.0_rp * vector
+        error = self%mock_error
+
+    end subroutine project_mock_extension
+
+    subroutine get_extra_trial_vectors_mock_extension(self, trial_vectors, error, &
+                                                      context)
+        !
+        ! this subroutine is the extra trial vector function of the mock extension,
+        ! which records its call and context and returns what the shared mock returns
+        !
+
+        class(mock_extension_type), intent(inout) :: self
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        integer(ip) :: i
+
+        self%called_role = "get_extra_trial_vectors"
+        self%role_context => context
+        do i = 1, size(trial_vectors, 2)
+            trial_vectors(:, i) = real(i, kind=rp)
+        end do
+        error = self%mock_error
+
+    end subroutine get_extra_trial_vectors_mock_extension
 
     function mock_factor(factors) result(factor)
         !
@@ -571,6 +589,46 @@ contains
 
     end subroutine mock_evaluate_dm_failing_os
 
+    subroutine mock_basis_update_orbs(self, kappa, func, grad, h_diag, hess_x_funptr, &
+                                      error, context)
+        !
+        ! this subroutine is a mock of the orbital update of an orbital basis, which
+        ! updates nothing
+        !
+        use opentrustregion, only: hess_x_type
+
+        class(mock_orbital_basis_type), intent(inout) :: self
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        func = sum(kappa)
+        grad = 0.0_rp
+        h_diag = 0.0_rp
+        hess_x_funptr => null()
+        error = 0
+
+    end subroutine mock_basis_update_orbs
+
+    subroutine mock_basis_hess_x(self, x, hess_x, error, context)
+        !
+        ! this subroutine is a mock of the Hessian linear transformation of an orbital
+        ! basis, which returns the trial vector
+        !
+        class(mock_orbital_basis_type), intent(inout) :: self
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        hess_x = x
+        error = 0
+
+    end subroutine mock_basis_hess_x
+
     subroutine mock_rotate_orbitals(self, kappa, settings, error)
         !
         ! this subroutine is a mock of moving the orbitals, which does nothing
@@ -652,23 +710,6 @@ contains
         eigval_pairs = self%eigval_pairs
 
     end function mock_get_hess_eigval_pairs
-
-    subroutine mock_get_extra_trial_vectors(self, trial_vectors, settings, error)
-        !
-        ! this subroutine is a mock of returning extra trial vectors, which contributes
-        ! none
-        !
-        use opentrustregion, only: settings_type
-
-        class(mock_orbital_basis_type), intent(inout) :: self
-        real(rp), intent(out) :: trial_vectors(:, :)
-        class(settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
-
-        error = 0
-        trial_vectors = 0.0_rp
-
-    end subroutine mock_get_extra_trial_vectors
 
     function identity_matrix(n) result(matrix)
         !
@@ -765,6 +806,9 @@ contains
         ! to the wrong level is detected by the context it passes, and arms these
         !
         use opentrustregion_unit_tests, only: test_context_type
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func, mock_hess_x, &
+                                   mock_precond, mock_precond_pd, &
+                                   mock_get_extra_trial_vectors, host_called
         use test_reference, only: reset_host_context, n_param
 
         type(mock_extension_type), intent(out), target :: extension
@@ -775,12 +819,13 @@ contains
         extension%stability_level%extension => extension
         associate (host => extension%solver_level%host)
             host%context => context
-            host%update_orbs => mock_host_update_orbs
-            host%obj_func => mock_host_obj_func
-            host%precond => mock_host_precond
-            host%precond_pd => mock_host_precond_pd
+            host%update_orbs => mock_update_orbs
+            host%obj_func => mock_obj_func
+            host%hess_x => mock_hess_x
+            host%precond => mock_precond
+            host%precond_pd => mock_precond_pd
             host%project => mock_host_project
-            host%get_extra_trial_vectors => mock_host_get_extra_trial_vectors
+            host%get_extra_trial_vectors => mock_get_extra_trial_vectors
             host%conv_check => mock_host_conv_check
             host%stability_hess_x => mock_host_stability_hess_x
             host%approx_hess_x => mock_host_approx_hess_x
@@ -789,10 +834,11 @@ contains
         end associate
         associate (host => extension%stability_level%host)
             host%context => stability_context
-            host%update_orbs => mock_host_update_orbs
-            host%obj_func => mock_host_obj_func
+            host%update_orbs => mock_update_orbs
+            host%obj_func => mock_obj_func
+            host%hess_x => mock_hess_x
             host%precond => mock_host_stability_precond
-            host%precond_pd => mock_host_precond_pd
+            host%precond_pd => mock_precond_pd
             host%project => mock_host_stability_project
             host%get_extra_trial_vectors => mock_host_stability_get_extra_trial_vectors
             host%conv_check => mock_host_conv_check
@@ -851,30 +897,43 @@ contains
 
     end subroutine setup_mock_orbital_basis
 
-    logical function check_forwarded(test_name, i_level, host_callback, contexts)
+    logical function check_forwarded(test_name, i_level, host_callback, contexts, &
+                                     case_name)
         !
         ! this function checks that a callback function called with the given level of
         ! an extension forwarded to the given mock host callback function with the host
-        ! context of that level and not with that of the other level
+        ! context of that level and not with that of the other level, naming the case
+        ! instead of the level if one is given
         !
         use opentrustregion_unit_tests, only: test_context_type
+        use otr_common_mock, only: host_called
         use test_reference, only: host_context_reached
 
         character(len=*), intent(in) :: test_name, host_callback
         integer(ip), intent(in) :: i_level
         type(test_context_type), intent(in) :: contexts(2)
+        character(len=*), intent(in), optional :: case_name
+
+        character(len=:), allocatable :: for_case
 
         ! assume tests pass
         check_forwarded = .true.
 
+        ! name the case in the messages
+        if (present(case_name)) then
+            for_case = case_name
+        else
+            for_case = "the "//trim(level_names(i_level))
+        end if
+
         if (host_called /= host_callback) then
-            write(stderr, *) "test_"//test_name//" failed: Forwarded to wrong host "// &
-                "callback function for the "//trim(level_names(i_level))//"."
+            write(stderr, *) "test_"//test_name// &
+                " failed: Forwarded to wrong host callback function for "//for_case//"."
             check_forwarded = .false.
         end if
         if (contexts(3 - i_level)%n_calls /= 0) then
             write(stderr, *) "test_"//test_name//" failed: Forwarded with host "// &
-                "context of the other level for the "//trim(level_names(i_level))//"."
+                "context of the other level for "//for_case//"."
             check_forwarded = .false.
         end if
         if (.not. host_context_reached(test_name, contexts(i_level))) &
@@ -882,20 +941,36 @@ contains
 
     end function check_forwarded
 
-    logical function check_role_called(test_name, extension, role)
+    logical function check_role_called(test_name, extension, role, context, case_name)
         !
-        ! this function checks that the given role of the mock extension was called
+        ! this function checks that the given role of the mock extension was called,
+        ! with the given context if one is given, naming the case if one is given
         !
         character(len=*), intent(in) :: test_name, role
         type(mock_extension_type), intent(in) :: extension
+        class(*), intent(in), pointer, optional :: context
+        character(len=*), intent(in), optional :: case_name
+
+        character(len=:), allocatable :: for_case
 
         ! assume tests pass
         check_role_called = .true.
 
+        ! name the case in the messages
+        for_case = ""
+        if (present(case_name)) for_case = " for "//case_name
+
         if (extension%called_role /= role) then
             write(stderr, *) "test_"//test_name//" failed: Role "//role// &
-                " of the extension object not called."
+                " of the extension object not called"//for_case//"."
             check_role_called = .false.
+        end if
+        if (present(context)) then
+            if (.not. associated(extension%role_context, context)) then
+                write(stderr, *) "test_"//test_name//" failed: Role "//role//" of "// &
+                    "the extension object called with the wrong context"//for_case//"."
+                check_role_called = .false.
+            end if
         end if
 
     end function check_role_called
@@ -933,6 +1008,68 @@ contains
 
     end function test_init_orbital_settings
 
+    logical(c_bool) function test_check_unwired_extension() bind(C)
+        !
+        ! this function tests the subroutine which produces an error for solver
+        ! settings an extension already wired
+        !
+        use opentrustregion, only: solver_settings_type
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use otr_common, only: orbital_settings_type
+
+        type(mock_extension_type), target :: extension
+        type(solver_settings_type) :: solver_settings
+        type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context, log_context
+        integer(ip) :: error, i_case
+        character(len=15), parameter :: case_names(2) = &
+            [character(len=15) :: "solver settings", "nested settings"]
+
+        ! assume tests pass
+        test_check_unwired_extension = .true.
+
+        ! check solver settings whose solver and nested settings hold the host context,
+        ! which have to be accepted without an error message
+        call setup_settings(settings)
+        call setup_error_logging(settings, log_context)
+        call setup_settings(solver_settings)
+        solver_settings%context => context
+        solver_settings%stability_settings%context => context
+        call extension%check_unwired(solver_settings, settings, error)
+        if (error /= 0 .or. log_context%log_message /= "") then
+            write(stderr, *) "test_check_unwired_extension failed: Solver settings "// &
+                "not wired by the extension refused."
+            test_check_unwired_extension = .false.
+        end if
+
+        ! check solver settings whose solver or nested settings the extension wired,
+        ! which have to be refused with an error message
+        do i_case = 1, size(case_names)
+            log_context%log_message = ""
+            solver_settings%context => context
+            solver_settings%stability_settings%context => context
+            if (i_case == 1) then
+                solver_settings%context => extension%solver_level
+            else
+                solver_settings%stability_settings%context => extension%stability_level
+            end if
+            call extension%check_unwired(solver_settings, settings, error)
+            if (error == 0) then
+                write(stderr, *) "test_check_unwired_extension failed: No error "// &
+                    "returned for "//case_names(i_case)//" wired by the extension."
+                test_check_unwired_extension = .false.
+            end if
+            if (log_context%log_message == "") then
+                write(stderr, *) "test_check_unwired_extension failed: No error "// &
+                    "message printed for "//case_names(i_case)// &
+                    " wired by the extension."
+                test_check_unwired_extension = .false.
+            end if
+        end do
+
+    end function test_check_unwired_extension
+
     logical(c_bool) function test_wire_solver_settings_extension() bind(C)
         !
         ! this function tests the subroutine which saves the host's callback functions
@@ -945,12 +1082,14 @@ contains
             settings_uninitialized_warning_msg
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
-        use otr_common, only: orbital_settings_type, host_record_type, &
-                              precond_callback, precond_pd_callback, project_callback, &
-                              get_extra_trial_vectors_callback, &
-                              stability_hess_x_callback, approx_hess_x_callback, &
-                              conv_check_stability_callback, logger_callback
+        use otr_common, only: &
+            orbital_settings_type, host_record_type, provided_roles_type, &
+            precond_callback, precond_pd_callback, project_callback, &
+            get_extra_trial_vectors_callback, stability_hess_x_callback, &
+            approx_hess_x_callback, conv_check_stability_callback, logger_callback
         use otr_common_test_reference, only: same_callbacks
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func, mock_precond, &
+                                   mock_precond_pd, mock_get_extra_trial_vectors
 
         type(mock_extension_type), target :: extension
         type(solver_settings_type) :: solver_settings, expected_settings
@@ -976,16 +1115,16 @@ contains
         ! set up the settings of the extension and the host's orbital update and
         ! objective function
         call setup_settings(settings)
-        update_orbs_funptr => mock_host_update_orbs
-        obj_func_funptr => mock_host_obj_func
+        update_orbs_funptr => mock_update_orbs
+        obj_func_funptr => mock_obj_func
 
         ! the host record of the solver has to hold the host's callback functions, of
         ! which the convergence check is unset
         expected_host = host_record_type( &
-            update_orbs=mock_host_update_orbs, obj_func=mock_host_obj_func, &
-            precond=mock_host_precond, precond_pd=mock_host_precond_pd, &
+            update_orbs=mock_update_orbs, obj_func=mock_obj_func, &
+            precond=mock_precond, precond_pd=mock_precond_pd, &
             project=mock_host_project, &
-            get_extra_trial_vectors=mock_host_get_extra_trial_vectors, &
+            get_extra_trial_vectors=mock_get_extra_trial_vectors, &
             stability_hess_x=mock_host_stability_hess_x, logger=mock_host_logger)
 
         ! wire solver settings that leave their convergence check unset and whose
@@ -1040,14 +1179,14 @@ contains
             else
                 expected_stability_context => context
                 expected_stability_host = host_record_type( &
-                    precond=mock_host_precond, project=mock_host_project, &
+                    precond=mock_precond, project=mock_host_project, &
                     stability_hess_x=mock_host_stability_hess_x, &
                     logger=mock_host_logger)
             end if
 
             ! wire the settings
-            call extension%wire_solver_settings(update_orbs_funptr, obj_func_funptr, &
-                                                solver_settings, settings, error)
+            call extension%wire_solver_settings(solver_settings, settings, error, &
+                                                update_orbs_funptr, obj_func_funptr)
             if (error /= 0) then
                 write(stderr, *) "test_wire_solver_settings_extension failed: "// &
                     "Produced error "//trim(case_names(i_case))//"."
@@ -1099,8 +1238,8 @@ contains
         ! functions or context is saved and no role is wired
         call setup_host_solver_settings()
         solver_settings%initialized = .false.
-        call extension%wire_solver_settings(update_orbs_funptr, obj_func_funptr, &
-                                            solver_settings, settings, error)
+        call extension%wire_solver_settings(solver_settings, settings, error, &
+                                            update_orbs_funptr, obj_func_funptr)
         if (index(context%log_message, " "//settings_uninitialized_warning_msg) == 0) &
             then
             write(stderr, *) "test_wire_solver_settings_extension failed: No "// &
@@ -1112,10 +1251,46 @@ contains
             .not. associated(solver_settings%context, extension%solver_level) .or. &
             associated(solver_settings%stability_settings%context) .or. &
             .not. same_callbacks(extension%solver_level%host, host_record_type( &
-                update_orbs=mock_host_update_orbs, obj_func=mock_host_obj_func)) .or. &
+                update_orbs=mock_update_orbs, obj_func=mock_obj_func)) .or. &
             associated(extension%solver_level%host%context)) then
             write(stderr, *) "test_wire_solver_settings_extension failed: Solver "// &
                 "settings that were not initialized wired wrong."
+            test_wire_solver_settings_extension = .false.
+        end if
+
+        ! wire solver settings without callback functions or context for an object
+        ! which performs the preconditioners, the projection and the extra trial
+        ! vectors itself and wraps no orbital update or objective function of the host,
+        ! into which the role callback functions of these roles have to be wired
+        ! nonetheless, also into the nested settings with the level of the stability
+        ! check, since the stability check does not inherit the extra trial vectors,
+        ! while the host records stay empty
+        call solver_settings%init(error)
+        extension%provides = provided_roles_type(precond=.true., precond_pd=.true., &
+                                                 project=.true., &
+                                                 get_extra_trial_vectors=.true.)
+        call extension%wire_solver_settings(solver_settings, settings, error)
+        extension%provides = provided_roles_type()
+        expected_settings = default_solver_settings
+        expected_settings%precond => precond_callback
+        expected_settings%precond_pd => precond_pd_callback
+        expected_settings%project => project_callback
+        expected_settings%get_extra_trial_vectors => get_extra_trial_vectors_callback
+        associate (nested => expected_settings%stability_settings)
+            nested%precond => precond_callback
+            nested%project => project_callback
+            nested%get_extra_trial_vectors => get_extra_trial_vectors_callback
+        end associate
+        if (error /= 0 .or. &
+            .not. same_callbacks(solver_settings, expected_settings) .or. &
+            .not. associated(solver_settings%context, extension%solver_level) .or. &
+            .not. associated(solver_settings%stability_settings%context, &
+                             extension%stability_level) .or. &
+            .not. same_callbacks(extension%solver_level%host, host_record_type()) .or. &
+            .not. same_callbacks(extension%stability_level%host, host_record_type())) &
+            then
+            write(stderr, *) "test_wire_solver_settings_extension failed: Settings "// &
+                "wired wrong for an object performing roles itself."
             test_wire_solver_settings_extension = .false.
         end if
 
@@ -1153,9 +1328,8 @@ contains
                     expected_stability_settings%conv_check => &
                         conv_check_stability_callback
                 end select
-                call extension%wire_solver_settings(update_orbs_funptr, &
-                                                    obj_func_funptr, solver_settings, &
-                                                    settings, error)
+                call extension%wire_solver_settings(solver_settings, settings, error, &
+                                                    update_orbs_funptr, obj_func_funptr)
                 if (.not. same_callbacks(nested, expected_stability_settings) .or. &
                     .not. associated(nested%context, extension%stability_level)) then
                     write(stderr, *) "test_wire_solver_settings_extension failed: "// &
@@ -1166,36 +1340,18 @@ contains
             end associate
         end do
 
-        ! wire solver settings again whose solver or nested settings the extension
-        ! already wired, which has to produce an error
+        ! wire solver settings again which the extension already wired, which the check
+        ! of the settings refuses, so that an error has to be returned and the settings
+        ! left unwired
         call setup_error_logging(settings, log_context)
         call setup_host_solver_settings()
         solver_settings%context => extension%solver_level
-        call extension%wire_solver_settings(update_orbs_funptr, obj_func_funptr, &
-                                            solver_settings, settings, error)
-        if (error == 0) then
-            write(stderr, *) "test_wire_solver_settings_extension failed: No error "// &
-                "returned for solver settings wired by the extension."
-            test_wire_solver_settings_extension = .false.
-        end if
-        if (log_context%log_message == "") then
-            write(stderr, *) "test_wire_solver_settings_extension failed: No error "// &
-                "message printed for solver settings wired by the extension."
-            test_wire_solver_settings_extension = .false.
-        end if
-        log_context%log_message = ""
-        call setup_host_solver_settings()
-        solver_settings%stability_settings%context => extension%stability_level
-        call extension%wire_solver_settings(update_orbs_funptr, obj_func_funptr, &
-                                            solver_settings, settings, error)
-        if (error == 0) then
-            write(stderr, *) "test_wire_solver_settings_extension failed: No error "// &
-                "returned for nested settings wired by the extension."
-            test_wire_solver_settings_extension = .false.
-        end if
-        if (log_context%log_message == "") then
-            write(stderr, *) "test_wire_solver_settings_extension failed: No error "// &
-                "message printed for nested settings wired by the extension."
+        call extension%wire_solver_settings(solver_settings, settings, error, &
+                                            update_orbs_funptr, obj_func_funptr)
+        if (error == 0 .or. .not. associated(solver_settings%precond, mock_precond)) &
+            then
+            write(stderr, *) "test_wire_solver_settings_extension failed: Solver "// &
+                "settings wired by the extension not refused."
             test_wire_solver_settings_extension = .false.
         end if
 
@@ -1209,10 +1365,10 @@ contains
             !
             call solver_settings%init(error)
             solver_settings%context => context
-            solver_settings%precond => mock_host_precond
-            solver_settings%precond_pd => mock_host_precond_pd
+            solver_settings%precond => mock_precond
+            solver_settings%precond_pd => mock_precond_pd
             solver_settings%project => mock_host_project
-            solver_settings%get_extra_trial_vectors => mock_host_get_extra_trial_vectors
+            solver_settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
             solver_settings%stability_hess_x => mock_host_stability_hess_x
             solver_settings%logger => mock_host_logger
             context%log_message = ""
@@ -1220,6 +1376,404 @@ contains
         end subroutine setup_host_solver_settings
 
     end function test_wire_solver_settings_extension
+
+    logical(c_bool) function test_update_orbs_extension() bind(C)
+        !
+        ! this function tests the default orbital update of extension objects, which
+        ! forwards to the host's one saved in the level of the object it receives as
+        ! context, keeps the Hessian linear transformation it returns in the host
+        ! records of both levels and returns the role callback function in its place
+        !
+        use opentrustregion, only: hess_x_type
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: update_orbs_extension, hess_x_callback
+        use otr_common_mock, only: mock_hess_x
+        use test_reference, only: n_param
+
+        type(mock_extension_type), target :: extension
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: kappa(n_param), func, grad(n_param), h_diag(n_param)
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        integer(ip) :: error, i_case
+        character(len=*), parameter :: case_names(3) = &
+            [character(len=58) :: "a host returning a Hessian linear transformation", &
+             "a host returning none", &
+             "a host returning none to an object performing its own"]
+
+        ! assume tests pass
+        test_update_orbs_extension = .true.
+
+        ! set up a step
+        call random_number(kappa)
+
+        ! call the orbital update with the level of the solver as context, the only
+        ! level that calls it, for a host returning a Hessian linear transformation,
+        ! whose host records hold none before, for one returning none, whose host
+        ! records hold one of an earlier call, and for one returning none to an object
+        ! performing its own, and determine if it forwards to the host's orbital update
+        ! with the host context of the level, returns its results and error, keeps the
+        ! host's Hessian linear transformation in the host records of both levels and
+        ! returns the role callback function where a Hessian linear transformation can
+        ! be called
+        do i_case = 1, size(case_names)
+            call setup_mock_extension(extension, contexts(1), contexts(2))
+            if (i_case > 1) extension%solver_level%host%update_orbs => &
+                mock_host_update_orbs_no_hess_x
+            extension%provides%hess_x = i_case == 3
+            if (i_case == 1) then
+                extension%solver_level%host%hess_x => null()
+                extension%stability_level%host%hess_x => null()
+            end if
+            contexts(1)%mock_error = 3
+            context => extension%solver_level
+            call update_orbs_extension(extension, kappa, func, grad, h_diag, &
+                                       hess_x_funptr, error, context)
+            if (error /= 3) then
+                write(stderr, *) "test_update_orbs_extension failed: Error of the "// &
+                    "host's callback function not passed on for "// &
+                    trim(case_names(i_case))//"."
+                test_update_orbs_extension = .false.
+            end if
+            if (abs(func - sum(kappa)) > tol .or. &
+                any(abs(grad - 2.0_rp * kappa) > tol) .or. &
+                any(abs(h_diag - 3.0_rp * kappa) > tol)) then
+                write(stderr, *) "test_update_orbs_extension failed: Results of "// &
+                    "the host's callback function not returned for "// &
+                    trim(case_names(i_case))//"."
+                test_update_orbs_extension = .false.
+            end if
+            if (.not. check_forwarded("update_orbs_extension", 1_ip, "update_orbs", &
+                                      contexts, trim(case_names(i_case)))) &
+                test_update_orbs_extension = .false.
+            if ((i_case == 1 .and. .not. ( &
+                associated(extension%solver_level%host%hess_x, mock_hess_x) .and. &
+                associated(extension%stability_level%host%hess_x, mock_hess_x))) .or. &
+                (i_case > 1 .and. &
+                 (associated(extension%solver_level%host%hess_x) .or. &
+                  associated(extension%stability_level%host%hess_x)))) then
+                write(stderr, *) "test_update_orbs_extension failed: Hessian "// &
+                    "linear transformation of the host not kept in the host "// &
+                    "records of both levels for "//trim(case_names(i_case))//"."
+                test_update_orbs_extension = .false.
+            end if
+            if ((i_case == 2 .and. associated(hess_x_funptr)) .or. &
+                (i_case /= 2 .and. .not. associated(hess_x_funptr, hess_x_callback))) &
+                then
+                write(stderr, *) "test_update_orbs_extension failed: Role callback "// &
+                    "function of the Hessian linear transformation returned "// &
+                    "wrongly for "//trim(case_names(i_case))//"."
+                test_update_orbs_extension = .false.
+            end if
+        end do
+
+    end function test_update_orbs_extension
+
+    logical(c_bool) function test_obj_func_extension() bind(C)
+        !
+        ! this function tests the default objective function of extension objects, which
+        ! forwards to the host's one saved in the level of the object it receives as
+        ! context
+        !
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: obj_func_extension
+        use test_reference, only: n_param
+
+        type(mock_extension_type), target :: extension
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: kappa(n_param), func
+        integer(ip) :: error, i_level
+        character(len=*), parameter :: host_callbacks(2) = &
+            [character(len=8) :: "obj_func", "obj_func"]
+
+        ! assume tests pass
+        test_obj_func_extension = .true.
+
+        ! set up a step
+        call random_number(kappa)
+
+        ! call the objective function with the levels of the solver and of the
+        ! stability check as context and determine if it forwards to the host's one of
+        ! the level with its host context and returns its results and error
+        do i_level = 1, 2
+            call setup_mock_extension(extension, contexts(1), contexts(2))
+            contexts(i_level)%mock_error = 3
+            context => level_context(extension, i_level)
+            func = obj_func_extension(extension, kappa, error, context)
+            if (error /= 3) then
+                write(stderr, *) "test_obj_func_extension failed: Error of the "// &
+                    "host's callback function not passed on for the "// &
+                    trim(level_names(i_level))//"."
+                test_obj_func_extension = .false.
+            end if
+            if (abs(func - sum(kappa)) > tol) then
+                write(stderr, *) "test_obj_func_extension failed: Result of the "// &
+                    "host's callback function not returned for the "// &
+                    trim(level_names(i_level))//"."
+                test_obj_func_extension = .false.
+            end if
+            if (.not. check_forwarded("obj_func_extension", i_level, &
+                                      trim(host_callbacks(i_level)), contexts)) &
+                test_obj_func_extension = .false.
+        end do
+
+    end function test_obj_func_extension
+
+    logical(c_bool) function test_hess_x_extension() bind(C)
+        !
+        ! this function tests the default Hessian linear transformation of extension
+        ! objects, which forwards to the one the host's orbital update returned, saved
+        ! in the level of the object it receives as context
+        !
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: hess_x_extension
+        use test_reference, only: n_param
+
+        type(mock_extension_type), target :: extension
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: x(n_param), hess_x(n_param)
+        integer(ip) :: error, i_level
+
+        ! assume tests pass
+        test_hess_x_extension = .true.
+
+        ! set up a vector
+        call random_number(x)
+
+        ! call the Hessian linear transformation with the levels of the solver and of
+        ! the stability check as context, which both call it, and determine if it
+        ! forwards to the host's one of the level with its host context and returns its
+        ! result and error
+        do i_level = 1, 2
+            call setup_mock_extension(extension, contexts(1), contexts(2))
+            contexts(i_level)%mock_error = 3
+            context => level_context(extension, i_level)
+            call hess_x_extension(extension, x, hess_x, error, context)
+            if (error /= 3) then
+                write(stderr, *) "test_hess_x_extension failed: Error of the "// &
+                    "host's callback function not passed on for the "// &
+                    trim(level_names(i_level))//"."
+                test_hess_x_extension = .false.
+            end if
+            if (any(abs(hess_x - 4.0_rp * x) > tol)) then
+                write(stderr, *) "test_hess_x_extension failed: Result of the "// &
+                    "host's callback function not returned for the "// &
+                    trim(level_names(i_level))//"."
+                test_hess_x_extension = .false.
+            end if
+            if (.not. check_forwarded("hess_x_extension", i_level, "hess_x", &
+                                      contexts)) test_hess_x_extension = .false.
+        end do
+
+    end function test_hess_x_extension
+
+    logical(c_bool) function test_precond_extension() bind(C)
+        !
+        ! this function tests the default level-shifted preconditioner of extension
+        ! objects, which forwards to the host's one saved in the level of the object it
+        ! receives as context
+        !
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: precond_extension
+        use test_reference, only: n_param
+
+        type(mock_extension_type), target :: extension
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: residual(n_param), precond_residual(n_param)
+        integer(ip) :: error, i_level
+        character(len=*), parameter :: host_callbacks(2) = &
+            [character(len=17) :: "precond", "stability_precond"]
+
+        ! assume tests pass
+        test_precond_extension = .true.
+
+        ! set up a vector
+        call random_number(residual)
+
+        ! call the preconditioner with the levels of the solver and of the stability
+        ! check as context and determine if it forwards to the host's one of the level
+        ! with its host context and returns its results and error
+        do i_level = 1, 2
+            call setup_mock_extension(extension, contexts(1), contexts(2))
+            contexts(i_level)%mock_error = 3
+            context => level_context(extension, i_level)
+            call precond_extension(extension, residual, 2.0_rp, precond_residual, &
+                                   error, context)
+            if (error /= 3) then
+                write(stderr, *) "test_precond_extension failed: Error of the "// &
+                    "host's callback function not passed on for the "// &
+                    trim(level_names(i_level))//"."
+                test_precond_extension = .false.
+            end if
+            if (any(abs(precond_residual - 2.0_rp * residual) > tol)) then
+                write(stderr, *) "test_precond_extension failed: Result of the "// &
+                    "host's callback function not returned for the "// &
+                    trim(level_names(i_level))//"."
+                test_precond_extension = .false.
+            end if
+            if (.not. check_forwarded("precond_extension", i_level, &
+                                      trim(host_callbacks(i_level)), contexts)) &
+                test_precond_extension = .false.
+        end do
+
+    end function test_precond_extension
+
+    logical(c_bool) function test_precond_pd_extension() bind(C)
+        !
+        ! this function tests the default positive-definite preconditioner of extension
+        ! objects, which forwards to the host's one saved in the level of the object it
+        ! receives as context
+        !
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: precond_pd_extension
+        use test_reference, only: n_param
+
+        type(mock_extension_type), target :: extension
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: residual(n_param), precond_residual(n_param)
+        integer(ip) :: error, i_level
+        character(len=*), parameter :: host_callbacks(2) = &
+            [character(len=10) :: "precond_pd", "precond_pd"]
+
+        ! assume tests pass
+        test_precond_pd_extension = .true.
+
+        ! set up a vector
+        call random_number(residual)
+
+        ! call the preconditioner with the levels of the solver and of the stability
+        ! check as context and determine if it forwards to the host's one of the level
+        ! with its host context and returns its results and error
+        do i_level = 1, 2
+            call setup_mock_extension(extension, contexts(1), contexts(2))
+            contexts(i_level)%mock_error = 3
+            context => level_context(extension, i_level)
+            call precond_pd_extension(extension, residual, precond_residual, error, &
+                                      context)
+            if (error /= 3) then
+                write(stderr, *) "test_precond_pd_extension failed: Error of the "// &
+                    "host's callback function not passed on for the "// &
+                    trim(level_names(i_level))//"."
+                test_precond_pd_extension = .false.
+            end if
+            if (any(abs(precond_residual - 3.0_rp * residual) > tol)) then
+                write(stderr, *) "test_precond_pd_extension failed: Result of the "// &
+                    "host's callback function not returned for the "// &
+                    trim(level_names(i_level))//"."
+                test_precond_pd_extension = .false.
+            end if
+            if (.not. check_forwarded("precond_pd_extension", i_level, &
+                                      trim(host_callbacks(i_level)), contexts)) &
+                test_precond_pd_extension = .false.
+        end do
+
+    end function test_precond_pd_extension
+
+    logical(c_bool) function test_project_extension() bind(C)
+        !
+        ! this function tests the default projection of extension objects, which
+        ! forwards to the host's one saved in the level of the object it receives as
+        ! context
+        !
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: project_extension
+        use test_reference, only: n_param
+
+        type(mock_extension_type), target :: extension
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: vector(n_param), projected(n_param)
+        integer(ip) :: error, i_level
+        character(len=*), parameter :: host_callbacks(2) = &
+            [character(len=17) :: "project", "stability_project"]
+
+        ! assume tests pass
+        test_project_extension = .true.
+
+        ! set up a vector
+        call random_number(vector)
+
+        ! call the projection with the levels of the solver and of the stability check
+        ! as context and determine if it forwards to the host's one of the level with
+        ! its host context and returns its results and error
+        do i_level = 1, 2
+            call setup_mock_extension(extension, contexts(1), contexts(2))
+            contexts(i_level)%mock_error = 3
+            context => level_context(extension, i_level)
+            projected = vector
+            call project_extension(extension, projected, error, context)
+            if (error /= 3) then
+                write(stderr, *) "test_project_extension failed: Error of the "// &
+                    "host's callback function not passed on for the "// &
+                    trim(level_names(i_level))//"."
+                test_project_extension = .false.
+            end if
+            if (any(abs(projected - 2.0_rp * vector) > tol)) then
+                write(stderr, *) "test_project_extension failed: Result of the "// &
+                    "host's callback function not returned for the "// &
+                    trim(level_names(i_level))//"."
+                test_project_extension = .false.
+            end if
+            if (.not. check_forwarded("project_extension", i_level, &
+                                      trim(host_callbacks(i_level)), contexts)) &
+                test_project_extension = .false.
+        end do
+
+    end function test_project_extension
+
+    logical(c_bool) function test_get_extra_trial_vectors_extension() bind(C)
+        !
+        ! this function tests the default extra trial vector function of extension
+        ! objects, which forwards to the host's one saved in the level of the object it
+        ! receives as context
+        !
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: get_extra_trial_vectors_extension
+        use test_reference, only: n_param
+
+        type(mock_extension_type), target :: extension
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: trial_vectors(n_param, 2)
+        integer(ip) :: error, i_level
+        character(len=*), parameter :: host_callbacks(2) = &
+            [character(len=33) :: "get_extra_trial_vectors", &
+             "stability_get_extra_trial_vectors"]
+
+        ! assume tests pass
+        test_get_extra_trial_vectors_extension = .true.
+
+        ! call the extra trial vector function with the levels of the solver and of the
+        ! stability check as context and determine if it forwards to the host's one of
+        ! the level with its host context and returns its results and error
+        do i_level = 1, 2
+            call setup_mock_extension(extension, contexts(1), contexts(2))
+            contexts(i_level)%mock_error = 3
+            context => level_context(extension, i_level)
+            call get_extra_trial_vectors_extension(extension, trial_vectors, error, &
+                                                   context)
+            if (error /= 3) then
+                write(stderr, *) "test_get_extra_trial_vectors_extension failed: "// &
+                    "Error of the host's callback function not passed on for the "// &
+                    trim(level_names(i_level))//"."
+                test_get_extra_trial_vectors_extension = .false.
+            end if
+            if (any(abs(trial_vectors(:, 2) - 2.0_rp) > tol)) then
+                write(stderr, *) "test_get_extra_trial_vectors_extension failed: "// &
+                    "Result of the host's callback function not returned for the "// &
+                    trim(level_names(i_level))//"."
+                test_get_extra_trial_vectors_extension = .false.
+            end if
+            if (.not. check_forwarded("get_extra_trial_vectors_extension", i_level, &
+                                      trim(host_callbacks(i_level)), contexts)) &
+                test_get_extra_trial_vectors_extension = .false.
+        end do
+
+    end function test_get_extra_trial_vectors_extension
 
     logical(c_bool) function test_extension_level() bind(C)
         !
@@ -1283,15 +1837,15 @@ contains
         call random_number(kappa)
 
         ! call the orbital update with the level of the solver as context and determine
-        ! if it calls that of the object and returns its results, Hessian linear
-        ! transformation and error
+        ! if it calls that of the object with the level and returns its results, Hessian
+        ! linear transformation and error
         extension%mock_error = 3
         extension%solver_level%extension => extension
         context => extension%solver_level
         call update_orbs_callback(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                   context)
-        if (.not. check_role_called("update_orbs_callback", extension, "update_orbs")) &
-            test_update_orbs_callback = .false.
+        if (.not. check_role_called("update_orbs_callback", extension, "update_orbs", &
+                                    context)) test_update_orbs_callback = .false.
         if (error /= 3) then
             write(stderr, *) "test_update_orbs_callback failed: Error of the "// &
                 "object not passed on."
@@ -1330,20 +1884,16 @@ contains
 
     logical(c_bool) function test_obj_func_callback() bind(C)
         !
-        ! this function tests the objective function, which forwards to the host's one
-        ! saved in the level of an extension object it receives as context
+        ! this function tests the objective function, which dispatches to the extension
+        ! object whose level it receives as context
         !
-        use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: obj_func_callback
         use test_reference, only: n_param
 
         type(mock_extension_type), target :: extension
-        type(test_context_type), target :: contexts(2)
         class(*), pointer :: context
         real(rp) :: kappa(n_param), func
         integer(ip) :: error, i_level
-        character(len=*), parameter :: host_callbacks(2) = &
-            [character(len=8) :: "obj_func", "obj_func"]
 
         ! assume tests pass
         test_obj_func_callback = .true.
@@ -1352,28 +1902,28 @@ contains
         call random_number(kappa)
 
         ! call the objective function with the levels of the solver and of the
-        ! stability check as context and determine if it forwards to the host's one of
-        ! the level with its host context and returns its results and error
+        ! stability check as context and determine if it calls that of the object with
+        ! the level and returns its result and error
+        extension%mock_error = 3
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
         do i_level = 1, 2
-            call setup_mock_extension(extension, contexts(1), contexts(2))
-            contexts(i_level)%mock_error = 3
             context => level_context(extension, i_level)
+            extension%called_role = ""
             func = obj_func_callback(kappa, error, context)
+            if (.not. check_role_called("obj_func_callback", extension, "obj_func", &
+                                        context, "the "//trim(level_names(i_level)))) &
+                test_obj_func_callback = .false.
             if (error /= 3) then
                 write(stderr, *) "test_obj_func_callback failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not passed on for the "//trim(level_names(i_level))//"."
                 test_obj_func_callback = .false.
             end if
             if (abs(func - sum(kappa)) > tol) then
                 write(stderr, *) "test_obj_func_callback failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not returned for the "//trim(level_names(i_level))//"."
                 test_obj_func_callback = .false.
             end if
-            if (.not. check_forwarded("obj_func_callback", i_level, &
-                                      trim(host_callbacks(i_level)), contexts)) &
-                test_obj_func_callback = .false.
         end do
 
         ! call the objective function without a level, which has to produce an error
@@ -1408,7 +1958,7 @@ contains
 
         ! call the Hessian linear transformation with the levels of the solver and of
         ! the stability check as context, which both call it, and determine if it calls
-        ! that of the object and returns its result and error
+        ! that of the object with the level and returns its result and error
         extension%mock_error = 3
         extension%solver_level%extension => extension
         extension%stability_level%extension => extension
@@ -1416,7 +1966,8 @@ contains
             context => level_context(extension, i_level)
             extension%called_role = ""
             call hess_x_callback(x, hess_x, error, context)
-            if (.not. check_role_called("hess_x_callback", extension, "hess_x")) &
+            if (.not. check_role_called("hess_x_callback", extension, "hess_x", &
+                                        context, "the "//trim(level_names(i_level)))) &
                 test_hess_x_callback = .false.
             if (error /= 3) then
                 write(stderr, *) "test_hess_x_callback failed: Error of the object "// &
@@ -1444,20 +1995,16 @@ contains
 
     logical(c_bool) function test_precond_callback() bind(C)
         !
-        ! this function tests the level-shifted preconditioner, which forwards to the
-        ! host's one saved in the level of an extension object it receives as context
+        ! this function tests the level-shifted preconditioner, which dispatches to the
+        ! extension object whose level it receives as context
         !
-        use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: precond_callback
         use test_reference, only: n_param
 
         type(mock_extension_type), target :: extension
-        type(test_context_type), target :: contexts(2)
         class(*), pointer :: context
         real(rp) :: residual(n_param), precond_residual(n_param)
         integer(ip) :: error, i_level
-        character(len=*), parameter :: host_callbacks(2) = &
-            [character(len=17) :: "precond", "stability_precond"]
 
         ! assume tests pass
         test_precond_callback = .true.
@@ -1465,32 +2012,33 @@ contains
         ! set up a vector
         call random_number(residual)
 
-        ! call the preconditioner with the levels of the solver and of the stability
-        ! check as context and determine if it forwards to the host's one of the level
-        ! with its host context and returns its results and error
+        ! call the level-shifted preconditioner with the levels of the solver and of the
+        ! stability check as context and determine if it calls that of the object with
+        ! the level and returns its result and error
+        extension%mock_error = 3
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
         do i_level = 1, 2
-            call setup_mock_extension(extension, contexts(1), contexts(2))
-            contexts(i_level)%mock_error = 3
             context => level_context(extension, i_level)
+            extension%called_role = ""
             call precond_callback(residual, 2.0_rp, precond_residual, error, context)
+            if (.not. check_role_called("precond_callback", extension, "precond", &
+                                        context, "the "//trim(level_names(i_level)))) &
+                test_precond_callback = .false.
             if (error /= 3) then
                 write(stderr, *) "test_precond_callback failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not passed on for the "//trim(level_names(i_level))//"."
                 test_precond_callback = .false.
             end if
             if (any(abs(precond_residual - 2.0_rp * residual) > tol)) then
                 write(stderr, *) "test_precond_callback failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not returned for the "//trim(level_names(i_level))//"."
                 test_precond_callback = .false.
             end if
-            if (.not. check_forwarded("precond_callback", i_level, &
-                                      trim(host_callbacks(i_level)), contexts)) &
-                test_precond_callback = .false.
         end do
 
-        ! call the preconditioner without a level, which has to produce an error
+        ! call the level-shifted preconditioner without a level, which has to produce
+        ! an error
         context => null()
         call precond_callback(residual, 2.0_rp, precond_residual, error, context)
         if (error == 0) then
@@ -1503,21 +2051,16 @@ contains
 
     logical(c_bool) function test_precond_pd_callback() bind(C)
         !
-        ! this function tests the positive-definite preconditioner, which forwards to
-        ! the host's one saved in the level of an extension object it receives as
-        ! context
+        ! this function tests the positive-definite preconditioner, which dispatches to
+        ! the extension object whose level it receives as context
         !
-        use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: precond_pd_callback
         use test_reference, only: n_param
 
         type(mock_extension_type), target :: extension
-        type(test_context_type), target :: contexts(2)
         class(*), pointer :: context
         real(rp) :: residual(n_param), precond_residual(n_param)
         integer(ip) :: error, i_level
-        character(len=*), parameter :: host_callbacks(2) = &
-            [character(len=10) :: "precond_pd", "precond_pd"]
 
         ! assume tests pass
         test_precond_pd_callback = .true.
@@ -1525,32 +2068,33 @@ contains
         ! set up a vector
         call random_number(residual)
 
-        ! call the preconditioner with the levels of the solver and of the stability
-        ! check as context and determine if it forwards to the host's one of the level
-        ! with its host context and returns its results and error
+        ! call the positive-definite preconditioner with the levels of the solver and
+        ! of the stability check as context and determine if it calls that of the
+        ! object with the level and returns its result and error
+        extension%mock_error = 3
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
         do i_level = 1, 2
-            call setup_mock_extension(extension, contexts(1), contexts(2))
-            contexts(i_level)%mock_error = 3
             context => level_context(extension, i_level)
+            extension%called_role = ""
             call precond_pd_callback(residual, precond_residual, error, context)
+            if (.not. check_role_called( &
+                "precond_pd_callback", extension, "precond_pd", context, &
+                "the "//trim(level_names(i_level)))) test_precond_pd_callback = .false.
             if (error /= 3) then
                 write(stderr, *) "test_precond_pd_callback failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not passed on for the "//trim(level_names(i_level))//"."
                 test_precond_pd_callback = .false.
             end if
             if (any(abs(precond_residual - 3.0_rp * residual) > tol)) then
                 write(stderr, *) "test_precond_pd_callback failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not returned for the "//trim(level_names(i_level))//"."
                 test_precond_pd_callback = .false.
             end if
-            if (.not. check_forwarded("precond_pd_callback", i_level, &
-                                      trim(host_callbacks(i_level)), contexts)) &
-                test_precond_pd_callback = .false.
         end do
 
-        ! call the preconditioner without a level, which has to produce an error
+        ! call the positive-definite preconditioner without a level, which has to
+        ! produce an error
         context => null()
         call precond_pd_callback(residual, precond_residual, error, context)
         if (error == 0) then
@@ -1563,20 +2107,16 @@ contains
 
     logical(c_bool) function test_project_callback() bind(C)
         !
-        ! this function tests the projection, which forwards to the host's one saved in
-        ! the level of an extension object it receives as context
+        ! this function tests the projection, which dispatches to the extension object
+        ! whose level it receives as context
         !
-        use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: project_callback
         use test_reference, only: n_param
 
         type(mock_extension_type), target :: extension
-        type(test_context_type), target :: contexts(2)
         class(*), pointer :: context
         real(rp) :: vector(n_param), projected(n_param)
         integer(ip) :: error, i_level
-        character(len=*), parameter :: host_callbacks(2) = &
-            [character(len=17) :: "project", "stability_project"]
 
         ! assume tests pass
         test_project_callback = .true.
@@ -1585,29 +2125,29 @@ contains
         call random_number(vector)
 
         ! call the projection with the levels of the solver and of the stability check
-        ! as context and determine if it forwards to the host's one of the level with
-        ! its host context and returns its results and error
+        ! as context and determine if it calls that of the object with the level and
+        ! returns its result and error
+        extension%mock_error = 3
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
         do i_level = 1, 2
-            call setup_mock_extension(extension, contexts(1), contexts(2))
-            contexts(i_level)%mock_error = 3
             context => level_context(extension, i_level)
+            extension%called_role = ""
             projected = vector
             call project_callback(projected, error, context)
+            if (.not. check_role_called("project_callback", extension, "project", &
+                                        context, "the "//trim(level_names(i_level)))) &
+                test_project_callback = .false.
             if (error /= 3) then
                 write(stderr, *) "test_project_callback failed: Error of the "// &
-                    "host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not passed on for the "//trim(level_names(i_level))//"."
                 test_project_callback = .false.
             end if
             if (any(abs(projected - 2.0_rp * vector) > tol)) then
                 write(stderr, *) "test_project_callback failed: Result of the "// &
-                    "host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
+                    "object not returned for the "//trim(level_names(i_level))//"."
                 test_project_callback = .false.
             end if
-            if (.not. check_forwarded("project_callback", i_level, &
-                                      trim(host_callbacks(i_level)), contexts)) &
-                test_project_callback = .false.
         end do
 
         ! call the projection without a level, which has to produce an error
@@ -1624,48 +2164,46 @@ contains
 
     logical(c_bool) function test_get_extra_trial_vectors_callback() bind(C)
         !
-        ! this function tests the extra trial vector function, which forwards to the
-        ! host's one saved in the level of an extension object it receives as context
+        ! this function tests the extra trial vector function, which dispatches to the
+        ! extension object whose level it receives as context
         !
-        use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: get_extra_trial_vectors_callback
         use test_reference, only: n_param
 
         type(mock_extension_type), target :: extension
-        type(test_context_type), target :: contexts(2)
         class(*), pointer :: context
         real(rp) :: trial_vectors(n_param, 2)
         integer(ip) :: error, i_level
-        character(len=*), parameter :: host_callbacks(2) = &
-            [character(len=33) :: "get_extra_trial_vectors", &
-             "stability_get_extra_trial_vectors"]
 
         ! assume tests pass
         test_get_extra_trial_vectors_callback = .true.
 
         ! call the extra trial vector function with the levels of the solver and of the
-        ! stability check as context and determine if it forwards to the host's one of
-        ! the level with its host context and returns its results and error
+        ! stability check as context and determine if it calls that of the object with
+        ! the level and returns its result and error
+        extension%mock_error = 3
+        extension%solver_level%extension => extension
+        extension%stability_level%extension => extension
         do i_level = 1, 2
-            call setup_mock_extension(extension, contexts(1), contexts(2))
-            contexts(i_level)%mock_error = 3
             context => level_context(extension, i_level)
+            extension%called_role = ""
             call get_extra_trial_vectors_callback(trial_vectors, error, context)
+            if (.not. check_role_called("get_extra_trial_vectors_callback", extension, &
+                                        "get_extra_trial_vectors", context, &
+                                        "the "//trim(level_names(i_level)))) &
+                test_get_extra_trial_vectors_callback = .false.
             if (error /= 3) then
                 write(stderr, *) "test_get_extra_trial_vectors_callback failed: "// &
-                    "Error of the host's callback function not passed on for the "// &
+                    "Error of the object not passed on for the "// &
                     trim(level_names(i_level))//"."
                 test_get_extra_trial_vectors_callback = .false.
             end if
             if (any(abs(trial_vectors(:, 2) - 2.0_rp) > tol)) then
                 write(stderr, *) "test_get_extra_trial_vectors_callback failed: "// &
-                    "Result of the host's callback function not returned for the "// &
+                    "Result of the object not returned for the "// &
                     trim(level_names(i_level))//"."
                 test_get_extra_trial_vectors_callback = .false.
             end if
-            if (.not. check_forwarded("get_extra_trial_vectors_callback", i_level, &
-                                      trim(host_callbacks(i_level)), contexts)) &
-                test_get_extra_trial_vectors_callback = .false.
         end do
 
         ! call the extra trial vector function without a level, which has to produce an
@@ -2079,13 +2617,11 @@ contains
         ! preconditioner based on the eigendecomposition of the static part of the
         ! Hessian of an orbital basis
         !
-        use otr_common, only: orbital_settings_type
         use opentrustregion, only: precond_floor
         use opentrustregion_unit_tests, only: setup_settings
-        use test_reference, only: n_param
+        use test_reference, only: n_param, no_context
 
         type(mock_orbital_basis_type) :: basis
-        type(orbital_settings_type) :: settings
         real(rp) :: residual(n_param), precond_residual(n_param), divisors(n_param), &
                     expected(n_param), mu
         integer(ip) :: error
@@ -2093,12 +2629,10 @@ contains
         ! assume tests pass
         test_precond_orbital_basis = .true.
 
-        ! setup settings object
-        call setup_settings(settings)
-
-        ! set up the mock orbital basis with a stale eigendecomposition and a random
-        ! residual and level shift
+        ! set up the mock orbital basis with a stale eigendecomposition and settings,
+        ! and a random residual and level shift
         call setup_mock_orbital_basis(basis, n_param)
+        call setup_settings(basis%settings)
         call random_number(residual)
         mu = 0.3_rp
 
@@ -2111,7 +2645,7 @@ contains
 
         ! call routine and determine if values of the preconditioned residual match,
         ! which requires the eigendecomposition to be refreshed
-        call basis%precond(residual, mu, precond_residual, settings, error)
+        call basis%precond(residual, mu, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_orbital_basis failed: Produced error."
             test_precond_orbital_basis = .false.
@@ -2130,13 +2664,11 @@ contains
         ! preconditioner based on the eigendecomposition of the static part of the
         ! Hessian of an orbital basis
         !
-        use otr_common, only: orbital_settings_type
         use opentrustregion, only: precond_floor, precond_rel_floor_factor
         use opentrustregion_unit_tests, only: setup_settings
-        use test_reference, only: n_param
+        use test_reference, only: n_param, no_context
 
         type(mock_orbital_basis_type) :: basis
-        type(orbital_settings_type) :: settings
         real(rp) :: residual(n_param), precond_residual(n_param), divisors(n_param), &
                     expected(n_param), floor_val
         integer(ip) :: error
@@ -2144,12 +2676,10 @@ contains
         ! assume tests pass
         test_precond_pd_orbital_basis = .true.
 
-        ! setup settings object
-        call setup_settings(settings)
-
-        ! set up the mock orbital basis with a stale eigendecomposition and a random
-        ! residual
+        ! set up the mock orbital basis with a stale eigendecomposition and settings,
+        ! and a random residual
         call setup_mock_orbital_basis(basis, n_param)
+        call setup_settings(basis%settings)
         call random_number(residual)
 
         ! construct the expected preconditioned residual from the eigenvalue pairs of
@@ -2162,7 +2692,7 @@ contains
 
         ! call routine and determine if values of the preconditioned residual match,
         ! which requires the eigendecomposition to be refreshed
-        call basis%precond_pd(residual, precond_residual, settings, error)
+        call basis%precond_pd(residual, precond_residual, error, no_context)
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_orbital_basis failed: Produced error."
             test_precond_pd_orbital_basis = .false.

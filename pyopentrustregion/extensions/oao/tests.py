@@ -20,14 +20,17 @@ from unittest.mock import patch
 from pyopentrustregion.tests import (
     lib,
     n_param,
-    n_extra_trial_vectors,
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
     LegacyPyInterfaceHelpers,
 )
 from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
-from pyopentrustregion.extensions.common.tests import n_ao
+from pyopentrustregion.extensions.common.tests import (
+    n_ao,
+    setup_wired_solver_settings,
+    check_wired_solver_settings,
+)
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
 
 if NUMPY_AVAILABLE:
@@ -40,9 +43,8 @@ fortran_tests = {
     "oao_tests": [
         "calculate_grad_h_diag_oao",
         "get_extra_trial_vectors_oao",
-        "get_extra_trial_vectors_oao_callback",
         "get_hess_eigval_pairs_oao",
-        "hess_x_oao_callback",
+        "hess_x_oao",
         "hess_x_static_oao",
         "init_oao_settings",
         "oao_deconstructor",
@@ -50,13 +52,10 @@ fortran_tests = {
         "oao_factory_cs",
         "oao_factory_os",
         "oao_sanity_check",
-        "oao_set_solver_settings",
-        "obj_func_oao_callback",
+        "obj_func_oao",
         "pack_asymm",
-        "precond_oao_callback",
-        "precond_pd_oao_callback",
         "project_asymm",
-        "project_oao_callback",
+        "project_oao",
         "project_symm",
         "purify",
         "refresh_hess_eigen_oao",
@@ -66,22 +65,16 @@ fortran_tests = {
         "rotate_to_hess_eigenbasis_oao",
         "symmetric_transformation",
         "unpack_asymm",
-        "update_orbs_oao_callback",
+        "update_orbs_oao",
     ],
     "oao_c_interface_tests": [
         "assign_oao_c_f",
         "assign_oao_f_c",
         "evaluate_dm_oao_f_wrapper",
-        "get_extra_trial_vectors_oao_c_wrapper",
         "get_response_oao_f_wrapper",
-        "hess_x_oao_c_wrapper",
         "init_oao_settings_c",
         "oao_deconstructor_c_wrapper",
         "oao_factory_c_wrapper",
-        "obj_func_oao_c_wrapper",
-        "precond_oao_c_wrapper",
-        "precond_pd_oao_c_wrapper",
-        "project_oao_c_wrapper",
         "update_orbs_oao_c_wrapper",
     ],
 }
@@ -212,10 +205,10 @@ class OAOPyInterfaceTests(unittest.TestCase):
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
 
         # initialize solver settings object
-        solver_settings = SolverSettings()
+        solver_settings, python_functions = setup_wired_solver_settings()
 
         # call OAO factory python interface
-        obj_func_oao, update_orbs_oao = oao_factory(
+        update_orbs_oao, obj_func_oao = oao_factory(
             dm_ao,
             ao_overlap,
             1,
@@ -225,22 +218,17 @@ class OAOPyInterfaceTests(unittest.TestCase):
             settings,
         )
 
-        # determine if the OAO routines are wired into the solver settings
-        if any(
-            callback is None
-            for callback in (
-                solver_settings.precond,
-                solver_settings.precond_pd,
-                solver_settings.project,
-                solver_settings.get_extra_trial_vectors,
-                solver_settings.stability_settings.precond,
-                solver_settings.stability_settings.project,
-                solver_settings.stability_settings.get_extra_trial_vectors,
-            )
+        # check the solver settings the factory wired
+        if not check_wired_solver_settings(
+            solver_settings, python_functions, "oao_factory_py_interface"
         ):
+            test_passed = False
+
+        # check that the factory received the density matrix in place
+        if not np.allclose(dm_ao, np.full(2 * (n_ao,), 2.0, dtype=np.float64)):
             print(
-                " test_oao_factory_py_interface failed: OAO routines not wired into "
-                "solver settings."
+                " test_oao_factory_py_interface failed: Density matrix not passed in "
+                "place."
             )
             test_passed = False
 
@@ -279,14 +267,6 @@ class OAOPyInterfaceTests(unittest.TestCase):
             print(
                 " test_oao_factory_py_interface failed: Returned OAO orbital updating "
                 "function raises error."
-            )
-            test_passed = False
-
-        # check if density matrix was updated
-        if not np.allclose(dm_ao, np.full(2 * (n_ao,), 2.0, dtype=np.float64)):
-            print(
-                " test_oao_factory_py_interface failed: Density matrix not updated "
-                "correctly."
             )
             test_passed = False
 
@@ -332,90 +312,6 @@ class OAOPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
-        # call wired OAO projection function
-        vector = np.full(n_param, 1.0, dtype=np.float64)
-        try:
-            solver_settings.project(vector)
-        except RuntimeError:
-            print(
-                " test_oao_factory_py_interface failed: Wired OAO projection "
-                "function raises error."
-            )
-            test_passed = False
-
-        # check results
-        if not np.allclose(vector, np.full(n_param, 2.0, dtype=np.float64)):
-            print(
-                " test_oao_factory_py_interface failed: Returned projected vector "
-                "of wired OAO projection function wrong."
-            )
-            test_passed = False
-
-        # call wired OAO level-shifted preconditioner function
-        residual = np.full(n_param, 1.0, dtype=np.float64)
-        precond_residual = np.empty(n_param, dtype=np.float64)
-        mu = 5.0
-        try:
-            solver_settings.precond(residual, mu, precond_residual)
-        except RuntimeError:
-            print(
-                " test_oao_factory_py_interface failed: Wired OAO level-shifted "
-                "preconditioner function raises error."
-            )
-            test_passed = False
-
-        # check results
-        if not np.allclose(precond_residual, np.full(n_param, mu, dtype=np.float64)):
-            print(
-                " test_oao_factory_py_interface failed: Returned preconditioned "
-                "residual of wired OAO level-shifted preconditioner function wrong."
-            )
-            test_passed = False
-
-        # call wired OAO positive-definite preconditioner function
-        precond_pd_residual = np.empty(n_param, dtype=np.float64)
-        try:
-            solver_settings.precond_pd(residual, precond_pd_residual)
-        except RuntimeError:
-            print(
-                " test_oao_factory_py_interface failed: Wired OAO positive-definite "
-                "preconditioner function raises error."
-            )
-            test_passed = False
-
-        # check results
-        if not np.allclose(
-            precond_pd_residual, np.full(n_param, 3.0, dtype=np.float64)
-        ):
-            print(
-                " test_oao_factory_py_interface failed: Returned preconditioned "
-                "residual of wired OAO positive-definite preconditioner function "
-                "wrong."
-            )
-            test_passed = False
-
-        # call wired OAO extra trial vector function
-        trial_vectors = np.empty((n_extra_trial_vectors, n_param), dtype=np.float64)
-        try:
-            solver_settings.get_extra_trial_vectors(trial_vectors)
-        except RuntimeError:
-            print(
-                " test_oao_factory_py_interface failed: Wired OAO extra trial "
-                "vector function raises error."
-            )
-            test_passed = False
-
-        # check results
-        if not np.allclose(
-            trial_vectors,
-            np.arange(1, n_extra_trial_vectors + 1, dtype=np.float64)[:, None],
-        ):
-            print(
-                " test_oao_factory_py_interface failed: Returned trial vectors of "
-                "wired OAO extra trial vector function wrong."
-            )
-            test_passed = False
-
         # number of particles
         n_particle = 2
 
@@ -429,7 +325,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
             n_particle,
             n_ao,
             self.mock_evaluate_dm,
-            SolverSettings(),
+            setup_wired_solver_settings()[0],
             settings,
         )
 

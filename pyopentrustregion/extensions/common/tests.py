@@ -5,10 +5,16 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_void_p, POINTER
+from ctypes import c_void_p, POINTER, cast
 
-from pyopentrustregion.tests import lib, NUMPY_AVAILABLE, add_tests, print_separator
-from pyopentrustregion.python_interface import c_real, c_int
+from pyopentrustregion.tests import (
+    lib,
+    n_param,
+    NUMPY_AVAILABLE,
+    add_tests,
+    print_separator,
+)
+from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -22,27 +28,35 @@ fortran_tests = {
     "common_tests": [
         "approx_hess_x_callback",
         "channel_rows",
+        "check_unwired_extension",
         "compute_sqrt_and_inv_sqrt",
         "conv_check_callback",
         "conv_check_stability_callback",
         "extension_level",
         "fill_extra_trial_vectors_orbital_basis",
         "get_extra_trial_vectors_callback",
+        "get_extra_trial_vectors_extension",
         "hess_x_callback",
+        "hess_x_extension",
         "init_orbital_settings",
         "level_shifted_divisors",
         "logger_callback",
         "matrix_exponential",
         "obj_func_callback",
+        "obj_func_extension",
         "positive_definite_divisors",
         "precond_callback",
+        "precond_extension",
         "precond_orbital_basis",
         "precond_pd_callback",
+        "precond_pd_extension",
         "precond_pd_orbital_basis",
         "project_callback",
+        "project_extension",
         "refresh_response_orbital_basis",
         "stability_hess_x_callback",
         "update_orbs_callback",
+        "update_orbs_extension",
         "wire_solver_settings_extension",
     ],
     "common_c_interface_tests": [
@@ -70,6 +84,72 @@ getattr(lib, "test_" + fortran_tests["common_tests"][0])
 
 # number of AOs
 n_ao = c_int.in_dll(lib, "test_n_ao").value
+
+
+def setup_wired_solver_settings():
+    """
+    this function returns solver settings for the Python test of a factory that wires
+    them, whose projection and logging function and the convergence check of their
+    stability check are built from Python functions, which the factory has to be handed
+    without, while their preconditioner is set directly, which it has to be handed,
+    together with these Python functions
+    """
+    solver_settings = SolverSettings()
+    solver_settings.project = lambda vector: None
+    solver_settings.logger = lambda message: None
+    solver_settings.stability_settings.conv_check = lambda residual, eigval: False
+    solver_settings.set_optional_callbacks(n_param, {})
+    solver_settings.settings_c.precond = cast(lib.mock_level_precond, c_void_p).value
+    python_functions = (
+        solver_settings.project,
+        solver_settings.logger,
+        solver_settings.stability_settings.conv_check,
+    )
+
+    return solver_settings, python_functions
+
+
+def check_wired_solver_settings(solver_settings, python_functions, test_name):
+    """
+    this function checks that solver settings a mock factory wired still hold their
+    Python functions, from which the solver builds the callback functions anew, and
+    that the preconditioners the mock factory wired into both levels are called with
+    the contexts of their levels
+    """
+    test_passed = True
+
+    if (
+        solver_settings.project,
+        solver_settings.logger,
+        solver_settings.stability_settings.conv_check,
+    ) != python_functions:
+        print(f" test_{test_name} failed: Python functions of the settings not kept.")
+        test_passed = False
+
+    residual = np.full(n_param, 1.0, dtype=np.float64)
+    precond_residual = np.empty(n_param, dtype=np.float64)
+    for level, settings in (
+        ("solver", solver_settings),
+        ("stability check", solver_settings.stability_settings),
+    ):
+        precond_residual[:] = 0.0
+        try:
+            settings.precond(residual, 2.0, precond_residual)
+        except RuntimeError:
+            print(
+                f" test_{test_name} failed: Wired preconditioner of the {level} "
+                "raises error."
+            )
+            test_passed = False
+            continue
+        if not np.allclose(precond_residual, 2.0):
+            print(
+                f" test_{test_name} failed: Wired preconditioner of the {level} "
+                "returns wrong result."
+            )
+            test_passed = False
+
+    return test_passed
 
 
 @add_tests

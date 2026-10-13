@@ -6,18 +6,14 @@
 
 module otr_mo_c_interface
 
-    use opentrustregion, only: ip, rp, obj_func_type, update_orbs_type, hess_x_type, &
-                               precond_type, precond_pd_type, &
-                               get_extra_trial_vectors_type
-    use c_interface, only: c_ip, c_rp, obj_func_c_type, update_orbs_c_type, &
-                           hess_x_c_type, precond_c_type, precond_pd_c_type, &
-                           get_extra_trial_vectors_c_type
+    use opentrustregion, only: ip, rp, obj_func_type, update_orbs_type
+    use c_interface, only: c_ip, c_rp, update_orbs_c_type
     use otr_mo, only: standard_mo_factory_cs => mo_factory_cs, &
                       standard_mo_factory_os => mo_factory_os, &
                       standard_mo_deconstructor => mo_deconstructor
     use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                           get_response_cs_type, get_response_os_type
-    use otr_common_c_interface, only: orbital_c_callbacks_type
+    use otr_common_c_interface, only: orbital_c_callbacks_type, extension_holder_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_loc, &
                                            c_f_pointer, c_funloc, c_f_procpointer, &
                                            c_associated, c_null_funptr, c_null_ptr
@@ -32,14 +28,14 @@ module otr_mo_c_interface
     ! of the shared MO object, context included
     type(orbital_c_callbacks_type), target :: mo_callbacks
 
-    ! define procedure pointer which will point to the Fortran procedures
-    procedure(obj_func_type), pointer :: obj_func_mo_before_wrapping => null()
-    procedure(update_orbs_type), pointer :: update_orbs_mo_before_wrapping => null()
-    procedure(hess_x_type), pointer :: hess_x_mo_before_wrapping => null()
-    procedure(precond_type), pointer :: precond_mo_before_wrapping => null()
-    procedure(precond_pd_type), pointer :: precond_pd_mo_before_wrapping => null()
-    procedure(get_extra_trial_vectors_type), pointer :: &
-        get_extra_trial_vectors_mo_before_wrapping => null()
+    ! holder of the MO object for C hosts, whose levels are the contexts of the C
+    ! callback functions the factory returns and wires into the C solver settings
+    type(extension_holder_type), target :: mo_holder
+
+    ! MO coefficients of the C host, which the MO object rotates a copy of if the
+    ! factory could not hand it the host's array in place, which the C wrapper of the
+    ! orbital update then copies back
+    real(c_rp), pointer :: mo_coeff_3d_c(:, :, :) => null()
 
     ! derived type for MO settings
     type, bind(C) :: mo_settings_type_c
@@ -49,10 +45,6 @@ module otr_mo_c_interface
         type(c_ptr) :: context
     end type
 
-    ! MO coefficients passed from C, which are updated from their Fortran copy after
-    ! every orbital update if the real kinds differ
-    real(c_rp), pointer :: mo_coeff_3d_c(:, :, :) => null()
-
     procedure(standard_mo_factory_cs), pointer :: mo_factory_cs => &
         standard_mo_factory_cs
     procedure(standard_mo_factory_os), pointer :: mo_factory_os => &
@@ -61,6 +53,8 @@ module otr_mo_c_interface
         standard_mo_deconstructor
 
     ! create function pointers to ensure that routines comply with interface
+    procedure(update_orbs_c_type), pointer :: update_orbs_mo_c_wrapper_ptr => &
+        update_orbs_mo_c_wrapper
     procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_mo_cs_f_wrapper_ptr => &
         evaluate_dm_mo_cs_f_wrapper
     procedure(evaluate_dm_os_type), pointer :: evaluate_dm_mo_os_f_wrapper_ptr => &
@@ -69,17 +63,6 @@ module otr_mo_c_interface
         get_response_mo_cs_f_wrapper
     procedure(get_response_os_type), pointer :: get_response_mo_os_f_wrapper_ptr => &
         get_response_mo_os_f_wrapper
-    procedure(obj_func_c_type), pointer :: obj_func_mo_c_wrapper_ptr => &
-        obj_func_mo_c_wrapper
-    procedure(update_orbs_c_type), pointer :: update_orbs_mo_c_wrapper_ptr => &
-        update_orbs_mo_c_wrapper
-    procedure(hess_x_c_type), pointer :: hess_x_mo_c_wrapper_ptr => hess_x_mo_c_wrapper
-    procedure(precond_c_type), pointer :: precond_mo_c_wrapper_ptr => &
-        precond_mo_c_wrapper
-    procedure(precond_pd_c_type), pointer :: precond_pd_mo_c_wrapper_ptr => &
-        precond_pd_mo_c_wrapper
-    procedure(get_extra_trial_vectors_c_type), pointer :: &
-        get_extra_trial_vectors_mo_c_wrapper_ptr => get_extra_trial_vectors_mo_c_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -91,26 +74,28 @@ contains
 
     function mo_factory_c_wrapper(mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, &
                                   n_ao_c, n_mo_c, evaluate_dm_c_funptr, &
-                                  obj_func_mo_c_funptr, update_orbs_mo_c_funptr, &
+                                  update_orbs_mo_c_funptr, obj_func_mo_c_funptr, &
                                   solver_settings_c, settings_c, orbsym_c) &
         result(error_c) bind(C, name="mo_factory")
         !
-        ! this subroutine wraps the factory function for the subroutine to convert C
-        ! variables to Fortran variables
+        ! this function wraps the MO factory for C hosts, whose C solver settings it
+        ! hands to the holder of the MO object, and writes the solver settings the
+        ! factory wired back into the C solver settings
         !
-        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
-        use otr_mo, only: mo_settings_type, count_mo_params
-        use otr_common_c_interface, only: n_param
+        use otr_mo, only: mo_settings_type, mo_object
+        use otr_common_c_interface, only: setup_extension_holder, &
+                                          wire_solver_settings_c, obj_func_c_wrapper
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in) :: n_occ_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c, n_mo_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_mo_c_funptr, obj_func_mo_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(mo_settings_type_c), intent(in) :: settings_c
-        type(c_funptr), intent(out) :: obj_func_mo_c_funptr, update_orbs_mo_c_funptr
         integer(c_ip), intent(in), optional :: orbsym_c(*)
         integer(c_ip) :: error_c
 
@@ -119,12 +104,19 @@ contains
         real(rp), pointer :: ao_overlap(:, :)
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
-        procedure(obj_func_type), pointer :: obj_func_mo_funptr
         procedure(update_orbs_type), pointer :: update_orbs_mo_funptr
+        procedure(obj_func_type), pointer :: obj_func_mo_funptr
         type(solver_settings_type) :: solver_settings
         type(mo_settings_type) :: settings
+        type(orbital_c_callbacks_type), target :: callbacks
+        type(extension_holder_type) :: previous_holder
+        type(orbital_c_callbacks_type) :: previous_callbacks
         integer(ip) :: n_particle, n_ao, n_mo, error
         integer(ip), allocatable :: n_occ(:), orbsym(:, :), orbsym_1d(:)
+
+        ! no functions are returned unless the factory succeeds
+        update_orbs_mo_c_funptr = c_null_funptr
+        obj_func_mo_c_funptr = c_null_funptr
 
         ! convert dimensions to Fortran kind
         n_particle = int(n_particle_c, kind=ip)
@@ -152,14 +144,14 @@ contains
             end if
             call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
         else
-            call c_f_pointer(c_loc(mo_coeff_c(1)), mo_coeff_3d_c, &
-                             [n_ao, n_mo, n_particle])
             if (n_particle == 1) then
                 allocate(mo_coeff_2d(n_ao, n_mo))
-                mo_coeff_2d = real(mo_coeff_3d_c(:, :, 1), kind=rp)
+                mo_coeff_2d = reshape(real(mo_coeff_c(:n_ao * n_mo), kind=rp), &
+                                      [n_ao, n_mo])
             else
                 allocate(mo_coeff_3d(n_ao, n_mo, n_particle))
-                mo_coeff_3d = real(mo_coeff_3d_c, kind=rp)
+                mo_coeff_3d = reshape(real(mo_coeff_c(:n_ao * n_mo * n_particle), &
+                                           kind=rp), [n_ao, n_mo, n_particle])
             end if
             allocate(ao_overlap(n_ao, n_ao))
             ao_overlap = reshape(real(ao_overlap_c(:n_ao**2), kind=rp), [n_ao, n_ao])
@@ -174,114 +166,100 @@ contains
 
         ! convert settings and hand the density matrix evaluating function and the
         ! logging function with the host context of initialized settings to their
-        ! wrappers in the bundle held by the module, which the settings point to
+        ! wrappers in a bundle, which the settings point to
         settings = settings_c
-        mo_callbacks = orbital_c_callbacks_type()
-        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=mo_callbacks%evaluate_dm)
+        call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=callbacks%evaluate_dm)
         if (settings_c%initialized) then
             if (c_associated(settings_c%logger)) &
-                call c_f_procpointer(cptr=settings_c%logger, fptr=mo_callbacks%logger)
-            mo_callbacks%host_context = settings_c%context
+                call c_f_procpointer(cptr=settings_c%logger, fptr=callbacks%logger)
+            callbacks%host_context = settings_c%context
         end if
-        settings%context => mo_callbacks
+        settings%context => callbacks
 
-        ! the factory wires its routines into Fortran solver settings, which start
-        ! from the defaults since only the wired routines are copied into the C solver
-        ! settings, which are initialized there
-        solver_settings = default_solver_settings
+        ! keep the holder and the bundle held by the module, which are restored if the
+        ! factory fails after the holder was set up, so that the functions an earlier
+        ! call returned keep working
+        previous_holder = mo_holder
+        previous_callbacks = mo_callbacks
+
+        ! set up the holder and convert the solver settings, unless the holder was
+        ! already wired into these
+        call setup_extension_holder(mo_holder, solver_settings_c, solver_settings, &
+                                    settings, error)
+        if (error /= 0) then
+            error_c = int(error, kind=c_ip)
+            return
+        end if
+
+        ! the bundle held by the module, in which the wrappers of the callback functions
+        ! find them, takes over the bundle only once the holder accepted the solver
+        ! settings, so that refused settings leave the callback functions of an object
+        ! in use unchanged
+        mo_callbacks = callbacks
+        settings%context => mo_callbacks
 
         ! call factory function
         if (n_particle == 1) then
             call mo_factory_cs(mo_coeff_2d, ao_overlap, n_occ(1), n_particle, n_ao, &
-                               n_mo, evaluate_dm_cs_funptr, obj_func_mo_funptr, &
-                               update_orbs_mo_funptr, solver_settings, error, &
-                               settings, orbsym_1d)
+                               n_mo, evaluate_dm_cs_funptr, update_orbs_mo_funptr, &
+                               obj_func_mo_funptr, solver_settings, error, settings, &
+                               orbsym_1d)
         else
             call mo_factory_os(mo_coeff_3d, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                               evaluate_dm_os_funptr, obj_func_mo_funptr, &
-                               update_orbs_mo_funptr, solver_settings, error, &
-                               settings, orbsym)
+                               evaluate_dm_os_funptr, update_orbs_mo_funptr, &
+                               obj_func_mo_funptr, solver_settings, error, settings, &
+                               orbsym)
         end if
 
-        ! calculate the number of parameters of a successful setup and store it
-        ! globally to access assumed size arrays passed from C to Fortran
-        if (error == 0) n_param = count_mo_params(n_occ, n_mo, orbsym)
-
-        ! associate the global procedure pointers to the Fortran function pointers
-        obj_func_mo_before_wrapping => obj_func_mo_funptr
-        update_orbs_mo_before_wrapping => update_orbs_mo_funptr
-
-        ! get a C function pointer to the C wrapper functions
-        obj_func_mo_c_funptr = c_funloc(obj_func_mo_c_wrapper)
-        update_orbs_mo_c_funptr = c_funloc(update_orbs_mo_c_wrapper)
-
-        ! copy the solver settings
-        if (error == 0) &
-            call mo_set_solver_settings_c(solver_settings, solver_settings_c)
+        ! write the wired solver settings back and return the C wrappers of the orbital
+        ! update, which copies the orbitals back to the host's array if the object
+        ! updates a copy of them, and of the objective function of the object, or
+        ! restore the holder and the bundle held by the module if the factory failed
+        if (error == 0) then
+            call wire_solver_settings_c(mo_holder, mo_object, solver_settings, &
+                                        solver_settings_c)
+            update_orbs_mo_c_funptr = c_funloc(update_orbs_mo_c_wrapper)
+            obj_func_mo_c_funptr = c_funloc(obj_func_c_wrapper)
+            if (rp /= c_rp) call c_f_pointer(c_loc(mo_coeff_c(1)), mo_coeff_3d_c, &
+                                             [n_ao, n_mo, n_particle])
+        else
+            mo_holder = previous_holder
+            mo_callbacks = previous_callbacks
+        end if
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
 
     end function mo_factory_c_wrapper
 
-    subroutine mo_set_solver_settings_c(solver_settings, solver_settings_c)
+    recursive function update_orbs_mo_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
+                                                hess_x_c_funptr, context_c) &
+        result(error_c) bind(C)
         !
-        ! this subroutine wires the C wrappers of the MO-basis preconditioners and
-        ! extra trial vectors into C solver settings, leaving the projection to the
-        ! caller
+        ! this function exposes the orbital update of the MO object, and of ARH in the
+        ! MO basis, to C hosts through the shared C wrapper of the orbital update,
+        ! after which it copies the MO coefficients the object rotated back to the
+        ! array of the C host if the factory could not hand it the host's array in
+        ! place
         !
-        use opentrustregion, only: solver_settings_type, default_solver_settings, &
-                                   default_stability_settings, stderr, &
-                                   settings_uninitialized_warning_msg, &
-                                   stability_settings_uninitialized_warning_msg
-        use c_interface, only: solver_settings_type_c, assignment(=), &
-                               warn_uninitialized_settings_c
+        use otr_common_c_interface, only: update_orbs_c_wrapper
+        use otr_mo, only: mo_object
 
-        type(solver_settings_type), intent(in) :: solver_settings
-        type(solver_settings_type_c), intent(inout) :: solver_settings_c
+        real(c_rp), intent(in), target :: kappa_c(*)
+        real(c_rp), intent(out) :: func_c
+        real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
+        type(c_funptr), intent(inout) :: hess_x_c_funptr
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error_c
 
-        ! initialize the C solver settings and their nested stability check settings if
-        ! they were not initialized, which the solver can no longer detect once the
-        ! routines are wired into them, after printing the warning the solver would
-        ! print, regardless of the verbosity, since the default settings would silence
-        ! it, through the logging function of the solver settings or on stderr since
-        ! solver settings that were not initialized provide none
-        if (.not. solver_settings_c%initialized) then
-            write(stderr, '(A)') " "//settings_uninitialized_warning_msg
-            solver_settings_c = default_solver_settings
-        else if (.not. solver_settings_c%stability_settings%initialized) then
-            call warn_uninitialized_settings_c( &
-                solver_settings_c%logger, solver_settings_c%context, &
-                stability_settings_uninitialized_warning_msg)
-            solver_settings_c%stability_settings = default_stability_settings
-        end if
+        ! update the orbitals
+        error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
+                                        hess_x_c_funptr, context_c)
 
-        ! associate the global procedure pointers to the Fortran function pointers and
-        ! get C function pointers to the C wrapper functions
-        if (associated(solver_settings%precond)) then
-            precond_mo_before_wrapping => solver_settings%precond
-            solver_settings_c%precond = c_funloc(precond_mo_c_wrapper)
-        end if
-        if (associated(solver_settings%precond_pd)) then
-            precond_pd_mo_before_wrapping => solver_settings%precond_pd
-            solver_settings_c%precond_pd = c_funloc(precond_pd_mo_c_wrapper)
-        end if
-        if (associated(solver_settings%get_extra_trial_vectors)) then
-            get_extra_trial_vectors_mo_before_wrapping => &
-                solver_settings%get_extra_trial_vectors
-            solver_settings_c%get_extra_trial_vectors = &
-                c_funloc(get_extra_trial_vectors_mo_c_wrapper)
-        end if
-        if (associated(solver_settings%stability_settings%precond, &
-                       solver_settings%precond)) &
-            solver_settings_c%stability_settings%precond = &
-            c_funloc(precond_mo_c_wrapper)
-        if (associated(solver_settings%stability_settings%get_extra_trial_vectors, &
-                       solver_settings%get_extra_trial_vectors)) &
-            solver_settings_c%stability_settings%get_extra_trial_vectors = &
-            c_funloc(get_extra_trial_vectors_mo_c_wrapper)
+        ! copy the rotated MO coefficients back to the host's array if they are a copy
+        if (rp /= c_rp) mo_coeff_3d_c = real(mo_object%mo_coeff, kind=c_rp)
 
-    end subroutine mo_set_solver_settings_c
+    end function update_orbs_mo_c_wrapper
 
     subroutine evaluate_dm_mo_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, &
                                            error, context)
@@ -376,124 +354,6 @@ contains
         call get_response_f_wrapper_impl(mo_callbacks, dm, response, error)
 
     end subroutine get_response_mo_os_f_wrapper
-
-    function obj_func_mo_c_wrapper(kappa_c, func_c, context_c) result(error_c) bind(C)
-        !
-        ! this function wraps the objective function subroutine to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: obj_func_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out) :: func_c
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = obj_func_c_wrapper_impl(obj_func_mo_before_wrapping, kappa_c, &
-                                          func_c, context_c)
-
-    end function obj_func_mo_c_wrapper
-
-    function update_orbs_mo_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                      hess_x_c_funptr, context_c) result(error_c) &
-        bind(C)
-        !
-        ! this function wraps the orbital update subroutine to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: update_orbs_c_wrapper_impl
-        use otr_mo, only: mo_object
-
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out) :: func_c
-        real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(inout) :: hess_x_c_funptr
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = update_orbs_c_wrapper_impl( &
-            update_orbs_mo_before_wrapping, hess_x_mo_before_wrapping, &
-            hess_x_mo_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr, &
-            context_c)
-
-        ! update the rotated orbitals passed from C if they could not be rotated in
-        ! place
-        if (rp /= c_rp) mo_coeff_3d_c = real(mo_object%mo_coeff, kind=c_rp)
-
-    end function update_orbs_mo_c_wrapper
-
-    function hess_x_mo_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
-        !
-        ! this function wraps the Hessian linear transformation to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: hess_x_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: x_c(*)
-        real(c_rp), intent(out), target :: hess_x_c(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = &
-            hess_x_c_wrapper_impl(hess_x_mo_before_wrapping, x_c, hess_x_c, context_c)
-
-    end function hess_x_mo_c_wrapper
-
-    function precond_mo_c_wrapper(residual_c, mu_c, precond_residual_c, context_c) &
-        result(error_c) bind(C)
-        !
-        ! this function wraps the level-shifted preconditioner subroutine to convert
-        ! Fortran variables to C variables
-        !
-        use otr_common_c_interface, only: precond_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: residual_c(*)
-        real(c_rp), intent(in) :: mu_c
-        real(c_rp), intent(out), target :: precond_residual_c(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = precond_c_wrapper_impl(precond_mo_before_wrapping, residual_c, mu_c, &
-                                         precond_residual_c, context_c)
-
-    end function precond_mo_c_wrapper
-
-    function precond_pd_mo_c_wrapper(residual_c, precond_residual_c, context_c) &
-        result(error_c) bind(C)
-        !
-        ! this function wraps the positive-definite preconditioner subroutine to
-        ! convert Fortran variables to C variables
-        !
-        use otr_common_c_interface, only: precond_pd_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: residual_c(*)
-        real(c_rp), intent(out), target :: precond_residual_c(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = precond_pd_c_wrapper_impl(precond_pd_mo_before_wrapping, residual_c, &
-                                            precond_residual_c, context_c)
-
-    end function precond_pd_mo_c_wrapper
-
-    function get_extra_trial_vectors_mo_c_wrapper( &
-        trial_vectors_c, n_extra_trial_vectors_c, context_c) result(error_c) bind(C)
-        !
-        ! this function wraps the extra trial vector subroutine to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: get_extra_trial_vectors_c_wrapper_impl
-
-        real(c_rp), intent(out), target :: trial_vectors_c(*)
-        integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = get_extra_trial_vectors_c_wrapper_impl( &
-            get_extra_trial_vectors_mo_before_wrapping, trial_vectors_c, &
-            n_extra_trial_vectors_c, context_c)
-
-    end function get_extra_trial_vectors_mo_c_wrapper
 
     subroutine init_mo_settings_c(settings_c) bind(C, name="init_mo_settings")
         !

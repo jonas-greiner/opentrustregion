@@ -9,11 +9,13 @@ module otr_qn_mock
     use opentrustregion, only: ip, stderr
     use otr_qn, only: qn_factory, update_orbs_qn_deconstructor
     use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
-    use, intrinsic :: iso_c_binding, only: c_loc
 
     implicit none
 
     logical :: test_passed
+
+    ! error the mock factory returns
+    integer(ip) :: mock_qn_factory_error = 0
 
     ! create function pointers to ensure that routines comply with interface
     procedure(qn_factory), pointer :: mock_qn_factory_ptr => mock_qn_factory
@@ -22,45 +24,56 @@ module otr_qn_mock
 
 contains
 
-    subroutine mock_qn_factory(update_orbs_orig_funptr, transport_funptr, &
-                               init_hess_funptr, n_param, error, settings, &
-                               update_orbs_qn_funptr)
+    subroutine mock_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                               transport_funptr, init_hess_funptr, &
+                               update_orbs_qn_funptr, obj_func_qn_funptr, &
+                               solver_settings, error, settings)
         !
         ! this function is a test function for the function which returns a modified
-        ! orbital updating function
+        ! orbital updating function and objective function and wires the solver
+        ! settings, which returns the error it is set to and otherwise sets up the
+        ! quasi-Newton object and points the context of the solver settings at its
+        ! level of the solver, as the factory does
         !
-        use opentrustregion, only: update_orbs_type
-        use otr_qn, only: transport_type, init_hess_type, qn_settings_type
-        use test_reference, only: check_update_orbs_funptr, host_context, &
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver_settings_type
+        use otr_qn, only: transport_type, init_hess_type, qn_settings_type, &
+                          update_object, sr1_object
+        use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
                                   n_param_ref => n_param
-        use c_interface, only: c_callbacks_type
-        use otr_qn_c_interface, only: update_orbs_orig_qn_before_wrapping
         use otr_qn_test_reference, only: test_transport_funptr, test_init_hess_funptr
-        use otr_common_mock, only: mock_update_orbs
+        use otr_common_mock, only: mock_update_orbs, mock_obj_func
 
-        procedure(update_orbs_type), intent(in), pointer :: update_orbs_orig_funptr
+        integer(ip), intent(in) :: n_param
+        procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
+        procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         procedure(transport_type), intent(in), pointer :: transport_funptr
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
-        integer(ip), intent(in) :: n_param
-        type(qn_settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
-
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context
+        procedure(obj_func_type), intent(out), pointer :: obj_func_qn_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
+        integer(ip), intent(out) :: error
+        type(qn_settings_type), intent(in) :: settings
 
         ! initialize logical
         test_passed = .true.
 
-        ! test passed orbital update function, which calls the original C function
-        ! through the C wrapper of the core, so it finds it in the callback bundle the
-        ! returned orbital update builds, here with the host context the test armed
-        callbacks%update_orbs => update_orbs_orig_qn_before_wrapping
-        callbacks%host_context = c_loc(host_context)
-        context => callbacks
+        ! check number of parameters
+        if (n_param /= n_param_ref) then
+            test_passed = .false.
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Passed number of "// &
+                "parameters wrong."
+        end if
+
+        ! test passed orbital update and objective function, which call the host's C
+        ! functions through the C wrappers of the core, so they find them with the host
+        ! context in the callback bundle the converted solver settings point to, as the
+        ! object does through the host record of its level of the solver
         if (.not. check_update_orbs_funptr( &
-            update_orbs_orig_funptr, "qn_factory_c_wrapper", &
-            " by given orbital updating function", context)) test_passed = .false.
+            update_orbs_funptr, "qn_factory_c_wrapper", " by given orbital "// &
+            "updating function", solver_settings%context)) test_passed = .false.
+        if (.not. check_obj_func_funptr(obj_func_funptr, "qn_factory_c_wrapper", &
+                                        " by given objective function", &
+                                        solver_settings%context)) test_passed = .false.
 
         ! test passed transport function
         if (.not. test_transport_funptr(transport_funptr, "qn_factory_c_wrapper", &
@@ -71,13 +84,6 @@ contains
         if (.not. test_init_hess_funptr(init_hess_funptr, "qn_factory_c_wrapper", &
                                         " by given initial Hessian function", &
                                         settings%context)) test_passed = .false.
-
-        ! check number of parameters
-        if (n_param /= n_param_ref) then
-            test_passed = .false.
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Passed number of "// &
-                "parameters wrong."
-        end if
 
         ! check if optional logging function is correctly passed
         if (.not. associated(settings%logger)) then
@@ -96,8 +102,14 @@ contains
         end if
 
         ! set output quantities
-        error = 0
+        error = mock_qn_factory_error
+        update_orbs_qn_funptr => null()
+        obj_func_qn_funptr => null()
+        if (error /= 0) return
+        update_object => sr1_object
+        solver_settings%context => update_object%solver_level
         update_orbs_qn_funptr => mock_update_orbs
+        obj_func_qn_funptr => mock_obj_func
 
     end subroutine mock_qn_factory
 

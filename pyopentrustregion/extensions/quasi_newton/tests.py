@@ -25,11 +25,15 @@ from pyopentrustregion.tests import (
     print_separator,
     LegacyPyInterfaceHelpers,
 )
-from pyopentrustregion.python_interface import c_real, c_int
+from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
 from pyopentrustregion.extensions.quasi_newton import (
     QNSettings,
     qn_factory,
     update_orbs_qn_deconstructor,
+)
+from pyopentrustregion.extensions.common.tests import (
+    setup_wired_solver_settings,
+    check_wired_solver_settings,
 )
 
 if NUMPY_AVAILABLE:
@@ -42,12 +46,10 @@ fortran_tests = {
     "qn_c_interface_tests": [
         "assign_qn_c_f",
         "assign_qn_f_c",
-        "hess_x_qn_c_wrapper",
         "init_hess_f_wrapper",
         "init_qn_settings_c",
         "qn_factory_c_wrapper",
         "transport_f_wrapper",
-        "update_orbs_qn_c_wrapper",
         "update_orbs_qn_deconstructor_c_wrapper",
     ],
 }
@@ -120,6 +122,7 @@ class QNPyInterfaceTests(unittest.TestCase):
 
     mock_update_orbs = LegacyPyInterfaceHelpers.mock_update_orbs
     mock_hess_x = LegacyPyInterfaceHelpers.mock_hess_x
+    mock_obj_func = LegacyPyInterfaceHelpers.mock_obj_func
 
     def mock_transport(self, geodesic, tangent_vector):
         """
@@ -151,19 +154,22 @@ class QNPyInterfaceTests(unittest.TestCase):
         # initialize test flag
         test_passed = True
 
-        # initialize settings object
+        # initialize settings objects
         settings = QNSettings()
         self.assign_ref_to_settings(settings)
+        solver_settings, python_functions = setup_wired_solver_settings()
 
         # initialize logging boolean
         self.test_logger = True
 
         # call quasi-Newton orbital updating factory python interface
-        update_orbs_qn = qn_factory(
+        update_orbs_qn, obj_func_qn = qn_factory(
+            n_param,
             self.mock_update_orbs,
+            self.mock_obj_func,
             self.mock_transport,
             self.mock_init_hess,
-            n_param,
+            solver_settings,
             settings,
         )
 
@@ -233,22 +239,52 @@ class QNPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        # call returned objective function
+        try:
+            func = obj_func_qn(kappa)
+        except RuntimeError:
+            print(
+                " test_qn_factory_py_interface failed: Returned objective function "
+                "raises error."
+            )
+            test_passed = False
+        else:
+            if func != 3.0:
+                print(
+                    " test_qn_factory_py_interface failed: Returned function value of "
+                    "returned objective function wrong."
+                )
+                test_passed = False
+
+        # check the solver settings the factory wired
+        if not check_wired_solver_settings(
+            solver_settings, python_functions, "qn_factory_py_interface"
+        ):
+            test_passed = False
+
         # call qn_factory python interface for host callbacks which cannot be called
         # with the arguments the C interface passes, which have to raise an error
         # before the Fortran factory is called
         invalid_cases = (
             (
                 "transport with a wrong number of arguments",
-                (self.mock_update_orbs, lambda geodesic: None, self.mock_init_hess),
+                (lambda geodesic: None, self.mock_init_hess),
             ),
             (
                 "init_hess with a wrong number of arguments",
-                (self.mock_update_orbs, self.mock_transport, lambda: None),
+                (self.mock_transport, lambda: None),
             ),
         )
         for case, callbacks in invalid_cases:
             try:
-                qn_factory(*callbacks, n_param, settings)
+                qn_factory(
+                    n_param,
+                    self.mock_update_orbs,
+                    self.mock_obj_func,
+                    *callbacks,
+                    SolverSettings(),
+                    settings,
+                )
                 print(
                     f" test_qn_factory_py_interface failed: {case} did not raise an "
                     "error."

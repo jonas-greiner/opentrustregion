@@ -22,7 +22,6 @@ from unittest.mock import patch
 from pyopentrustregion.tests import (
     lib,
     n_param,
-    n_extra_trial_vectors,
     NUMPY_AVAILABLE,
     add_tests,
     print_separator,
@@ -34,7 +33,11 @@ from pyopentrustregion.python_interface import (
     update_orbs_interface_type,
     SolverSettings,
 )
-from pyopentrustregion.extensions.common.tests import n_ao
+from pyopentrustregion.extensions.common.tests import (
+    n_ao,
+    setup_wired_solver_settings,
+    check_wired_solver_settings,
+)
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory, mo_deconstructor
 from pyopentrustregion.extensions.mo.python_interface import UpdateOrbsMOPyInterface
 
@@ -51,9 +54,8 @@ fortran_tests = {
         "diagonalize_per_irrep",
         "finalize_mo",
         "get_extra_trial_vectors_mo",
-        "get_extra_trial_vectors_mo_callback",
         "get_hess_eigval_pairs_mo",
-        "hess_x_mo_callback",
+        "hess_x_mo",
         "hess_x_static_mo",
         "init_mo_settings",
         "mo_deconstructor",
@@ -62,33 +64,25 @@ fortran_tests = {
         "mo_factory_os",
         "mo_param_rows",
         "mo_sanity_check",
-        "mo_set_solver_settings",
         "mo_transform",
-        "obj_func_mo_callback",
+        "obj_func_mo",
         "pack_ov",
-        "precond_mo_callback",
-        "precond_pd_mo_callback",
         "refresh_hess_eigen_mo",
         "rotate_from_hess_eigenbasis_mo",
         "rotate_mo_coeff",
         "rotate_orbitals_mo",
         "rotate_to_hess_eigenbasis_mo",
         "unpack_ov",
-        "update_orbs_mo_callback",
+        "update_orbs_mo",
     ],
     "mo_c_interface_tests": [
         "assign_mo_c_f",
         "assign_mo_f_c",
         "evaluate_dm_mo_f_wrapper",
-        "get_extra_trial_vectors_mo_c_wrapper",
         "get_response_mo_f_wrapper",
-        "hess_x_mo_c_wrapper",
         "init_mo_settings_c",
         "mo_deconstructor_c_wrapper",
         "mo_factory_c_wrapper",
-        "obj_func_mo_c_wrapper",
-        "precond_mo_c_wrapper",
-        "precond_pd_mo_c_wrapper",
         "update_orbs_mo_c_wrapper",
     ],
 }
@@ -262,18 +256,11 @@ class MOPyInterfaceTests(unittest.TestCase):
             # initialize logging boolean
             self.test_logger = True
 
-            # initialize solver settings object, without a projection for the
-            # closed-shell cases and with a projection supplied by the caller, which
-            # has to be kept, for the open-shell cases, already passed on as a C
-            # callback by a previous solver call
-            solver_settings = SolverSettings()
-            caller_project = None if n_particle == 1 else lambda vector: None
-            solver_settings.project = caller_project
-            solver_settings.stability_settings.project = caller_project
-            solver_settings.set_optional_callbacks(n_param, {})
+            # initialize solver settings object
+            solver_settings, python_functions = setup_wired_solver_settings()
 
             # call MO factory python interface
-            obj_func_mo, update_orbs_mo = mo_factory(
+            update_orbs_mo, obj_func_mo = mo_factory(
                 mo_coeff,
                 ao_overlap,
                 n_occ[0] if n_particle == 1 else n_occ[:n_particle],
@@ -296,31 +283,10 @@ class MOPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
-            # determine if the MO routines are wired into the solver settings without a
-            # projection
-            if any(
-                callback is None
-                for callback in (
-                    solver_settings.precond,
-                    solver_settings.precond_pd,
-                    solver_settings.get_extra_trial_vectors,
-                    solver_settings.stability_settings.precond,
-                    solver_settings.stability_settings.get_extra_trial_vectors,
-                )
+            # check the solver settings the factory wired
+            if not check_wired_solver_settings(
+                solver_settings, python_functions, "mo_factory_py_interface"
             ):
-                print(
-                    " test_mo_factory_py_interface failed: MO routines not wired "
-                    f"into solver settings for the {case} case."
-                )
-                test_passed = False
-            if (
-                solver_settings.project is not caller_project
-                or solver_settings.stability_settings.project is not caller_project
-            ):
-                print(
-                    " test_mo_factory_py_interface failed: Projection wired or "
-                    f"projection supplied by the caller replaced for the {case} case."
-                )
                 test_passed = False
 
             # check if the mock factory received the correct input and reset its flag
@@ -397,43 +363,6 @@ class MOPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
-            # call wired MO level-shifted preconditioner function
-            residual = np.full(n_param, 1.0, dtype=np.float64)
-            precond_residual = np.empty(n_param, dtype=np.float64)
-            mu = 5.0
-            solver_settings.precond(residual, mu, precond_residual)
-            if not np.allclose(precond_residual, mu):
-                print(
-                    " test_mo_factory_py_interface failed: Returned preconditioned "
-                    "residual of wired MO level-shifted preconditioner function "
-                    f"wrong for the {case} case."
-                )
-                test_passed = False
-
-            # call wired MO positive-definite preconditioner function
-            precond_pd_residual = np.empty(n_param, dtype=np.float64)
-            solver_settings.precond_pd(residual, precond_pd_residual)
-            if not np.allclose(precond_pd_residual, 3.0):
-                print(
-                    " test_mo_factory_py_interface failed: Returned preconditioned "
-                    "residual of wired MO positive-definite preconditioner function "
-                    f"wrong for the {case} case."
-                )
-                test_passed = False
-
-            # call wired MO extra trial vector function
-            trial_vectors = np.empty((n_extra_trial_vectors, n_param), dtype=np.float64)
-            solver_settings.get_extra_trial_vectors(trial_vectors)
-            if not np.allclose(
-                trial_vectors,
-                np.arange(1, n_extra_trial_vectors + 1, dtype=np.float64)[:, None],
-            ):
-                print(
-                    " test_mo_factory_py_interface failed: Returned trial vectors of "
-                    f"wired MO extra trial vector function wrong for the {case} case."
-                )
-                test_passed = False
-
         # call MO factory python interface for row-major MO coefficients and its
         # orbital updating function, set new starting orbitals in the same array and
         # call the factory again, which has to take them over and share the buffer the
@@ -444,10 +373,10 @@ class MOPyInterfaceTests(unittest.TestCase):
         grad = np.empty(n_param, dtype=np.float64)
         h_diag = np.empty(n_param, dtype=np.float64)
         args = (mo_coeff, ao_overlap, n_occ[0], 1, n_ao, n_mo, self.mock_evaluate_dm)
-        returned = [mo_factory(*args, SolverSettings(), settings)]
-        returned[0][1](kappa, grad, h_diag)
+        returned = [mo_factory(*args, setup_wired_solver_settings()[0], settings)]
+        returned[0][0](kappa, grad, h_diag)
         mo_coeff[:] = mo_coeff_pattern(1, 0.0)[0]
-        returned.append(mo_factory(*args, SolverSettings(), settings))
+        returned.append(mo_factory(*args, setup_wired_solver_settings()[0], settings))
         if not mock_passed.value:
             print(
                 " test_mo_factory_py_interface failed: New starting orbitals not "
@@ -455,7 +384,7 @@ class MOPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
         mock_passed.value = True
-        if returned[0][0].mo_coeff_buffer is not returned[1][0].mo_coeff_buffer:
+        if returned[0][1].mo_coeff_buffer is not returned[1][1].mo_coeff_buffer:
             print(
                 " test_mo_factory_py_interface failed: Buffer of the MO coefficients "
                 "not shared between factory calls for the same array."
@@ -468,8 +397,11 @@ class MOPyInterfaceTests(unittest.TestCase):
         # a buffer of its own, which the library no longer rotates
         mo_coeff = initial_mo_coeff(1, False, np.float64)
         args = (mo_coeff, ao_overlap, n_occ[0], 1, n_ao, n_mo, self.mock_evaluate_dm)
-        returned = [mo_factory(*args, SolverSettings(), settings) for _ in range(2)]
-        returned[0][1](kappa, grad, h_diag)
+        returned = [
+            mo_factory(*args, setup_wired_solver_settings()[0], settings)
+            for _ in range(2)
+        ]
+        returned[0][0](kappa, grad, h_diag)
         if not np.allclose(mo_coeff, mo_coeff_pattern(1, 1000.0)[0]):
             print(
                 " test_mo_factory_py_interface failed: MO coefficients rotated "
@@ -496,8 +428,8 @@ class MOPyInterfaceTests(unittest.TestCase):
                 n_mo,
                 self.mock_evaluate_dm,
             )
-            returned = [mo_factory(*args, SolverSettings(), settings)]
-            mo_coeff_buffer_ref = weakref.ref(returned[0][0].mo_coeff_buffer)
+            returned = [mo_factory(*args, setup_wired_solver_settings()[0], settings)]
+            mo_coeff_buffer_ref = weakref.ref(returned[0][1].mo_coeff_buffer)
             del mo_coeff, args, returned
             gc.collect()
             if mo_coeff_ref() is not None or mo_coeff_buffer_ref() is not None:

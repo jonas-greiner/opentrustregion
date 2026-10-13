@@ -532,11 +532,9 @@ or, when installing the Python package:
 CMAKE_FLAGS='-DENABLE_MO=ON' pip install .
 ```
 
-This exposes an `mo_factory` function that prepares MO-specific callbacks for energy and orbital updates and wires MO-specific preconditioning and extra trial vectors into the solver settings.
-
 #### Usage
 
-The routine `mo_factory` constructs and returns MO versions of the energy and orbital updating functions, and wires MO versions of the preconditioning and extra trial vector functions into the solver settings. Since the parameters are non-redundant, the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels, or the number of occupied-virtual pairs of the same irrep if `orbsym` is given, and no projection is wired into the solver settings, so that the projection is left to the caller. This routine requires the following input arguments:
+The routine `mo_factory` constructs and returns MO versions of the orbital updating subroutine and the objective function and wires the solver settings with the MO object, which provides MO versions of the preconditioning and extra trial vector functions. Since the parameters are non-redundant, the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels, or the number of occupied-virtual pairs of the same irrep if `orbsym` is given, and the MO object provides no projection, so that the projection is left to the caller. This routine requires the following input arguments:
 
 #### Required Arguments
 
@@ -547,13 +545,13 @@ The routine `mo_factory` constructs and returns MO versions of the energy and or
 - **`n_ao`** (integer): Specifies the number of AOs.
 - **`n_mo`** (integer): Specifies the number of MOs, which must not exceed the number of AOs.
 - **`evaluate_dm`** (subroutine): Accepts an AO density matrix, built from the occupied orbitals of every particle channel, and returns the same quantities as the `evaluate_dm` of the OAO extension, whose description below applies unchanged.
-- **`obj_func_mo`** (subroutine): Returned MO objective function as defined for the `solver` subroutine.
 - **`update_orbs_mo`** (subroutine): Returned MO orbital updating subroutine as defined for the `solver` subroutine.
-- **`settings`** (solver_settings_type): Solver settings object, which is initialized first if it is not initialized yet, and into which the following MO routines are wired:
+- **`obj_func_mo`** (function): Returned MO objective function as defined for the `solver` subroutine.
+- **`settings`** (solver_settings_type): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the MO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. Within one calculation, the same settings can be passed to `mo_factory` and then to `arh_factory_mo` (see below), but start from fresh settings for every new calculation: calling `mo_factory` again with settings it wired is refused with an error, and if `arh_factory_mo` or another factory wired them in between, the repeated call is not detected and the callback functions neither object provides then call each other without end. The MO object provides the following routines:
   - **`precond`**: MO level-shifted preconditioner, based on the exact eigendecomposition of the static part of the Hessian, also for the stability check.
   - **`precond_pd`**: MO positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`get_extra_trial_vectors`**: MO extra trial vectors, the rotations between the pseudo-canonical occupied and virtual orbitals with the most negative orbital energy differences, also for the stability check.
-- **`error`** (integer): An integer code indicating the success or failure of the factory. The error code structure is explained below.
+- **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`mo_settings`** (mo_settings_type): Settings object which controls optional arguments as described below.
 - **`orbsym`** (integer array, optional): Specifies the irreps of the MOs as the last argument, with dimension (`n_mo`) for closed-shell and (`n_mo`, 2) for open-shell calculations, which is (`n_mo`) and (2, `n_mo`) in Python, and is omitted in Fortran, `NULL` in C and `None` in Python if all MOs belong to the same irrep. Only the occupied-virtual rotations between orbitals of the same irrep are then parameters, so that symmetry-adapted starting orbitals stay symmetry-adapted. Any integers can label the irreps; only their equality matters.
 
@@ -570,8 +568,8 @@ use otr_mo, only: mo_factory, mo_settings_type, evaluate_dm_cs_type, &
 type(solver_settings_type) :: settings
 type(mo_settings_type) :: mo_settings
 procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
-procedure(obj_func_type), pointer :: obj_func_mo_funptr
 procedure(update_orbs_type), pointer :: update_orbs_mo_funptr
+procedure(obj_func_type), pointer :: obj_func_mo_funptr
 integer(ip) :: n_occ, n_particle, n_ao, n_mo, n_param, error
 real(rp), allocatable, target :: mo_coeff(:, :)
 real(rp), allocatable :: ao_overlap(:, :)
@@ -588,9 +586,9 @@ mo_settings%verbose = 1
 ! initialize settings
 call settings%init(error)
 
-! get MO routines and wire the remaining ones into the settings
+! get MO routines and wire the settings with the MO object
 call mo_factory(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                evaluate_dm_funptr, obj_func_mo_funptr, update_orbs_mo_funptr, &
+                evaluate_dm_funptr, update_orbs_mo_funptr, obj_func_mo_funptr, &
                 settings, error, mo_settings)
 
 ! set number of parameters
@@ -626,9 +624,9 @@ mo_settings.verbose = 1;
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
-// get callback functions and wire the remaining ones into the settings
-obj_func_fp obj_func_mo_funptr;
+// get MO functions and wire the settings with the MO object
 update_orbs_fp update_orbs_mo_funptr;
+obj_func_fp obj_func_mo_funptr;
 c_int error = mo_factory(mo_coeff,
                          ao_overlap,
                          n_occ,
@@ -636,8 +634,8 @@ c_int error = mo_factory(mo_coeff,
                          n_ao,
                          n_mo,
                          evaluate_dm_funptr,
-                         &obj_func_mo_funptr,
                          &update_orbs_mo_funptr,
+                         &obj_func_mo_funptr,
                          &settings,
                          &mo_settings,
                          NULL);
@@ -669,8 +667,8 @@ mo_settings.verbose = 1
 # initialize settings
 settings = SolverSettings()
 
-# get callback functions and wire the remaining ones into the settings
-obj_func_mo, update_orbs_mo = mo_factory(
+# get MO functions and wire the settings with the MO object
+update_orbs_mo, obj_func_mo = mo_factory(
     mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, settings,
     mo_settings
 )
@@ -689,11 +687,17 @@ mo_deconstructor()
 
 - `mo_coeff`, `ao_overlap`, `n_occ`, `n_particle`, `n_ao` and `n_mo` are assumed to be prepared elsewhere.
 - `evaluate_dm` is a callback procedure provided elsewhere.
-- MO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden. `mo_settings_type` does not add any settings of its own beyond the base ones.
-- `mo_factory` returns two procedures, `obj_func` and `update_orbs`, which are passed to the normal `solver`, and wires `precond`, `precond_pd`, and `get_extra_trial_vectors` into the solver settings. All other solver settings set before the call are kept, including a projection. To use the `solver`'s own default diagonal preconditioner or no extra trial vectors instead, reset the corresponding setting and its stability check counterpart after the factory call.
+- MO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
+- `mo_factory` returns two procedures, `update_orbs` and `obj_func`, which are passed to the normal `solver` together with the wired settings. To use the `solver`'s default diagonal preconditioner or no extra trial vectors instead, unset the corresponding callback function, and its stability check counterpart, after the factory call.
 - Unlike ARH, MO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `evaluate_dm`, rather than a history-based approximation.
-- When `mo_factory` and `arh_factory_mo` are combined for the same orbitals, for example to use the exact Hessian in the stability check of an ARH calculation, call `mo_factory` first: both share the MO objects and the C callbacks of the objective function, the preconditioners and the extra trial vectors, which belong to the factory called last. In Python, pass both factories the same `mo_coeff` array object, through which they share the MO coefficients they rotate. `arh_deconstructor` then also deallocates the MO objects.
+- When `mo_factory` and `arh_factory_mo` are combined for the same orbitals, for example to use the exact Hessian in the stability check of an ARH calculation, call `mo_factory` first: both share the MO objects, and settings wired by both use the routines of the object wired last where both provide one. Fortran and C hosts call the functions `mo_factory` returned with the context the settings had right after that call. The MO object then uses the ARH settings: their logging function and verbosity apply to its messages, and in Fortran its `evaluate_dm` and the `get_response` it returns receive the context of the ARH settings. In Python, pass both factories the same `mo_coeff` array object, through which they share the MO coefficients they rotate. `arh_deconstructor` then also deallocates the MO objects.
 - Clean up MO resources by calling `mo_deconstructor`; the final orbitals are the MO coefficients passed to the factory, which are rotated in place.
+
+#### Optional Settings
+The MO factory can be fine-tuned using the following settings:
+
+- **`verbose`** (integer): Controls the verbosity of output of the MO routines.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm`, of the `get_response` it returns and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
 ### Orthogonal Atomic Orbitals (OAO)
 
@@ -713,11 +717,9 @@ or, when installing the Python package:
 CMAKE_FLAGS='-DENABLE_OAO=ON' pip install .
 ```
 
-This exposes an `oao_factory` function that prepares OAO-specific callbacks for energy and orbital updates and wires OAO-specific preconditioning, projection, and extra trial vectors into the solver settings.
-
 #### Usage
 
-The routine `oao_factory` constructs and returns OAO versions of the energy and orbital updating functions, and wires OAO versions of the preconditioning, projection, and extra trial vector functions into the solver settings. This routine requires the following input arguments:
+The routine `oao_factory` constructs and returns OAO versions of the orbital updating subroutine and the objective function and wires the solver settings with the OAO object, which provides OAO versions of the preconditioning, projection, and extra trial vector functions. This routine requires the following input arguments:
 
 #### Required Arguments
 
@@ -734,14 +736,14 @@ The routine `oao_factory` constructs and returns OAO versions of the energy and 
   - Receives the host context of the extension's settings as its last argument.
 
   Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` (or, for `get_response`, `False`) in Python, and the callback must not build it.
-- **`obj_func_oao`** (subroutine): Returned OAO objective function as defined for the `solver` subroutine.
 - **`update_orbs_oao`** (subroutine): Returned OAO orbital updating subroutine as defined for the `solver` subroutine.
-- **`settings`** (solver_settings_type): Solver settings object, which is initialized first if it is not initialized yet, and into which the following OAO routines are wired:
+- **`obj_func_oao`** (function): Returned OAO objective function as defined for the `solver` subroutine.
+- **`settings`** (solver_settings_type): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the OAO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. Within one calculation, the same settings can be passed to `oao_factory` and then to `arh_factory_oao` (see below), but start from fresh settings for every new calculation: calling `oao_factory` again with settings it wired is refused with an error, and if `arh_factory_oao` or another factory wired them in between, the repeated call is not detected and the callback functions neither object provides then call each other without end. The OAO object provides the following routines:
   - **`precond`**: OAO level-shifted preconditioner, based on the exact eigendecomposition of the static part of the Hessian, also for the stability check.
   - **`precond_pd`**: OAO positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`project`**: OAO projection onto the non-redundant orbital rotations, also for the stability check.
   - **`get_extra_trial_vectors`**: OAO extra trial vectors, the orbital rotations between those occupied-virtual eigenvector pairs of the static part of the Hessian whose eigenvalue sums are most negative, also for the stability check.
-- **`error`** (integer): An integer code indicating the success or failure of the factory. The error code structure is explained below.
+- **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`oao_settings`** (oao_settings_type): Settings object which controls optional arguments as described below.
 
 ---
@@ -757,8 +759,8 @@ use otr_oao, only: oao_factory, oao_settings_type, evaluate_dm_cs_type, &
 type(solver_settings_type) :: settings
 type(oao_settings_type) :: oao_settings
 procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
-procedure(obj_func_type), pointer :: obj_func_oao_funptr
 procedure(update_orbs_type), pointer :: update_orbs_oao_funptr
+procedure(obj_func_type), pointer :: obj_func_oao_funptr
 integer(ip) :: n_particle, n_ao, n_param, error
 real(rp), allocatable, target :: dm_ao(:, :)
 real(rp), allocatable :: ao_overlap(:, :)
@@ -775,9 +777,9 @@ oao_settings%verbose = 1
 ! initialize settings
 call settings%init(error)
 
-! get OAO routines and wire the remaining ones into the settings
+! get OAO routines and wire the settings with the OAO object
 call oao_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
-                 obj_func_oao_funptr, update_orbs_oao_funptr, settings, error, &
+                 update_orbs_oao_funptr, obj_func_oao_funptr, settings, error, &
                  oao_settings)
 
 ! set number of parameters
@@ -813,16 +815,16 @@ oao_settings.verbose = 1;
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
-// get callback functions and wire the remaining ones into the settings
-obj_func_fp obj_func_oao_funptr;
+// get OAO functions and wire the settings with the OAO object
 update_orbs_fp update_orbs_oao_funptr;
-c_int error = oao_factory(dm_ao, 
-                          ao_overlap, 
-                          n_particle, 
+obj_func_fp obj_func_oao_funptr;
+c_int error = oao_factory(dm_ao,
+                          ao_overlap,
+                          n_particle,
                           n_ao,
                           evaluate_dm_funptr,
-                          &obj_func_oao_funptr,
                           &update_orbs_oao_funptr,
+                          &obj_func_oao_funptr,
                           &settings,
                           &oao_settings);
 
@@ -856,8 +858,8 @@ oao_settings.verbose = 1
 # initialize settings
 settings = SolverSettings()
 
-# get callback functions and wire the remaining ones into the settings
-obj_func_oao, update_orbs_oao = oao_factory(
+# get OAO functions and wire the settings with the OAO object
+update_orbs_oao, obj_func_oao = oao_factory(
     dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm, settings, oao_settings
 )
 
@@ -875,11 +877,17 @@ oao_deconstructor()
 
 - `dm_ao`, `ao_overlap`, `n_particle` and `n_ao` are assumed to be prepared elsewhere.
 - `evaluate_dm` is a callback procedure provided elsewhere.
-- OAO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden. `oao_settings_type` does not add any settings of its own beyond the base ones.
-- `oao_factory` returns two procedures, `obj_func` and `update_orbs`, which are passed to the normal `solver`, and wires `precond`, `precond_pd`, `project`, and `get_extra_trial_vectors` into the solver settings. All other solver settings set before the call are kept. To use the `solver`'s own default diagonal preconditioner or no extra trial vectors instead, reset the corresponding setting and its stability check counterpart after the factory call.
+- OAO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
+- `oao_factory` returns two procedures, `update_orbs` and `obj_func`, which are passed to the normal `solver` together with the wired settings. To use the `solver`'s default diagonal preconditioner or no extra trial vectors instead, unset the corresponding callback function, and its stability check counterpart, after the factory call.
 - Unlike ARH, OAO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `evaluate_dm`, rather than a history-based approximation.
-- When `oao_factory` and `arh_factory_oao` are combined for the same density matrix, for example to use the exact Hessian in the stability check of an ARH calculation, call `oao_factory` first: both share the OAO objects and the C callbacks of the objective function, the preconditioners, the projection and the extra trial vectors, which belong to the factory called last. `arh_deconstructor` then also deallocates the OAO objects.
+- When `oao_factory` and `arh_factory_oao` are combined for the same density matrix, for example to use the exact Hessian in the stability check of an ARH calculation, call `oao_factory` first: both share the OAO objects, and settings wired by both use the routines of the object wired last where both provide one. Fortran and C hosts call the functions `oao_factory` returned with the context the settings had right after that call. The OAO object then uses the ARH settings: their logging function and verbosity apply to its messages, and in Fortran its `evaluate_dm` and the `get_response` it returns receive the context of the ARH settings. `arh_deconstructor` then also deallocates the OAO objects.
 - Clean up OAO resources by calling `oao_deconstructor`; the final AO density matrix is the one passed to the factory, which is updated in place.
+
+#### Optional Settings
+The OAO factory can be fine-tuned using the following settings:
+
+- **`verbose`** (integer): Controls the verbosity of output of the OAO routines.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm`, of the `get_response` it returns and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
 ### Quasi-Newton Extension
 
@@ -901,36 +909,44 @@ CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install .
 
 #### Usage
 
-This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the `hess_x` function is never called. The routine `qn_factory` constructs and returns a quasi-Newton version of the orbital-updating subroutine. This routine requires the following input arguments:
+This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `qn_factory` constructs and returns quasi-Newton versions of the orbital updating subroutine and the objective function and wires the solver settings with the quasi-Newton object. This routine takes the following arguments:
 
 #### Required Arguments
 
-- **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine is not used. The returned orbital updating subroutine calls it with the host context the solver hands to it.
+- **`n_param`** (integer): Specifies the number of parameters to be optimized.
+- **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine it returns is not used. The returned orbital updating subroutine calls it with the host context of the solver settings.
+- **`obj_func`** (function): Original objective function as defined for the `solver` subroutine, which the returned objective function calls with the host context of the solver settings.
 - **`transport`** (subroutine): Transports a tangent vector in place along the geodesic of an orbital rotation, so that the stored steps and gradient differences refer to the current orbitals, and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the quasi-Newton settings as its last argument.
 - **`init_hess`** (subroutine): Applies the initial Hessian approximation in place to a vector and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the quasi-Newton settings as its last argument.
-- **`n_param`** (integer): Specifies the number of parameters to be optimized.
+- **`update_orbs_qn`** (subroutine): Returned quasi-Newton orbital updating subroutine as defined for the `solver` subroutine.
+- **`obj_func_qn`** (function): Returned objective function as defined for the `solver` subroutine.
+- **`settings`** (solver_settings_type): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. Start from fresh settings for every new calculation: calling `qn_factory` again with settings it wired is refused with an error, and if another factory wired them in between, the repeated call is not detected and the callback functions neither object provides then call each other without end.
+- **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`qn_settings`** (qn_settings_type): Settings object which controls optional arguments as described below.
-- **`update_orbs`** (subroutine):  
-  Returned quasi-Newton orbital updating subroutine as defined for the `solver` subroutine.
 
 ---
 
 The following Fortran snippet demonstrates how to use the quasi-Newton interface:
 
 ```fortran
-use opentrustregion, only: settings_type, update_orbs_type, solver
-use opentrustregion_quasi_newton, only: qn_factory, qn_settings_type, &
-                                        update_orbs_qn_deconstructor
+use opentrustregion, only: ip, solver_settings_type, update_orbs_type, obj_func_type, &
+                           solver
+use otr_qn, only: qn_factory, qn_settings_type, transport_type, init_hess_type, &
+                  update_orbs_qn_deconstructor
 
-type(settings_type) :: settings
+type(solver_settings_type) :: settings
 type(qn_settings_type) :: qn_settings
 procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_qn_funptr
-procedure(obj_func), pointer :: obj_func_funptr
+procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_qn_funptr
+procedure(transport_type), pointer :: transport_funptr
+procedure(init_hess_type), pointer :: init_hess_funptr
 integer(ip) :: n_param, error
 
 ! set callback function pointers to existing implementations
 update_orbs_funptr => update_orbs
 obj_func_funptr => obj_func
+transport_funptr => transport
+init_hess_funptr => init_hess
 
 ! initialize quasi-Newton settings
 call qn_settings%init(error)
@@ -939,14 +955,16 @@ call qn_settings%init(error)
 qn_settings%verbose = 1
 qn_settings%hess_update_scheme = "sr1"
 
-! get a quasi-Newton orbital updating subroutine
-call qn_factory(update_orbs_funptr, n_param, qn_settings, update_orbs_qn_funptr)
-
 ! initialize settings
 call settings%init(error)
 
+! get quasi-Newton routines and wire the settings with the quasi-Newton object
+call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+                init_hess_funptr, update_orbs_qn_funptr, obj_func_qn_funptr, settings, &
+                error, qn_settings)
+
 ! call solver
-call solver(update_orbs_qn_funptr, obj_func_funptr, n_param, error, settings)
+call solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, error, settings)
 
 ! clean up quasi-Newton objects
 call update_orbs_qn_deconstructor()
@@ -966,6 +984,8 @@ c_int n_param;
 // set callback function pointers to existing implementations
 update_orbs_fp update_orbs_funptr = (void*)update_orbs;
 obj_func_fp obj_func_funptr = (void*)obj_func;
+transport_fp transport_funptr = (void*)transport;
+init_hess_fp init_hess_funptr = (void*)init_hess;
 
 // initialize quasi-Newton settings
 qn_settings_type qn_settings = qn_settings_init();
@@ -974,15 +994,24 @@ qn_settings_type qn_settings = qn_settings_init();
 qn_settings.verbose = 1;
 strcpy(qn_settings.hess_update_scheme, "sr1");
 
-// get a quasi-Newton orbital updating function
-update_orbs_fp update_orbs_qn_funptr;
-qn_factory(update_orbs, n_param, qn_settings, &update_orbs_qn_funptr);
-
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
+// get quasi-Newton functions and wire the settings with the quasi-Newton object
+update_orbs_fp update_orbs_qn_funptr;
+obj_func_fp obj_func_qn_funptr;
+c_int error = qn_factory(n_param,
+                         update_orbs_funptr,
+                         obj_func_funptr,
+                         transport_funptr,
+                         init_hess_funptr,
+                         &update_orbs_qn_funptr,
+                         &obj_func_qn_funptr,
+                         &settings,
+                         &qn_settings);
+
 // call solver
-c_int error = solver(update_orbs_qn_funptr, obj_func_funptr, n_param, &settings, NULL);
+error = solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, &settings, NULL);
 
 // clean up quasi-Newton objects
 update_orbs_qn_deconstructor();
@@ -1005,14 +1034,16 @@ qn_settings = QNSettings()
 qn_settings.verbose = 1
 qn_settings.hess_update_scheme = "sr1"
 
-# get a quasi-Newton orbital updating function
-update_orbs_qn = qn_factory(update_orbs, n_param, qn_settings)
-
 # initialize settings
 settings = SolverSettings()
 
+# get quasi-Newton functions and wire the settings with the quasi-Newton object
+update_orbs_qn, obj_func_qn = qn_factory(
+    n_param, update_orbs, obj_func, transport, init_hess, settings, qn_settings
+)
+
 # call solver
-solver(update_orbs_qn, obj_func, n_param, settings)
+solver(update_orbs_qn, obj_func_qn, n_param, settings)
 
 # clean up quasi-Newton objects
 update_orbs_qn_deconstructor()
@@ -1020,11 +1051,11 @@ update_orbs_qn_deconstructor()
 
 ---
 
-- Callback functions (`update_orbs`, `obj_func`) point to existing implementations elsewhere in the program.
+- Callback functions (`update_orbs`, `obj_func`, `transport`, `init_hess`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
 - Quasi-Newton settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `hess_update_scheme`) can then be overridden.
-- A quasi-Newton orbital updating function is obtained by calling `qn_factory` with the original `update_orbs` pointer, `n_param`, and `qn_settings`.
-- The `solver` is then called with the quasi-Newton-wrapped `update_orbs` function.
+- Quasi-Newton versions of the orbital updating function and the objective function are obtained by calling `qn_factory`, which also wires the solver settings with the quasi-Newton object.
+- The `solver` is then called with the returned functions and the wired settings.
 - Clean up quasi-Newton resources by calling `update_orbs_qn_deconstructor`.
 
 #### Optional Settings
@@ -1033,12 +1064,12 @@ The quasi-Newton factory function can be fine-tuned using the following settings
 - **`hess_update_scheme`** (string): Specifies which quasi-Newton updating scheme to use. Options include:
   - `"sr1"`: symmetric rank-1 update,
   - `"bfgs"`: Broyden-Fletcher-Goldfarb-Shanno update,
-- **`verbose`** (integer): Controls the verbosity of output during the stability check.
+- **`verbose`** (integer): Controls the verbosity of output of the quasi-Newton routines.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport` and `init_hess` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
 ### Augmented Roothaan–Hall (ARH)
 
-This extension provides access to the augmented Roothaan-Hall method for RHF and UHF, with the orbitals parameterized either in the molecular orbital (MO) basis (`arh_factory_mo`), the default, or in the orthogonalized atomic orbital (OAO) basis (`arh_factory_oao`), both available under these names and with the same arguments in Fortran, C and Python. Fortran and Python additionally provide `arh_factory`, which accepts the arguments of either basis factory and forwards them to the one they match, the generic interface in Fortran and a helper in Python; C, which cannot overload functions, calls the basis factories directly. Both bases share the same history-based approximation of the Hessian and every ARH type.
+This extension provides access to the augmented Roothaan-Hall method for RHF and UHF, with the orbitals parameterized either in the molecular orbital (MO) basis (`arh_factory_mo`), the default, or in the orthogonalized atomic orbital (OAO) basis (`arh_factory_oao`), both available under these names and with the same arguments in Fortran, C and Python. Fortran and Python additionally provide `arh_factory`, which forwards to the basis factory matching its arguments; C calls the basis factories directly. Both bases share the same history-based approximation of the Hessian and every ARH type.
 
 #### Installation
 
@@ -1054,11 +1085,9 @@ or, when installing the Python package:
 CMAKE_FLAGS='-DENABLE_ARH=ON' pip install .
 ```
 
-This exposes the `arh_factory_mo` and `arh_factory_oao` functions, which prepare ARH-specific callbacks for energy and orbital updates and wire ARH-specific preconditioning, extra trial vectors and, in the OAO basis, projection into the solver settings.
-
 #### Usage
 
-The ARH factories construct and return ARH versions of the energy and orbital updating functions, and wire ARH versions of the preconditioning and extra trial vector functions into the solver settings. Both bases take the following arguments, together with the orbitals of their basis described in the two parts below:
+The ARH factories construct and return ARH versions of the orbital updating subroutine and the objective function and wire the solver settings with the ARH object, which provides ARH versions of the preconditioning and extra trial vector functions. Both bases take the following arguments, together with the orbitals of their basis described in the two parts below:
 
 - **`ao_overlap`** (real array): Represents the AO overlap matrix with dimension (`n_ao`, `n_ao`).
 - **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell).
@@ -1076,20 +1105,20 @@ The ARH factories construct and return ARH versions of the energy and orbital up
   The linear (Coulomb and exact exchange) potential of a spin channel is thereby the Coulomb potential of both spin channels minus its own exact-exchange potential, and the non-linear potential is the rest of the effective potential, i.e. the effective potential minus this linear potential.
 
   Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` in Python, and the callback must not build it.
-- **`obj_func_arh`** (subroutine): Returned ARH objective function as defined for the `solver` subroutine.
 - **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.
-- **`settings`** (solver_settings_type): Solver settings object, which is initialized first if it is not initialized yet. Its `refresh_hess` is set, since every energy evaluation adds the evaluated point to the ARH history and thereby changes the approximate Hessian, its `n_micro` is set to 300, since the linear transformations of the approximate Hessian are cheap compared to energy evaluations and a subsystem solve stopped by the micro iteration limit is rejected, its `hess_symm` is set according to `arh_type`, and the following ARH routines are wired into it:
-  - **`precond`**: ARH level-shifted preconditioner, which applies the exact, level-shifted inverse of the full ARH approximate Hessian using the Sherman-Morrison-Woodbury identity, also for the stability check.
+- **`obj_func_arh`** (function): Returned ARH objective function as defined for the `solver` subroutine.
+- **`settings`** (solver_settings_type): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the ARH object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. Within one calculation, the same settings can first be passed to the exact factory of the basis, `mo_factory` or `oao_factory` (see below), but start from fresh settings for every new calculation: calling an ARH factory again with settings an ARH factory wired is refused with an error, and if another factory wired them in between, the repeated call is not detected and the callback functions neither object provides then call each other without end. The factory also sets `refresh_hess`, which has to stay set since every energy evaluation changes the approximate Hessian, `n_micro` to 300, since the approximate Hessian is cheap to apply, and `hess_symm` according to `arh_type`. The ARH object provides the following routines:
+  - **`precond`**: ARH level-shifted preconditioner, which applies the exact, level-shifted inverse of the full ARH approximate Hessian, also for the stability check.
   - **`precond_pd`**: ARH positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`get_extra_trial_vectors`**: ARH extra trial vectors, which only depend on the static part of the Hessian, also for the stability check.
 
   How the two bases treat the projection is described in their parts below.
-- **`error`** (integer): An integer code indicating the success or failure of the factory. The error code structure is explained below.
+- **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`arh_settings`** (arh_settings_type): Settings object which controls optional arguments as described below.
 
 ##### Orbitals in the MO basis
 
-In the MO basis, the parameters are only the occupied-virtual rotations of every particle channel, and only those between orbitals of the same irrep if the irreps of the MOs are given as the optional last argument `orbsym`, described for the MO extension, so that the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels, or the number of occupied-virtual pairs of the same irrep. These parameters are non-redundant, so the factory wires no projection into the solver settings and leaves the projection to the caller. `precond_pd` and `get_extra_trial_vectors` are those of the MO extension. Without `orbsym` and for `n_mo` equal to `n_ao`, the approximate Hessian equals that of the OAO basis in MO coordinates. Besides the common arguments, `arh_factory_mo` takes, in the order `mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, ...`:
+In the MO basis, the parameters are only the occupied-virtual rotations of every particle channel, and only those between orbitals of the same irrep if the irreps of the MOs are given as the optional last argument `orbsym`, described for the MO extension, so that the number of parameters is the sum of `n_occ * (n_mo - n_occ)` over the particle channels, or the number of occupied-virtual pairs of the same irrep. These parameters are non-redundant, so the ARH object provides no projection and leaves the projection to the caller. `precond_pd` and `get_extra_trial_vectors` are those of the MO extension. Without `orbsym` and for `n_mo` equal to `n_ao`, the approximate Hessian equals that of the OAO basis in MO coordinates. Besides the common arguments, `arh_factory_mo` takes, in the order `mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, ...`:
 
 - **`mo_coeff`** (real array): Represents the starting MO coefficients, orthonormal with respect to the AO overlap matrix and with the occupied orbitals of every particle channel first, which are rotated in place throughout the calculation, with dimension (`n_ao`, `n_mo`) for closed-shell and (`n_ao`, `n_mo`, 2) for open-shell calculations, which is (`n_ao`, `n_mo`) and (2, `n_ao`, `n_mo`) in Python. The C interface expects the matrix of every particle channel in column-major order; the Python interface accepts any memory layout and precision of a writeable floating-point array and copies the rotated MO coefficients back after every orbital update if they cannot be rotated in place.
 - **`n_occ`** (integer or integer array): Specifies the number of occupied orbitals, a single integer for closed-shell and one per particle channel for open-shell calculations, which may differ between the channels.
@@ -1106,8 +1135,8 @@ use otr_arh, only: arh_factory, arh_settings_type, evaluate_dm_cs_type, &
 type(solver_settings_type) :: settings
 type(arh_settings_type) :: arh_settings
 procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
-procedure(obj_func_type), pointer :: obj_func_arh_funptr
 procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+procedure(obj_func_type), pointer :: obj_func_arh_funptr
 integer(ip) :: n_occ, n_particle, n_ao, n_mo, n_param, error
 real(rp), allocatable, target :: mo_coeff(:, :)
 real(rp), allocatable :: ao_overlap(:, :)
@@ -1124,9 +1153,9 @@ arh_settings%verbose = 1
 ! initialize settings
 call settings%init(error)
 
-! get ARH routines and wire the remaining ones into the settings
+! get ARH routines and wire the settings with the ARH object
 call arh_factory(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                 evaluate_dm_funptr, obj_func_arh_funptr, update_orbs_arh_funptr, &
+                 evaluate_dm_funptr, update_orbs_arh_funptr, obj_func_arh_funptr, &
                  settings, error, arh_settings)
 
 ! set number of parameters
@@ -1162,9 +1191,9 @@ arh_settings.verbose = 1;
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
-// get callback functions and wire the remaining ones into the settings
-obj_func_fp obj_func_arh_funptr;
+// get ARH functions and wire the settings with the ARH object
 update_orbs_fp update_orbs_arh_funptr;
+obj_func_fp obj_func_arh_funptr;
 c_int error = arh_factory_mo(mo_coeff,
                              ao_overlap,
                              n_occ,
@@ -1172,8 +1201,8 @@ c_int error = arh_factory_mo(mo_coeff,
                              n_ao,
                              n_mo,
                              evaluate_dm_funptr,
-                             &obj_func_arh_funptr,
                              &update_orbs_arh_funptr,
+                             &obj_func_arh_funptr,
                              &settings,
                              &arh_settings,
                              NULL);
@@ -1205,8 +1234,8 @@ arh_settings.verbose = 1
 # initialize settings
 settings = SolverSettings()
 
-# get callback functions and wire the remaining ones into the settings
-obj_func_arh, update_orbs_arh = arh_factory(
+# get ARH functions and wire the settings with the ARH object
+update_orbs_arh, obj_func_arh = arh_factory(
     mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, evaluate_dm, settings,
     arh_settings
 )
@@ -1223,7 +1252,7 @@ arh_deconstructor()
 
 ##### Orbitals in the OAO basis
 
-In the OAO basis, the parameters are the rotations between all orthogonalized AOs, packed as the `n_ao * (n_ao - 1) / 2` elements of an antisymmetric matrix per particle channel. These parameters are redundant, so the factory also wires the projection onto the non-redundant rotations of the OAO extension into the solver settings, also for the stability check, replacing a projection that is already set; `precond_pd` and `get_extra_trial_vectors` are those of the OAO extension. Besides the common arguments, `arh_factory_oao` takes, in the order `dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm, ...`:
+In the OAO basis, the parameters are the rotations between all orthogonalized AOs, packed as the `n_ao * (n_ao - 1) / 2` elements of an antisymmetric matrix per particle channel. These parameters are redundant, so the ARH object also provides the projection onto the non-redundant rotations of the OAO extension, also for the stability check, which replaces a projection that is already set; `precond_pd` and `get_extra_trial_vectors` are those of the OAO extension. Besides the common arguments, `arh_factory_oao` takes, in the order `dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm, ...`:
 
 - **`dm_ao`** (real array): Represents the starting AO density matrix and is updated throughout the calculation with dimension (`n_ao`, `n_ao`) for closed-shell and (`n_ao`, `n_ao`, `n_particle`) for open-shell calculations, which is (2, `n_ao`, `n_ao`) in Python, where it has to be a writeable, C-contiguous `float64` array, since it is updated in place.
 
@@ -1238,8 +1267,8 @@ use otr_arh, only: arh_factory, arh_settings_type, evaluate_dm_cs_type, &
 type(solver_settings_type) :: settings
 type(arh_settings_type) :: arh_settings
 procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
-procedure(obj_func_type), pointer :: obj_func_arh_funptr
 procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
+procedure(obj_func_type), pointer :: obj_func_arh_funptr
 integer(ip) :: n_particle, n_ao, n_param, error
 real(rp), allocatable, target :: dm_ao(:, :)
 real(rp), allocatable :: ao_overlap(:, :)
@@ -1256,9 +1285,9 @@ arh_settings%verbose = 1
 ! initialize settings
 call settings%init(error)
 
-! get ARH routines and wire the remaining ones into the settings
+! get ARH routines and wire the settings with the ARH object
 call arh_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
-                 obj_func_arh_funptr, update_orbs_arh_funptr, settings, error, &
+                 update_orbs_arh_funptr, obj_func_arh_funptr, settings, error, &
                  arh_settings)
 
 ! set number of parameters
@@ -1294,16 +1323,16 @@ arh_settings.verbose = 1;
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
-// get callback functions and wire the remaining ones into the settings
-obj_func_fp obj_func_arh_funptr;
+// get ARH functions and wire the settings with the ARH object
 update_orbs_fp update_orbs_arh_funptr;
+obj_func_fp obj_func_arh_funptr;
 c_int error = arh_factory_oao(dm_ao,
                               ao_overlap,
                               n_particle,
                               n_ao,
                               evaluate_dm_funptr,
-                              &obj_func_arh_funptr,
                               &update_orbs_arh_funptr,
+                              &obj_func_arh_funptr,
                               &settings,
                               &arh_settings);
 
@@ -1336,8 +1365,8 @@ arh_settings.verbose = 1
 # initialize settings
 settings = SolverSettings()
 
-# get callback functions and wire the remaining ones into the settings
-obj_func_arh, update_orbs_arh = arh_factory(
+# get ARH functions and wire the settings with the ARH object
+update_orbs_arh, obj_func_arh = arh_factory(
     dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm, settings, arh_settings
 )
 
@@ -1358,7 +1387,7 @@ arh_deconstructor()
 - ARH settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
 - `arh_factory` in Fortran and Python is equivalent to calling `arh_factory_mo` or `arh_factory_oao` with the same arguments.
 - The MO and the OAO basis build on the MO and the OAO extension, which `-DENABLE_ARH=ON` always builds. To combine an ARH factory with the exact factory of its basis, call `mo_factory` or `oao_factory` first, as described for those extensions.
-- The factories return two procedures, `obj_func` and `update_orbs`, which are passed to the normal `solver`, wire `precond`, `precond_pd`, `get_extra_trial_vectors` and, in the OAO basis, `project` into the solver settings and set its `refresh_hess`, `n_micro`, and `hess_symm`. All other solver settings set before the call are kept. To use the `solver`'s own default diagonal preconditioner or no extra trial vectors instead, reset the corresponding setting and its stability check counterpart after the factory call. `refresh_hess` has to stay set: the ARH approximate Hessian changes with every energy evaluation, so without it the subsystem solver would continue from Hessian information of two different models after a rejected step.
+- The factories return two procedures, `update_orbs` and `obj_func`, which are passed to the normal `solver` together with the wired settings. To use the `solver`'s default diagonal preconditioner or no extra trial vectors instead, unset the corresponding callback function, and its stability check counterpart, after the factory call.
 - Of the five `arh_type` options below, only `"arh"` breaks Hessian symmetry; `"symm_arh"`, `"ms_psb"`, `"ms_sp"`, and the default `"ms_sr1"` are symmetric. The factory sets `hess_symm` of the solver settings accordingly.
 - Clean up ARH resources by calling `arh_deconstructor`; the final orbitals are the MO coefficients or AO density matrix passed to the factory, which are updated in place.
 
@@ -1394,35 +1423,41 @@ CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install .
 
 #### Usage
 
-This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the `hess_x` function is never called. The routine `s_gek_factory` constructs and returns an S-GEK version of the orbital-updating subroutine. This routine requires the following input arguments:
+This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `s_gek_factory` constructs and returns S-GEK versions of the orbital updating subroutine and the objective function and wires the solver settings with the S-GEK object. This routine takes the following arguments:
 
 #### Required Arguments
 
-- **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine is not used. The returned orbital updating subroutine calls it with the host context the solver hands to it.
-- **`change_reference`** (subroutine): Expresses the parameters, local gradients and gradients of the `n_points` stored points in place relative to a new reference point and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the S-GEK settings as its last argument.
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
+- **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine it returns is not used. The returned orbital updating subroutine calls it with the host context of the solver settings.
+- **`obj_func`** (function): Original objective function as defined for the `solver` subroutine, which the returned objective function calls with the host context of the solver settings.
+- **`change_reference`** (subroutine): Expresses the parameters, local gradients and gradients of the `n_points` stored points in place relative to a new reference point and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the S-GEK settings as its last argument.
+- **`update_orbs_s_gek`** (subroutine): Returned S-GEK orbital updating subroutine as defined for the `solver` subroutine.
+- **`obj_func_s_gek`** (function): Returned objective function as defined for the `solver` subroutine.
+- **`settings`** (solver_settings_type): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. Start from fresh settings for every new calculation: calling `s_gek_factory` again with settings it wired is refused with an error, and if another factory wired them in between, the repeated call is not detected and the callback functions neither object provides then call each other without end.
+- **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`s_gek_settings`** (s_gek_settings_type): Settings object which controls optional arguments as described below.
-- **`update_orbs`** (subroutine):  
-  Returned S-GEK orbital updating subroutine as defined for the `solver` subroutine.
 
 ---
 
 The following Fortran snippet demonstrates how to use the S-GEK interface:
 
 ```fortran
-use opentrustregion, only: settings_type, update_orbs_type, solver
-use otr_s_gek, only: s_gek_factory, s_gek_settings_type, &
+use opentrustregion, only: ip, solver_settings_type, update_orbs_type, obj_func_type, &
+                           solver
+use otr_s_gek, only: s_gek_factory, s_gek_settings_type, change_reference_type, &
                      update_orbs_s_gek_deconstructor
 
-type(settings_type) :: settings
+type(solver_settings_type) :: settings
 type(s_gek_settings_type) :: s_gek_settings
 procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_s_gek_funptr
-procedure(obj_func), pointer :: obj_func_funptr
+procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_s_gek_funptr
+procedure(change_reference_type), pointer :: change_reference_funptr
 integer(ip) :: n_param, error
 
 ! set callback function pointers to existing implementations
 update_orbs_funptr => update_orbs
 obj_func_funptr => obj_func
+change_reference_funptr => change_reference
 
 ! initialize S-GEK settings
 call s_gek_settings%init(error)
@@ -1431,14 +1466,16 @@ call s_gek_settings%init(error)
 s_gek_settings%verbose = 1
 s_gek_settings%max_points = 30
 
-! get a S-GEK orbital updating subroutine
-call s_gek_factory(update_orbs_funptr, n_param, s_gek_settings, update_orbs_s_gek_funptr)
-
 ! initialize settings
 call settings%init(error)
 
+! get S-GEK routines and wire the settings with the S-GEK object
+call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                   change_reference_funptr, update_orbs_s_gek_funptr, &
+                   obj_func_s_gek_funptr, settings, error, s_gek_settings)
+
 ! call solver
-call solver(update_orbs_s_gek_funptr, obj_func_funptr, n_param, error, settings)
+call solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, error, settings)
 
 ! clean up S-GEK objects
 call update_orbs_s_gek_deconstructor()
@@ -1449,7 +1486,6 @@ call update_orbs_s_gek_deconstructor()
 The following C snippet demonstrates the equivalent usage through the C interface:
 
 ```c
-#include <string.h>
 #include "opentrustregion.h"
 #include "opentrustregion_s_gek.h"
 
@@ -1458,6 +1494,7 @@ c_int n_param;
 // set callback function pointers to existing implementations
 update_orbs_fp update_orbs_funptr = (void*)update_orbs;
 obj_func_fp obj_func_funptr = (void*)obj_func;
+change_reference_fp change_reference_funptr = (void*)change_reference;
 
 // initialize S-GEK settings
 s_gek_settings_type s_gek_settings = s_gek_settings_init();
@@ -1466,16 +1503,24 @@ s_gek_settings_type s_gek_settings = s_gek_settings_init();
 s_gek_settings.verbose = 1;
 s_gek_settings.max_points = 30;
 
-// get a S_GEK orbital updating function
-update_orbs_fp update_orbs_s_gek_funptr;
-s_gek_factory(update_orbs, n_param, s_gek_settings, &update_orbs_s_gek_funptr);
-
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
+// get S-GEK functions and wire the settings with the S-GEK object
+update_orbs_fp update_orbs_s_gek_funptr;
+obj_func_fp obj_func_s_gek_funptr;
+c_int error = s_gek_factory(n_param,
+                            update_orbs_funptr,
+                            obj_func_funptr,
+                            change_reference_funptr,
+                            &update_orbs_s_gek_funptr,
+                            &obj_func_s_gek_funptr,
+                            &settings,
+                            &s_gek_settings);
+
 // call solver
-c_int error =
-    solver(update_orbs_s_gek_funptr, obj_func_funptr, n_param, &settings, NULL);
+error =
+    solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, &settings, NULL);
 
 // clean up S-GEK objects
 update_orbs_s_gek_deconstructor();
@@ -1498,14 +1543,16 @@ s_gek_settings = SGEKSettings()
 s_gek_settings.verbose = 1
 s_gek_settings.max_points = 30
 
-# get a S-GEK orbital updating function
-update_orbs_s_gek = s_gek_factory(update_orbs, n_param, s_gek_settings)
-
 # initialize settings
 settings = SolverSettings()
 
+# get S-GEK functions and wire the settings with the S-GEK object
+update_orbs_s_gek, obj_func_s_gek = s_gek_factory(
+    n_param, update_orbs, obj_func, change_reference, settings, s_gek_settings
+)
+
 # call solver
-solver(update_orbs_s_gek, obj_func, n_param, settings)
+solver(update_orbs_s_gek, obj_func_s_gek, n_param, settings)
 
 # clean up S-GEK objects
 update_orbs_s_gek_deconstructor()
@@ -1513,11 +1560,11 @@ update_orbs_s_gek_deconstructor()
 
 ---
 
-- Callback functions (`update_orbs`, `obj_func`) point to existing implementations elsewhere in the program.
+- Callback functions (`update_orbs`, `obj_func`, `change_reference`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
 - S-GEK settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `max_points`) can then be overridden.
-- A S-GEK orbital updating function is obtained by calling `s_gek_factory` with the original `update_orbs` pointer, `n_param`, and `s_gek_settings`.
-- The `solver` is then called with the S-GEK-wrapped `update_orbs` function.
+- S-GEK versions of the orbital updating function and the objective function are obtained by calling `s_gek_factory`, which also wires the solver settings with the S-GEK object.
+- The `solver` is then called with the returned functions and the wired settings.
 - Clean up S-GEK resources by calling `update_orbs_s_gek_deconstructor`.
 
 #### Optional Settings
@@ -1525,7 +1572,7 @@ The S-GEK factory function can be fine-tuned using the following settings:
 
 - **`use_subspace`** (boolean): Specifies whether the surrogate model is constructed in a subspace.
 - **`max_points`** (integer): Controls the number of points for the surrogate model and subspace construction.
-- **`verbose`** (integer): Controls the verbosity of output during the stability check.
+- **`verbose`** (integer): Controls the verbosity of output of the S-GEK routines.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `change_reference` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
 ## AI Usage Disclosure

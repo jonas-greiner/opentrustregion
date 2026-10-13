@@ -7,10 +7,9 @@
 module otr_arh
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
-                               hess_x_type, precond_type, precond_pd_type, &
-                               get_extra_trial_vectors_type, solver_settings_type
+                               hess_x_type, solver_settings_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
-                          orbital_basis_type, channel_rows
+                          orbital_basis_type, extension_type, channel_rows
     use otr_oao, only: oao_type
     use otr_mo, only: mo_channel_type, mo_type
 
@@ -73,7 +72,7 @@ module otr_arh
     ! are type-bound procedures of the types extending it for the MO and the OAO basis,
     ! which point to the quantities of the object holding the orbitals that these
     ! operations need
-    type, abstract :: arh_type
+    type, abstract, extends(extension_type) :: arh_type
         type(arh_settings_type) :: settings
         logical :: evaluation_stale = .true., model_stale = .false.
         class(orbital_basis_type), pointer :: orbitals => null()
@@ -88,6 +87,12 @@ module otr_arh
         procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
         procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
     contains
+        procedure :: update_orbs => update_orbs_arh
+        procedure :: obj_func => obj_func_arh
+        procedure :: hess_x => hess_x_arh
+        procedure :: precond => precond_arh
+        procedure :: precond_pd => precond_pd_arh
+        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_arh
         procedure(rotate_trial_arh_type), deferred :: rotate_trial
         procedure(history_dm_arh_type), deferred :: history_dm
         procedure(to_history_basis_arh_type), deferred :: to_history_basis
@@ -173,6 +178,7 @@ module otr_arh
         procedure :: history_channel_rows => history_channel_rows_arh_oao
         procedure :: packed_channel_rows => packed_channel_rows_arh_oao
         procedure :: hess_x_static => hess_x_static_arh_oao
+        procedure :: project => project_arh_oao
     end type
 
     ! define the constructors for these types
@@ -186,18 +192,6 @@ module otr_arh
 
     ! global variables
     class(arh_type), allocatable, target :: arh_object
-
-    ! create function pointers to ensure that routines comply with interface
-    procedure(obj_func_type), pointer :: obj_func_arh_callback_ptr => &
-        obj_func_arh_callback
-    procedure(update_orbs_type), pointer :: update_orbs_arh_callback_ptr => &
-        update_orbs_arh_callback
-    procedure(hess_x_type), pointer :: hess_x_arh_callback_ptr => hess_x_arh_callback
-    procedure(precond_type), pointer :: precond_arh_callback_ptr => precond_arh_callback
-    procedure(precond_pd_type), pointer :: precond_pd_arh_callback_ptr => &
-        precond_pd_arh_callback
-    procedure(get_extra_trial_vectors_type), pointer :: &
-        get_extra_trial_vectors_arh_callback_ptr => get_extra_trial_vectors_arh_callback
 
     ! define module procedures for different spin cases in every orbital basis, which
     ! share their call structure with the C and Python interfaces
@@ -218,26 +212,30 @@ module otr_arh
 contains
 
     subroutine arh_factory_mo_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                                 evaluate_dm_cs, obj_func_arh_funptr, &
-                                 update_orbs_arh_funptr, solver_settings, error, &
+                                 evaluate_dm_cs, update_orbs_arh_funptr, &
+                                 obj_func_arh_funptr, solver_settings, error, &
                                  settings, orbsym)
         !
-        ! this function returns a modified ARH orbital updating function for the
-        ! closed-shell case, with the orbitals parameterized in the MO basis, and wires
-        ! the ARH preconditioners and extra trial vectors into the solver settings,
+        ! this function returns the ARH orbital updating function and objective
+        ! function for the closed-shell case, with the orbitals parameterized in the MO
+        ! basis, and wires the solver settings with the ARH object, whose
+        ! preconditioners and extra trial vectors the solver then uses, while the
+        ! projection is left to the caller, since the parameters are non-redundant,
         ! which it also asks to rebuild the Hessian information of the subsystem solver
         ! after rejected steps and tells whether the approximate Hessian is symmetric;
         ! the MO coefficients are rotated in place, so they have to outlive the
         ! calculation; if the irreps of the MOs are given, only the occupied-virtual
         ! rotations between orbitals of the same irrep are parameters
         !
+        use otr_common, only: update_orbs_callback, obj_func_callback
+
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ, n_particle, n_ao, n_mo
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:)
@@ -245,8 +243,16 @@ contains
         real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
         integer(ip), allocatable :: orbsym_2d(:, :)
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(arh_object)) then
+            call arh_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup, passing the irreps of the MOs only if they are given
         mo_coeff_3d(1:size(mo_coeff, 1), 1:size(mo_coeff, 2), 1:1) => mo_coeff
@@ -259,23 +265,29 @@ contains
         ! set pointers to functions
         arh_object%evaluate_dm_cs => evaluate_dm_cs
 
-        ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_callback
-        update_orbs_arh_funptr => update_orbs_arh_callback
+        ! wire the solver settings with the object and adjust them to the approximate
+        ! Hessian
+        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
+                                             error)
+        if (error /= 0) return
+        call arh_set_solver_settings(solver_settings, arh_object)
 
-        ! wire the remaining ARH routines into the solver settings
-        call arh_set_solver_settings(solver_settings, arh_object, error)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_arh_funptr => update_orbs_callback
+        obj_func_arh_funptr => obj_func_callback
 
     end subroutine arh_factory_mo_cs
 
     subroutine arh_factory_mo_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                                 evaluate_dm_os, obj_func_arh_funptr, &
-                                 update_orbs_arh_funptr, solver_settings, error, &
+                                 evaluate_dm_os, update_orbs_arh_funptr, &
+                                 obj_func_arh_funptr, solver_settings, error, &
                                  settings, orbsym)
         !
-        ! this function returns a modified ARH orbital updating function for the
-        ! open-shell case, with the orbitals parameterized in the MO basis, and wires
-        ! the ARH preconditioners and extra trial vectors into the solver settings,
+        ! this function returns the ARH orbital updating function and objective
+        ! function for the open-shell case, with the orbitals parameterized in the MO
+        ! basis, and wires the solver settings with the ARH object, whose
+        ! preconditioners and extra trial vectors the solver then uses, while the
+        ! projection is left to the caller, since the parameters are non-redundant,
         ! which it also asks to rebuild the Hessian information of the subsystem solver
         ! after rejected steps and tells whether the approximate Hessian is symmetric;
         ! the MO coefficients are rotated in place, so they have to outlive the
@@ -283,19 +295,29 @@ contains
         ! only the occupied-virtual rotations between orbitals of the same irrep are
         ! parameters
         !
+        use otr_common, only: update_orbs_callback, obj_func_callback
+
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(arh_object)) then
+            call arh_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup
         call arh_factory_mo_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
@@ -305,12 +327,16 @@ contains
         ! set pointers to functions
         arh_object%evaluate_dm_os => evaluate_dm_os
 
-        ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_callback
-        update_orbs_arh_funptr => update_orbs_arh_callback
+        ! wire the solver settings with the object and adjust them to the approximate
+        ! Hessian
+        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
+                                             error)
+        if (error /= 0) return
+        call arh_set_solver_settings(solver_settings, arh_object)
 
-        ! wire the remaining ARH routines into the solver settings
-        call arh_set_solver_settings(solver_settings, arh_object, error)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_arh_funptr => update_orbs_callback
+        obj_func_arh_funptr => obj_func_callback
 
     end subroutine arh_factory_mo_os
 
@@ -365,33 +391,41 @@ contains
     end subroutine arh_factory_mo_common
 
     subroutine arh_factory_oao_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
-                                  obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                  update_orbs_arh_funptr, obj_func_arh_funptr, &
                                   solver_settings, error, settings)
         !
-        ! this function returns a modified ARH orbital updating function for the
-        ! closed-shell case, with the orbitals parameterized in the OAO basis, and
-        ! wires the ARH preconditioners, projection and extra trial vectors into the
-        ! solver settings, which it also asks to rebuild the Hessian information of the
-        ! subsystem solver after rejected steps and tells whether the approximate
-        ! Hessian is symmetric; the density matrix is updated in place, so it has to
-        ! outlive the calculation
+        ! this function returns the ARH orbital updating function and objective
+        ! function for the closed-shell case, with the orbitals parameterized in the
+        ! OAO basis, and wires the solver settings with the ARH object, whose
+        ! preconditioners, projection and extra trial vectors the solver then uses,
+        ! which it also asks to rebuild the Hessian information of the subsystem solver
+        ! after rejected steps and tells whether the approximate Hessian is symmetric;
+        ! the density matrix is updated in place, so it has to outlive the calculation
         !
-        use otr_oao, only: project_oao_callback
+        use otr_common, only: update_orbs_callback, obj_func_callback
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(arh_object)) then
+            call arh_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
@@ -403,43 +437,53 @@ contains
         ! set pointers to functions
         arh_object%evaluate_dm_cs => evaluate_dm_cs
 
-        ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_callback
-        update_orbs_arh_funptr => update_orbs_arh_callback
+        ! wire the solver settings with the object and adjust them to the approximate
+        ! Hessian
+        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
+                                             error)
+        if (error /= 0) return
+        call arh_set_solver_settings(solver_settings, arh_object)
 
-        ! wire the remaining ARH routines and the projection of the OAO basis into the
-        ! solver settings
-        call arh_set_solver_settings(solver_settings, arh_object, error, &
-                                     project_oao_callback)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_arh_funptr => update_orbs_callback
+        obj_func_arh_funptr => obj_func_callback
 
     end subroutine arh_factory_oao_cs
 
     subroutine arh_factory_oao_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
-                                  obj_func_arh_funptr, update_orbs_arh_funptr, &
+                                  update_orbs_arh_funptr, obj_func_arh_funptr, &
                                   solver_settings, error, settings)
         !
-        ! this function returns a modified ARH orbital updating function for the
-        ! open-shell case, with the orbitals parameterized in the OAO basis, and wires
-        ! the ARH preconditioners, projection and extra trial vectors into the solver
-        ! settings, which it also asks to rebuild the Hessian information of the
-        ! subsystem solver after rejected steps and tells whether the approximate
-        ! Hessian is symmetric; the density matrix is updated in place, so it has to
-        ! outlive the calculation
+        ! this function returns the ARH orbital updating function and objective
+        ! function for the open-shell case, with the orbitals parameterized in the OAO
+        ! basis, and wires the solver settings with the ARH object, whose
+        ! preconditioners, projection and extra trial vectors the solver then uses,
+        ! which it also asks to rebuild the Hessian information of the subsystem solver
+        ! after rejected steps and tells whether the approximate Hessian is symmetric;
+        ! the density matrix is updated in place, so it has to outlive the calculation
         !
-        use otr_oao, only: project_oao_callback
+        use otr_common, only: update_orbs_callback, obj_func_callback
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        type(solver_settings_type), intent(inout) :: solver_settings
+        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        type(solver_settings_type), intent(inout), target :: solver_settings
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in) :: settings
 
-        ! initialize error flag
+        ! initialize error flag and the returned functions
         error = 0
+        update_orbs_arh_funptr => null()
+        obj_func_arh_funptr => null()
+
+        ! refuse solver settings the object already wired before changing any state
+        if (allocated(arh_object)) then
+            call arh_object%check_unwired(solver_settings, settings, error)
+            if (error /= 0) return
+        end if
 
         ! call common setup
         call arh_factory_oao_common(dm_ao, ao_overlap, n_particle, n_ao, error, &
@@ -449,14 +493,16 @@ contains
         ! set pointers to functions
         arh_object%evaluate_dm_os => evaluate_dm_os
 
-        ! get pointers to modified function
-        obj_func_arh_funptr => obj_func_arh_callback
-        update_orbs_arh_funptr => update_orbs_arh_callback
+        ! wire the solver settings with the object and adjust them to the approximate
+        ! Hessian
+        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
+                                             error)
+        if (error /= 0) return
+        call arh_set_solver_settings(solver_settings, arh_object)
 
-        ! wire the remaining ARH routines and the projection of the OAO basis into the
-        ! solver settings
-        call arh_set_solver_settings(solver_settings, arh_object, error, &
-                                     project_oao_callback)
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_arh_funptr => update_orbs_callback
+        obj_func_arh_funptr => obj_func_callback
 
     end subroutine arh_factory_oao_os
 
@@ -541,60 +587,17 @@ contains
 
     end subroutine arh_sanity_check
 
-    subroutine arh_set_solver_settings(solver_settings, arh, error, project)
+    subroutine arh_set_solver_settings(solver_settings, arh)
         !
-        ! this subroutine wires the ARH preconditioners and extra trial vectors and, if
-        ! given, the projection of the orbital basis into the solver settings and those
-        ! of its stability check, which only the OAO basis passes, since the parameters
-        ! of the MO basis are non-redundant, so that the MO basis leaves the projection
-        ! to the caller; it also asks the solver to rebuild the Hessian information of
-        ! the subsystem solver after rejected steps, since the objective function adds
-        ! the rejected point to the history, which changes the approximate Hessian,
-        ! raises the micro iteration limit, since the linear transformations of the
+        ! this subroutine asks the solver to rebuild the Hessian information of the
+        ! subsystem solver after rejected steps, since the objective function adds the
+        ! rejected point to the history, which changes the approximate Hessian, raises
+        ! the micro iteration limit, since the linear transformations of the
         ! approximate Hessian are cheap, and tells it whether the approximate Hessian
         ! of the given ARH type is symmetric
         !
-        use opentrustregion, only: warn_uninitialized_settings, &
-                                   settings_uninitialized_warning_msg, &
-                                   stability_settings_uninitialized_warning_msg
-        use opentrustregion, only: project_type
-
         type(solver_settings_type), intent(inout) :: solver_settings
         class(arh_type), intent(in) :: arh
-        integer(ip), intent(out) :: error
-        procedure(project_type), optional :: project
-
-        ! initialize error flag
-        error = 0
-
-        ! initialize the settings and their nested stability check settings if they
-        ! were not initialized, which the solver can no longer detect once the
-        ! callback functions are wired into them, after printing the warning the solver
-        ! would print, regardless of the verbosity, since the default settings would
-        ! silence it
-        if (.not. solver_settings%initialized) then
-            call warn_uninitialized_settings(solver_settings, &
-                                             settings_uninitialized_warning_msg)
-            call solver_settings%init(error)
-            if (error /= 0) return
-        else if (.not. solver_settings%stability_settings%initialized) then
-            call warn_uninitialized_settings( &
-                solver_settings, stability_settings_uninitialized_warning_msg)
-            call solver_settings%stability_settings%init(error)
-            if (error /= 0) return
-        end if
-
-        ! set callback functions of the solver and its stability check
-        solver_settings%precond => precond_arh_callback
-        solver_settings%precond_pd => precond_pd_arh_callback
-        solver_settings%get_extra_trial_vectors => get_extra_trial_vectors_arh_callback
-        solver_settings%stability_settings%precond => precond_arh_callback
-        solver_settings%stability_settings%get_extra_trial_vectors => &
-            get_extra_trial_vectors_arh_callback
-        if (present(project)) then
-            solver_settings%project => project
-            solver_settings%stability_settings%project => project
-        end if
 
         ! rebuild the Hessian information after rejected steps
         solver_settings%refresh_hess = .true.
@@ -607,12 +610,13 @@ contains
 
     end subroutine arh_set_solver_settings
 
-    function obj_func_arh_callback(kappa, error, context) result(energy)
+    function obj_func_arh(self, kappa, error, context) result(energy)
         !
         ! this function defines the energy evaluation, which also adds the evaluated
         ! point with its Coulomb, exact-exchange and non-linear potentials to the
         ! history, unless it is already there
         !
+        class(arh_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -627,8 +631,8 @@ contains
         energy = 0.0_rp
 
         ! number of AOs and number of particles
-        n_ao = arh_object%orbitals%n_ao
-        n_particle = arh_object%orbitals%n_particle
+        n_ao = self%orbitals%n_ao
+        n_particle = self%orbitals%n_particle
 
         ! get rotated density matrix in the AO and history basis
         allocate(rot_dm_ao(n_ao, n_ao, n_particle), &
@@ -636,46 +640,46 @@ contains
                  v_coulomb_ao(n_ao, n_ao, n_particle), &
                  v_exchange_ao(n_ao, n_ao, n_particle), &
                  v_nonlinear_ao(n_ao, n_ao, n_particle))
-        call arh_object%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        call self%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
         if (error /= 0) return
 
         ! calculate mean-field energy
-        if (associated(arh_object%evaluate_dm_cs)) then
-            call arh_object%evaluate_dm_cs( &
-                rot_dm_ao(:, :, 1), energy, v_coulomb=v_coulomb_ao(:, :, 1), &
-                v_exchange=v_exchange_ao(:, :, 1), &
-                v_nonlinear=v_nonlinear_ao(:, :, 1), error=error, &
-                context=arh_object%settings%context)
+        if (associated(self%evaluate_dm_cs)) then
+            call self%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, &
+                                     v_coulomb=v_coulomb_ao(:, :, 1), &
+                                     v_exchange=v_exchange_ao(:, :, 1), &
+                                     v_nonlinear=v_nonlinear_ao(:, :, 1), error=error, &
+                                     context=self%settings%context)
         else
-            call arh_object%evaluate_dm_os(rot_dm_ao, energy, v_coulomb=v_coulomb_ao, &
-                                           v_exchange=v_exchange_ao, &
-                                           v_nonlinear=v_nonlinear_ao, error=error, &
-                                           context=arh_object%settings%context)
+            call self%evaluate_dm_os( &
+                rot_dm_ao, energy, v_coulomb=v_coulomb_ao, v_exchange=v_exchange_ao, &
+                v_nonlinear=v_nonlinear_ao, error=error, context=self%settings%context)
         end if
         if (error /= 0) return
 
         ! update list of density and potential matrices
-        if (allocated(arh_object%dm_list)) then
+        if (allocated(self%dm_list)) then
             if (.not. density_in_history(rot_dm_hist)) then
-                call prepend(arh_object%dm_list, rot_dm_hist)
-                call prepend(arh_object%v_coulomb_list, &
-                             arh_object%to_history_basis(v_coulomb_ao))
-                call prepend(arh_object%v_exchange_list, &
-                             arh_object%to_history_basis(v_exchange_ao))
-                call prepend(arh_object%v_nonlinear_list, &
-                             arh_object%to_history_basis(v_nonlinear_ao))
-                arh_object%model_stale = .true.
+                call prepend(self%dm_list, rot_dm_hist)
+                call prepend(self%v_coulomb_list, self%to_history_basis(v_coulomb_ao))
+                call prepend(self%v_exchange_list, self%to_history_basis(v_exchange_ao))
+                call prepend(self%v_nonlinear_list, &
+                             self%to_history_basis(v_nonlinear_ao))
+                self%model_stale = .true.
             end if
         end if
 
-    end function obj_func_arh_callback
+    end function obj_func_arh
 
-    subroutine update_orbs_arh_callback(kappa, func, grad, h_diag, hess_x_funptr, &
-                                        error, context)
+    subroutine update_orbs_arh(self, kappa, func, grad, h_diag, hess_x_funptr, error, &
+                               context)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation on the basis of augmented Roothaan-Hall
         !
+        use otr_common, only: hess_x_callback
+
+        class(arh_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -693,33 +697,33 @@ contains
 
         ! evaluate at the rotated orbitals, or at the current ones if these have not
         ! been evaluated yet
-        if ((sum(abs(kappa)) > 0.0_rp) .or. arh_object%evaluation_stale) then
+        if ((sum(abs(kappa)) > 0.0_rp) .or. self%evaluation_stale) then
             ! number of AOs
-            n_ao = arh_object%orbitals%n_ao
+            n_ao = self%orbitals%n_ao
 
             ! number of particles
-            n_particle = arh_object%orbitals%n_particle
+            n_particle = self%orbitals%n_particle
 
             ! add the current point to the list of density and potential matrices if it
             ! has been evaluated
-            if (.not. allocated(arh_object%dm_list)) then
-                allocate(arh_object%dm_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%v_coulomb_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%v_exchange_list(n_ao, n_ao, n_particle, 0), &
-                         arh_object%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
-            else if (.not. arh_object%evaluation_stale) then
-                dm_current = arh_object%history_dm()
+            if (.not. allocated(self%dm_list)) then
+                allocate(self%dm_list(n_ao, n_ao, n_particle, 0), &
+                         self%v_coulomb_list(n_ao, n_ao, n_particle, 0), &
+                         self%v_exchange_list(n_ao, n_ao, n_particle, 0), &
+                         self%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
+            else if (.not. self%evaluation_stale) then
+                dm_current = self%history_dm()
                 if (.not. density_in_history(dm_current)) then
-                    call prepend(arh_object%dm_list, dm_current)
-                    call prepend(arh_object%v_coulomb_list, arh_object%v_coulomb)
-                    call prepend(arh_object%v_exchange_list, arh_object%v_exchange)
-                    call prepend(arh_object%v_nonlinear_list, arh_object%v_nonlinear)
+                    call prepend(self%dm_list, dm_current)
+                    call prepend(self%v_coulomb_list, self%v_coulomb)
+                    call prepend(self%v_exchange_list, self%v_exchange)
+                    call prepend(self%v_nonlinear_list, self%v_nonlinear)
                 end if
             end if
 
             ! rotate orbitals, which have not been evaluated until this succeeds
-            arh_object%evaluation_stale = .true.
-            call arh_object%orbitals%rotate_orbitals(kappa, arh_object%settings, error)
+            self%evaluation_stale = .true.
+            call self%orbitals%rotate_orbitals(kappa, self%settings, error)
             if (error /= 0) return
 
             ! get energy, Fock matrix, Coulomb and exact-exchange potentials, and
@@ -728,16 +732,15 @@ contains
                      v_coulomb_ao(n_ao, n_ao, n_particle), &
                      v_exchange_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
-            if (associated(arh_object%evaluate_dm_cs)) then
-                call arh_object%evaluate_dm_cs( &
-                    arh_object%orbitals%dm_ao(:, :, 1), arh_object%orbitals%energy, &
+            if (associated(self%evaluate_dm_cs)) then
+                call self%evaluate_dm_cs( &
+                    self%orbitals%dm_ao(:, :, 1), self%orbitals%energy, &
                     fock_ao(:, :, 1), v_coulomb_ao(:, :, 1), v_exchange_ao(:, :, 1), &
-                    v_nonlinear_ao(:, :, 1), error, arh_object%settings%context)
+                    v_nonlinear_ao(:, :, 1), error, self%settings%context)
             else
-                call arh_object%evaluate_dm_os( &
-                    arh_object%orbitals%dm_ao, arh_object%orbitals%energy, fock_ao, &
-                    v_coulomb_ao, v_exchange_ao, v_nonlinear_ao, error, &
-                    arh_object%settings%context)
+                call self%evaluate_dm_os(self%orbitals%dm_ao, self%orbitals%energy, &
+                                         fock_ao, v_coulomb_ao, v_exchange_ao, &
+                                         v_nonlinear_ao, error, self%settings%context)
             end if
             if (error /= 0) then
                 deallocate(fock_ao, v_coulomb_ao, v_exchange_ao, v_nonlinear_ao)
@@ -747,20 +750,19 @@ contains
             ! calculate gradient, Hessian diagonal and static part of the Hessian from
             ! the Fock matrix in the history basis, the basis the orbital object
             ! represents the density matrix in
-            call arh_object%orbitals%calculate_grad_h_diag( &
-                arh_object%to_history_basis(fock_ao))
+            call self%orbitals%calculate_grad_h_diag(self%to_history_basis(fock_ao))
             deallocate(fock_ao)
 
             ! transform Coulomb, exact-exchange and non-linear potentials to the
             ! history basis
-            arh_object%v_coulomb = arh_object%to_history_basis(v_coulomb_ao)
-            arh_object%v_exchange = arh_object%to_history_basis(v_exchange_ao)
-            arh_object%v_nonlinear = arh_object%to_history_basis(v_nonlinear_ao)
+            self%v_coulomb = self%to_history_basis(v_coulomb_ao)
+            self%v_exchange = self%to_history_basis(v_exchange_ao)
+            self%v_nonlinear = self%to_history_basis(v_nonlinear_ao)
             deallocate(v_coulomb_ao, v_exchange_ao, v_nonlinear_ao)
 
             ! assemble the approximate Hessian model from the history for the closed- or
             ! open-shell case
-            if (associated(arh_object%evaluate_dm_cs)) then
+            if (associated(self%evaluate_dm_cs)) then
                 call build_hess_model_cs(error)
             else
                 call build_hess_model_os(error)
@@ -768,16 +770,16 @@ contains
             if (error /= 0) return
 
             ! the rotated orbitals have been evaluated
-            arh_object%evaluation_stale = .false.
+            self%evaluation_stale = .false.
         end if
 
         ! set outputs
-        func = arh_object%orbitals%energy
-        grad = arh_object%orbitals%grad
-        h_diag = arh_object%orbitals%h_diag
-        hess_x_funptr => hess_x_arh_callback
+        func = self%orbitals%energy
+        grad = self%orbitals%grad
+        h_diag = self%orbitals%h_diag
+        hess_x_funptr => hess_x_callback
 
-    end subroutine update_orbs_arh_callback
+    end subroutine update_orbs_arh
 
     subroutine build_hess_model_cs(error)
         !
@@ -1140,11 +1142,12 @@ contains
 
     end subroutine rebuild_stale_hess_model
 
-    subroutine hess_x_arh_callback(x, hess_x, error, context)
+    subroutine hess_x_arh(self, x, hess_x, error, context)
         !
         ! this function defines the Hessian linear transformation on the basis of
         ! augmented Roothaan-Hall and related methods
         !
+        class(arh_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -1163,27 +1166,26 @@ contains
         if (error /= 0) return
 
         ! get static part
-        hess_x = arh_object%hess_x_static(x)
+        hess_x = self%hess_x_static(x)
 
         ! add the response part, which the shared low-rank factors express directly in
         ! the packed parameter space as expansion * coupling * projection^T, already
         ! carrying both the projection onto the non-redundant subspace (trivial in the
         ! MO basis) and the scaling applied to the static part
-        if (allocated(arh_object%coupling_matrix)) then
-            n_dirs = size(arh_object%expansion_dirs, 2)
+        if (allocated(self%coupling_matrix)) then
+            n_dirs = size(self%expansion_dirs, 2)
             allocate(projected_x(n_dirs), coupled_x(n_dirs))
-            call dgemv("T", size(x, kind=ip), n_dirs, 1.0_rp, &
-                       arh_object%projection_dirs, size(x, kind=ip), x, 1_ip, 0.0_rp, &
-                       projected_x, 1_ip)
-            call dgemv("N", n_dirs, n_dirs, 1.0_rp, arh_object%coupling_matrix, &
-                       n_dirs, projected_x, 1_ip, 0.0_rp, coupled_x, 1_ip)
+            call dgemv("T", size(x, kind=ip), n_dirs, 1.0_rp, self%projection_dirs, &
+                       size(x, kind=ip), x, 1_ip, 0.0_rp, projected_x, 1_ip)
+            call dgemv("N", n_dirs, n_dirs, 1.0_rp, self%coupling_matrix, n_dirs, &
+                       projected_x, 1_ip, 0.0_rp, coupled_x, 1_ip)
             call dgemv("N", size(hess_x, kind=ip), n_dirs, 1.0_rp, &
-                       arh_object%expansion_dirs, size(hess_x, kind=ip), coupled_x, &
-                       1_ip, 1.0_rp, hess_x, 1_ip)
+                       self%expansion_dirs, size(hess_x, kind=ip), coupled_x, 1_ip, &
+                       1.0_rp, hess_x, 1_ip)
             deallocate(projected_x, coupled_x)
         end if
 
-    end subroutine hess_x_arh_callback
+    end subroutine hess_x_arh
 
     subroutine inv_hess_x_arh(x, inv_hess_x, error, level_shift)
         !
@@ -1306,10 +1308,11 @@ contains
 
     end subroutine inv_hess_x_arh
 
-    subroutine precond_arh_callback(residual, mu, precond_residual, error, context)
+    subroutine precond_arh(self, residual, mu, precond_residual, error, context)
         !
         ! this subroutine defines the preconditioner of the ARH approximate Hessian
         !
+        class(arh_type), intent(inout) :: self
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
         real(rp), intent(out), target :: precond_residual(:)
@@ -1318,36 +1321,50 @@ contains
 
         call inv_hess_x_arh(residual, precond_residual, error, mu)
 
-    end subroutine precond_arh_callback
+    end subroutine precond_arh
 
-    subroutine precond_pd_arh_callback(residual, precond_residual, error, context)
+    subroutine precond_pd_arh(self, residual, precond_residual, error, context)
         !
         ! this subroutine defines the positive-definite preconditioner based on the
-        ! exact eigendecomposition of the static part of the Hessian
+        ! exact eigendecomposition of the static part of the Hessian of the orbitals
         !
+        class(arh_type), intent(inout) :: self
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        call arh_object%orbitals%precond_pd(residual, precond_residual, &
-                                            arh_object%settings, error)
+        call self%orbitals%precond_pd(residual, precond_residual, error, context)
 
-    end subroutine precond_pd_arh_callback
+    end subroutine precond_pd_arh
 
-    subroutine get_extra_trial_vectors_arh_callback(trial_vectors, error, context)
+    subroutine get_extra_trial_vectors_arh(self, trial_vectors, error, context)
         !
-        ! this subroutine returns the extra trial vectors of the orbital basis for the
+        ! this subroutine returns the extra trial vectors of the orbitals for the
         ! solver's initial trial space
         !
+        class(arh_type), intent(inout) :: self
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        call arh_object%orbitals%get_extra_trial_vectors(trial_vectors, &
-                                                         arh_object%settings, error)
+        call self%orbitals%get_extra_trial_vectors(trial_vectors, error, context)
 
-    end subroutine get_extra_trial_vectors_arh_callback
+    end subroutine get_extra_trial_vectors_arh
+
+    subroutine project_arh_oao(self, vector, error, context)
+        !
+        ! this subroutine applies the projection of the orbitals in the OAO basis onto
+        ! their non-redundant rotations
+        !
+        class(arh_oao_type), intent(inout) :: self
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        call self%orbitals%project(vector, error, context)
+
+    end subroutine project_arh_oao
 
     subroutine init_arh_settings(self, error)
         !
@@ -1393,11 +1410,18 @@ contains
         ! this function returns the ARH object for the MO basis pointing to the given
         ! MO object and to those of its quantities which are allocated
         !
+        use otr_common, only: provided_roles_type
+
         type(mo_type), intent(in), target :: mo
         type(arh_mo_type) :: arh
 
-        ! point to the orbitals
+        ! point to the orbitals, whose parameters are those of the object, which
+        ! performs every role but the projection itself
         arh%orbitals => mo
+        arh%n_param = mo%n_param
+        arh%provides = provided_roles_type( &
+            update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
+            precond_pd=.true., get_extra_trial_vectors=.true.)
 
         ! associate matrices and particle channels
         if (associated(mo%mo_coeff)) arh%mo_coeff => mo%mo_coeff
@@ -1411,11 +1435,18 @@ contains
         ! this function returns the ARH object for the OAO basis pointing to the given
         ! OAO object and to those of its quantities which are allocated
         !
+        use otr_common, only: provided_roles_type
+
         type(oao_type), intent(in), target :: oao
         type(arh_oao_type) :: arh
 
-        ! point to the orbitals
+        ! point to the orbitals, whose parameters are those of the object, which
+        ! performs every role itself
         arh%orbitals => oao
+        arh%n_param = oao%n_param
+        arh%provides = provided_roles_type( &
+            update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
+            precond_pd=.true., project=.true., get_extra_trial_vectors=.true.)
 
         ! associate matrices
         if (allocated(oao%s_inv_sqrt)) arh%s_inv_sqrt => oao%s_inv_sqrt

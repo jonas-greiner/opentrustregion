@@ -17,16 +17,23 @@ from pyopentrustregion.python_interface import (
     callback_type,
     CallbackInterface,
     update_orbs_interface_type,
+    obj_func_interface_type,
     logger_interface_type,
     UpdateOrbsInterface,
+    ObjFuncInterface,
     LoggerInterface,
     adopt_collector,
     Settings,
+    SolverSettings,
+    SolverSettingsC,
     auto_bind_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
+    ObjFuncPyInterface,
     UpdateOrbsPyInterface,
+    attach_wired_callbacks,
     check_callback_arguments,
+    detach_python_callbacks,
 )
 
 if TYPE_CHECKING:
@@ -113,21 +120,26 @@ class ChangeReferenceInterface(CallbackInterface):
 
 
 def s_gek_factory(
+    n_param: int,
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
+    obj_func: Callable[[np.ndarray], float],
     change_reference: ChangeReferenceType,
-    n_param: int,
+    solver_settings: SolverSettings,
     settings: SGEKSettings,
-) -> Callable[
-    [np.ndarray, np.ndarray, np.ndarray],
-    Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+) -> Tuple[
+    Callable[
+        [np.ndarray, np.ndarray, np.ndarray],
+        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
+    ],
+    Callable[[np.ndarray], float],
 ]:
-    # collector for exceptions raised inside the wrapped user callback; adopted from
-    # update_orbs when it is itself factory-produced so a whole chain of factories
-    # shares one, and handed to solver through the returned object
-    exception = adopt_collector(update_orbs)
+    # collector for exceptions raised inside the wrapped user callbacks; adopted from
+    # update_orbs or obj_func when these are themselves factory-produced so a whole
+    # chain of factories shares one, and handed to solver through the returned objects
+    exception = adopt_collector(update_orbs, obj_func)
 
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
@@ -138,6 +150,9 @@ def s_gek_factory(
     )
     update_orbs_interface = update_orbs_interface_type(
         UpdateOrbsInterface(update_orbs, n_param, exception)
+    )
+    obj_func_interface = obj_func_interface_type(
+        ObjFuncInterface(obj_func, n_param, exception)
     )
     change_reference_interface = change_reference_interface_type(
         ChangeReferenceInterface(change_reference, n_param, exception)
@@ -154,6 +169,11 @@ def s_gek_factory(
         exception,
     )
 
+    # the factory keeps calling the callback functions of the solver settings it wires,
+    # so those the solver built from the Python functions of the settings are removed
+    # first, the solver builds them anew
+    detach_python_callbacks(solver_settings)
+
     if not hasattr(lib, "s_gek_factory"):
         raise RuntimeError(
             "Please reinstall the package with: "
@@ -163,21 +183,28 @@ def s_gek_factory(
     # define result and argument types
     lib.s_gek_factory.restype = c_int
     lib.s_gek_factory.argtypes = [
-        update_orbs_interface_type,
-        change_reference_interface_type,
         c_int,
-        POINTER(SGEKSettingsC),
+        update_orbs_interface_type,
+        obj_func_interface_type,
+        change_reference_interface_type,
         POINTER(update_orbs_interface_type),
+        POINTER(obj_func_interface_type),
+        POINTER(SolverSettingsC),
+        POINTER(SGEKSettingsC),
     ]
 
     # call Fortran function
     update_orbs_s_gek_funptr = update_orbs_interface_type()
+    obj_func_s_gek_funptr = obj_func_interface_type()
     error = lib.s_gek_factory(
-        update_orbs_interface,
-        change_reference_interface,
         n_param,
+        update_orbs_interface,
+        obj_func_interface,
+        change_reference_interface,
+        byref(update_orbs_s_gek_funptr),
+        byref(obj_func_s_gek_funptr),
+        byref(solver_settings.settings_c),
         byref(settings.settings_c),
-        update_orbs_s_gek_funptr,
     )
 
     if error:
@@ -190,13 +217,29 @@ def s_gek_factory(
                 f"OpenTrustRegion S-GEK factory produced error (code {error})."
             )
 
-    return UpdateOrbsPyInterface(
-        update_orbs_funptr=update_orbs_s_gek_funptr,
-        _otr_exception=exception,
-        saved_objects={
-            "update_orbs_interface": update_orbs_interface,
-            "change_reference_interface": change_reference_interface,
-        },
+    # attach the routines the factory has wired into the solver settings
+    attach_wired_callbacks(solver_settings, exception)
+
+    # the returned functions are called with the context the factory has written into
+    # the solver settings, through which they reach the S-GEK object
+    saved_objects = {
+        "update_orbs_interface": update_orbs_interface,
+        "obj_func_interface": obj_func_interface,
+        "change_reference_interface": change_reference_interface,
+    }
+    return (
+        UpdateOrbsPyInterface(
+            update_orbs_funptr=update_orbs_s_gek_funptr,
+            saved_objects=saved_objects,
+            _otr_exception=exception,
+            context=solver_settings.settings_c.context,
+        ),
+        ObjFuncPyInterface(
+            obj_func_funptr=obj_func_s_gek_funptr,
+            saved_objects=saved_objects,
+            _otr_exception=exception,
+            context=solver_settings.settings_c.context,
+        ),
     )
 
 

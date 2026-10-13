@@ -13,8 +13,7 @@ module otr_arh_c_interface_mock
                                    arh_factory_oao_c_wrapper, init_arh_settings_c, &
                                    arh_deconstructor_c_wrapper
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
-                                           c_funloc, c_null_char, c_f_pointer, c_loc, &
-                                           c_null_funptr
+                                           c_funloc, c_null_char, c_f_pointer, c_loc
 
     implicit none
 
@@ -36,7 +35,7 @@ contains
 
     function mock_arh_factory_mo_c_wrapper( &
         mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
-        evaluate_dm_c_funptr, obj_func_arh_c_funptr, update_orbs_arh_c_funptr, &
+        evaluate_dm_c_funptr, update_orbs_arh_c_funptr, obj_func_arh_c_funptr, &
         solver_settings_c, settings_c, orbsym_c) result(error_c) &
         bind(C, name="mock_arh_factory_mo")
         !
@@ -44,26 +43,25 @@ contains
         ! orbitals parameterized in the MO basis
         !
         use, intrinsic :: iso_c_binding, only: c_null_ptr
-        use opentrustregion, only: default_solver_settings
         use otr_arh, only: arh_n_micro
         use otr_arh_c_interface, only: arh_settings_type_c
-        use otr_mo_c_interface, only: mo_coeff_3d_c
-        use c_interface, only: logger_c_type, solver_settings_type_c, assignment(=)
+        use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c
         use otr_arh_test_reference, only: test_evaluate_dm_c_funptr, operator(/=)
         use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
                                          orbsym_c_ref => orbsym_c, mo_coeff_pattern
-        use otr_mo_c_interface_mock, only: mock_update_orbs_mo, orbsym_passed
+        use otr_mo_c_interface_mock, only: mock_update_orbs_mo, orbsym_passed, &
+                                           mo_coeff_3d_c
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c
-        use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
-                                          mock_precond_pd, mock_get_extra_trial_vectors
+        use otr_common_c_interface_mock, only: mock_level_obj_func, &
+                                               mock_wire_solver_settings_c
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in) :: n_occ_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c, n_mo_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
-        type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_arh_c_funptr, obj_func_arh_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(arh_settings_type_c), intent(in) :: settings_c
         integer(c_ip), intent(in), optional :: orbsym_c(*)
@@ -142,20 +140,14 @@ contains
             end if
         end if
 
-        ! set function pointers to mock to ARH mock functions, and set solver settings
-        ! without wiring a projection, since the parameters are non-redundant, so that
-        ! the projection is left to the caller
-        obj_func_arh_c_funptr = c_funloc(mock_obj_func)
+        ! set function pointers to the mock functions of the level of the solver, and
+        ! check the passed solver settings, wire them and adjust them as the factory
+        ! does
         update_orbs_arh_c_funptr = c_funloc(mock_update_orbs_mo)
-        if (.not. solver_settings_c%initialized) &
-            solver_settings_c = default_solver_settings
-        solver_settings_c%precond = c_funloc(mock_precond)
-        solver_settings_c%precond_pd = c_funloc(mock_precond_pd)
-        solver_settings_c%get_extra_trial_vectors = &
-            c_funloc(mock_get_extra_trial_vectors)
-        solver_settings_c%stability_settings%precond = c_funloc(mock_precond)
-        solver_settings_c%stability_settings%get_extra_trial_vectors = &
-            c_funloc(mock_get_extra_trial_vectors)
+        obj_func_arh_c_funptr = c_funloc(mock_level_obj_func)
+        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
+                                              "arh_factory_mo_py_interface")) &
+            test_arh_factory_mo_interface = .false.
         solver_settings_c%refresh_hess = .true._c_bool
         solver_settings_c%n_micro = int(arh_n_micro, kind=c_ip)
         solver_settings_c%hess_symm = .false._c_bool
@@ -167,48 +159,33 @@ contains
 
     function mock_arh_factory_oao_c_wrapper( &
         dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-        obj_func_arh_c_funptr, update_orbs_arh_c_funptr, solver_settings_c, &
+        update_orbs_arh_c_funptr, obj_func_arh_c_funptr, solver_settings_c, &
         settings_c) result(error_c) bind(C, name="mock_arh_factory_oao")
         !
         ! this subroutine is a mock routine for the ARH orbital updating factory C
         ! wrapper subroutine
         !
         use, intrinsic :: iso_c_binding, only: c_null_ptr
-        use opentrustregion, only: default_solver_settings
         use otr_arh, only: arh_n_micro
         use otr_arh_c_interface, only: arh_settings_type_c
-        use c_interface, only: obj_func_c_type, update_orbs_c_type, precond_c_type, &
-                               precond_pd_c_type, project_c_type, logger_c_type, &
-                               solver_settings_type_c, assignment(=)
-        use otr_oao_c_interface, only: dm_ao_3d_c
+        use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c
         use otr_arh_test_reference, only: test_evaluate_dm_c_funptr, operator(/=)
-        use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
-                                          mock_precond_pd, mock_project, &
-                                          mock_get_extra_trial_vectors
-        use otr_oao_c_interface_mock, only: mock_update_orbs_oao
+        use otr_common_c_interface_mock, only: &
+            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c
 
         real(c_rp), intent(inout), target :: dm_ao_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
-        type(c_funptr), intent(out) :: obj_func_arh_c_funptr, update_orbs_arh_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_arh_c_funptr, obj_func_arh_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(arh_settings_type_c), intent(in) :: settings_c
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr
         character(len=:), allocatable, target :: message
-        procedure(obj_func_c_type), pointer :: obj_func_arh_funptr
-        procedure(update_orbs_c_type), pointer :: update_orbs_arh_funptr
-        procedure(precond_c_type), pointer :: precond_arh_funptr
-        procedure(precond_pd_c_type), pointer :: precond_pd_arh_funptr
-        procedure(project_c_type), pointer :: project_arh_funptr
-
-        ! set global pointer to density matrix so that it can be accessed in the mock
-        ! orbital updating function
-        call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, [n_ao_c, n_ao_c, n_particle_c])
 
         ! closed-shell case
         if (n_particle_c == 1) then
@@ -274,20 +251,16 @@ contains
 
         end if
 
-        ! set function pointers to mock to ARH mock functions, and set solver settings
-        obj_func_arh_c_funptr = c_funloc(mock_obj_func)
-        update_orbs_arh_c_funptr = c_funloc(mock_update_orbs_oao)
-        if (.not. solver_settings_c%initialized) &
-            solver_settings_c = default_solver_settings
-        solver_settings_c%precond = c_funloc(mock_precond)
-        solver_settings_c%precond_pd = c_funloc(mock_precond_pd)
-        solver_settings_c%project = c_funloc(mock_project)
-        solver_settings_c%get_extra_trial_vectors = &
-            c_funloc(mock_get_extra_trial_vectors)
-        solver_settings_c%stability_settings%precond = c_funloc(mock_precond)
-        solver_settings_c%stability_settings%project = c_funloc(mock_project)
-        solver_settings_c%stability_settings%get_extra_trial_vectors = &
-            c_funloc(mock_get_extra_trial_vectors)
+        ! mark the density matrix of the caller, which the factory receives in place,
+        ! set function pointers to the mock functions of the level of the solver, and
+        ! check the passed solver settings, wire them and adjust them as the factory
+        ! does
+        dm_ao_c(:n_ao_c**2 * n_particle_c) = 2.0_c_rp
+        update_orbs_arh_c_funptr = c_funloc(mock_level_update_orbs)
+        obj_func_arh_c_funptr = c_funloc(mock_level_obj_func)
+        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
+                                              "arh_factory_oao_py_interface")) &
+            test_arh_factory_oao_interface = .false.
         solver_settings_c%refresh_hess = .true._c_bool
         solver_settings_c%hess_symm = .false._c_bool
         solver_settings_c%n_micro = int(arh_n_micro, kind=c_ip)

@@ -6,9 +6,9 @@
 
 module otr_qn_c_interface
 
-    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, hess_x_type
-    use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
-                           hess_x_c_type
+    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, obj_func_type
+    use c_interface, only: c_ip, c_rp, c_callbacks_type
+    use otr_common_c_interface, only: extension_holder_type
     use otr_qn, only: &
         transport_type, init_hess_type, standard_qn_factory => qn_factory, &
         standard_update_orbs_qn_deconstructor => update_orbs_qn_deconstructor
@@ -53,11 +53,9 @@ module otr_qn_c_interface
     ! settings outlive the factory call that sets it
     type(qn_c_callbacks_type), target :: qn_callbacks
 
-    ! define procedure pointer which will point to the Fortran procedures
-    procedure(update_orbs_c_type), pointer :: update_orbs_orig_qn_before_wrapping => &
-        null()
-    procedure(update_orbs_type), pointer :: update_orbs_qn_before_wrapping => null()
-    procedure(hess_x_type), pointer :: hess_x_qn_before_wrapping => null()
+    ! holder of the quasi-Newton object for C hosts, whose levels are the contexts of
+    ! the C callback functions the factory returns and wires into the C solver settings
+    type(extension_holder_type), target :: qn_holder
 
     ! derived type for quasi-Newton settings
     type, bind(C) :: qn_settings_type_c
@@ -75,9 +73,6 @@ module otr_qn_c_interface
     ! create function pointers to ensure that routines comply with interface
     procedure(transport_type), pointer :: transport_f_wrapper_ptr => transport_f_wrapper
     procedure(init_hess_type), pointer :: init_hess_f_wrapper_ptr => init_hess_f_wrapper
-    procedure(update_orbs_c_type), pointer :: update_orbs_qn_c_wrapper_ptr => &
-        update_orbs_qn_c_wrapper
-    procedure(hess_x_c_type), pointer :: hess_x_qn_c_wrapper_ptr => hess_x_qn_c_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -88,70 +83,107 @@ module otr_qn_c_interface
 contains
 
     function qn_factory_c_wrapper( &
-        update_orbs_orig_c_funptr, transport_c_funptr, init_hess_c_funptr, n_param_c, &
-        settings_c, update_orbs_qn_c_funptr) result(error_c) bind(C, name="qn_factory")
+        n_param_c, update_orbs_c_funptr, obj_func_c_funptr, transport_c_funptr, &
+        init_hess_c_funptr, update_orbs_qn_c_funptr, obj_func_qn_c_funptr, &
+        solver_settings_c, settings_c) result(error_c) bind(C, name="qn_factory")
         !
-        ! this subroutine wraps the factory function for the subroutine to convert C
-        ! variables to Fortran variables
+        ! this function wraps the quasi-Newton factory for C hosts, whose orbital
+        ! update, objective function and C solver settings it hands to the holder of
+        ! the quasi-Newton object, and writes the solver settings the factory wired
+        ! back into the C solver settings
         !
-        use otr_qn, only: qn_settings_type
-        use c_interface, only: update_orbs_f_wrapper
-        use otr_common_c_interface, only: n_param
+        use opentrustregion, only: solver_settings_type
+        use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
+                               obj_func_f_wrapper
+        use otr_qn, only: qn_settings_type, update_object
+        use otr_common_c_interface, only: setup_extension_holder, &
+                                          wire_solver_settings_c, &
+                                          update_orbs_c_wrapper, obj_func_c_wrapper
 
-        type(c_funptr), intent(in), value :: update_orbs_orig_c_funptr, &
-                                             transport_c_funptr, init_hess_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
+        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
+                                             transport_c_funptr, init_hess_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_qn_c_funptr, obj_func_qn_c_funptr
+        type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(qn_settings_type_c), intent(in) :: settings_c
-        type(c_funptr), intent(out) :: update_orbs_qn_c_funptr
         integer(c_ip) :: error_c
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
                                                 update_orbs_qn_funptr
+        procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_qn_funptr
         procedure(transport_type), pointer :: transport_funptr
         procedure(init_hess_type), pointer :: init_hess_funptr
+        type(solver_settings_type) :: solver_settings
         type(qn_settings_type) :: settings
+        type(qn_c_callbacks_type), target :: callbacks
+        type(extension_holder_type) :: previous_holder
+        type(qn_c_callbacks_type) :: previous_callbacks
         integer(ip) :: error
 
-        ! associate the input C pointer to update_orbs subroutine to a Fortran
-        ! procedure pointer
-        call c_f_procpointer(cptr=update_orbs_orig_c_funptr, &
-                             fptr=update_orbs_orig_qn_before_wrapping)
-
-        ! associate procedure pointer to wrapper function
-        ! the orbital update which wraps the original one calls it through the C
-        ! wrapper of the core, which finds it in the callback bundle the returned
-        ! orbital update hands over as context
-        update_orbs_funptr => update_orbs_f_wrapper
-        transport_funptr => transport_f_wrapper
-        init_hess_funptr => init_hess_f_wrapper
-
-        ! convert number of parameters to Fortran kind and store globally to access
-        ! assumed size arrays passed from C to Fortran
-        n_param = int(n_param_c, kind=ip)
+        ! no functions are returned unless the factory succeeds
+        update_orbs_qn_c_funptr = c_null_funptr
+        obj_func_qn_c_funptr = c_null_funptr
 
         ! convert settings and hand the transport and initial Hessian functions and the
         ! logging function with the host context of initialized settings to their
-        ! wrappers in the bundle held by the module, which the settings point to
+        ! wrappers in a bundle, which the settings point to
         settings = settings_c
-        qn_callbacks = qn_c_callbacks_type()
-        call c_f_procpointer(cptr=transport_c_funptr, fptr=qn_callbacks%transport)
-        call c_f_procpointer(cptr=init_hess_c_funptr, fptr=qn_callbacks%init_hess)
+        call c_f_procpointer(cptr=transport_c_funptr, fptr=callbacks%transport)
+        call c_f_procpointer(cptr=init_hess_c_funptr, fptr=callbacks%init_hess)
         if (settings_c%initialized) then
             if (c_associated(settings_c%logger)) &
-                call c_f_procpointer(cptr=settings_c%logger, fptr=qn_callbacks%logger)
-            qn_callbacks%host_context = settings_c%context
+                call c_f_procpointer(cptr=settings_c%logger, fptr=callbacks%logger)
+            callbacks%host_context = settings_c%context
         end if
+        settings%context => callbacks
+
+        ! keep the holder and the bundle held by the module, which are restored if the
+        ! factory fails after the holder was set up, so that the functions an earlier
+        ! call returned keep working
+        previous_holder = qn_holder
+        previous_callbacks = qn_callbacks
+
+        ! set up the holder with the host's orbital update and objective function and
+        ! convert the solver settings, unless the holder was already wired into these
+        call setup_extension_holder(qn_holder, solver_settings_c, solver_settings, &
+                                    settings, error, update_orbs_c_funptr, &
+                                    obj_func_c_funptr)
+        if (error /= 0) then
+            error_c = int(error, kind=c_ip)
+            return
+        end if
+
+        ! the bundle held by the module, in which the wrappers of the callback functions
+        ! find them, takes over the bundle only once the holder accepted the solver
+        ! settings, so that refused settings leave the callback functions of an object
+        ! in use unchanged
+        qn_callbacks = callbacks
         settings%context => qn_callbacks
 
+        ! the factory reaches the host's callback functions through the core's
+        ! wrappers, which find them in the bundles of the holder
+        update_orbs_funptr => update_orbs_f_wrapper
+        obj_func_funptr => obj_func_f_wrapper
+        transport_funptr => transport_f_wrapper
+        init_hess_funptr => init_hess_f_wrapper
+
         ! call factory function
-        call qn_factory(update_orbs_funptr, transport_funptr, init_hess_funptr, &
-                        n_param, error, settings, update_orbs_qn_funptr)
+        call qn_factory(int(n_param_c, kind=ip), update_orbs_funptr, obj_func_funptr, &
+                        transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
+                        obj_func_qn_funptr, solver_settings, error, settings)
 
-        ! associate the global procedure pointer to the Fortran function pointer
-        update_orbs_qn_before_wrapping => update_orbs_qn_funptr
-
-        ! get a C function pointer to the C wrapper function
-        update_orbs_qn_c_funptr = c_funloc(update_orbs_qn_c_wrapper)
+        ! write the wired solver settings back and return the C wrappers of the orbital
+        ! update and the objective function of the object, or restore the holder and
+        ! the bundle held by the module if the factory failed
+        if (error == 0) then
+            call wire_solver_settings_c(qn_holder, update_object, solver_settings, &
+                                        solver_settings_c)
+            update_orbs_qn_c_funptr = c_funloc(update_orbs_c_wrapper)
+            obj_func_qn_c_funptr = c_funloc(obj_func_c_wrapper)
+        else
+            qn_holder = previous_holder
+            qn_callbacks = previous_callbacks
+        end if
 
         ! convert return arguments to C kind
         error_c = int(error, kind=c_ip)
@@ -227,46 +259,6 @@ contains
         end if
 
     end subroutine init_hess_f_wrapper
-
-    function update_orbs_qn_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                      hess_x_c_funptr, context_c) result(error_c) &
-        bind(C)
-        !
-        ! this function wraps the orbital update subroutine to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: update_orbs_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out) :: func_c
-        real(c_rp), intent(out), target :: grad_c(*), h_diag_c(*)
-        type(c_funptr), intent(inout) :: hess_x_c_funptr
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = update_orbs_c_wrapper_impl( &
-            update_orbs_qn_before_wrapping, hess_x_qn_before_wrapping, &
-            hess_x_qn_c_wrapper, kappa_c, func_c, grad_c, h_diag_c, hess_x_c_funptr, &
-            context_c, update_orbs_orig_qn_before_wrapping)
-
-    end function update_orbs_qn_c_wrapper
-
-    function hess_x_qn_c_wrapper(x_c, hess_x_c, context_c) result(error_c) bind(C)
-        !
-        ! this function wraps the Hessian linear transformation to convert Fortran
-        ! variables to C variables
-        !
-        use otr_common_c_interface, only: hess_x_c_wrapper_impl
-
-        real(c_rp), intent(in), target :: x_c(*)
-        real(c_rp), intent(out), target :: hess_x_c(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        error_c = &
-            hess_x_c_wrapper_impl(hess_x_qn_before_wrapping, x_c, hess_x_c, context_c)
-
-    end function hess_x_qn_c_wrapper
 
     subroutine init_qn_settings_c(settings_c) bind(C, name="init_qn_settings")
         !

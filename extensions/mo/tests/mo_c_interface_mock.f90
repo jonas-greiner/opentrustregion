@@ -24,6 +24,10 @@ module otr_mo_c_interface_mock
     logical(c_bool), bind(C, name="test_orbsym_passed") :: orbsym_passed = &
         .false._c_bool
 
+    ! MO coefficients passed to the mock factory, which the mock orbital update
+    ! overwrites to test that the Python interface copies them back
+    real(c_rp), pointer :: mo_coeff_3d_c(:, :, :) => null()
+
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_c_type), pointer :: mock_update_orbs_mo_ptr => &
         mock_update_orbs_mo
@@ -41,10 +45,10 @@ contains
         !
         ! this function is a test function for the orbital update C function for
         ! orbitals parameterized in the MO basis, which overwrites the MO coefficients
-        ! with a pattern encoding their indices
+        ! with a pattern encoding their indices in addition to the mock orbital update
+        ! of the level of the solver
         !
-        use c_interface_unit_tests, only: mock_update_orbs_orig => mock_update_orbs
-        use otr_mo_c_interface, only: mo_coeff_3d_c
+        use otr_common_c_interface_mock, only: mock_level_update_orbs
         use otr_mo_test_reference, only: mo_coeff_pattern
 
         real(c_rp), intent(in), target :: kappa(*)
@@ -54,8 +58,8 @@ contains
         type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
-        error = &
-            mock_update_orbs_orig(kappa, func, grad, h_diag, hess_x_c_funptr, context_c)
+        error = mock_level_update_orbs(kappa, func, grad, h_diag, hess_x_c_funptr, &
+                                       context_c)
 
         mo_coeff_3d_c = mo_coeff_pattern(size(mo_coeff_3d_c, 1, kind=c_ip), &
                                          size(mo_coeff_3d_c, 2, kind=c_ip), &
@@ -65,7 +69,7 @@ contains
 
     function mock_mo_factory_c_wrapper( &
         mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
-        evaluate_dm_c_funptr, obj_func_mo_c_funptr, update_orbs_mo_c_funptr, &
+        evaluate_dm_c_funptr, update_orbs_mo_c_funptr, obj_func_mo_c_funptr, &
         solver_settings_c, settings_c, orbsym_c) result(error_c) &
         bind(C, name="mock_mo_factory")
         !
@@ -73,24 +77,23 @@ contains
         ! wrapper subroutine
         !
         use, intrinsic :: iso_c_binding, only: c_null_ptr
-        use opentrustregion, only: default_solver_settings
-        use otr_mo_c_interface, only: mo_settings_type_c, mo_coeff_3d_c
-        use c_interface, only: logger_c_type, solver_settings_type_c, assignment(=)
+        use otr_mo_c_interface, only: mo_settings_type_c
+        use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c
         use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
                                          orbsym_c_ref => orbsym_c, mo_coeff_pattern, &
                                          operator(/=)
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c, &
                                              test_evaluate_dm_c_funptr
-        use c_interface_unit_tests, only: mock_obj_func, mock_precond, &
-                                          mock_precond_pd, mock_get_extra_trial_vectors
+        use otr_common_c_interface_mock, only: mock_level_obj_func, &
+                                               mock_wire_solver_settings_c
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
         integer(c_ip), intent(in) :: n_occ_c(*)
         integer(c_ip), intent(in), value :: n_particle_c, n_ao_c, n_mo_c
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
-        type(c_funptr), intent(out) :: obj_func_mo_c_funptr, update_orbs_mo_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_mo_c_funptr, obj_func_mo_c_funptr
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(mo_settings_type_c), intent(in) :: settings_c
         integer(c_ip), intent(in), optional :: orbsym_c(*)
@@ -168,20 +171,13 @@ contains
             end if
         end if
 
-        ! set function pointers to mock to MO mock functions, and set solver settings
-        ! without wiring a projection, since the parameters are non-redundant, so that
-        ! the projection is left to the caller
-        obj_func_mo_c_funptr = c_funloc(mock_obj_func)
+        ! check the passed solver settings and wire them, and set function pointers to
+        ! the mock functions of the level of the solver
+        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
+                                              "mo_factory_py_interface")) &
+            test_mo_factory_interface = .false.
         update_orbs_mo_c_funptr = c_funloc(mock_update_orbs_mo)
-        if (.not. solver_settings_c%initialized) &
-            solver_settings_c = default_solver_settings
-        solver_settings_c%precond = c_funloc(mock_precond)
-        solver_settings_c%precond_pd = c_funloc(mock_precond_pd)
-        solver_settings_c%get_extra_trial_vectors = &
-            c_funloc(mock_get_extra_trial_vectors)
-        solver_settings_c%stability_settings%precond = c_funloc(mock_precond)
-        solver_settings_c%stability_settings%get_extra_trial_vectors = &
-            c_funloc(mock_get_extra_trial_vectors)
+        obj_func_mo_c_funptr = c_funloc(mock_level_obj_func)
 
         ! set return arguments
         error_c = 0
