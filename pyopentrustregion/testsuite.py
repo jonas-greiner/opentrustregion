@@ -20,6 +20,7 @@ from pyopentrustregion.tests import (
 try:
     from pyopentrustregion.extensions.common.tests import (
         CommonTests,
+        CommonCInterfaceTests,
         CommonPyInterfaceTests,
     )
 except AttributeError:

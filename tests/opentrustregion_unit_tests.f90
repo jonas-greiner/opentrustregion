@@ -2517,8 +2517,7 @@ contains
             error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
             error_precond, error_project, error_conv_check, error_precond_pd, &
             error_get_extra_trial_vectors, subsystem_solver_options, &
-            settings_uninitialized_warning_msg, &
-            stability_settings_uninitialized_warning_msg
+            settings_uninitialized_warning_msg
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error
@@ -2595,20 +2594,14 @@ contains
         ! start at saddle point again with nested stability check settings that were
         ! not initialized, the solver initializes them before handing down its context,
         ! so the internal stability check still calls the Hessian linear transformation
-        ! with the solver's context, and prints a warning
+        ! with the solver's context, the warning is printed through the logging
+        ! function
         context%vars = saddle_point
         settings%stability_settings%initialized = .false.
         settings%logger => logger
-        context%log_message = ""
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_solver failed: Produced error when nested "// &
-                "stability check settings were not initialized."
-            test_solver = .false.
-        end if
-        if (index(context%log_message, &
-                  " "//stability_settings_uninitialized_warning_msg) == 0) then
-            write(stderr, *) "test_solver failed: Warning not printed when nested "// &
                 "stability check settings were not initialized."
             test_solver = .false.
         end if
@@ -6473,7 +6466,7 @@ contains
         !
         use opentrustregion, only: solver_settings_type, &
                                    default_settings => default_solver_settings
-        use test_reference, only: operator(/=), callbacks_unset
+        use test_reference, only: operator(/=), same_callbacks
 
         type, extends(solver_settings_type) :: extended_solver_settings_type
         end type
@@ -6510,7 +6503,7 @@ contains
         end if
 
         ! check function pointers and host context
-        if (.not. callbacks_unset(settings)) then
+        if (.not. same_callbacks(settings, default_settings)) then
             write(stderr, *) "test_init_solver_settings failed: Function pointers "// &
                 "not discarded."
             test_init_solver_settings = .false.
@@ -6551,7 +6544,7 @@ contains
         !
         use opentrustregion, only: stability_settings_type, &
                                    default_settings => default_stability_settings
-        use test_reference, only: operator(/=), callbacks_unset
+        use test_reference, only: operator(/=), same_callbacks
 
         type, extends(stability_settings_type) :: extended_stability_settings_type
         end type
@@ -6582,7 +6575,7 @@ contains
         end if
 
         ! check function pointers and host context
-        if (.not. callbacks_unset(settings)) then
+        if (.not. same_callbacks(settings, default_settings)) then
             write(stderr, *) "test_init_stability_settings failed: Function "// &
                 "pointers not discarded."
             test_init_stability_settings = .false.
@@ -7633,6 +7626,98 @@ contains
         end if
 
     end function test_warn_uninitialized_settings
+
+    logical(c_bool) function test_init_uninitialized_settings() bind(C)
+        !
+        ! this function tests the subroutine which initializes solver settings or their
+        ! nested stability check settings that were not initialized
+        !
+        use opentrustregion, only: &
+            solver_settings_type, default_solver_settings, default_stability_settings, &
+            init_uninitialized_settings, settings_uninitialized_warning_msg, &
+            stability_settings_uninitialized_warning_msg
+        use test_reference, only: same_callbacks, operator(/=)
+
+        type(solver_settings_type) :: settings
+        type(test_context_type), target :: context
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_init_uninitialized_settings = .true.
+
+        ! settings that were not initialized have to be replaced by the default
+        ! settings after the warning was printed through their logging function
+        call setup_settings(settings, context)
+        settings%precond => identity_precond
+        settings%conv_tol = 1.0_rp
+        settings%initialized = .false.
+        call init_uninitialized_settings(settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_init_uninitialized_settings failed: Produced "// &
+                "error for settings that were not initialized."
+            test_init_uninitialized_settings = .false.
+        end if
+        if (context%log_message /= " "//settings_uninitialized_warning_msg) then
+            write(stderr, *) "test_init_uninitialized_settings failed: Warning not "// &
+                "printed for settings that were not initialized."
+            test_init_uninitialized_settings = .false.
+        end if
+        if (settings /= default_solver_settings .or. &
+            .not. same_callbacks(settings, default_solver_settings)) then
+            write(stderr, *) "test_init_uninitialized_settings failed: Settings "// &
+                "that were not initialized not replaced by the default settings."
+            test_init_uninitialized_settings = .false.
+        end if
+
+        ! nested settings that were not initialized have to be replaced by the default
+        ! settings after the warning was printed through the logging function of the
+        ! solver settings, which have to be kept
+        call setup_settings(settings, context)
+        settings%precond => identity_precond
+        settings%stability_settings%project => identity_project
+        settings%stability_settings%initialized = .false.
+        call init_uninitialized_settings(settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_init_uninitialized_settings failed: Produced "// &
+                "error for nested settings that were not initialized."
+            test_init_uninitialized_settings = .false.
+        end if
+        if (context%log_message /= " "//stability_settings_uninitialized_warning_msg) &
+            then
+            write(stderr, *) "test_init_uninitialized_settings failed: Warning not "// &
+                "printed for nested settings that were not initialized."
+            test_init_uninitialized_settings = .false.
+        end if
+        if (settings%stability_settings /= default_stability_settings .or. &
+            .not. same_callbacks(settings%stability_settings, &
+                                 default_stability_settings)) then
+            write(stderr, *) "test_init_uninitialized_settings failed: Nested "// &
+                "settings that were not initialized not replaced by the default "// &
+                "settings."
+            test_init_uninitialized_settings = .false.
+        end if
+        if (.not. associated(settings%precond, identity_precond)) then
+            write(stderr, *) "test_init_uninitialized_settings failed: Solver "// &
+                "settings changed for nested settings that were not initialized."
+            test_init_uninitialized_settings = .false.
+        end if
+
+        ! initialized settings have to be kept without a warning
+        call setup_settings(settings, context)
+        settings%precond => identity_precond
+        call init_uninitialized_settings(settings, error)
+        if (context%log_message /= "") then
+            write(stderr, *) "test_init_uninitialized_settings failed: Warning "// &
+                "printed for initialized settings."
+            test_init_uninitialized_settings = .false.
+        end if
+        if (.not. associated(settings%precond, identity_precond)) then
+            write(stderr, *) "test_init_uninitialized_settings failed: Initialized "// &
+                "settings changed."
+            test_init_uninitialized_settings = .false.
+        end if
+
+    end function test_init_uninitialized_settings
 
     logical(c_bool) function test_print_message() bind(C)
         !
@@ -9487,7 +9572,7 @@ contains
             default_ellipsoidal_trust_radius, verbosity_info, verbosity_debug
 
         type(solver_settings_type) :: settings
-        type(test_context_type), target :: context, stability_context
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_init_defaults = .true.
@@ -9590,31 +9675,21 @@ contains
             test_init_defaults = .false.
         end if
 
-        ! check that nested stability check settings without callback functions, a
-        ! context or a convergence check of their own, with a verbosity below the
-        ! solver's and an unset number of random trial vectors inherit the solver's
-        ! preconditioning, projection and logging functions, context and verbosity,
-        ! stop as soon as an instability is certain and use a single random trial
-        ! vector
+        ! check that nested stability check settings without callback functions or a
+        ! convergence check of their own, with a verbosity below the solver's and an
+        ! unset number of random trial vectors inherit the solver's callback functions,
+        ! which inherit_solver_callbacks lets them, and its verbosity, stop as soon as
+        ! an instability is certain and use a single random trial vector
         call setup_settings(settings, context)
         settings%precond => identity_precond
-        settings%project => identity_project
         settings%verbose = verbosity_debug
         settings%stability_settings%stop_on_instability = .false.
         settings%stability_settings%n_random_trial_vectors = -1
         call init_defaults(settings)
-        if (.not. associated(settings%stability_settings%precond, &
-                             identity_precond) .or. &
-            .not. associated(settings%stability_settings%project, &
-                             identity_project) .or. &
-            .not. associated(settings%stability_settings%logger, logger)) then
+        if (.not. associated(settings%stability_settings%precond, identity_precond)) &
+            then
             write(stderr, *) "test_init_defaults failed: Nested stability check "// &
                 "settings did not inherit the solver's callback functions."
-            test_init_defaults = .false.
-        end if
-        if (.not. associated(settings%stability_settings%context, context)) then
-            write(stderr, *) "test_init_defaults failed: Nested stability check "// &
-                "settings did not inherit the solver's context."
             test_init_defaults = .false.
         end if
         if (settings%stability_settings%verbose /= verbosity_debug) then
@@ -9633,38 +9708,16 @@ contains
             test_init_defaults = .false.
         end if
 
-        ! check that nested stability check settings with callback functions, a context
-        ! and a convergence check of their own, a verbosity above the solver's and a
-        ! number of random trial vectors keep all of these
+        ! check that nested stability check settings with a convergence check of their
+        ! own, a verbosity above the solver's and a number of random trial vectors keep
+        ! all of these
         call setup_settings(settings, context)
-        settings%precond => mock_precond
-        settings%project => mock_project
         settings%verbose = verbosity_info
-        settings%stability_settings%precond => identity_precond
-        settings%stability_settings%project => identity_project
-        settings%stability_settings%logger => discarding_logger
-        settings%stability_settings%context => stability_context
         settings%stability_settings%conv_check => mock_conv_check_stability
         settings%stability_settings%verbose = verbosity_debug
         settings%stability_settings%stop_on_instability = .false.
         settings%stability_settings%n_random_trial_vectors = 3
         call init_defaults(settings)
-        if (.not. associated(settings%stability_settings%precond, &
-                             identity_precond) .or. &
-            .not. associated(settings%stability_settings%project, &
-                             identity_project) .or. &
-            .not. associated(settings%stability_settings%logger, discarding_logger)) &
-            then
-            write(stderr, *) "test_init_defaults failed: Callback functions of "// &
-                "nested stability check settings replaced."
-            test_init_defaults = .false.
-        end if
-        if (.not. associated(settings%stability_settings%context, stability_context)) &
-            then
-            write(stderr, *) "test_init_defaults failed: Context of nested "// &
-                "stability check settings replaced."
-            test_init_defaults = .false.
-        end if
         if (settings%stability_settings%verbose /= verbosity_debug) then
             write(stderr, *) "test_init_defaults failed: Higher verbosity of "// &
                 "nested stability check settings replaced."
@@ -9682,6 +9735,70 @@ contains
         end if
 
     end function test_init_defaults
+
+    logical(c_bool) function test_inherit_solver_callbacks() bind(C)
+        !
+        ! this function tests the subroutine which lets the nested stability check
+        ! settings of solver settings inherit the solver's preconditioning, projection
+        ! and logging functions and its host context
+        !
+        use opentrustregion, only: solver_settings_type, inherit_solver_callbacks
+
+        type(solver_settings_type) :: settings
+        type(test_context_type), target :: context, stability_context
+
+        ! assume tests pass
+        test_inherit_solver_callbacks = .true.
+
+        ! nested settings without callback functions or a context of their own have to
+        ! inherit the solver's
+        call setup_settings(settings, context)
+        settings%precond => identity_precond
+        settings%project => identity_project
+        call inherit_solver_callbacks(settings)
+        if (.not. associated(settings%stability_settings%precond, &
+                             identity_precond) .or. &
+            .not. associated(settings%stability_settings%project, &
+                             identity_project) .or. &
+            .not. associated(settings%stability_settings%logger, logger)) then
+            write(stderr, *) "test_inherit_solver_callbacks failed: Nested "// &
+                "settings did not inherit the solver's callback functions."
+            test_inherit_solver_callbacks = .false.
+        end if
+        if (.not. associated(settings%stability_settings%context, context)) then
+            write(stderr, *) "test_inherit_solver_callbacks failed: Nested "// &
+                "settings did not inherit the solver's context."
+            test_inherit_solver_callbacks = .false.
+        end if
+
+        ! nested settings with callback functions and a context of their own have to
+        ! keep these
+        call setup_settings(settings, context)
+        settings%precond => mock_precond
+        settings%project => mock_project
+        settings%stability_settings%precond => identity_precond
+        settings%stability_settings%project => identity_project
+        settings%stability_settings%logger => discarding_logger
+        settings%stability_settings%context => stability_context
+        call inherit_solver_callbacks(settings)
+        if (.not. associated(settings%stability_settings%precond, &
+                             identity_precond) .or. &
+            .not. associated(settings%stability_settings%project, &
+                             identity_project) .or. &
+            .not. associated(settings%stability_settings%logger, discarding_logger)) &
+            then
+            write(stderr, *) "test_inherit_solver_callbacks failed: Callback "// &
+                "functions of nested settings replaced."
+            test_inherit_solver_callbacks = .false.
+        end if
+        if (.not. associated(settings%stability_settings%context, stability_context)) &
+            then
+            write(stderr, *) "test_inherit_solver_callbacks failed: Context of "// &
+                "nested settings replaced."
+            test_inherit_solver_callbacks = .false.
+        end if
+
+    end function test_inherit_solver_callbacks
 
     logical(c_bool) function test_solver_sanity_check() bind(C)
         !

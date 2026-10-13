@@ -20,16 +20,47 @@ if NUMPY_AVAILABLE:
 # define all tests in alphabetical order
 fortran_tests = {
     "common_tests": [
+        "approx_hess_x_callback",
         "channel_rows",
         "compute_sqrt_and_inv_sqrt",
+        "conv_check_callback",
+        "conv_check_stability_callback",
+        "extension_level",
         "fill_extra_trial_vectors_orbital_basis",
+        "get_extra_trial_vectors_callback",
+        "hess_x_callback",
         "init_orbital_settings",
         "level_shifted_divisors",
+        "logger_callback",
         "matrix_exponential",
+        "obj_func_callback",
         "positive_definite_divisors",
+        "precond_callback",
         "precond_orbital_basis",
+        "precond_pd_callback",
         "precond_pd_orbital_basis",
+        "project_callback",
         "refresh_response_orbital_basis",
+        "stability_hess_x_callback",
+        "update_orbs_callback",
+        "wire_solver_settings_extension",
+    ],
+    "common_c_interface_tests": [
+        "approx_hess_x_c_wrapper",
+        "conv_check_c_wrapper",
+        "conv_check_stability_c_wrapper",
+        "get_extra_trial_vectors_c_wrapper",
+        "hess_x_c_wrapper",
+        "holder_level",
+        "logger_c_wrapper",
+        "obj_func_c_wrapper",
+        "precond_c_wrapper",
+        "precond_pd_c_wrapper",
+        "project_c_wrapper",
+        "setup_extension_holder",
+        "stability_hess_x_c_wrapper",
+        "update_orbs_c_wrapper",
+        "wire_solver_settings_c",
     ],
 }
 
@@ -52,6 +83,20 @@ class CommonTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         print_separator("Running unit tests for shared extension routines...")
+        return super().setUpClass()
+
+
+@add_tests
+class CommonCInterfaceTests(unittest.TestCase):
+    """
+    this class contains unit tests for the C interface shared between extensions
+    """
+
+    tests = fortran_tests["common_c_interface_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running unit tests for shared extension C interface...")
         return super().setUpClass()
 
 

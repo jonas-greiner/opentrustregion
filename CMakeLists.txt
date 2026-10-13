@@ -217,11 +217,13 @@ endif()
 if(ENABLE_QUASI_NEWTON)
     message(STATUS "Including quasi-Newton in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/quasi_newton/src/quasi_newton.f90
         extensions/quasi_newton/src/quasi_newton_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include
     )
 endif()
@@ -240,11 +242,13 @@ endif()
 if(ENABLE_S_GEK)
     message(STATUS "Including subspace gradient-enhanced kriging in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
+        extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
         extensions/s_gek/src/s_gek.f90
         extensions/s_gek/src/s_gek_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/s_gek/include
     )
 endif()
@@ -351,6 +355,9 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     if(ENABLE_QUASI_NEWTON)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
+            extensions/common/tests/common_test_reference.f90
+            extensions/common/tests/common_unit_tests.f90
+            extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/quasi_newton/tests/quasi_newton_test_reference.f90
             extensions/quasi_newton/tests/quasi_newton_c_interface_unit_tests.f90
             extensions/quasi_newton/tests/quasi_newton_mock.f90
@@ -375,6 +382,9 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     if(ENABLE_S_GEK)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
+            extensions/common/tests/common_test_reference.f90
+            extensions/common/tests/common_unit_tests.f90
+            extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/s_gek/tests/s_gek_test_reference.f90
             extensions/s_gek/tests/s_gek_c_interface_unit_tests.f90
             extensions/s_gek/tests/s_gek_mock.f90

@@ -402,24 +402,10 @@ contains
             local_settings = default_solver_settings
         end if
 
-        ! initialize settings, settings that were not initialized are replaced by the
-        ! default settings, which would silence the warning, so it is printed
-        ! beforehand through the caller's logging function or on stderr regardless of
-        ! the verbosity
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            call add_error_origin(error, error_solver, local_settings)
-            if (error /= 0) return
-        end if
-        if (.not. local_settings%stability_settings%initialized) then
-            call warn_uninitialized_settings( &
-                local_settings, stability_settings_uninitialized_warning_msg)
-            call local_settings%stability_settings%init(error)
-            call add_error_origin(error, error_solver, local_settings)
-            if (error /= 0) return
-        end if
+        ! initialize settings or their nested settings that were not initialized
+        call init_uninitialized_settings(local_settings, error)
+        call add_error_origin(error, error_solver, local_settings)
+        if (error /= 0) return
 
         ! initialize macroiteration convergence
         macro_converged = .false.
@@ -2971,6 +2957,32 @@ contains
 
     end subroutine warn_uninitialized_settings
 
+    subroutine init_uninitialized_settings(settings, error)
+        !
+        ! this subroutine initializes solver settings that were not initialized, or
+        ! otherwise their nested stability check settings if these were not, after
+        ! printing the warning through the logging function of the settings or on
+        ! stderr regardless of the verbosity, since the default settings which replace
+        ! them would silence it
+        !
+        type(solver_settings_type), intent(inout) :: settings
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        if (.not. settings%initialized) then
+            call warn_uninitialized_settings(settings, &
+                                             settings_uninitialized_warning_msg)
+            call settings%init(error)
+        else if (.not. settings%stability_settings%initialized) then
+            call warn_uninitialized_settings( &
+                settings, stability_settings_uninitialized_warning_msg)
+            call settings%stability_settings%init(error)
+        end if
+
+    end subroutine init_uninitialized_settings
+
     subroutine print_message(self, message, level, error)
         !
         ! this subroutine performs logging
@@ -3832,12 +3844,9 @@ contains
 
         ! let the nested stability check settings inherit preconditioning, projection
         ! and logging functions and the host context if they provide none of their own
-        associate (nested => settings%stability_settings)
-            if (.not. associated(nested%precond)) nested%precond => settings%precond
-            if (.not. associated(nested%project)) nested%project => settings%project
-            if (.not. associated(nested%logger)) nested%logger => settings%logger
-            if (.not. associated(nested%context)) nested%context => settings%context
+        call inherit_solver_callbacks(settings)
 
+        associate (nested => settings%stability_settings)
             ! inherit the solver's verbosity if higher, stop the check as soon as an
             ! instability is certain unless a convergence check is provided, and use a
             ! single random trial vector unless their number is set
@@ -3847,6 +3856,23 @@ contains
         end associate
 
     end subroutine init_defaults
+
+    subroutine inherit_solver_callbacks(settings)
+        !
+        ! this subroutine lets the nested stability check settings of solver settings
+        ! inherit the solver's preconditioning, projection and logging functions and
+        ! its host context where they provide none of their own
+        !
+        type(solver_settings_type), intent(inout) :: settings
+
+        associate (nested => settings%stability_settings)
+            if (.not. associated(nested%precond)) nested%precond => settings%precond
+            if (.not. associated(nested%project)) nested%project => settings%project
+            if (.not. associated(nested%logger)) nested%logger => settings%logger
+            if (.not. associated(nested%context)) nested%context => settings%context
+        end associate
+
+    end subroutine inherit_solver_callbacks
 
     subroutine solver_sanity_check(settings, n_param, grad, error)
         !

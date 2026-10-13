@@ -115,13 +115,14 @@ module test_reference
     ! one
     class(*), pointer :: no_context => null()
 
-    ! checks and operations on all callback functions of settings, so that a new
-    ! callback function only needs to be added here
-    interface callbacks_unset
-        module procedure solver_callbacks_unset
-        module procedure stability_callbacks_unset
-        module procedure solver_callbacks_unset_c
-        module procedure stability_callbacks_unset_c
+    ! checks and operations on all callback functions of settings and callback bundles,
+    ! so that a new callback function only needs to be added here
+    interface same_callbacks
+        module procedure same_solver_callbacks
+        module procedure same_stability_callbacks
+        module procedure same_solver_callbacks_c
+        module procedure same_stability_callbacks_c
+        module procedure same_bundle_callbacks
     end interface
 
     interface unset_callbacks
@@ -1073,77 +1074,176 @@ contains
 
     end function not_equal_stability_state_c
 
-    logical function solver_callbacks_unset(settings)
+    logical function same_solver_callbacks(settings, expected)
         !
-        ! this function checks that no callback function of solver settings, including
-        ! those of the nested stability check settings, is associated
+        ! this function checks that every callback function of solver settings,
+        ! including those of the nested stability check settings, is that of the
+        ! expected settings, unset where these have none
         !
-        type(solver_settings_type), intent(in) :: settings
+        type(solver_settings_type), intent(in) :: settings, expected
 
-        solver_callbacks_unset = .not. ( &
-            associated(settings%precond) .or. associated(settings%precond_pd) .or. &
-            associated(settings%project) .or. &
-            associated(settings%get_extra_trial_vectors) .or. &
-            associated(settings%conv_check) .or. &
-            associated(settings%stability_hess_x) .or. &
-            associated(settings%logger)) .and. &
-                                 stability_callbacks_unset(settings%stability_settings)
+        same_solver_callbacks = &
+            (associated(settings%precond, expected%precond) .or. &
+             .not. (associated(settings%precond) .or. &
+                    associated(expected%precond))) .and. &
+            (associated(settings%precond_pd, expected%precond_pd) .or. &
+             .not. (associated(settings%precond_pd) .or. &
+                    associated(expected%precond_pd))) .and. &
+            (associated(settings%project, expected%project) .or. &
+             .not. (associated(settings%project) .or. &
+                    associated(expected%project))) .and. &
+            (associated(settings%get_extra_trial_vectors, &
+                        expected%get_extra_trial_vectors) .or. &
+             .not. (associated(settings%get_extra_trial_vectors) .or. &
+                    associated(expected%get_extra_trial_vectors))) .and. &
+            (associated(settings%conv_check, expected%conv_check) .or. &
+             .not. (associated(settings%conv_check) .or. &
+                    associated(expected%conv_check))) .and. &
+            (associated(settings%stability_hess_x, expected%stability_hess_x) .or. &
+             .not. (associated(settings%stability_hess_x) .or. &
+                    associated(expected%stability_hess_x))) .and. &
+            (associated(settings%logger, expected%logger) .or. &
+             .not. (associated(settings%logger) .or. &
+                    associated(expected%logger))) .and. same_stability_callbacks( &
+                        settings%stability_settings, expected%stability_settings)
 
-    end function solver_callbacks_unset
+    end function same_solver_callbacks
 
-    logical function stability_callbacks_unset(settings)
+    logical function same_stability_callbacks(settings, expected)
         !
-        ! this function checks that no callback function of stability check settings is
-        ! associated
+        ! this function checks that every callback function of stability check settings
+        ! is that of the expected settings, unset where these have none
         !
-        type(stability_settings_type), intent(in) :: settings
+        type(stability_settings_type), intent(in) :: settings, expected
 
-        stability_callbacks_unset = .not. ( &
-            associated(settings%precond) .or. associated(settings%project) .or. &
-            associated(settings%approx_hess_x) .or. &
-            associated(settings%get_extra_trial_vectors) .or. &
-            associated(settings%conv_check) .or. associated(settings%logger))
+        same_stability_callbacks = &
+            (associated(settings%precond, expected%precond) .or. &
+             .not. (associated(settings%precond) .or. &
+                    associated(expected%precond))) .and. &
+            (associated(settings%project, expected%project) .or. &
+             .not. (associated(settings%project) .or. &
+                    associated(expected%project))) .and. &
+            (associated(settings%approx_hess_x, expected%approx_hess_x) .or. &
+             .not. (associated(settings%approx_hess_x) .or. &
+                    associated(expected%approx_hess_x))) .and. &
+            (associated(settings%get_extra_trial_vectors, &
+                        expected%get_extra_trial_vectors) .or. &
+             .not. (associated(settings%get_extra_trial_vectors) .or. &
+                    associated(expected%get_extra_trial_vectors))) .and. &
+            (associated(settings%conv_check, expected%conv_check) .or. &
+             .not. (associated(settings%conv_check) .or. &
+                    associated(expected%conv_check))) .and. &
+            (associated(settings%logger, expected%logger) .or. &
+             .not. (associated(settings%logger) .or. associated(expected%logger)))
 
-    end function stability_callbacks_unset
+    end function same_stability_callbacks
 
-    logical function solver_callbacks_unset_c(settings_c)
+    logical function same_funptr(funptr, expected)
         !
-        ! this function checks that no callback function of C solver settings, including
-        ! those of the nested stability check settings, is associated
+        ! this function checks that a C function pointer points to the expected
+        ! function, or is unset if the expected one is
+        !
+        type(c_funptr), intent(in) :: funptr, expected
+
+        same_funptr = c_associated(funptr, expected) .or. &
+                      .not. (c_associated(funptr) .or. c_associated(expected))
+
+    end function same_funptr
+
+    logical function same_solver_callbacks_c(settings_c, expected_c)
+        !
+        ! this function checks that every callback function of C solver settings,
+        ! including those of the nested stability check settings, is that of the
+        ! expected settings, unset where these have none
         !
         use c_interface, only: solver_settings_type_c
 
-        type(solver_settings_type_c), intent(in) :: settings_c
+        type(solver_settings_type_c), intent(in) :: settings_c, expected_c
 
-        solver_callbacks_unset_c = &
-            .not. (c_associated(settings_c%precond) .or. &
-                   c_associated(settings_c%precond_pd) .or. &
-                   c_associated(settings_c%project) .or. &
-                   c_associated(settings_c%get_extra_trial_vectors) .or. &
-                   c_associated(settings_c%conv_check) .or. &
-                   c_associated(settings_c%stability_hess_x) .or. &
-                   c_associated(settings_c%logger)) .and. &
-            stability_callbacks_unset_c(settings_c%stability_settings)
+        same_solver_callbacks_c = &
+            same_funptr(settings_c%precond, expected_c%precond) .and. &
+            same_funptr(settings_c%precond_pd, expected_c%precond_pd) .and. &
+            same_funptr(settings_c%project, expected_c%project) .and. &
+            same_funptr(settings_c%get_extra_trial_vectors, &
+                        expected_c%get_extra_trial_vectors) .and. &
+            same_funptr(settings_c%conv_check, expected_c%conv_check) .and. &
+            same_funptr(settings_c%stability_hess_x, &
+                        expected_c%stability_hess_x) .and. &
+            same_funptr(settings_c%logger, expected_c%logger) .and. &
+            same_stability_callbacks_c(settings_c%stability_settings, &
+                                       expected_c%stability_settings)
 
-    end function solver_callbacks_unset_c
+    end function same_solver_callbacks_c
 
-    logical function stability_callbacks_unset_c(settings_c)
+    logical function same_stability_callbacks_c(settings_c, expected_c)
         !
-        ! this function checks that no callback function of C stability check settings
-        ! is associated
+        ! this function checks that every callback function of C stability check
+        ! settings is that of the expected settings, unset where these have none
         !
         use c_interface, only: stability_settings_type_c
 
-        type(stability_settings_type_c), intent(in) :: settings_c
+        type(stability_settings_type_c), intent(in) :: settings_c, expected_c
 
-        stability_callbacks_unset_c = .not. ( &
-            c_associated(settings_c%precond) .or. &
-            c_associated(settings_c%project) .or. &
-            c_associated(settings_c%approx_hess_x) .or. &
-            c_associated(settings_c%get_extra_trial_vectors) .or. &
-            c_associated(settings_c%conv_check) .or. c_associated(settings_c%logger))
+        same_stability_callbacks_c = &
+            same_funptr(settings_c%precond, expected_c%precond) .and. &
+            same_funptr(settings_c%project, expected_c%project) .and. &
+            same_funptr(settings_c%approx_hess_x, expected_c%approx_hess_x) .and. &
+            same_funptr(settings_c%get_extra_trial_vectors, &
+                        expected_c%get_extra_trial_vectors) .and. &
+            same_funptr(settings_c%conv_check, expected_c%conv_check) .and. &
+            same_funptr(settings_c%logger, expected_c%logger)
 
-    end function stability_callbacks_unset_c
+    end function same_stability_callbacks_c
+
+    logical function same_bundle_callbacks(callbacks, expected)
+        !
+        ! this function checks that every C callback function of a callback bundle is
+        ! that of the expected bundle, unset where this has none
+        !
+        use c_interface, only: c_callbacks_type
+
+        type(c_callbacks_type), intent(in) :: callbacks, expected
+
+        same_bundle_callbacks = &
+            (associated(callbacks%update_orbs, expected%update_orbs) .or. &
+             .not. (associated(callbacks%update_orbs) .or. &
+                    associated(expected%update_orbs))) .and. &
+            (associated(callbacks%hess_x, expected%hess_x) .or. &
+             .not. (associated(callbacks%hess_x) .or. &
+                    associated(expected%hess_x))) .and. &
+            (associated(callbacks%obj_func, expected%obj_func) .or. &
+             .not. (associated(callbacks%obj_func) .or. &
+                    associated(expected%obj_func))) .and. &
+            (associated(callbacks%precond, expected%precond) .or. &
+             .not. (associated(callbacks%precond) .or. &
+                    associated(expected%precond))) .and. &
+            (associated(callbacks%precond_pd, expected%precond_pd) .or. &
+             .not. (associated(callbacks%precond_pd) .or. &
+                    associated(expected%precond_pd))) .and. &
+            (associated(callbacks%project, expected%project) .or. &
+             .not. (associated(callbacks%project) .or. &
+                    associated(expected%project))) .and. &
+            (associated(callbacks%get_extra_trial_vectors, &
+                        expected%get_extra_trial_vectors) .or. &
+             .not. (associated(callbacks%get_extra_trial_vectors) .or. &
+                    associated(expected%get_extra_trial_vectors))) .and. &
+            (associated(callbacks%conv_check, expected%conv_check) .or. &
+             .not. (associated(callbacks%conv_check) .or. &
+                    associated(expected%conv_check))) .and. &
+            (associated(callbacks%conv_check_stability, &
+                        expected%conv_check_stability) .or. &
+             .not. (associated(callbacks%conv_check_stability) .or. &
+                    associated(expected%conv_check_stability))) .and. &
+            (associated(callbacks%stability_hess_x, expected%stability_hess_x) .or. &
+             .not. (associated(callbacks%stability_hess_x) .or. &
+                    associated(expected%stability_hess_x))) .and. &
+            (associated(callbacks%approx_hess_x, expected%approx_hess_x) .or. &
+             .not. (associated(callbacks%approx_hess_x) .or. &
+                    associated(expected%approx_hess_x))) .and. &
+            (associated(callbacks%logger, expected%logger) .or. &
+             .not. (associated(callbacks%logger) .or. associated(expected%logger)))
+
+    end function same_bundle_callbacks
 
     logical function solver_callbacks_wrapped(settings)
         !
@@ -1205,9 +1305,12 @@ contains
 
         type(solver_settings_type_c), intent(in) :: settings_c
 
+        type(solver_settings_type_c) :: no_callbacks_c
+
+        call unset_callbacks(no_callbacks_c)
         is_default_solver_settings = &
             settings_c == default_solver_settings .and. &
-            callbacks_unset(settings_c) .and. &
+            same_callbacks(settings_c, no_callbacks_c) .and. &
             .not. c_associated(settings_c%context) .and. &
             .not. c_associated(settings_c%stability_settings%context)
 
@@ -1224,9 +1327,12 @@ contains
 
         type(stability_settings_type_c), intent(in) :: settings_c
 
-        is_default_stability_settings = settings_c == default_stability_settings .and. &
-                                        callbacks_unset(settings_c) .and. &
-                                        .not. c_associated(settings_c%context)
+        type(stability_settings_type_c) :: no_callbacks_c
+
+        call unset_callbacks(no_callbacks_c)
+        is_default_stability_settings = &
+            settings_c == default_stability_settings .and. same_callbacks( &
+                settings_c, no_callbacks_c) .and. .not. c_associated(settings_c%context)
 
     end function is_default_stability_settings
 

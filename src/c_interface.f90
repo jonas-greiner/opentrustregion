@@ -260,9 +260,7 @@ contains
         !
         ! this function exposes a Fortran-implemented solver subroutine to C
         !
-        use opentrustregion, only: solver_settings_type, stderr, &
-                                   settings_uninitialized_warning_msg, &
-                                   stability_settings_uninitialized_warning_msg
+        use opentrustregion, only: solver_settings_type
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
@@ -289,12 +287,6 @@ contains
         ! bundle the C function pointers
         call c_f_procpointer(cptr=update_orbs_c_funptr, fptr=callbacks%update_orbs)
         call c_f_procpointer(cptr=obj_func_c_funptr, fptr=callbacks%obj_func)
-        call store_optional_c_callbacks( &
-            callbacks, local_settings_c%initialized, local_settings_c%precond, &
-            local_settings_c%precond_pd, local_settings_c%project, &
-            local_settings_c%get_extra_trial_vectors, local_settings_c%conv_check, &
-            c_null_funptr, local_settings_c%stability_hess_x, c_null_funptr, &
-            local_settings_c%logger, local_settings_c%context)
 
         ! let the bundle refer to the state and to the host's record, if one is given,
         ! so that the state is copied into it before every callback function
@@ -303,22 +295,6 @@ contains
             call c_f_pointer(cptr=state_c_ptr, fptr=callbacks%solver_state_c)
         end if
 
-        ! the solver lets the internal stability check inherit its optional callback
-        ! functions when the nested settings do not provide their own, so the nested
-        ! bundle starts as a copy of the solver's and only the provided ones override
-        stability_callbacks = callbacks
-        call store_optional_c_callbacks( &
-            stability_callbacks, local_settings_c%initialized .and. &
-            local_settings_c%stability_settings%initialized, &
-            local_settings_c%stability_settings%precond, c_null_funptr, &
-            local_settings_c%stability_settings%project, &
-            local_settings_c%stability_settings%get_extra_trial_vectors, &
-            c_null_funptr, local_settings_c%stability_settings%conv_check, &
-            c_null_funptr, local_settings_c%stability_settings%approx_hess_x, &
-            local_settings_c%stability_settings%logger, &
-            local_settings_c%stability_settings%context)
-        callbacks%stability => stability_callbacks
-
         ! associate procedure pointer to wrapper function
         update_orbs => update_orbs_f_wrapper
         obj_func => obj_func_f_wrapper
@@ -326,24 +302,10 @@ contains
         ! convert dummy argument to Fortran kind
         n_param = int(n_param_c, kind=ip)
 
-        ! convert settings and hand the bundles to the callback wrappers as opaque
-        ! context
-        settings = local_settings_c
-        settings%context => callbacks
-        settings%stability_settings%context => stability_callbacks
-
-        ! the conversion replaces settings that were not initialized by the default
-        ! settings, so the solver cannot detect these anymore and the warning is
-        ! printed here regardless of the verbosity, through the logging function of
-        ! the solver settings or on stderr since settings that were not initialized
-        ! provide none
-        if (.not. local_settings_c%initialized) then
-            write(stderr, '(A)') " "//settings_uninitialized_warning_msg
-        else if (.not. local_settings_c%stability_settings%initialized) then
-            call warn_uninitialized_settings_c( &
-                local_settings_c%logger, local_settings_c%context, &
-                stability_settings_uninitialized_warning_msg)
-        end if
+        ! convert settings, whose optional callback functions and host contexts join
+        ! the bundles of the solver and of the internal stability check
+        call convert_solver_settings_c(local_settings_c, settings, callbacks, &
+                                       stability_callbacks)
 
         ! call solver
         call solver(update_orbs, obj_func, n_param, error, settings, state)
@@ -471,6 +433,68 @@ contains
         error_c = int(error, kind=c_ip)
 
     end function stability_check_c_wrapper
+
+    subroutine convert_solver_settings_c(settings_c, settings, callbacks, &
+                                         stability_callbacks)
+        !
+        ! this subroutine converts C solver settings to Fortran, stores their optional
+        ! callback functions and host contexts in the callback bundles of the solver
+        ! and of its internal stability check, which the converted settings hand to the
+        ! callback wrappers as opaque context, and prints the warning for settings that
+        ! were not initialized, which the conversion replaces by the default settings
+        !
+        use opentrustregion, only: solver_settings_type, warn_uninitialized_settings, &
+                                   settings_uninitialized_warning_msg, &
+                                   stability_settings_uninitialized_warning_msg
+
+        type(solver_settings_type_c), intent(in) :: settings_c
+        type(solver_settings_type), intent(out) :: settings
+        type(c_callbacks_type), intent(inout), target :: callbacks, stability_callbacks
+
+        ! store the optional C function pointers and the host context in the bundle,
+        ! which may already hold others
+        call store_optional_c_callbacks( &
+            callbacks, settings_c%initialized, settings_c%precond, &
+            settings_c%precond_pd, settings_c%project, &
+            settings_c%get_extra_trial_vectors, settings_c%conv_check, c_null_funptr, &
+            settings_c%stability_hess_x, c_null_funptr, settings_c%logger, &
+            settings_c%context)
+
+        ! the solver lets the internal stability check inherit its optional callback
+        ! functions when the nested settings do not provide their own, so the nested
+        ! bundle starts as a copy of the solver's and only the provided ones override
+        stability_callbacks = callbacks
+        call store_optional_c_callbacks( &
+            stability_callbacks, &
+            settings_c%initialized .and. settings_c%stability_settings%initialized, &
+            settings_c%stability_settings%precond, c_null_funptr, &
+            settings_c%stability_settings%project, &
+            settings_c%stability_settings%get_extra_trial_vectors, c_null_funptr, &
+            settings_c%stability_settings%conv_check, c_null_funptr, &
+            settings_c%stability_settings%approx_hess_x, &
+            settings_c%stability_settings%logger, settings_c%stability_settings%context)
+        callbacks%stability => stability_callbacks
+
+        ! convert settings and hand the bundles to the callback wrappers as opaque
+        ! context
+        settings = settings_c
+        settings%context => callbacks
+        settings%stability_settings%context => stability_callbacks
+
+        ! the conversion replaces settings that were not initialized by the default
+        ! settings, so the solver cannot detect these anymore and the warning is
+        ! printed here regardless of the verbosity, through the logging function of the
+        ! converted settings or on stderr since settings that were not initialized
+        ! provide none
+        if (.not. settings_c%initialized) then
+            call warn_uninitialized_settings(settings, &
+                                             settings_uninitialized_warning_msg)
+        else if (.not. settings_c%stability_settings%initialized) then
+            call warn_uninitialized_settings( &
+                settings, stability_settings_uninitialized_warning_msg)
+        end if
+
+    end subroutine convert_solver_settings_c
 
     subroutine store_optional_c_callbacks( &
         callbacks, initialized, precond_c_funptr, precond_pd_c_funptr, &

@@ -8,6 +8,7 @@ module otr_common_test_reference
 
     use opentrustregion, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
+    use test_reference, only: same_callbacks
     use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_f_procpointer, &
                                            c_associated, c_null_funptr
 
@@ -47,6 +48,12 @@ module otr_common_test_reference
     interface operator(==)
         module procedure equal_orbital_to_ref
         module procedure equal_orbital
+    end interface
+
+    ! the comparison of the callback functions of settings and callback bundles,
+    ! extended to the host records of the levels of extension objects
+    interface same_callbacks
+        module procedure same_host_record_callbacks
     end interface
 
 contains
@@ -567,5 +574,50 @@ contains
         equal_orbital = lhs%verbose == rhs%verbose
 
     end function equal_orbital
+
+    logical function same_host_record_callbacks(host, expected)
+        !
+        ! this function checks that every callback function of the host record of a
+        ! level of an extension object is that of the expected record, unset where this
+        ! has none
+        !
+        use otr_common, only: host_record_type
+
+        type(host_record_type), intent(in) :: host, expected
+
+        same_host_record_callbacks = &
+            (associated(host%update_orbs, expected%update_orbs) .or. &
+             .not. (associated(host%update_orbs) .or. &
+                    associated(expected%update_orbs))) .and. &
+            (associated(host%obj_func, expected%obj_func) .or. &
+             .not. (associated(host%obj_func) .or. &
+                    associated(expected%obj_func))) .and. &
+            (associated(host%precond, expected%precond) .or. &
+             .not. (associated(host%precond) .or. associated(expected%precond))) .and. &
+            (associated(host%precond_pd, expected%precond_pd) .or. &
+             .not. (associated(host%precond_pd) .or. &
+                    associated(expected%precond_pd))) .and. &
+            (associated(host%project, expected%project) .or. &
+             .not. (associated(host%project) .or. associated(expected%project))) .and. &
+            (associated(host%get_extra_trial_vectors, &
+                        expected%get_extra_trial_vectors) .or. &
+             .not. (associated(host%get_extra_trial_vectors) .or. &
+                    associated(expected%get_extra_trial_vectors))) .and. &
+            (associated(host%conv_check, expected%conv_check) .or. &
+             .not. (associated(host%conv_check) .or. &
+                    associated(expected%conv_check))) .and. &
+            (associated(host%stability_hess_x, expected%stability_hess_x) .or. &
+             .not. (associated(host%stability_hess_x) .or. &
+                    associated(expected%stability_hess_x))) .and. &
+            (associated(host%approx_hess_x, expected%approx_hess_x) .or. &
+             .not. (associated(host%approx_hess_x) .or. &
+                    associated(expected%approx_hess_x))) .and. &
+            (associated(host%conv_check_stability, expected%conv_check_stability) .or. &
+             .not. (associated(host%conv_check_stability) .or. &
+                    associated(expected%conv_check_stability))) .and. &
+            (associated(host%logger, expected%logger) .or. &
+             .not. (associated(host%logger) .or. associated(expected%logger)))
+
+    end function same_host_record_callbacks
 
 end module otr_common_test_reference

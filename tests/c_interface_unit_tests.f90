@@ -430,24 +430,13 @@ contains
         use test_reference, only: host_context_type, get_reference_solver_values, &
                                   get_reference_solver_state_values, host_context, &
                                   arm_host_context_c, host_context_reached, &
-                                  unset_callbacks, callbacks_unset, &
-                                  ref_solver_settings, operator(/=)
+                                  same_callbacks, ref_solver_settings, operator(/=)
 
         type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr
         type(solver_settings_type_c) :: settings
         type(solver_state_type_c), target :: state
         type(host_context_type), target :: nested_host_context
-        procedure(precond_c_type), pointer :: expected_precond
-        procedure(project_c_type), pointer :: expected_project
-        procedure(logger_c_type), pointer :: expected_logger
-        procedure(get_extra_trial_vectors_c_type), pointer :: &
-            expected_get_extra_trial_vectors
-        type(c_ptr) :: expected_context
         integer(c_ip) :: error
-        integer(ip) :: i_case
-        character(len=34), parameter :: case_names(4) = &
-            [character(len=34) :: "without nested context", "with nested context", &
-             "with nested callback functions", "with uninitialized nested settings"]
 
         ! assume tests pass
         test_solver_c_wrapper = .true.
@@ -459,195 +448,10 @@ contains
         update_orbs_c_funptr = c_funloc(mock_update_orbs)
         obj_func_c_funptr = c_funloc(mock_obj_func)
 
-        ! run with nested stability check settings that provide neither callback
-        ! functions nor a context of their own, that provide a context, that provide
-        ! a context and callback functions and that provide both but were not
-        ! initialized, the callback bundle of the nested settings has to hold the
-        ! nested settings' own callback functions and context where these were provided
-        ! and initialized and the solver's otherwise
-        do i_case = 1, size(case_names)
-            ! associate optional settings with the reference values and callback
-            ! functions
-            call get_reference_solver_values(settings)
-            call unset_callbacks(settings%stability_settings)
-            settings%stability_settings%context = c_null_ptr
-            settings%precond = c_funloc(mock_precond)
-            settings%precond_pd = c_funloc(mock_precond_pd)
-            settings%project = c_funloc(mock_project)
-            settings%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
-            settings%conv_check = c_funloc(mock_conv_check)
-            settings%stability_hess_x = c_funloc(mock_stability_hess_x)
-            settings%logger = c_funloc(mock_logger)
-
-            ! set host contexts and the nested settings' own callback functions
-            call arm_host_context_c(settings%context)
-            if (i_case >= 2) &
-                settings%stability_settings%context = c_loc(nested_host_context)
-            if (i_case >= 3) then
-                settings%stability_settings%precond = c_funloc(mock_stability_precond)
-                settings%stability_settings%project = c_funloc(mock_stability_project)
-                settings%stability_settings%approx_hess_x = c_funloc(mock_approx_hess_x)
-                settings%stability_settings%get_extra_trial_vectors = &
-                    c_funloc(mock_stability_get_extra_trial_vectors)
-                settings%stability_settings%conv_check = &
-                    c_funloc(mock_conv_check_stability)
-                settings%stability_settings%logger = c_funloc(mock_stability_logger)
-            end if
-            if (i_case == 4) settings%stability_settings%initialized = .false.
-
-            ! set expected nested callback functions and context
-            if (i_case == 3) then
-                expected_precond => mock_stability_precond
-                expected_project => mock_stability_project
-                expected_get_extra_trial_vectors => &
-                    mock_stability_get_extra_trial_vectors
-                expected_logger => mock_stability_logger
-            else
-                expected_precond => mock_precond
-                expected_project => mock_project
-                expected_get_extra_trial_vectors => mock_get_extra_trial_vectors
-                expected_logger => mock_logger
-            end if
-            if (i_case == 2 .or. i_case == 3) then
-                expected_context = c_loc(nested_host_context)
-            else
-                expected_context = c_loc(host_context)
-            end if
-
-            ! clear the result of the mock so that a missing call is detected, and
-            ! start the state from the reference values so that a state that is not
-            ! copied is detected
-            test_passed = .false.
-            call get_reference_solver_state_values(state)
-
-            ! call solver
-            error = solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, &
-                                     n_param_c, settings, c_loc(state))
-
-            ! check if logging subroutine was correctly called
-            if (.not. host_context%logger_called) then
-                write(stderr, *) "test_solver_c_wrapper failed: Called logging "// &
-                    "subroutine wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-
-            ! check that a warning was printed through the logging function of the
-            ! solver settings exactly when the nested settings were not initialized
-            if (host_context%stability_warning_logged .neqv. i_case == 4) then
-                write(stderr, *) "test_solver_c_wrapper failed: Warning for nested "// &
-                    "settings that were not initialized printed wrong "// &
-                    trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-
-            ! check if optional settings are correctly passed in the first case, the
-            ! conversion of the nested settings the other cases vary is covered by the
-            ! tests of the conversion routines
-            if (i_case == 1 .and. received_solver_settings /= ref_solver_settings) then
-                write(stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
-                    "settings associated with wrong values."
-                test_solver_c_wrapper = .false.
-            end if
-
-            ! check the callback bundle of the nested settings
-            if (.not. associated(received_stability_callbacks%precond, &
-                                 expected_precond)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Preconditioner of "// &
-                    "internal stability check wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (.not. associated(received_stability_callbacks%project, &
-                                 expected_project)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Projection of "// &
-                    "internal stability check wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (.not. associated(received_stability_callbacks%get_extra_trial_vectors, &
-                                 expected_get_extra_trial_vectors)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Extra trial vector "// &
-                    "function of internal stability check wrong "// &
-                    trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (associated(received_stability_callbacks%approx_hess_x, &
-                           mock_approx_hess_x) .neqv. i_case == 3) then
-                write(stderr, *) "test_solver_c_wrapper failed: Approximate "// &
-                    "Hessian linear transformation of internal stability check "// &
-                    "wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (associated(received_stability_callbacks%conv_check_stability, &
-                           mock_conv_check_stability) .neqv. i_case == 3) then
-                write(stderr, *) "test_solver_c_wrapper failed: Convergence check "// &
-                    "of internal stability check wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (.not. associated(received_stability_callbacks%stability_hess_x, &
-                                 mock_stability_hess_x)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Hessian linear "// &
-                    "transformation of the stability check not handed to internal "// &
-                    "stability check "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (.not. associated(received_stability_callbacks%logger, &
-                                 expected_logger)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Logging function "// &
-                    "of internal stability check wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (.not. associated(received_stability_callbacks%hess_x, mock_hess_x)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Hessian linear "// &
-                    "transformation returned by orbital update not handed to "// &
-                    "internal stability check "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-            if (.not. c_associated(received_stability_callbacks%host_context, &
-                                   expected_context)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Context of "// &
-                    "internal stability check wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-
-            ! check if output variables are as expected
-            if (error /= int(mock_error, kind=c_ip)) then
-                write(stderr, *) "test_solver_c_wrapper failed: Produced error "// &
-                    "code wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-
-            ! check that the state the mock solver set is copied into the given one,
-            ! also after the error the mock solver returns
-            if (state /= mock_solver_state) then
-                write(stderr, *) "test_solver_c_wrapper failed: Returned state "// &
-                    "wrong "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-
-            ! check that the callback bundles of the settings and the nested settings
-            ! both refer to the state record and the host's record, so that the state
-            ! is copied before every callback function, the internal stability
-            ! check's included
-            if (.not. solver_state_bundled .or. .not. associated( &
-                received_callbacks%solver_state_c, state) .or. .not. associated( &
-                    received_stability_callbacks%solver_state_c, state)) then
-                write(stderr, *) "test_solver_c_wrapper failed: State not handed "// &
-                    "to the callback bundles "//trim(case_names(i_case))//"."
-                test_solver_c_wrapper = .false.
-            end if
-
-            ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("solver_c_wrapper")) &
-                test_solver_c_wrapper = .false.
-
-            ! check if test has passed
-            if (.not. test_passed) test_solver_c_wrapper = .false.
-        end do
-
-        ! call the solver without a state and with settings that were not initialized
-        ! but carry callback functions and a host context, while their nested
-        ! settings are initialized and carry their own, none of which may reach the
-        ! callback bundles since the conversion replaces these settings by the default
-        ! settings
+        ! associate optional settings with the reference values and with the callback
+        ! functions and host contexts of the solver and of the nested stability check
+        ! settings, which callback bundles these join is covered by the test of the
+        ! conversion routine
         call get_reference_solver_values(settings)
         settings%precond = c_funloc(mock_precond)
         settings%precond_pd = c_funloc(mock_precond_pd)
@@ -656,7 +460,7 @@ contains
         settings%conv_check = c_funloc(mock_conv_check)
         settings%stability_hess_x = c_funloc(mock_stability_hess_x)
         settings%logger = c_funloc(mock_logger)
-        settings%context = c_loc(host_context)
+        call arm_host_context_c(settings%context)
         settings%stability_settings%precond = c_funloc(mock_stability_precond)
         settings%stability_settings%project = c_funloc(mock_stability_project)
         settings%stability_settings%approx_hess_x = c_funloc(mock_approx_hess_x)
@@ -665,37 +469,84 @@ contains
         settings%stability_settings%conv_check = c_funloc(mock_conv_check_stability)
         settings%stability_settings%logger = c_funloc(mock_stability_logger)
         settings%stability_settings%context = c_loc(nested_host_context)
-        settings%initialized = .false.
+
+        ! clear the result of the mock so that a missing call is detected, and start
+        ! the state from the reference values so that a state that is not copied is
+        ! detected
+        test_passed = .false.
+        call get_reference_solver_state_values(state)
+
+        ! call solver
+        error = solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
+                                 settings, c_loc(state))
+
+        ! check if logging subroutine was correctly called
+        if (.not. host_context%logger_called) then
+            write(stderr, *) "test_solver_c_wrapper failed: Called logging "// &
+                "subroutine wrong."
+            test_solver_c_wrapper = .false.
+        end if
+
+        ! check if optional settings are correctly passed
+        if (received_solver_settings /= ref_solver_settings) then
+            write(stderr, *) "test_solver_c_wrapper failed: Passed optional "// &
+                "settings associated with wrong values."
+            test_solver_c_wrapper = .false.
+        end if
+
+        ! check that the solver received the callback bundles of the converted
+        ! settings, of which the nested one holds the nested settings' own callback
+        ! functions and context
+        if (.not. associated(received_callbacks%precond, mock_precond) .or. &
+            .not. associated(received_stability_callbacks%precond, &
+                             mock_stability_precond) .or. &
+            .not. c_associated(received_stability_callbacks%host_context, &
+                               c_loc(nested_host_context))) then
+            write(stderr, *) "test_solver_c_wrapper failed: Callback bundles of "// &
+                "the converted settings not passed."
+            test_solver_c_wrapper = .false.
+        end if
+
+        ! check if output variables are as expected
+        if (error /= int(mock_error, kind=c_ip)) then
+            write(stderr, *) "test_solver_c_wrapper failed: Produced error code wrong."
+            test_solver_c_wrapper = .false.
+        end if
+
+        ! check that the state the mock solver set is copied into the given one, also
+        ! after the error the mock solver returns
+        if (state /= mock_solver_state) then
+            write(stderr, *) "test_solver_c_wrapper failed: Returned state wrong."
+            test_solver_c_wrapper = .false.
+        end if
+
+        ! check that the callback bundles of the settings and the nested settings both
+        ! refer to the state record and the host's record, so that the state is copied
+        ! before every callback function, the internal stability check's included
+        if (.not. solver_state_bundled .or. &
+            .not. associated(received_callbacks%solver_state_c, state) .or. &
+            .not. associated(received_stability_callbacks%solver_state_c, state)) then
+            write(stderr, *) "test_solver_c_wrapper failed: State not handed to "// &
+                "the callback bundles."
+            test_solver_c_wrapper = .false.
+        end if
+
+        ! check that the host context reached the callback functions unchanged
+        if (.not. host_context_reached("solver_c_wrapper")) &
+            test_solver_c_wrapper = .false.
+
+        ! check if test has passed
+        if (.not. test_passed) test_solver_c_wrapper = .false.
+
+        ! call the solver without a state, the callback bundles may not refer to one
         test_passed = .false.
         error = solver_c_wrapper(update_orbs_c_funptr, obj_func_c_funptr, n_param_c, &
                                  settings, c_null_ptr)
-        if (c_associated(received_callbacks%host_context)) then
-            write(stderr, *) "test_solver_c_wrapper failed: Host context passed "// &
-                "for settings that were not initialized."
-            test_solver_c_wrapper = .false.
-        end if
         if (solver_state_bundled .or. &
             associated(received_callbacks%solver_state_c) .or. &
             associated(received_stability_callbacks%solver_state_c)) then
             write(stderr, *) "test_solver_c_wrapper failed: State handed to the "// &
                 "callback bundles without a host's record."
-            test_solver_c_wrapper = .false.
-        end if
-        if (associated(received_stability_callbacks%precond) .or. &
-            associated(received_stability_callbacks%precond_pd) .or. &
-            associated(received_stability_callbacks%project) .or. &
-            associated(received_stability_callbacks%get_extra_trial_vectors) .or. &
-            associated(received_stability_callbacks%conv_check_stability) .or. &
-            associated(received_stability_callbacks%stability_hess_x) .or. &
-            associated(received_stability_callbacks%approx_hess_x) .or. &
-            associated(received_stability_callbacks%logger)) then
-            write(stderr, *) "test_solver_c_wrapper failed: Callback functions of "// &
-                "nested settings passed for settings that were not initialized."
-            test_solver_c_wrapper = .false.
-        end if
-        if (c_associated(received_stability_callbacks%host_context)) then
-            write(stderr, *) "test_solver_c_wrapper failed: Host context of nested "// &
-                "settings passed for settings that were not initialized."
             test_solver_c_wrapper = .false.
         end if
         if (.not. test_passed) test_solver_c_wrapper = .false.
@@ -711,7 +562,8 @@ contains
                 "passed without settings."
             test_solver_c_wrapper = .false.
         end if
-        if (.not. callbacks_unset(received_solver_settings)) then
+        if (.not. same_callbacks(received_solver_settings, default_solver_settings)) &
+            then
             write(stderr, *) "test_solver_c_wrapper failed: Callback functions "// &
                 "passed without settings."
             test_solver_c_wrapper = .false.
@@ -745,7 +597,7 @@ contains
         use test_reference, only: get_reference_stability_values, &
                                   get_reference_stability_state_values, host_context, &
                                   arm_host_context_c, host_context_reached, &
-                                  callbacks_unset, ref_stability_settings, operator(/=)
+                                  same_callbacks, ref_stability_settings, operator(/=)
 
         type(c_funptr) :: hess_x_c_funptr
         real(c_rp) :: h_diag(n_param)
@@ -927,7 +779,8 @@ contains
                 "settings not passed without settings."
             test_stability_check_c_wrapper = .false.
         end if
-        if (.not. callbacks_unset(received_stability_settings)) then
+        if (.not. same_callbacks(received_stability_settings, &
+                                 default_stability_settings)) then
             write(stderr, *) "test_stability_check_c_wrapper failed: Callback "// &
                 "functions passed without settings."
             test_stability_check_c_wrapper = .false.
@@ -944,18 +797,255 @@ contains
 
     end function test_stability_check_c_wrapper
 
+    logical(c_bool) function test_convert_solver_settings_c() bind(C)
+        !
+        ! this function tests the subroutine that converts C solver settings and stores
+        ! their optional callback functions and host contexts in the callback bundles
+        ! of the solver and of its internal stability check
+        !
+        use opentrustregion, only: solver_settings_type, solver_state_type
+        use c_interface, only: solver_settings_type_c, solver_state_type_c, &
+                               c_callbacks_type, convert_solver_settings_c
+        use test_reference, only: host_context_type, get_reference_solver_values, &
+                                  host_context, arm_host_context_c, &
+                                  host_context_reached, unset_callbacks, &
+                                  same_callbacks, ref_solver_settings, operator(/=)
+
+        type(solver_settings_type_c) :: settings_c
+        type(solver_settings_type) :: settings
+        type(c_callbacks_type), target :: callbacks, stability_callbacks
+        type(c_callbacks_type) :: expected_callbacks, expected_stability_callbacks
+        type(solver_state_type), target :: state
+        type(solver_state_type_c), target :: state_c
+        type(host_context_type), target :: nested_host_context
+        type(c_ptr) :: expected_context
+        integer(ip) :: i_case
+        character(len=34), parameter :: case_names(4) = &
+            [character(len=34) :: "without nested context", "with nested context", &
+             "with nested callback functions", "with uninitialized nested settings"]
+
+        ! assume tests pass
+        test_convert_solver_settings_c = .true.
+
+        ! the bundle of the solver has to hold the orbital update stored beforehand and
+        ! the optional callback functions of the solver settings
+        expected_callbacks = c_callbacks_type( &
+            update_orbs=mock_update_orbs, precond=mock_precond, &
+            precond_pd=mock_precond_pd, project=mock_project, &
+            get_extra_trial_vectors=mock_get_extra_trial_vectors, &
+            conv_check=mock_conv_check, stability_hess_x=mock_stability_hess_x, &
+            logger=mock_logger)
+
+        ! convert settings whose nested stability check settings provide neither
+        ! callback functions nor a context of their own, that provide a context, that
+        ! provide a context and callback functions and that provide both but were not
+        ! initialized, the callback bundle of the nested settings has to hold the
+        ! nested settings' own callback functions and context where these were provided
+        ! and initialized and the solver's otherwise
+        do i_case = 1, size(case_names)
+            ! associate optional settings with the reference values and callback
+            ! functions
+            call get_reference_solver_values(settings_c)
+            call unset_callbacks(settings_c%stability_settings)
+            settings_c%stability_settings%context = c_null_ptr
+            settings_c%precond = c_funloc(mock_precond)
+            settings_c%precond_pd = c_funloc(mock_precond_pd)
+            settings_c%project = c_funloc(mock_project)
+            settings_c%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
+            settings_c%conv_check = c_funloc(mock_conv_check)
+            settings_c%stability_hess_x = c_funloc(mock_stability_hess_x)
+            settings_c%logger = c_funloc(mock_logger)
+
+            ! set host contexts and the nested settings' own callback functions
+            call arm_host_context_c(settings_c%context)
+            if (i_case >= 2) &
+                settings_c%stability_settings%context = c_loc(nested_host_context)
+            if (i_case >= 3) then
+                settings_c%stability_settings%precond = c_funloc(mock_stability_precond)
+                settings_c%stability_settings%project = c_funloc(mock_stability_project)
+                settings_c%stability_settings%approx_hess_x = &
+                    c_funloc(mock_approx_hess_x)
+                settings_c%stability_settings%get_extra_trial_vectors = &
+                    c_funloc(mock_stability_get_extra_trial_vectors)
+                settings_c%stability_settings%conv_check = &
+                    c_funloc(mock_conv_check_stability)
+                settings_c%stability_settings%logger = c_funloc(mock_stability_logger)
+            end if
+            if (i_case == 4) settings_c%stability_settings%initialized = .false.
+
+            ! set expected nested callback functions and context, the nested bundle
+            ! starts as a copy of the solver's
+            expected_stability_callbacks = expected_callbacks
+            if (i_case == 3) then
+                expected_stability_callbacks%precond => mock_stability_precond
+                expected_stability_callbacks%project => mock_stability_project
+                expected_stability_callbacks%get_extra_trial_vectors => &
+                    mock_stability_get_extra_trial_vectors
+                expected_stability_callbacks%approx_hess_x => mock_approx_hess_x
+                expected_stability_callbacks%conv_check_stability => &
+                    mock_conv_check_stability
+                expected_stability_callbacks%logger => mock_stability_logger
+            end if
+            if (i_case == 2 .or. i_case == 3) then
+                expected_context = c_loc(nested_host_context)
+            else
+                expected_context = c_loc(host_context)
+            end if
+
+            ! start the bundle of the solver with the orbital update and the state the
+            ! caller stores in it beforehand
+            callbacks = c_callbacks_type()
+            stability_callbacks = c_callbacks_type()
+            callbacks%update_orbs => mock_update_orbs
+            callbacks%solver_state => state
+            callbacks%solver_state_c => state_c
+
+            ! convert settings
+            call convert_solver_settings_c(settings_c, settings, callbacks, &
+                                           stability_callbacks)
+
+            ! check if optional settings are correctly converted in the first case, the
+            ! conversion of the nested settings the other cases vary is covered by the
+            ! tests of the conversion routines
+            if (i_case == 1 .and. settings /= ref_solver_settings) then
+                write(stderr, *) "test_convert_solver_settings_c failed: Optional "// &
+                    "settings converted with wrong values."
+                test_convert_solver_settings_c = .false.
+            end if
+
+            ! check that the converted settings and the nested settings hand their
+            ! bundles to the callback wrappers and that the bundle of the solver refers
+            ! to that of the internal stability check
+            if (.not. associated(settings%context, callbacks) .or. .not. associated( &
+                settings%stability_settings%context, stability_callbacks) .or. &
+                .not. associated(callbacks%stability, stability_callbacks)) then
+                write(stderr, *) "test_convert_solver_settings_c failed: Callback "// &
+                    "bundles not handed to the settings "//trim(case_names(i_case))//"."
+                test_convert_solver_settings_c = .false.
+            end if
+
+            ! check the callback bundle of the solver, which only holds the optional
+            ! callback functions of the solver settings next to what it held before
+            if (.not. same_callbacks(callbacks, expected_callbacks)) then
+                write(stderr, *) "test_convert_solver_settings_c failed: Callback "// &
+                    "functions of the solver wrong "//trim(case_names(i_case))//"."
+                test_convert_solver_settings_c = .false.
+            end if
+            if (.not. c_associated(callbacks%host_context, c_loc(host_context))) then
+                write(stderr, *) "test_convert_solver_settings_c failed: Context "// &
+                    "of the solver wrong "//trim(case_names(i_case))//"."
+                test_convert_solver_settings_c = .false.
+            end if
+
+            ! check the callback bundle of the nested settings
+            if (.not. same_callbacks(stability_callbacks, &
+                                     expected_stability_callbacks)) then
+                write(stderr, *) "test_convert_solver_settings_c failed: Callback "// &
+                    "functions of internal stability check wrong "// &
+                    trim(case_names(i_case))//"."
+                test_convert_solver_settings_c = .false.
+            end if
+            if (.not. c_associated(stability_callbacks%host_context, &
+                                   expected_context)) then
+                write(stderr, *) "test_convert_solver_settings_c failed: Context "// &
+                    "of internal stability check wrong "//trim(case_names(i_case))//"."
+                test_convert_solver_settings_c = .false.
+            end if
+
+            ! check that both bundles refer to the state the caller stored beforehand
+            if (.not. associated(callbacks%solver_state, state) .or. &
+                .not. associated(callbacks%solver_state_c, state_c) .or. &
+                .not. associated(stability_callbacks%solver_state, state) .or. &
+                .not. associated(stability_callbacks%solver_state_c, state_c)) then
+                write(stderr, *) "test_convert_solver_settings_c failed: State not "// &
+                    "kept in or handed to the bundles "//trim(case_names(i_case))//"."
+                test_convert_solver_settings_c = .false.
+            end if
+
+            ! check that a warning was printed through the logging function of the
+            ! solver settings with their host context exactly when the nested settings
+            ! were not initialized
+            if (host_context%stability_warning_logged .neqv. i_case == 4) then
+                write(stderr, *) "test_convert_solver_settings_c failed: Warning "// &
+                    "for nested settings that were not initialized printed wrong "// &
+                    trim(case_names(i_case))//"."
+                test_convert_solver_settings_c = .false.
+            end if
+            if (i_case == 4) then
+                if (.not. host_context_reached("convert_solver_settings_c")) &
+                    test_convert_solver_settings_c = .false.
+            end if
+        end do
+
+        ! convert settings that were not initialized but carry callback functions and a
+        ! host context, while their nested settings are initialized and carry their
+        ! own, none of which may reach the callback bundles since the conversion
+        ! replaces these settings by the default settings, whose warning is printed on
+        ! stderr since they provide no logging function
+        call get_reference_solver_values(settings_c)
+        settings_c%precond = c_funloc(mock_precond)
+        settings_c%precond_pd = c_funloc(mock_precond_pd)
+        settings_c%project = c_funloc(mock_project)
+        settings_c%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
+        settings_c%conv_check = c_funloc(mock_conv_check)
+        settings_c%stability_hess_x = c_funloc(mock_stability_hess_x)
+        settings_c%logger = c_funloc(mock_logger)
+        settings_c%context = c_loc(host_context)
+        settings_c%stability_settings%precond = c_funloc(mock_stability_precond)
+        settings_c%stability_settings%project = c_funloc(mock_stability_project)
+        settings_c%stability_settings%approx_hess_x = c_funloc(mock_approx_hess_x)
+        settings_c%stability_settings%get_extra_trial_vectors = &
+            c_funloc(mock_stability_get_extra_trial_vectors)
+        settings_c%stability_settings%conv_check = c_funloc(mock_conv_check_stability)
+        settings_c%stability_settings%logger = c_funloc(mock_stability_logger)
+        settings_c%stability_settings%context = c_loc(nested_host_context)
+        settings_c%initialized = .false.
+        callbacks = c_callbacks_type()
+        stability_callbacks = c_callbacks_type()
+        call convert_solver_settings_c(settings_c, settings, callbacks, &
+                                       stability_callbacks)
+        if (.not. associated(settings%context, callbacks) .or. .not. associated( &
+            settings%stability_settings%context, stability_callbacks)) then
+            write(stderr, *) "test_convert_solver_settings_c failed: Callback "// &
+                "bundles not handed to settings that were not initialized."
+            test_convert_solver_settings_c = .false.
+        end if
+        if (.not. same_callbacks(callbacks, c_callbacks_type()) .or. &
+            .not. same_callbacks(stability_callbacks, c_callbacks_type())) then
+            write(stderr, *) "test_convert_solver_settings_c failed: Callback "// &
+                "functions passed for settings that were not initialized."
+            test_convert_solver_settings_c = .false.
+        end if
+        if (c_associated(callbacks%host_context) .or. &
+            c_associated(stability_callbacks%host_context)) then
+            write(stderr, *) "test_convert_solver_settings_c failed: Host context "// &
+                "passed for settings that were not initialized."
+            test_convert_solver_settings_c = .false.
+        end if
+
+    end function test_convert_solver_settings_c
+
     logical(c_bool) function test_store_optional_c_callbacks() bind(C)
         !
         ! this function tests the subroutine that stores the optional C callback
         ! functions and the host context of C settings in a callback bundle
         !
         use c_interface, only: c_callbacks_type, store_optional_c_callbacks
-        use test_reference, only: host_context
+        use test_reference, only: host_context, same_callbacks
 
-        type(c_callbacks_type) :: callbacks
+        type(c_callbacks_type) :: callbacks, stored
 
         ! assume tests pass
         test_store_optional_c_callbacks = .true.
+
+        ! bundle of the callback functions that are provided
+        stored = c_callbacks_type( &
+            precond=mock_precond, precond_pd=mock_precond_pd, project=mock_project, &
+            get_extra_trial_vectors=mock_get_extra_trial_vectors, &
+            conv_check=mock_conv_check, &
+            conv_check_stability=mock_conv_check_stability, &
+            stability_hess_x=mock_stability_hess_x, approx_hess_x=mock_approx_hess_x, &
+            logger=mock_logger)
 
         ! store the callback functions and host context of initialized settings
         call store_optional_c_callbacks( &
@@ -964,8 +1054,11 @@ contains
             c_funloc(mock_get_extra_trial_vectors), c_funloc(mock_conv_check), &
             c_funloc(mock_conv_check_stability), c_funloc(mock_stability_hess_x), &
             c_funloc(mock_approx_hess_x), c_funloc(mock_logger), c_loc(host_context))
-        if (.not. callbacks_stored(.true., "of initialized settings not stored")) &
+        if (.not. same_callbacks(callbacks, stored)) then
+            write(stderr, *) "test_store_optional_c_callbacks failed: Callback "// &
+                "functions of initialized settings not stored."
             test_store_optional_c_callbacks = .false.
+        end if
         if (.not. c_associated(callbacks%host_context, c_loc(host_context))) then
             write(stderr, *) "test_store_optional_c_callbacks failed: Host context "// &
                 "of initialized settings not stored."
@@ -978,9 +1071,11 @@ contains
                                         c_null_funptr, c_null_funptr, c_null_funptr, &
                                         c_null_funptr, c_null_funptr, c_null_funptr, &
                                         c_null_funptr, c_null_funptr, c_null_ptr)
-        if (.not. callbacks_stored( &
-            .true., "in the bundle replaced by one that was not provided")) &
+        if (.not. same_callbacks(callbacks, stored)) then
+            write(stderr, *) "test_store_optional_c_callbacks failed: Callback "// &
+                "functions in the bundle replaced by ones that were not provided."
             test_store_optional_c_callbacks = .false.
+        end if
         if (.not. c_associated(callbacks%host_context, c_loc(host_context))) then
             write(stderr, *) "test_store_optional_c_callbacks failed: Host context "// &
                 "in the bundle replaced by one that was not provided."
@@ -996,64 +1091,16 @@ contains
             c_funloc(mock_get_extra_trial_vectors), c_funloc(mock_conv_check), &
             c_funloc(mock_conv_check_stability), c_funloc(mock_stability_hess_x), &
             c_funloc(mock_approx_hess_x), c_funloc(mock_logger), c_loc(host_context))
-        if (.not. callbacks_stored(.false., "of settings that were not initialized "// &
-                                   "stored")) test_store_optional_c_callbacks = .false.
+        if (.not. same_callbacks(callbacks, c_callbacks_type())) then
+            write(stderr, *) "test_store_optional_c_callbacks failed: Callback "// &
+                "functions of settings that were not initialized stored."
+            test_store_optional_c_callbacks = .false.
+        end if
         if (c_associated(callbacks%host_context)) then
             write(stderr, *) "test_store_optional_c_callbacks failed: Host context "// &
                 "of settings that were not initialized stored."
             test_store_optional_c_callbacks = .false.
         end if
-
-    contains
-
-        logical function callbacks_stored(stored, failure)
-            !
-            ! this function checks that every callback function of the bundle is the
-            ! mock that was provided if they are expected to be stored and unset
-            ! otherwise, and reports the failure for every callback function that is
-            ! not
-            !
-            logical, intent(in) :: stored
-            character(len=*), intent(in) :: failure
-
-            character(len=*), parameter :: names(9) = &
-                [character(len=59) :: "Preconditioner", &
-                 "Positive-definite preconditioner", "Projection function", &
-                 "Extra trial vector function", "Convergence check function", &
-                 "Stability check convergence check function", "Stability check "// &
-                 "Hessian linear transformation function", "Approximate Hessian "// &
-                 "linear transformation function", "Logging function"]
-            logical :: correct(9)
-            integer(ip) :: i_callback
-
-            correct = [merge(associated( &
-                callbacks%precond, mock_precond), .not. associated(callbacks%precond), &
-                stored), merge(associated(callbacks%precond_pd, mock_precond_pd), &
-                               .not. associated(callbacks%precond_pd), stored), &
-                merge(associated(callbacks%project, mock_project), &
-                      .not. associated(callbacks%project), stored), &
-                merge(associated(callbacks%get_extra_trial_vectors, &
-                                 mock_get_extra_trial_vectors), &
-                      .not. associated(callbacks%get_extra_trial_vectors), stored), &
-                merge(associated(callbacks%conv_check, mock_conv_check), &
-                      .not. associated(callbacks%conv_check), stored), &
-                merge(associated(callbacks%conv_check_stability, &
-                                 mock_conv_check_stability), &
-                      .not. associated(callbacks%conv_check_stability), stored), &
-                merge(associated(callbacks%stability_hess_x, mock_stability_hess_x), &
-                      .not. associated(callbacks%stability_hess_x), stored), &
-                merge(associated(callbacks%approx_hess_x, mock_approx_hess_x), &
-                      .not. associated(callbacks%approx_hess_x), stored), &
-                merge(associated(callbacks%logger, mock_logger), &
-                      .not. associated(callbacks%logger), stored)]
-            do i_callback = 1, size(names)
-                if (.not. correct(i_callback)) &
-                    write(stderr, *) "test_store_optional_c_callbacks failed: "// &
-                    trim(names(i_callback))//" "//failure//"."
-            end do
-            callbacks_stored = all(correct)
-
-        end function callbacks_stored
 
     end function test_store_optional_c_callbacks
 
@@ -1997,7 +2044,7 @@ contains
         use opentrustregion, only: solver_settings_type, default_solver_settings
         use c_interface, only: solver_settings_type_c, assignment(=)
         use test_reference, only: ref_solver_settings, get_reference_solver_values, &
-                                  operator(/=), callbacks_unset, unset_callbacks, &
+                                  operator(/=), same_callbacks, unset_callbacks, &
                                   callbacks_wrapped
 
         type(solver_settings_type_c) :: settings_c
@@ -2060,7 +2107,7 @@ contains
         ! callback functions are associated
         call unset_callbacks(settings_c)
         settings = settings_c
-        if (.not. callbacks_unset(settings)) then
+        if (.not. same_callbacks(settings, default_solver_settings)) then
             write(stderr, *) "test_assign_solver_f_c failed: Function pointers "// &
                 "associated for callback functions that were not provided."
             test_assign_solver_f_c = .false.
@@ -2072,7 +2119,7 @@ contains
         call get_reference_solver_values(settings_c)
         settings_c%initialized = .false.
         settings = settings_c
-        if (.not. callbacks_unset(settings)) then
+        if (.not. same_callbacks(settings, default_solver_settings)) then
             write(stderr, *) "test_assign_solver_f_c failed: Function pointers "// &
                 "converted for settings that were not initialized."
             test_assign_solver_f_c = .false.
@@ -2094,7 +2141,7 @@ contains
         use c_interface, only: stability_settings_type_c, assignment(=)
         use test_reference, only: ref_stability_settings, &
                                   get_reference_stability_values, operator(/=), &
-                                  callbacks_unset, unset_callbacks, callbacks_wrapped
+                                  same_callbacks, unset_callbacks, callbacks_wrapped
 
         type(stability_settings_type_c) :: settings_c
         type(stability_settings_type) :: settings, expected_settings
@@ -2148,7 +2195,7 @@ contains
         ! callback functions are associated
         call unset_callbacks(settings_c)
         settings = settings_c
-        if (.not. callbacks_unset(settings)) then
+        if (.not. same_callbacks(settings, default_stability_settings)) then
             write(stderr, *) "test_assign_stability_f_c failed: Function pointers "// &
                 "associated for callback functions that were not provided."
             test_assign_stability_f_c = .false.
@@ -2160,7 +2207,7 @@ contains
         call get_reference_stability_values(settings_c)
         settings_c%initialized = .false.
         settings = settings_c
-        if (.not. callbacks_unset(settings)) then
+        if (.not. same_callbacks(settings, default_stability_settings)) then
             write(stderr, *) "test_assign_stability_f_c failed: Function pointers "// &
                 "converted for settings that were not initialized."
             test_assign_stability_f_c = .false.
@@ -2180,11 +2227,11 @@ contains
         !
         use opentrustregion, only: solver_settings_type, default_solver_settings
         use c_interface, only: solver_settings_type_c, assignment(=)
-        use test_reference, only: ref_solver_settings, operator(/=), callbacks_unset, &
-                                  get_reference_solver_values
+        use test_reference, only: ref_solver_settings, operator(/=), same_callbacks, &
+                                  unset_callbacks, get_reference_solver_values
 
         type(solver_settings_type) :: settings
-        type(solver_settings_type_c) :: settings_c
+        type(solver_settings_type_c) :: settings_c, no_callbacks_c
         integer(ip) :: i
         character(len=12), parameter :: logical_names(5) = &
             [character(len=12) :: "stability", "line_search", "refresh_hess", &
@@ -2200,7 +2247,8 @@ contains
         settings_c = settings
 
         ! check that no callback function pointers and host contexts are associated
-        if (.not. callbacks_unset(settings_c)) then
+        call unset_callbacks(no_callbacks_c)
+        if (.not. same_callbacks(settings_c, no_callbacks_c)) then
             write(stderr, *) "test_assign_solver_c_f failed: Callback function "// &
                 "pointers associated."
             test_assign_solver_c_f = .false.
@@ -2266,10 +2314,11 @@ contains
         use opentrustregion, only: stability_settings_type, default_stability_settings
         use c_interface, only: stability_settings_type_c, assignment(=)
         use test_reference, only: ref_stability_settings, operator(/=), &
-                                  callbacks_unset, get_reference_stability_values
+                                  same_callbacks, unset_callbacks, &
+                                  get_reference_stability_values
 
         type(stability_settings_type) :: settings
-        type(stability_settings_type_c) :: settings_c
+        type(stability_settings_type_c) :: settings_c, no_callbacks_c
         integer(ip) :: i
         character(len=19), parameter :: logical_names(2) = &
             [character(len=19) :: "hess_symm", "stop_on_instability"]
@@ -2284,7 +2333,8 @@ contains
         settings_c = settings
 
         ! check that no callback function pointers and host context are associated
-        if (.not. callbacks_unset(settings_c)) then
+        call unset_callbacks(no_callbacks_c)
+        if (.not. same_callbacks(settings_c, no_callbacks_c)) then
             write(stderr, *) "test_assign_stability_c_f failed: Callback function "// &
                 "pointers associated."
             test_assign_stability_c_f = .false.
