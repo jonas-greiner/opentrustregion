@@ -8,10 +8,8 @@ import unittest
 from ctypes import (
     c_bool,
     c_char,
-    c_void_p,
     Array,
     byref,
-    CFUNCTYPE,
     Structure,
     POINTER,
 )
@@ -29,6 +27,7 @@ from pyopentrustregion.python_interface import (
     c_real,
     c_int,
     SolverSettings,
+    logger_interface_type,
 )
 from pyopentrustregion.extensions.arh import (
     ARHSettings,
@@ -321,7 +320,11 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
             # check the solver settings the factory wired
             if not check_wired_solver_settings(
-                solver_settings, python_functions, "arh_factory_mo_py_interface"
+                solver_settings,
+                python_functions,
+                "arh_factory_mo_py_interface",
+                (update_orbs_arh, obj_func_arh),
+                settings,
             ):
                 test_passed = False
             if not solver_settings.refresh_hess or solver_settings.hess_symm:
@@ -682,7 +685,11 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
         # check the solver settings the factory wired
         if not check_wired_solver_settings(
-            solver_settings, python_functions, "arh_factory_oao_py_interface"
+            solver_settings,
+            python_functions,
+            "arh_factory_oao_py_interface",
+            (update_orbs_arh, obj_func_arh),
+            settings,
         ):
             test_passed = False
 
@@ -1073,27 +1080,18 @@ class ARHPyInterfaceTests(unittest.TestCase):
             print(" test_arh_settings failed: Settings not initialized correctly.")
             test_passed = False
 
-        dummy_error_code = 42
+        # assigning a logging function writes the C callback function the settings
+        # built for it into the C settings, which calls it whatever context it
+        # receives, and reading returns the logging function
+        messages = []
 
-        def dummy_logger():
-            return dummy_error_code
+        def logger(message):
+            messages.append(message)
 
-        settings.set_optional_callback(
-            "logger", dummy_logger, lambda x: x, CFUNCTYPE(c_int)
-        )
-
-        c_ptr = getattr(settings.settings_c, "logger")
-        c_interface = getattr(settings.settings_c, "logger_interface", None)
-
-        if (
-            c_ptr is None
-            or (isinstance(c_ptr, c_void_p) and c_ptr.value is None)
-            or not callable(c_interface)
-            or c_interface() != dummy_error_code
-        ):
-            print(
-                " test_arh_settings failed: Optional callbacks are not set correctly."
-            )
+        settings.logger = logger
+        logger_interface_type(settings.settings_c.logger)(b"test", 12345)
+        if settings.logger is not logger or messages != ["test"]:
+            print(" test_arh_settings failed: Logging function not set correctly.")
             test_passed = False
 
         self.assertTrue(test_passed, "test_arh_settings failed")

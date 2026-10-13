@@ -20,20 +20,20 @@ from pyopentrustregion.python_interface import (
     update_orbs_interface_type,
     logger_interface_type,
     LoggerInterface,
+    LoggerPyInterface,
     adopt_collector,
     Settings,
     SolverSettings,
     SolverSettingsC,
     auto_bind_fields,
+    bind_callback_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
     evaluate_dm_interface_type,
     EvaluateDMInterface,
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
-    attach_wired_callbacks,
     check_callback_arguments,
-    detach_python_callbacks,
 )
 
 if TYPE_CHECKING:
@@ -62,12 +62,16 @@ class MOSettings(Settings):
             "CMAKE_FLAGS='-DENABLE_MO=ON' pip install ."
         )
 
+    callback_fields = {
+        "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface)
+    }
+
     logger: Optional[Callable[[str], None]]
-    logger_interface: Any
 
 
 # ensure that appropriate fields are automatically set in settings_c object
 auto_bind_fields(MOSettings)
+bind_callback_fields(MOSettings)
 
 
 # column-major copies of the MO coefficient arrays of the callers which cannot be
@@ -254,21 +258,8 @@ def mo_factory(
         EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
     )
 
-    # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not known when the attribute to
-    # settings is set (e.g. n_param)
-    settings.set_optional_callback(
-        "logger",
-        settings.logger,
-        LoggerInterface,
-        logger_interface_type,
-        exception,
-    )
-
-    # the factory keeps calling the callback functions of the solver settings it wires,
-    # so those the solver built from the Python functions of the settings are removed
-    # first, the solver builds them anew
-    detach_python_callbacks(solver_settings)
+    # hand the logging function of the settings the exception collector of the call
+    settings.prepare_call(None, exception)
 
     if not hasattr(lib, "mo_factory"):
         raise RuntimeError(
@@ -321,17 +312,17 @@ def mo_factory(
                 f"OpenTrustRegion MO factory produced error (code {error})."
             )
 
-    # attach the routines the factory has wired into the solver settings
-    attach_wired_callbacks(solver_settings, exception)
-
     # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the object
+    # the solver settings, through which they reach the object, and keep the settings
+    # alive, whose callback functions the object calls
     return (
         UpdateOrbsMOPyInterface(
             update_orbs_funptr=update_orbs_mo_funptr,
             _otr_exception=exception,
             saved_objects={
                 "evaluate_dm_interface": evaluate_dm_interface,
+                "solver_settings": solver_settings,
+                "settings": settings,
                 "mo_coeff_buffer": mo_coeff_buffer,
             },
             mo_coeff=None if in_place else mo_coeff,
@@ -340,7 +331,11 @@ def mo_factory(
         ),
         ObjFuncMOPyInterface(
             obj_func_funptr=obj_func_mo_funptr,
-            saved_objects={"evaluate_dm_interface": evaluate_dm_interface},
+            saved_objects={
+                "evaluate_dm_interface": evaluate_dm_interface,
+                "solver_settings": solver_settings,
+                "settings": settings,
+            },
             _otr_exception=exception,
             mo_coeff_buffer=mo_coeff_buffer,
             context=solver_settings.settings_c.context,

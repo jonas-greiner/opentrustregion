@@ -132,11 +132,11 @@ contains
         result(test_passed)
         !
         ! this function checks that a factory was handed the C solver settings of the
-        ! Python test without the callback functions built from its Python functions,
-        ! the projection and logging function of the solver and the convergence check
-        ! of the stability check, but with the preconditioner it set directly, and
-        ! wires them as a factory does, with the addresses of the levels as contexts
-        ! and the mock preconditioners of both levels
+        ! Python test with the callback functions of its Python functions, the
+        ! projection and logging function of the solver and the convergence check of
+        ! the stability check, and without a context, and wires them as a factory does,
+        ! with the addresses of the levels as contexts and the mock preconditioners of
+        ! both levels
         !
         use c_interface, only: solver_settings_type_c
 
@@ -147,18 +147,17 @@ contains
         ! assume tests pass
         test_passed = .true.
 
-        ! check the callback functions of the solver settings
-        if (c_associated(solver_settings_c%project) .or. &
-            c_associated(solver_settings_c%logger) .or. &
-            c_associated(solver_settings_c%stability_settings%conv_check)) then
+        ! check the callback functions and the context of the solver settings
+        if (.not. (c_associated(solver_settings_c%project) .and. &
+                   c_associated(solver_settings_c%logger) .and. &
+                   c_associated(solver_settings_c%stability_settings%conv_check))) then
             write(stderr, *) "test_"//test_name// &
-                " failed: Callback functions built from Python functions passed."
+                " failed: Callback functions of Python functions not passed."
             test_passed = .false.
         end if
-        if (.not. c_associated(solver_settings_c%precond, &
-                               c_funloc(mock_level_precond))) then
-            write(stderr, *) "test_"//test_name//" failed: Callback function not "// &
-                "built from a Python function not passed."
+        if (c_associated(solver_settings_c%context)) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Context of Python settings passed."
             test_passed = .false.
         end if
 

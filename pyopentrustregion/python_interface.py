@@ -268,26 +268,46 @@ class UpdateOrbsInterface(CallbackInterface):
 
 
 @dataclass
-class PrecondInterface(CallbackInterface):
+class SettingsCallbackInterface(CallbackInterface):
+    """
+    this class is the base class of the interfaces to the callback functions of a
+    settings object, which the settings build once per callback function and which
+    call the callable currently assigned to it with the number of parameters and the
+    exception collector the settings hold for the current call into the library
+    """
+
+    settings: Settings
+    name: str
+
+    @property
+    def func(self) -> Callable:
+        return self.settings._callables[self.name]
+
+    @property
+    def n_param(self) -> Optional[int]:
+        return self.settings._n_param
+
+    @property
+    def exception(self) -> Dict[str, Exception]:
+        return self.settings._exception
+
+
+class PrecondInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the preconditioning function
     """
 
-    precond: Callable[[np.ndarray, float, np.ndarray], None]
-    n_param: int
-    exception: Dict[str, Exception]
-
     def call(self, residual_ptr, mu_ptr, precond_residual_ptr) -> int:
-        # convert pointers to numpy arrays and float
-        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
-        mu = mu_ptr[0]
-        precond_residual = np.ctypeslib.as_array(
-            precond_residual_ptr, shape=(self.n_param,)
-        )
-
-        # call preconditioner
         try:
-            self.precond(residual, mu, precond_residual)
+            # convert pointers to numpy arrays and float
+            residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+            mu = mu_ptr[0]
+            precond_residual = np.ctypeslib.as_array(
+                precond_residual_ptr, shape=(self.n_param,)
+            )
+
+            # call preconditioner
+            self.func(residual, mu, precond_residual)
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -295,28 +315,23 @@ class PrecondInterface(CallbackInterface):
         return 0
 
 
-@dataclass
-class PrecondPDInterface(CallbackInterface):
+class PrecondPDInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the positive-definite preconditioning function
     used to define the ellipsoidal trust-region metric for the TCG and GLTR subsystem
     solvers
     """
 
-    precond_pd: Callable[[np.ndarray, np.ndarray], None]
-    n_param: int
-    exception: Dict[str, Exception]
-
     def call(self, residual_ptr, precond_residual_ptr) -> int:
-        # convert pointers to numpy arrays
-        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
-        precond_residual = np.ctypeslib.as_array(
-            precond_residual_ptr, shape=(self.n_param,)
-        )
-
-        # call positive-definite preconditioner
         try:
-            self.precond_pd(residual, precond_residual)
+            # convert pointers to numpy arrays
+            residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+            precond_residual = np.ctypeslib.as_array(
+                precond_residual_ptr, shape=(self.n_param,)
+            )
+
+            # call positive-definite preconditioner
+            self.func(residual, precond_residual)
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -324,23 +339,18 @@ class PrecondPDInterface(CallbackInterface):
         return 0
 
 
-@dataclass
-class ProjectInterface(CallbackInterface):
+class ProjectInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the projection function
     """
 
-    project: Callable[[np.ndarray], None]
-    n_param: int
-    exception: Dict[str, Exception]
-
     def call(self, vector_ptr) -> int:
-        # convert matrix pointers to numpy arrays
-        vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
-
-        # call projection function
         try:
-            self.project(vector)
+            # convert matrix pointers to numpy arrays
+            vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
+
+            # call projection function
+            self.func(vector)
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -348,19 +358,15 @@ class ProjectInterface(CallbackInterface):
         return 0
 
 
-@dataclass
-class ConvCheckInterface(CallbackInterface):
+class ConvCheckInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the convergence check function
     """
 
-    conv_check: Callable[[], bool]
-    exception: Dict[str, Exception]
-
     def call(self, conv_ptr) -> int:
         # call convergence check
         try:
-            conv_ptr[0] = self.conv_check()
+            conv_ptr[0] = self.func()
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -368,25 +374,20 @@ class ConvCheckInterface(CallbackInterface):
         return 0
 
 
-@dataclass
-class GetExtraTrialVectorsInterface(CallbackInterface):
+class GetExtraTrialVectorsInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the extra trial vector function
     """
 
-    get_extra_trial_vectors: Callable[[np.ndarray], None]
-    n_param: int
-    exception: Dict[str, Exception]
-
     def call(self, trial_vectors_ptr, n_extra_trial_vectors) -> int:
-        # convert matrix pointers to numpy arrays
-        trial_vectors = np.ctypeslib.as_array(
-            trial_vectors_ptr, shape=(n_extra_trial_vectors, self.n_param)
-        )
-
-        # call extra trial vector function
         try:
-            self.get_extra_trial_vectors(trial_vectors)
+            # convert matrix pointers to numpy arrays
+            trial_vectors = np.ctypeslib.as_array(
+                trial_vectors_ptr, shape=(n_extra_trial_vectors, self.n_param)
+            )
+
+            # call extra trial vector function
+            self.func(trial_vectors)
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -394,24 +395,40 @@ class GetExtraTrialVectorsInterface(CallbackInterface):
         return 0
 
 
-@dataclass
-class ConvCheckStabilityInterface(CallbackInterface):
+class SettingsHessXInterface(SettingsCallbackInterface):
+    """
+    this class provides the interface to a Hessian linear transformation function of
+    the settings
+    """
+
+    def call(self, x_ptr, hx_ptr) -> int:
+        try:
+            # convert trial vector pointer to numpy array
+            x = np.ctypeslib.as_array(x_ptr, shape=(self.n_param,))
+            hx = np.ctypeslib.as_array(hx_ptr, shape=(self.n_param,))
+
+            # perform linear transformation
+            self.func(x, hx)
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
+class ConvCheckStabilityInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the stability check convergence check function
     """
 
-    conv_check: Callable[[np.ndarray, float], bool]
-    n_param: int
-    exception: Dict[str, Exception]
-
     def call(self, residual_ptr, eigval_ptr, conv_ptr) -> int:
-        # convert pointers to numpy arrays and float
-        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
-        eigval = eigval_ptr[0]
-
-        # call convergence check
         try:
-            conv_ptr[0] = self.conv_check(residual, eigval)
+            # convert pointers to numpy arrays and float
+            residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+            eigval = eigval_ptr[0]
+
+            # call convergence check
+            conv_ptr[0] = self.func(residual, eigval)
         except Exception as e:
             self.exception["exc"] = e
             return 1
@@ -419,24 +436,172 @@ class ConvCheckStabilityInterface(CallbackInterface):
         return 0
 
 
-@dataclass
-class LoggerInterface(CallbackInterface):
+class LoggerInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the logging function
     """
 
-    logger: Callable[[str], None]
-    exception: Dict[str, Exception]
-
     def call(self, message):
         # call logger
         try:
-            self.logger(string_at(message).decode("utf-8"))
+            self.func(string_at(message).decode("utf-8"))
         except Exception as e:
             # the logger has no error channel since the result does not depend on it,
             # so the first failure is kept and reported once the call into the library
             # has returned
             self.exception.setdefault("logger", e)
+
+
+def raise_callback_error(error: int, exception: Optional[Dict[str, Exception]], msg):
+    """
+    this function raises if a C callback function called from Python failed, with the
+    exception raised by a failing Python callback function it reached as its cause
+    """
+    if error != 0:
+        if exception is not None and "exc" in exception:
+            raise RuntimeError(msg) from exception["exc"]
+        raise RuntimeError(msg)
+
+
+@dataclass
+class CFunctionInterface:
+    """
+    this class is the base class of the Python interfaces to C callback functions,
+    such as those a factory returns or wires into settings, which are called with the
+    context they belong to and keep the object they rely on alive
+    """
+
+    funptr: Any
+    _otr_exception: Optional[Dict[str, Exception]] = None
+    context: Optional[int] = None
+    _owner: Any = None
+
+
+class HessXPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a Hessian linear transformation C
+    function
+    """
+
+    def __call__(self, x: np.ndarray, hess_x: np.ndarray):
+        error = self.funptr(
+            x.ctypes.data_as(POINTER(c_real)),
+            hess_x.ctypes.data_as(POINTER(c_real)),
+            self.context,
+        )
+        raise_callback_error(
+            error,
+            self._otr_exception,
+            "Hessian linear transformation function raised error.",
+        )
+
+
+class PrecondPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a level-shifted preconditioner C
+    function
+    """
+
+    def __call__(self, residual: np.ndarray, mu: float, precond_residual: np.ndarray):
+        error = self.funptr(
+            residual.ctypes.data_as(POINTER(c_real)),
+            c_real(mu),
+            precond_residual.ctypes.data_as(POINTER(c_real)),
+            self.context,
+        )
+        raise_callback_error(
+            error, self._otr_exception, "Preconditioner function raised error."
+        )
+
+
+class PrecondPDPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a positive-definite preconditioner C
+    function
+    """
+
+    def __call__(self, residual: np.ndarray, precond_residual: np.ndarray):
+        error = self.funptr(
+            residual.ctypes.data_as(POINTER(c_real)),
+            precond_residual.ctypes.data_as(POINTER(c_real)),
+            self.context,
+        )
+        raise_callback_error(
+            error,
+            self._otr_exception,
+            "Positive-definite preconditioner function raised error.",
+        )
+
+
+class ProjectPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a projection C function
+    """
+
+    def __call__(self, vector: np.ndarray):
+        error = self.funptr(vector.ctypes.data_as(POINTER(c_real)), self.context)
+        raise_callback_error(
+            error, self._otr_exception, "Projection function raised error."
+        )
+
+
+class GetExtraTrialVectorsPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to an extra trial vector C function
+    """
+
+    def __call__(self, trial_vectors: np.ndarray):
+        error = self.funptr(
+            trial_vectors.ctypes.data_as(POINTER(c_real)),
+            trial_vectors.shape[0],
+            self.context,
+        )
+        raise_callback_error(
+            error, self._otr_exception, "Extra trial vector function raised error."
+        )
+
+
+class ConvCheckPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a convergence check C function
+    """
+
+    def __call__(self) -> bool:
+        converged = c_bool()
+        error = self.funptr(byref(converged), self.context)
+        raise_callback_error(
+            error, self._otr_exception, "Convergence check function raised error."
+        )
+        return converged.value
+
+
+class ConvCheckStabilityPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a stability check convergence check C
+    function
+    """
+
+    def __call__(self, residual: np.ndarray, eigval: float) -> bool:
+        converged = c_bool()
+        error = self.funptr(
+            residual.ctypes.data_as(POINTER(c_real)),
+            byref(c_real(eigval)),
+            byref(converged),
+            self.context,
+        )
+        raise_callback_error(
+            error, self._otr_exception, "Convergence check function raised error."
+        )
+        return converged.value
+
+
+class LoggerPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a logging C function
+    """
+
+    def __call__(self, message: str):
+        self.funptr(message.encode("utf-8"), self.context)
 
 
 # define classes corresponding to C structs for settings
@@ -531,6 +696,10 @@ class Settings:
     c_struct: type[Structure]
     init_c_struct: Any
 
+    # the interface, the C function type and the Python interface to a C function of
+    # every callback function of the settings
+    callback_fields: Dict[str, Tuple[type, Any, type]] = {}
+
     def __init__(self, settings_c: Optional[Structure] = None):
         """
         this function initializes the settings class
@@ -547,37 +716,64 @@ class Settings:
         else:
             self.settings_c = settings_c
 
-        # initializes all optional function pointers to None
-        for field_info in self.settings_c._fields_:
-            field_name, field_type = field_info[:2]
-            if field_type is c_void_p and field_name != "context":
-                setattr(self, field_name, None)
+        # the callables assigned to the callback functions, and the number of
+        # parameters and the exception collector of the current call into the library,
+        # which the interfaces of the callback functions read when they are called
+        self._callables: Dict[str, Optional[Callable]] = {}
+        self._n_param: Optional[int] = None
+        self._exception: Dict[str, Exception] = {}
 
-    def set_optional_callback(
-        self, attr_name, func, func_interface, func_interface_type, *args
-    ):
+        # build the C callback function of every callback function once, which calls
+        # the callable currently assigned to it, so that the C settings only change
+        # when a callable is assigned and a factory can keep them like those of a C
+        # host
+        self._callbacks = {
+            name: interface_type(interface(self, name))
+            for name, (interface, interface_type, _) in self.callback_fields.items()
+        }
+        self._callback_addresses = {
+            name: cast(callback, c_void_p).value
+            for name, callback in self._callbacks.items()
+        }
+
+    def prepare_call(self, n_param: Optional[int], exception: Dict[str, Exception]):
         """
-        this function sets a callback in the C struct from a Python function while also
-        keeping the interface alive in the Python object
+        this function hands the callback functions the number of parameters and the
+        exception collector of a call into the library
         """
-        # create interface if function is not None
-        interface = (
-            func_interface_type(func_interface(func, *args))
-            if func is not None
-            else None
-        )
-
-        # create c_void_p pointer, points to NULL if func_interface is None
-        setattr(self.settings_c, attr_name, cast(interface, c_void_p))
-
-        # keep interface alive
-        setattr(self.settings_c, attr_name + "_interface", interface)
+        self._n_param = n_param
+        self._exception = exception
 
 
 class SolverSettings(Settings):
 
     c_struct = SolverSettingsC
     init_c_struct = lib.init_solver_settings
+    callback_fields = {
+        "precond": (PrecondInterface, precond_interface_type, PrecondPyInterface),
+        "precond_pd": (
+            PrecondPDInterface,
+            precond_pd_interface_type,
+            PrecondPDPyInterface,
+        ),
+        "project": (ProjectInterface, project_interface_type, ProjectPyInterface),
+        "get_extra_trial_vectors": (
+            GetExtraTrialVectorsInterface,
+            get_extra_trial_vectors_interface_type,
+            GetExtraTrialVectorsPyInterface,
+        ),
+        "conv_check": (
+            ConvCheckInterface,
+            conv_check_interface_type,
+            ConvCheckPyInterface,
+        ),
+        "stability_hess_x": (
+            SettingsHessXInterface,
+            hess_x_interface_type,
+            HessXPyInterface,
+        ),
+        "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface),
+    }
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     precond_pd: Optional[Callable[[np.ndarray, np.ndarray], None]]
@@ -586,13 +782,6 @@ class SolverSettings(Settings):
     conv_check: Optional[Callable[[], bool]]
     stability_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
     logger: Optional[Callable[[str], None]]
-    precond_interface: Any
-    precond_pd_interface: Any
-    project_interface: Any
-    get_extra_trial_vectors_interface: Any
-    conv_check_interface: Any
-    stability_hess_x_interface: Any
-    logger_interface: Any
 
     def __init__(self):
         super().__init__()
@@ -604,67 +793,40 @@ class SolverSettings(Settings):
     def stability_settings(self) -> StabilitySettings:
         return self._stability_settings
 
-    def set_optional_callbacks(self, n_param: int, exception: Dict[str, Exception]):
+    def prepare_call(self, n_param: Optional[int], exception: Dict[str, Exception]):
         """
-        this function sets the interfaces for the optional callback functions
+        this function hands the callback functions of the settings and of their
+        nested stability check settings the number of parameters and the exception
+        collector of a call into the library
         """
-        self.set_optional_callback(
-            "precond",
-            self.precond,
-            PrecondInterface,
-            precond_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "precond_pd",
-            self.precond_pd,
-            PrecondPDInterface,
-            precond_pd_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "project",
-            self.project,
-            ProjectInterface,
-            project_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "get_extra_trial_vectors",
-            self.get_extra_trial_vectors,
-            GetExtraTrialVectorsInterface,
-            get_extra_trial_vectors_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "conv_check",
-            self.conv_check,
-            ConvCheckInterface,
-            conv_check_interface_type,
-            exception,
-        )
-        self.set_optional_callback(
-            "stability_hess_x",
-            self.stability_hess_x,
-            HessXInterface,
-            hess_x_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "logger", self.logger, LoggerInterface, logger_interface_type, exception
-        )
-        self.stability_settings.set_optional_callbacks(n_param, exception)
+        super().prepare_call(n_param, exception)
+        self.stability_settings.prepare_call(n_param, exception)
 
 
 class StabilitySettings(Settings):
 
     c_struct = StabilitySettingsC
     init_c_struct = lib.init_stability_settings
+    callback_fields = {
+        "precond": (PrecondInterface, precond_interface_type, PrecondPyInterface),
+        "project": (ProjectInterface, project_interface_type, ProjectPyInterface),
+        "approx_hess_x": (
+            SettingsHessXInterface,
+            hess_x_interface_type,
+            HessXPyInterface,
+        ),
+        "get_extra_trial_vectors": (
+            GetExtraTrialVectorsInterface,
+            get_extra_trial_vectors_interface_type,
+            GetExtraTrialVectorsPyInterface,
+        ),
+        "conv_check": (
+            ConvCheckStabilityInterface,
+            conv_check_stability_interface_type,
+            ConvCheckStabilityPyInterface,
+        ),
+        "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface),
+    }
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
@@ -672,60 +834,45 @@ class StabilitySettings(Settings):
     get_extra_trial_vectors: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[np.ndarray, float], bool]]
     logger: Optional[Callable[[str], None]]
-    precond_interface: Any
-    project_interface: Any
-    approx_hess_x_interface: Any
-    get_extra_trial_vectors_interface: Any
-    conv_check_interface: Any
-    logger_interface: Any
 
-    def set_optional_callbacks(self, n_param: int, exception: Dict[str, Exception]):
-        """
-        this function sets the interfaces for the optional callback functions
-        """
-        self.set_optional_callback(
-            "precond",
-            self.precond,
-            PrecondInterface,
-            precond_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "project",
-            self.project,
-            ProjectInterface,
-            project_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "approx_hess_x",
-            self.approx_hess_x,
-            HessXInterface,
-            hess_x_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "get_extra_trial_vectors",
-            self.get_extra_trial_vectors,
-            GetExtraTrialVectorsInterface,
-            get_extra_trial_vectors_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "conv_check",
-            self.conv_check,
-            ConvCheckStabilityInterface,
-            conv_check_stability_interface_type,
-            n_param,
-            exception,
-        )
-        self.set_optional_callback(
-            "logger", self.logger, LoggerInterface, logger_interface_type, exception
-        )
+
+def bind_callback_fields(cls: type[Settings]):
+    """
+    this function generates properties for the callback functions of a settings class:
+    assigning a callable writes the C callback function the settings built for it into
+    the C settings, or a null pointer for None, and reading returns the callable while
+    the C settings hold that C callback function, a Python interface to the C function
+    a factory wired into them otherwise, called with the context of the settings and
+    keeping them alive, and None for an unset callback function
+    """
+    for name, (_, interface_type, py_interface) in cls.callback_fields.items():
+
+        def make_property(name, interface_type, py_interface):
+
+            def getter(self):
+                funptr = getattr(self.settings_c, name)
+                if not funptr:
+                    return None
+                if funptr == self._callback_addresses[name]:
+                    return self._callables.get(name)
+                return py_interface(
+                    interface_type(funptr),
+                    _otr_exception=self._exception,
+                    context=self.settings_c.context,
+                    _owner=self,
+                )
+
+            def setter(self, func):
+                self._callables[name] = func
+                setattr(
+                    self.settings_c,
+                    name,
+                    None if func is None else self._callback_addresses[name],
+                )
+
+            return property(getter, setter)
+
+        setattr(cls, name, make_property(name, interface_type, py_interface))
 
 
 def auto_bind_fields(cls: type[Settings]):
@@ -791,6 +938,8 @@ def auto_bind_fields(cls: type[Settings]):
 # ensure that appropriate fields are automatically set in settings_c object
 auto_bind_fields(SolverSettings)
 auto_bind_fields(StabilitySettings)
+bind_callback_fields(SolverSettings)
+bind_callback_fields(StabilitySettings)
 
 
 # define classes for states, which the library keeps current during a call and which
@@ -896,11 +1045,10 @@ def solver(
         UpdateOrbsInterface(update_orbs, n_param, exception)
     )
 
-    # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not known when the attribute to
-    # settings is set (e.g. n_param)
+    # hand the callback functions of the settings the number of parameters and the
+    # exception collector of the call
     if settings is not None:
-        settings.set_optional_callbacks(n_param, exception)
+        settings.prepare_call(n_param, exception)
 
     # define result and argument types
     lib.solver.restype = c_int
@@ -939,11 +1087,10 @@ def stability_check(
     # define interfaces for callback functions
     hess_x_interface = hess_x_interface_type(HessXInterface(hess_x, n_param, exception))
 
-    # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not known when the attribute to
-    # settings is set (e.g. n_param)
+    # hand the callback functions of the settings the number of parameters and the
+    # exception collector of the call
     if settings is not None:
-        settings.set_optional_callbacks(n_param, exception)
+        settings.prepare_call(n_param, exception)
 
     # define result and argument types
     lib.stability_check.restype = c_int

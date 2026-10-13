@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import POINTER, byref, c_void_p, cast
+from ctypes import POINTER, byref
 from dataclasses import dataclass
 from inspect import signature
 from typing import TYPE_CHECKING
@@ -17,12 +17,7 @@ from pyopentrustregion.python_interface import (
     callback_type,
     CallbackInterface,
     hess_x_interface_type,
-    precond_interface_type,
-    precond_pd_interface_type,
-    project_interface_type,
-    get_extra_trial_vectors_interface_type,
-    Settings,
-    SolverSettings,
+    HessXPyInterface,
 )
 
 if TYPE_CHECKING:
@@ -145,8 +140,9 @@ class ObjFuncPyInterface:
     """
     this class provides the Python interface to the objective function, which is
     called with the context the factory has written into the solver settings, the
-    callback interfaces are stored to ensure that they are not garbage collected when
-    the factory completes
+    callback interfaces and the settings whose callback functions the factory's object
+    calls are stored to ensure that they are not garbage collected when the factory
+    completes
     """
 
     obj_func_funptr: Any
@@ -173,121 +169,6 @@ class ObjFuncPyInterface:
         return func.value
 
 
-@dataclass
-class ProjectPyInterface:
-    """
-    this class provides the Python interface to the projection function, which is
-    called with the context of the level of the solver settings it was wired into
-    """
-
-    project_funptr: Any
-    _otr_exception: Optional[Dict[str, Exception]] = None
-    context: Optional[int] = None
-
-    def __call__(self, vector: np.ndarray):
-        # get pointers to arrays
-        vector_ptr = vector.ctypes.data_as(POINTER(c_real))
-
-        # projection function
-        error = self.project_funptr(vector_ptr, self.context)
-        if error != 0:
-            if self._otr_exception is not None and "exc" in self._otr_exception:
-                raise RuntimeError(
-                    "Projection function raised error."
-                ) from self._otr_exception["exc"]
-            raise RuntimeError("Projection function raised error.")
-
-        return
-
-
-@dataclass
-class GetExtraTrialVectorsPyInterface:
-    """
-    this class provides the Python interface to the extra trial vector function, which
-    is called with the context of the level of the solver settings it was wired into
-    """
-
-    get_extra_trial_vectors_funptr: Any
-    _otr_exception: Optional[Dict[str, Exception]] = None
-    context: Optional[int] = None
-
-    def __call__(self, trial_vectors: np.ndarray):
-        # get pointers to arrays
-        trial_vectors_ptr = trial_vectors.ctypes.data_as(POINTER(c_real))
-
-        # extra trial vector function
-        error = self.get_extra_trial_vectors_funptr(
-            trial_vectors_ptr, trial_vectors.shape[0], self.context
-        )
-        if error != 0:
-            if self._otr_exception is not None and "exc" in self._otr_exception:
-                raise RuntimeError(
-                    "Extra trial vector function raised error."
-                ) from self._otr_exception["exc"]
-            raise RuntimeError("Extra trial vector function raised error.")
-
-        return
-
-
-@dataclass
-class PrecondPyInterface:
-    """
-    this class provides the Python interface to the level-shifted preconditioner
-    function, which is called with the context of the level of the solver settings it
-    was wired into
-    """
-
-    precond_funptr: Any
-    _otr_exception: Optional[Dict[str, Exception]] = None
-    context: Optional[int] = None
-
-    def __call__(self, residual: np.ndarray, mu: float, precond_residual: np.ndarray):
-        # get pointers to arrays
-        residual_ptr = residual.ctypes.data_as(POINTER(c_real))
-        precond_residual_ptr = precond_residual.ctypes.data_as(POINTER(c_real))
-
-        # call preconditioner function
-        error = self.precond_funptr(
-            residual_ptr, c_real(mu), precond_residual_ptr, self.context
-        )
-        if error != 0:
-            if self._otr_exception is not None and "exc" in self._otr_exception:
-                raise RuntimeError(
-                    "Preconditioner function raised error."
-                ) from self._otr_exception["exc"]
-            raise RuntimeError("Preconditioner function raised error.")
-
-        return
-
-
-@dataclass
-class PrecondPDPyInterface:
-    """
-    this class provides the Python interface to the positive-definite preconditioner
-    function, which is called with the context of the level of the solver settings it
-    was wired into
-    """
-
-    precond_pd_funptr: Any
-    _otr_exception: Optional[Dict[str, Exception]] = None
-    context: Optional[int] = None
-
-    def __call__(self, residual: np.ndarray, precond_residual: np.ndarray):
-        # get pointers to arrays
-        residual_ptr = residual.ctypes.data_as(POINTER(c_real))
-        precond_residual_ptr = precond_residual.ctypes.data_as(POINTER(c_real))
-
-        # call preconditioner function
-        error = self.precond_pd_funptr(residual_ptr, precond_residual_ptr, self.context)
-        if error != 0:
-            msg = "Positive-definite preconditioner function raised error."
-            if self._otr_exception is not None and "exc" in self._otr_exception:
-                raise RuntimeError(msg) from self._otr_exception["exc"]
-            raise RuntimeError(msg)
-
-        return
-
-
 def check_callback_arguments(
     callback: Any, name: str, arguments: Sequence[str]
 ) -> None:
@@ -306,108 +187,14 @@ def check_callback_arguments(
         raise TypeError(f"{name} has to take ({', '.join(arguments)}).") from None
 
 
-def python_built(settings: Settings, name: str) -> bool:
-    """
-    this function returns whether a callback function of the C settings is the C
-    callback the solver built from the Python function of the settings, which the
-    settings already hold
-    """
-    settings_c_funptr = getattr(settings.settings_c, name)
-    own_interface = getattr(settings.settings_c, name + "_interface", None)
-    return (
-        own_interface is not None
-        and settings_c_funptr == cast(own_interface, c_void_p).value
-    )
-
-
-def detach_python_callbacks(solver_settings: SolverSettings) -> None:
-    """
-    this function removes the C callbacks the solver built from the Python functions of
-    the settings from the C solver settings before a factory wires them, which would
-    otherwise keep calling them after the solver replaced them, while the settings keep
-    the Python functions, from which the solver builds them anew
-    """
-    for settings in (solver_settings, solver_settings.stability_settings):
-        for field_info in settings.settings_c._fields_:
-            field_name, field_type = field_info[:2]
-            if (
-                field_type is c_void_p
-                and field_name != "context"
-                and python_built(settings, field_name)
-            ):
-                setattr(settings.settings_c, field_name, None)
-
-
-def attach_wired_callbacks(
-    solver_settings: SolverSettings, exception: Dict[str, Exception]
-) -> None:
-    """
-    this function attaches the routines a factory has wired into the C solver
-    settings, which are called with the context of the level of the settings they were
-    wired into, skipping the C callbacks the solver built from the Python functions of
-    the settings, which the settings already hold and which a wrapper around them would
-    outlive once the solver replaces them
-    """
-    wrappers = {
-        "precond": (precond_interface_type, PrecondPyInterface),
-        "precond_pd": (precond_pd_interface_type, PrecondPDPyInterface),
-        "project": (project_interface_type, ProjectPyInterface),
-        "get_extra_trial_vectors": (
-            get_extra_trial_vectors_interface_type,
-            GetExtraTrialVectorsPyInterface,
-        ),
-    }
-    for settings in (solver_settings, solver_settings.stability_settings):
-        for name, (interface_type, py_interface) in wrappers.items():
-            if not hasattr(settings.settings_c, name):
-                continue
-            settings_c_funptr = getattr(settings.settings_c, name)
-            if not settings_c_funptr or python_built(settings, name):
-                continue
-            setattr(
-                settings,
-                name,
-                py_interface(
-                    interface_type(settings_c_funptr),
-                    _otr_exception=exception,
-                    context=settings.settings_c.context,
-                ),
-            )
-
-
-@dataclass
-class HessXPyInterface:
-    """
-    this class provides the Python interface to the Hessian linear transformation
-    function, which is called with the context of the orbital updating function that
-    returned it
-    """
-
-    hess_x_funptr: Any
-    _otr_exception: Optional[Dict[str, Exception]] = None
-    context: Optional[int] = None
-
-    def __call__(self, x: np.ndarray, hess_x: np.ndarray):
-        # get pointers to arrays
-        x_ptr = x.ctypes.data_as(POINTER(c_real))
-        hess_x_ptr = hess_x.ctypes.data_as(POINTER(c_real))
-
-        # update orbital function
-        error = self.hess_x_funptr(x_ptr, hess_x_ptr, self.context)
-        if error != 0:
-            msg = "Hessian linear transformation function raised error."
-            if self._otr_exception is not None and "exc" in self._otr_exception:
-                raise RuntimeError(msg) from self._otr_exception["exc"]
-            raise RuntimeError(msg)
-
-
 @dataclass
 class UpdateOrbsPyInterface:
     """
     this class provides the Python interface to the orbital updating function, which is
     called with the context the factory has written into the solver settings, the
-    callback interfaces are stored to ensure that they are not garbage collected when
-    the factory completes
+    callback interfaces and the settings whose callback functions the factory's object
+    calls are stored to ensure that they are not garbage collected when the factory
+    completes
     """
 
     update_orbs_funptr: Any
@@ -450,7 +237,9 @@ class UpdateOrbsPyInterface:
 
         # attach the Hessian linear transformation interface to the object so that it
         # persists in Python to ensure that it is not garbage collected when the
-        # factory completes
-        self.hess_x = HessXPyInterface(hess_x_funptr, self._otr_exception, self.context)
+        # factory completes, and let it keep this object alive
+        self.hess_x = HessXPyInterface(
+            hess_x_funptr, self._otr_exception, self.context, _owner=self
+        )
 
         return func.value, self.hess_x

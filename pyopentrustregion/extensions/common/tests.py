@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_void_p, POINTER, cast
+from ctypes import POINTER, c_void_p
 
 from pyopentrustregion.tests import (
     lib,
@@ -14,7 +14,12 @@ from pyopentrustregion.tests import (
     add_tests,
     print_separator,
 )
-from pyopentrustregion.python_interface import c_real, c_int, SolverSettings
+from pyopentrustregion.python_interface import (
+    c_real,
+    c_int,
+    hess_x_interface_type,
+    SolverSettings,
+)
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -89,17 +94,14 @@ n_ao = c_int.in_dll(lib, "test_n_ao").value
 def setup_wired_solver_settings():
     """
     this function returns solver settings for the Python test of a factory that wires
-    them, whose projection and logging function and the convergence check of their
-    stability check are built from Python functions, which the factory has to be handed
-    without, while their preconditioner is set directly, which it has to be handed,
-    together with these Python functions
+    them, with a projection and logging function and a convergence check of their
+    stability check, whose C callback functions the factory has to be handed, together
+    with these Python functions
     """
     solver_settings = SolverSettings()
     solver_settings.project = lambda vector: None
     solver_settings.logger = lambda message: None
     solver_settings.stability_settings.conv_check = lambda residual, eigval: False
-    solver_settings.set_optional_callbacks(n_param, {})
-    solver_settings.settings_c.precond = cast(lib.mock_level_precond, c_void_p).value
     python_functions = (
         solver_settings.project,
         solver_settings.logger,
@@ -109,12 +111,16 @@ def setup_wired_solver_settings():
     return solver_settings, python_functions
 
 
-def check_wired_solver_settings(solver_settings, python_functions, test_name):
+def check_wired_solver_settings(
+    solver_settings, python_functions, test_name, returned, extension_settings
+):
     """
     this function checks that solver settings a mock factory wired still hold their
-    Python functions, from which the solver builds the callback functions anew, and
-    that the preconditioners the mock factory wired into both levels are called with
-    the contexts of their levels
+    Python functions, that the preconditioners the mock factory wired into both levels
+    are called with the contexts of their levels, that a Python function assigned
+    after the wiring is called with the context the mock factory wrote into the
+    settings, and that the functions the factory returned keep the solver settings and
+    the settings of the extension alive, whose callback functions its object calls
     """
     test_passed = True
 
@@ -146,6 +152,41 @@ def check_wired_solver_settings(solver_settings, python_functions, test_name):
             print(
                 f" test_{test_name} failed: Wired preconditioner of the {level} "
                 "returns wrong result."
+            )
+            test_passed = False
+
+    # assign a Hessian linear transformation for the stability check after the wiring
+    # and call it through the C settings with the context the mock factory wrote
+    x = np.ones(n_param, dtype=np.float64)
+    hess_x = np.zeros(n_param, dtype=np.float64)
+
+    def stability_hess_x(x, hess_x):
+        hess_x[:] = 4 * x
+
+    solver_settings.stability_hess_x = stability_hess_x
+    solver_settings.prepare_call(n_param, {})
+    error = hess_x_interface_type(solver_settings.settings_c.stability_hess_x)(
+        x.ctypes.data_as(POINTER(c_real)),
+        hess_x.ctypes.data_as(POINTER(c_real)),
+        solver_settings.settings_c.context,
+    )
+    if error != 0 or not np.allclose(hess_x, 4.0):
+        print(
+            f" test_{test_name} failed: Python function assigned after the wiring "
+            "not called."
+        )
+        test_passed = False
+    solver_settings.stability_hess_x = None
+
+    # the returned functions keep the settings alive
+    for function in returned:
+        if (
+            function.saved_objects.get("solver_settings") is not solver_settings
+            or function.saved_objects.get("settings") is not extension_settings
+        ):
+            print(
+                f" test_{test_name} failed: Returned function does not keep the "
+                "settings alive."
             )
             test_passed = False
 

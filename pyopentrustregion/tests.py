@@ -19,9 +19,9 @@ from ctypes import (
     sizeof,
     Array,
     byref,
-    CFUNCTYPE,
     Structure,
     POINTER,
+    cast,
 )
 from unittest.mock import patch
 from pathlib import Path
@@ -61,15 +61,15 @@ except ImportError:
     )
 from pyopentrustregion.python_interface import (
     UpdateOrbsInterface,
-    PrecondInterface,
-    PrecondPDInterface,
-    ProjectInterface,
-    GetExtraTrialVectorsInterface,
-    ConvCheckInterface,
-    ConvCheckStabilityInterface,
-    LoggerInterface,
     raise_on_failure,
     hess_x_interface_type,
+    precond_interface_type,
+    precond_pd_interface_type,
+    project_interface_type,
+    get_extra_trial_vectors_interface_type,
+    conv_check_interface_type,
+    conv_check_stability_interface_type,
+    logger_interface_type,
 )
 
 if sys.platform == "darwin":
@@ -501,7 +501,9 @@ class PyInterfaceUnitTests(unittest.TestCase):
             )
 
         # call solver python interface with optional arguments, the result of the mock
-        # is cleared before and read right after the call
+        # is cleared before and read right after the call, and keep the C settings to
+        # check that the calls leave them unchanged
+        c_settings = bytes(settings.settings_c)
         interface_flag = c_bool.in_dll(lib, "test_solver_interface")
         interface_flag.value = False
         state = SolverState()
@@ -576,6 +578,12 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "function was not reported."
             )
 
+        # the C settings are left unchanged by the calls and by assigning another
+        # logging function
+        c_settings_kept = bytes(settings.settings_c) == c_settings
+        if not c_settings_kept:
+            print(" test_solver_py_interface failed: C settings changed by the calls.")
+
         # call solver python interface without settings, which have to be passed as
         # none so that the library uses its default settings, the results of the mock
         # start opposite to the expected ones
@@ -597,6 +605,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
             and callbacks_called
             and logger_error_reported
             and callback_error_reported
+            and c_settings_kept
             and no_settings_passed,
             "test_solver_py_interface failed",
         )
@@ -865,10 +874,12 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
     def test_callback_interfaces(self):
         """
-        this function tests that the interfaces to the Python callback functions
-        report an exception raised by a callback function as an error and keep it,
-        that the convergence check interfaces pass on the result and that the logging
-        interface keeps the first exception the logging function raises
+        this function tests that the interfaces to the Python callback functions,
+        those of the settings reached through the C callback functions the settings
+        build, report an exception raised by a callback function as an error and keep
+        it, also a call before the number of parameters is known, that the
+        convergence check interfaces pass on the result and that the logging interface
+        keeps the first exception the logging function raises
         """
         test_passed = True
         n_param = 2
@@ -878,45 +889,88 @@ class PyInterfaceUnitTests(unittest.TestCase):
         def raising(*args):
             raise ValueError("callback function failure")
 
-        for name, make_interface, args in [
+        def settings_callback(settings, name, func, interface_type, exception):
+            """
+            this function assigns a callable to a callback function of settings,
+            hands them the number of parameters and the exception collector of a call
+            and returns their C callback function
+            """
+            setattr(settings, name, func)
+            settings.prepare_call(n_param, exception)
+            return interface_type(getattr(settings.settings_c, name))
+
+        for name, call in [
             (
                 "orbital update",
-                lambda exc: UpdateOrbsInterface(raising, n_param, exc),
-                (vector_ptr, pointer(c_real()), vector_ptr, vector_ptr, None),
+                lambda exc: UpdateOrbsInterface(raising, n_param, exc).call(
+                    vector_ptr, pointer(c_real()), vector_ptr, vector_ptr, None
+                ),
             ),
             (
                 "preconditioner",
-                lambda exc: PrecondInterface(raising, n_param, exc),
-                (vector_ptr, pointer(c_real(1.0)), vector_ptr),
+                lambda exc: settings_callback(
+                    SolverSettings(), "precond", raising, precond_interface_type, exc
+                )(vector_ptr, pointer(c_real(1.0)), vector_ptr, None),
             ),
             (
                 "positive-definite preconditioner",
-                lambda exc: PrecondPDInterface(raising, n_param, exc),
-                (vector_ptr, vector_ptr),
+                lambda exc: settings_callback(
+                    SolverSettings(),
+                    "precond_pd",
+                    raising,
+                    precond_pd_interface_type,
+                    exc,
+                )(vector_ptr, vector_ptr, None),
             ),
             (
                 "projection",
-                lambda exc: ProjectInterface(raising, n_param, exc),
-                (vector_ptr,),
+                lambda exc: settings_callback(
+                    SolverSettings(), "project", raising, project_interface_type, exc
+                )(vector_ptr, None),
             ),
             (
                 "extra trial vector function",
-                lambda exc: GetExtraTrialVectorsInterface(raising, n_param, exc),
-                (vector_ptr, 1),
+                lambda exc: settings_callback(
+                    SolverSettings(),
+                    "get_extra_trial_vectors",
+                    raising,
+                    get_extra_trial_vectors_interface_type,
+                    exc,
+                )(vector_ptr, 1, None),
             ),
             (
                 "convergence check",
-                lambda exc: ConvCheckInterface(raising, exc),
-                (pointer(c_bool()),),
+                lambda exc: settings_callback(
+                    SolverSettings(),
+                    "conv_check",
+                    raising,
+                    conv_check_interface_type,
+                    exc,
+                )(pointer(c_bool()), None),
+            ),
+            (
+                "Hessian linear transformation of the stability check",
+                lambda exc: settings_callback(
+                    SolverSettings(),
+                    "stability_hess_x",
+                    raising,
+                    hess_x_interface_type,
+                    exc,
+                )(vector_ptr, vector_ptr, None),
             ),
             (
                 "stability check convergence check",
-                lambda exc: ConvCheckStabilityInterface(raising, n_param, exc),
-                (vector_ptr, pointer(c_real()), pointer(c_bool())),
+                lambda exc: settings_callback(
+                    StabilitySettings(),
+                    "conv_check",
+                    raising,
+                    conv_check_stability_interface_type,
+                    exc,
+                )(vector_ptr, pointer(c_real()), pointer(c_bool()), None),
             ),
         ]:
             exception = {}
-            if make_interface(exception).call(*args) != 1:
+            if call(exception) != 1:
                 print(
                     f" test_callback_interfaces failed: Exception raised by {name} "
                     "not reported as error."
@@ -928,6 +982,17 @@ class PyInterfaceUnitTests(unittest.TestCase):
                     "not kept."
                 )
                 test_passed = False
+
+        # a callback function of settings called before the number of parameters of a
+        # call is known reports an error
+        settings = SolverSettings()
+        settings.project = lambda vector: None
+        if project_interface_type(settings.settings_c.project)(vector_ptr, None) != 1:
+            print(
+                " test_callback_interfaces failed: Callback function called before "
+                "the number of parameters is known does not report an error."
+            )
+            test_passed = False
 
         # the orbital update interface leaves the Hessian linear transformation unset
         # without an error when the orbital update does not provide one, so that the
@@ -968,7 +1033,10 @@ class PyInterfaceUnitTests(unittest.TestCase):
         # the convergence check interface passes on that the optimization has not
         # converged
         converged = c_bool(True)
-        if ConvCheckInterface(lambda: False, {}).call(pointer(converged)) != 0:
+        conv_check = settings_callback(
+            SolverSettings(), "conv_check", lambda: False, conv_check_interface_type, {}
+        )
+        if conv_check(pointer(converged), None) != 0:
             print(
                 " test_callback_interfaces failed: Error reported for convergence "
                 "check."
@@ -984,12 +1052,14 @@ class PyInterfaceUnitTests(unittest.TestCase):
         # the stability check convergence check interface passes on that the
         # eigenpair has not converged
         converged = c_bool(True)
-        if (
-            ConvCheckStabilityInterface(
-                lambda residual, eigval: False, n_param, {}
-            ).call(vector_ptr, pointer(c_real()), pointer(converged))
-            != 0
-        ):
+        conv_check = settings_callback(
+            StabilitySettings(),
+            "conv_check",
+            lambda residual, eigval: False,
+            conv_check_stability_interface_type,
+            {},
+        )
+        if conv_check(vector_ptr, pointer(c_real()), pointer(converged), None) != 0:
             print(
                 " test_callback_interfaces failed: Error reported for stability check "
                 "convergence check."
@@ -1009,9 +1079,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
             raise next(failures)
 
         exception = {}
-        logger_interface = LoggerInterface(failing_logger, exception)
-        logger_interface.call(b"test")
-        logger_interface.call(b"test")
+        logger = settings_callback(
+            SolverSettings(), "logger", failing_logger, logger_interface_type, exception
+        )
+        logger(b"test", None)
+        logger(b"test", None)
         if str(exception.get("logger")) != "first":
             print(
                 " test_callback_interfaces failed: First exception raised by "
@@ -1104,38 +1176,73 @@ class PyInterfaceUnitTests(unittest.TestCase):
             "test_solver_settings", settings, ""
         )
 
-        dummy_error_code = 42
+        # assigning a callable writes the C callback function the settings built for it
+        # into the C settings and reading returns the callable
+        calls = []
 
-        def dummy_precond():
-            return dummy_error_code
+        def precond(residual, mu, precond_residual):
+            calls.append(mu)
 
-        settings.set_optional_callback(
-            "precond", dummy_precond, lambda x: x, CFUNCTYPE(c_int)
-        )
-
-        c_ptr = getattr(settings.settings_c, "precond")
-        c_interface = getattr(settings.settings_c, "precond_interface", None)
-
-        if (
-            c_ptr is None
-            or not callable(c_interface)
-            or c_interface() != dummy_error_code
-        ):
+        settings.precond = precond
+        c_funptr = settings.settings_c.precond
+        if not c_funptr or settings.precond is not precond:
             print(
-                " test_solver_settings failed: Optional callbacks are not set "
+                " test_solver_settings failed: Assigned callback function not set "
                 "correctly."
             )
             test_passed = False
 
-        # an unset optional callback function leaves its C function pointer null
-        settings.set_optional_callback("precond", None, lambda x: x, CFUNCTYPE(c_int))
-        if (
-            settings.settings_c.precond is not None
-            or settings.settings_c.precond_interface is not None
-        ):
+        # the C callback function calls the callable with the number of parameters of
+        # the call whatever context it receives, as for a callback function assigned
+        # after a factory wrote its context into the settings
+        vector = np.zeros(n_param)
+        vector_ptr = vector.ctypes.data_as(POINTER(c_real))
+        settings.prepare_call(n_param, {})
+        error = precond_interface_type(c_funptr)(
+            vector_ptr, pointer(c_real(2.0)), vector_ptr, 12345
+        )
+        if error != 0 or calls != [2.0]:
             print(
-                " test_solver_settings failed: Unset optional callback does not "
+                " test_solver_settings failed: C callback function does not call the "
+                "assigned callback function."
+            )
+            test_passed = False
+
+        # assigning another callable keeps the C settings
+        settings.precond = lambda residual, mu, precond_residual: None
+        if settings.settings_c.precond != c_funptr:
+            print(
+                " test_solver_settings failed: C settings changed by assigning "
+                "another callback function."
+            )
+            test_passed = False
+
+        # an unset callback function leaves its C function pointer null
+        settings.precond = None
+        if settings.settings_c.precond is not None or settings.precond is not None:
+            print(
+                " test_solver_settings failed: Unset callback function does not "
                 "leave a null function pointer."
+            )
+            test_passed = False
+
+        # a C function wired into the settings is read as a callable around it, which
+        # calls it with the context of the settings and keeps them alive
+        wired = []
+
+        def wired_precond(residual_ptr, mu_ptr, precond_residual_ptr, context):
+            wired.append((mu_ptr[0], context))
+            return 0
+
+        wired_c_funptr = precond_interface_type(wired_precond)
+        settings.settings_c.precond = cast(wired_c_funptr, c_void_p).value
+        settings.settings_c.context = 6789
+        read_precond = settings.precond
+        read_precond(vector, 3.0, vector)
+        if wired != [(3.0, 6789)] or read_precond._owner is not settings:
+            print(
+                " test_solver_settings failed: C function wired into the settings "
+                "not read correctly."
             )
             test_passed = False
 

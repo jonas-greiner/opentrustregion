@@ -22,18 +22,18 @@ from pyopentrustregion.python_interface import (
     update_orbs_interface_type,
     logger_interface_type,
     LoggerInterface,
+    LoggerPyInterface,
     adopt_collector,
     Settings,
     SolverSettings,
     SolverSettingsC,
     auto_bind_fields,
+    bind_callback_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
-    attach_wired_callbacks,
     check_callback_arguments,
-    detach_python_callbacks,
 )
 from pyopentrustregion.extensions.mo.python_interface import (
     check_mo_coeff,
@@ -94,12 +94,16 @@ class ARHSettings(Settings):
             "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
         )
 
+    callback_fields = {
+        "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface)
+    }
+
     logger: Optional[Callable[[str], None]]
-    logger_interface: Any
 
 
 # ensure that appropriate fields are automatically set in settings_c object
 auto_bind_fields(ARHSettings)
+bind_callback_fields(ARHSettings)
 
 
 # define interface factories
@@ -206,21 +210,8 @@ def arh_factory_mo(
         ARHEvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
     )
 
-    # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not known when the attribute to
-    # settings is set (e.g. n_param)
-    settings.set_optional_callback(
-        "logger",
-        settings.logger,
-        LoggerInterface,
-        logger_interface_type,
-        exception,
-    )
-
-    # the factory keeps calling the callback functions of the solver settings it wires,
-    # so those the solver built from the Python functions of the settings are removed
-    # first, the solver builds them anew
-    detach_python_callbacks(solver_settings)
+    # hand the logging function of the settings the exception collector of the call
+    settings.prepare_call(None, exception)
 
     if not hasattr(lib, "arh_factory_mo"):
         raise RuntimeError(
@@ -273,17 +264,17 @@ def arh_factory_mo(
                 f"OpenTrustRegion ARH MO factory produced error (code {error})."
             )
 
-    # attach the routines the factory has wired into the solver settings
-    attach_wired_callbacks(solver_settings, exception)
-
     # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the object
+    # the solver settings, through which they reach the object, and keep the settings
+    # alive, whose callback functions the object calls
     return (
         UpdateOrbsMOPyInterface(
             update_orbs_funptr=update_orbs_arh_funptr,
             _otr_exception=exception,
             saved_objects={
                 "evaluate_dm_interface": evaluate_dm_interface,
+                "solver_settings": solver_settings,
+                "settings": settings,
                 "mo_coeff_buffer": mo_coeff_buffer,
             },
             mo_coeff=None if in_place else mo_coeff,
@@ -292,7 +283,11 @@ def arh_factory_mo(
         ),
         ObjFuncMOPyInterface(
             obj_func_funptr=obj_func_arh_funptr,
-            saved_objects={"evaluate_dm_interface": evaluate_dm_interface},
+            saved_objects={
+                "evaluate_dm_interface": evaluate_dm_interface,
+                "solver_settings": solver_settings,
+                "settings": settings,
+            },
             _otr_exception=exception,
             mo_coeff_buffer=mo_coeff_buffer,
             context=solver_settings.settings_c.context,
@@ -340,21 +335,8 @@ def arh_factory_oao(
         ARHEvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
     )
 
-    # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not known when the attribute to
-    # settings is set (e.g. n_param)
-    settings.set_optional_callback(
-        "logger",
-        settings.logger,
-        LoggerInterface,
-        logger_interface_type,
-        exception,
-    )
-
-    # the factory keeps calling the callback functions of the solver settings it wires,
-    # so those the solver built from the Python functions of the settings are removed
-    # first, the solver builds them anew
-    detach_python_callbacks(solver_settings)
+    # hand the logging function of the settings the exception collector of the call
+    settings.prepare_call(None, exception)
 
     if not hasattr(lib, "arh_factory_oao"):
         raise RuntimeError(
@@ -401,23 +383,27 @@ def arh_factory_oao(
                 f"OpenTrustRegion ARH OAO factory produced error (code {error})."
             )
 
-    # attach the routines the factory has wired into the solver settings
-    attach_wired_callbacks(solver_settings, exception)
-
     # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the object
+    # the solver settings, through which they reach the object, and keep the settings
+    # alive, whose callback functions the object calls
     return (
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_arh_funptr,
             _otr_exception=exception,
             saved_objects={
                 "evaluate_dm_interface": evaluate_dm_interface,
+                "solver_settings": solver_settings,
+                "settings": settings,
             },
             context=solver_settings.settings_c.context,
         ),
         ObjFuncPyInterface(
             obj_func_funptr=obj_func_arh_funptr,
-            saved_objects={"evaluate_dm_interface": evaluate_dm_interface},
+            saved_objects={
+                "evaluate_dm_interface": evaluate_dm_interface,
+                "solver_settings": solver_settings,
+                "settings": settings,
+            },
             _otr_exception=exception,
             context=solver_settings.settings_c.context,
         ),

@@ -23,22 +23,22 @@ from pyopentrustregion.python_interface import (
     UpdateOrbsInterface,
     ObjFuncInterface,
     LoggerInterface,
+    LoggerPyInterface,
     adopt_collector,
     Settings,
     SolverSettings,
     SolverSettingsC,
     auto_bind_fields,
+    bind_callback_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
-    attach_wired_callbacks,
     check_callback_arguments,
-    detach_python_callbacks,
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any, Dict
+    from typing import Tuple, Callable, Optional, Dict
 
     TransportType = Callable[[np.ndarray, np.ndarray], None]
     InitHessType = Callable[[np.ndarray], None]
@@ -74,12 +74,16 @@ class QNSettings(Settings):
             "CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install ."
         )
 
+    callback_fields = {
+        "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface)
+    }
+
     logger: Optional[Callable[[str], None]]
-    logger_interface: Any
 
 
 # ensure that appropriate fields are automatically set in settings_c object
 auto_bind_fields(QNSettings)
+bind_callback_fields(QNSettings)
 
 
 # define interface factories
@@ -176,21 +180,8 @@ def qn_factory(
         InitHessInterface(init_hess, n_param, exception)
     )
 
-    # set interfaces for optional callback functions, these need to be set here since
-    # the interface might need parameters that are not known when the attribute to
-    # settings is set (e.g. n_param)
-    settings.set_optional_callback(
-        "logger",
-        settings.logger,
-        LoggerInterface,
-        logger_interface_type,
-        exception,
-    )
-
-    # the factory keeps calling the callback functions of the solver settings it wires,
-    # so those the solver built from the Python functions of the settings are removed
-    # first, the solver builds them anew
-    detach_python_callbacks(solver_settings)
+    # hand the logging function of the settings the exception collector of the call
+    settings.prepare_call(None, exception)
 
     if not hasattr(lib, "qn_factory"):
         raise RuntimeError(
@@ -237,12 +228,12 @@ def qn_factory(
                 f"OpenTrustRegion quasi-Newton factory produced error (code {error})."
             )
 
-    # attach the routines the factory has wired into the solver settings
-    attach_wired_callbacks(solver_settings, exception)
-
     # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the quasi-Newton object
+    # the solver settings, through which they reach the quasi-Newton object, and keep
+    # the settings alive, whose callback functions the object calls
     saved_objects = {
+        "solver_settings": solver_settings,
+        "settings": settings,
         "update_orbs_interface": update_orbs_interface,
         "obj_func_interface": obj_func_interface,
         "transport_interface": transport_interface,
