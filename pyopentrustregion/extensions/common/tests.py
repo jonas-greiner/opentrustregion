@@ -10,10 +10,11 @@ import unittest
 from ctypes import POINTER, addressof, c_void_p
 from unittest.mock import patch
 
+import numpy as np
+
 from pyopentrustregion.tests import (
     lib,
     n_param,
-    NUMPY_AVAILABLE,
     add_tests,
     print_separator,
 )
@@ -25,16 +26,13 @@ from pyopentrustregion.python_interface import (
     SolverState,
 )
 
-if NUMPY_AVAILABLE:
-    import numpy as np
-    from pyopentrustregion.extensions.common.python_interface import (
-        EvaluateDMInterface,
-        ExtensionOwner,
-        ObjFuncPyInterface,
-        UpdateOrbsPyInterface,
-        check_wrapped_functions,
-    )
-
+from pyopentrustregion.extensions.common.python_interface import (
+    EvaluateDMInterface,
+    ExtensionOwner,
+    ObjFuncPyInterface,
+    UpdateOrbsPyInterface,
+    check_wrapped_functions,
+)
 
 # define all tests in alphabetical order
 fortran_tests = {
@@ -291,7 +289,6 @@ class CommonCInterfaceTests(unittest.TestCase):
         return super().setUpClass()
 
 
-@unittest.skipUnless(NUMPY_AVAILABLE, "NumPy not available.")
 class CommonPyInterfaceTests(unittest.TestCase):
     """
     this class contains unit tests for the Python interface shared between extensions

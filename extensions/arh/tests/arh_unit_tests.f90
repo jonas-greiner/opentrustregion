@@ -302,7 +302,7 @@ contains
 
     end subroutine setup_basis_solver_settings
 
-    subroutine setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ)
+    subroutine setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
         !
         ! this subroutine sets up the given MO and ARH objects for orbitals
         ! parameterized in the MO basis the way the MO and ARH factories would,
@@ -310,7 +310,7 @@ contains
         !
         use otr_arh, only: arh_type, arh_mo_type
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_unit_tests, only: setup_mo_object
 
         class(arh_type), allocatable, intent(out) :: arh
@@ -318,18 +318,19 @@ contains
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:)
+        type(test_context_type), intent(inout), target :: context
 
         ! set up the MO object
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
 
         ! set up the ARH object in the MO basis
         allocate(arh, source=arh_mo_type(mo))
-        call setup_settings(arh%settings)
+        call setup_settings(arh%settings, context)
 
     end subroutine setup_arh_and_mo_objects
 
     subroutine setup_arh_and_oao_objects(arh, oao, case_arh_type, dm_oao, fock_oo, &
-                                         fock_vv, n_ao, n_particle, n_param)
+                                         fock_vv, n_ao, n_particle, n_param, context)
         !
         ! this subroutine sets up the given OAO and ARH objects for the preconditioner
         ! tests; the allocatable caches the individual preconditioner branches need are
@@ -337,18 +338,19 @@ contains
         !
         use otr_arh, only: arh_type, arh_oao_type
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
         class(arh_type), allocatable, intent(out) :: arh
         type(oao_type), allocatable, intent(out), target :: oao
         character(len=*), intent(in) :: case_arh_type
         real(rp), intent(in) :: dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
         integer(ip), intent(in) :: n_ao, n_particle, n_param
+        type(test_context_type), intent(inout), target :: context
 
         ! set up the OAO object so that the static-Hessian eigendecomposition used by
         ! the preconditioner can be refreshed
         allocate(oao)
-        call setup_settings(oao%settings)
+        call setup_settings(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%n_param = n_param
@@ -359,12 +361,13 @@ contains
 
         ! set up the ARH object in the OAO basis
         allocate(arh, source=arh_oao_type(oao))
-        call setup_settings(arh%settings)
+        call setup_settings(arh%settings, context)
         arh%settings%arh_type = case_arh_type
 
     end subroutine setup_arh_and_oao_objects
 
-    subroutine setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao)
+    subroutine setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
+                                                context)
         !
         ! this subroutine sets up the given OAO object for random density matrices in
         ! an AO basis whose overlap has the inverse square root c I, so that the
@@ -373,7 +376,7 @@ contains
         !
         use otr_arh, only: arh_type, arh_oao_type
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: identity_matrix, generate_random_density_matrix
         use otr_common_test_reference, only: n_occ
 
@@ -382,6 +385,7 @@ contains
         real(rp), intent(in) :: basis_scale
         real(rp), intent(out), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(out) :: dm_oao(:, :, :)
+        type(test_context_type), intent(inout), target :: context
 
         integer(ip) :: n_ao, n_particle, n_param, i
 
@@ -390,7 +394,7 @@ contains
         n_particle = size(dm_ao, 3, kind=ip)
         n_param = n_particle * n_ao * (n_ao - 1) / 2
         allocate(oao)
-        call setup_settings(oao%settings)
+        call setup_settings(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%n_param = n_param
@@ -407,7 +411,7 @@ contains
 
         ! set up the ARH object
         allocate(arh, source=arh_oao_type(oao))
-        call setup_settings(arh%settings)
+        call setup_settings(arh%settings, context)
 
     end subroutine setup_arh_and_scaled_oao_objects
 
@@ -606,12 +610,14 @@ contains
         ! for orbitals parameterized in the OAO basis, which also adds the evaluated
         ! point together with the potentials the shell keeps to the history
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
         use otr_arh, only: arh_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao
-        use otr_common_unit_tests, only: mock_requests
+        use otr_common_unit_tests, only: level_context, mock_requests
+        use opentrustregion_unit_tests, only: test_context_type
 
+        type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
         class(arh_type), allocatable, target :: arh
         integer(ip), intent(in) :: n_particle
@@ -631,9 +637,10 @@ contains
 
         ! set up the OAO and ARH objects with an empty history, which is removed for
         ! the first call
-        call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao)
+        call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
+                                              context)
         call setup_empty_history(arh, n_particle)
-        call arm_host_context(arh%settings)
+        call arm_host_context(arh%settings, context)
         deallocate(arh%dm_list)
 
         ! call routine with an orbital rotation before the history exists and determine
@@ -642,7 +649,7 @@ contains
         call random_number(kappa)
         kappa = 0.1_rp * kappa
         mock_requests = [integer(ip) :: ]
-        energy = arh%obj_func(kappa, error, no_context)
+        energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
         if (error /= 0) then
             write(stderr, *) test_name//" failed: Produced error without history."
             passed = .false.
@@ -672,7 +679,7 @@ contains
         ! basis, while the current density matrix is left untouched
         allocate(arh%dm_list(n_ao, n_ao, n_particle, 0))
         mock_requests = [integer(ip) :: ]
-        energy = arh%obj_func(kappa, error, no_context)
+        energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
         if (error /= 0) then
             write(stderr, *) test_name//" failed: Produced error with history."
             passed = .false.
@@ -712,7 +719,7 @@ contains
         ! call routine at the same point and determine if it is not added twice and
         ! leaves the Hessian model untouched
         arh%model_stale = .false.
-        energy = arh%obj_func(kappa, error, no_context)
+        energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
         if (error /= 0) then
             write(stderr, *) test_name// &
                 " failed: Produced error for a point the history already holds."
@@ -730,7 +737,7 @@ contains
         end if
 
         ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("obj_func_arh")) passed = .false.
+        if (.not. host_context_reached("obj_func_arh", context)) passed = .false.
 
         ! deallocate ARH and OAO objects
         deallocate(arh, oao)
@@ -744,15 +751,17 @@ contains
         ! which passes the Fock matrix in the history basis on to the orbital basis and
         ! adds the point the orbitals are rotated away from to the history
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
         use opentrustregion, only: hess_x_type
         use otr_common, only: hess_x_callback
         use otr_arh, only: arh_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao
-        use otr_common_unit_tests, only: identity_matrix, mock_requests, &
-                                         mock_fock_factor
+        use otr_common_unit_tests, only: level_context, identity_matrix, &
+                                         mock_requests, mock_fock_factor
+        use opentrustregion_unit_tests, only: test_context_type
 
+        type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
         class(arh_type), allocatable, target :: arh
         integer(ip), intent(in) :: n_particle
@@ -773,9 +782,10 @@ contains
         passed = .true.
 
         ! set up the OAO and ARH objects
-        call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao)
+        call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
+                                              context)
         arh%settings%arh_type = "ms_psb"
-        call arm_host_context(arh%settings)
+        call arm_host_context(arh%settings, context)
         if (n_particle == 1) then
             arh%evaluate_dm_cs => mock_evaluate_dm_cs
         else
@@ -792,7 +802,7 @@ contains
             kappa = 0.0_rp
             mock_requests = [integer(ip) :: ]
             call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(arh, 1_ip))
             if (error /= 0) then
                 write(stderr, *) test_name//" failed: Produced error."
                 passed = .false.
@@ -863,7 +873,7 @@ contains
             oao%energy = 0.0_rp
             oao%hess_eigen_stale = .false.
             call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(arh, 1_ip))
             if (error /= 0) then
                 write(stderr, *) test_name// &
                     " failed: Produced error for an initialized object."
@@ -894,7 +904,7 @@ contains
                 potentials_saved(:, :, :, :, k) = stacked_potentials(arh, 0_ip)
                 arh%model_stale = k == 1
                 call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     no_context)
+                                     level_context(arh, 1_ip))
                 if (error /= 0) then
                     write(stderr, *) test_name// &
                         " failed: Produced error for an orbital rotation."
@@ -938,7 +948,7 @@ contains
             ! does not add that density matrix a second time
             arh%dm_list(:, :, :, 1) = oao%dm_oao
             call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(arh, 1_ip))
             if (error /= 0) then
                 write(stderr, *) test_name//" failed: Produced error for a density "// &
                     "matrix already held in the history."
@@ -959,7 +969,7 @@ contains
                 arh%evaluate_dm_os => mock_evaluate_dm_failing_os
             end if
             call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(arh, 1_ip))
             if (error == 0) then
                 write(stderr, *) test_name//" failed: Error of the density matrix "// &
                     "evaluating function not passed on."
@@ -978,7 +988,7 @@ contains
             n_list = size(arh%dm_list, 4, kind=ip)
             kappa = 0.0_rp
             call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(arh, 1_ip))
             if (error /= 0) then
                 write(stderr, *) test_name// &
                     " failed: Produced error after a failed evaluation."
@@ -1004,7 +1014,7 @@ contains
         end block checks
 
         ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("update_orbs_arh")) passed = .false.
+        if (.not. host_context_reached("update_orbs_arh", context)) passed = .false.
 
         ! deallocate ARH and OAO objects
         deallocate(arh, oao)
@@ -1027,7 +1037,7 @@ contains
         use otr_oao, only: oao_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: &
             identity_matrix, mock_requests, generate_random_density_matrix, &
             generate_random_symm_matrix, generate_random_orthogonal_matrix
@@ -1035,6 +1045,7 @@ contains
                                      generate_random_mo_coeff, ref_mo_transform, &
                                      ref_pack_ov, ref_unpack_ov
 
+        type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
         type(mo_type), allocatable, target :: mo
         class(arh_type), allocatable, target :: arh
@@ -1074,7 +1085,8 @@ contains
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         if (n_particle == 2) mo_coeff(:, :, 2) = &
             matmul(mo_coeff(:, :, 1), generate_random_orthogonal_matrix(n_mo))
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ(:n_particle))
+        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, &
+                                      n_occ(:n_particle), context)
 
         ! steps of every channel which are not orthogonal, so that the pivoted
         ! factorization of the history reorders them and its factor is not diagonal
@@ -1177,7 +1189,7 @@ contains
         ! set up the OAO object with an orthonormal AO basis, so that the AO and the
         ! OAO basis coincide
         allocate(oao)
-        call setup_settings(oao%settings)
+        call setup_settings(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%n_param = n_particle * n_ao * (n_ao - 1) / 2
@@ -1247,7 +1259,7 @@ contains
             do i_type = 1, size(arh_types)
                 case_arh_type = trim(arh_types(i_type))
                 allocate(arh, source=arh_oao_type(oao))
-                call setup_settings(arh%settings)
+                call setup_settings(arh%settings, context)
                 arh%settings%arh_type = case_arh_type
                 call build_from_history()
 
@@ -1434,8 +1446,9 @@ contains
         use otr_mo, only: mo_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         type(extension_solver_settings_type), target :: solver_settings
         type(solver_state_type), target :: state
         class(extension_type), allocatable, target :: basis
@@ -1456,7 +1469,7 @@ contains
             basis%n_particle = 1
         end select
         call setup_basis_solver_settings(solver_settings, basis)
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         evaluate_dm_funptr => mock_evaluate_dm_cs
 
         ! call routine and determine if the ARH object built on the MO object holds
@@ -1532,8 +1545,9 @@ contains
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         type(extension_solver_settings_type), target :: solver_settings
         type(solver_state_type), target :: state
         class(extension_type), allocatable, target :: basis
@@ -1554,7 +1568,7 @@ contains
             basis%n_particle = 2
         end select
         call setup_basis_solver_settings(solver_settings, basis)
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         evaluate_dm_funptr => mock_evaluate_dm_os
 
         ! call routine and determine if the ARH object built on the OAO object holds
@@ -1801,7 +1815,7 @@ contains
         ! itself, and leave the solver settings untouched
         do i_case = 1, size(refusal_names)
             call setup_basis(.true., 1_ip)
-            call setup_settings(settings)
+            call setup_settings(settings, context)
             call setup_error_logging(settings, context)
             level => solver_settings%extensions(1)%object%solver_level
             evaluate_dm_cs_funptr => mock_evaluate_dm_cs
@@ -1844,7 +1858,7 @@ contains
         call setup_basis(.true., 1_ip)
         call move_alloc(solver_settings, other_settings)
         call setup_basis(.true., 1_ip)
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         evaluate_dm_cs_funptr => mock_evaluate_dm_cs
         evaluate_dm_os_funptr => null()
         call arh_factory_common(solver_settings%extensions(1)%object%solver_level, &
@@ -1889,7 +1903,7 @@ contains
             select type (basis)
             class is (orbital_basis_type)
                 basis%n_particle = n_particle
-                call setup_settings(basis%settings)
+                call setup_settings(basis%settings, context)
                 basis%settings%verbose = 7
             end select
             allocate(solver_settings)
@@ -1905,8 +1919,9 @@ contains
         ! input parameters
         !
         use otr_arh, only: arh_settings_type, arh_sanity_check, arh_types
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         type(arh_settings_type) :: settings
         integer(ip) :: i, error
 
@@ -1914,7 +1929,7 @@ contains
         test_arh_sanity_check = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! check if all available ARH types are accepted
         do i = 1, size(arh_types)
@@ -2064,9 +2079,10 @@ contains
         use otr_arh, only: arh_type, arh_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: mock_requests, generate_random_density_matrix
 
+        type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
         class(arh_type), allocatable, target :: arh
         integer(ip) :: n_particle_case, n_param_case
@@ -2103,7 +2119,7 @@ contains
             oao%n_param = n_param_case
             oao%dm_oao = dm_oao(:, :, :n_particle_case)
             allocate(arh, source=arh_oao_type(oao))
-            call setup_settings(arh%settings)
+            call setup_settings(arh%settings, context)
             arh%settings%arh_type = "ms_sr1"
             call setup_empty_history(arh, n_particle_case)
             allocate(arh%coupling_matrix(1, 1))
@@ -2141,6 +2157,7 @@ contains
         ! transformation on the basis of augmented Roothaan-Hall and related methods,
         ! which adds the low-rank part to the static part of the orbital basis
         !
+        use otr_common_unit_tests, only: level_context
         use otr_arh, only: arh_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
@@ -2148,8 +2165,9 @@ contains
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, &
                                      setup_random_mo_channels, ref_hess_x_static_mo
-        use test_reference, only: no_context
+        use opentrustregion_unit_tests, only: test_context_type
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_dirs = 2
 
         type(mo_type), allocatable, target :: mo
@@ -2167,7 +2185,7 @@ contains
         ! differently occupied spin channels
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ)
+        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
         call setup_random_mo_channels(mo, n_occ, n_mo)
         n_param = arh%orbitals%n_param
         allocate(x(n_param), hess_x(n_param))
@@ -2196,7 +2214,7 @@ contains
             else
                 case_name = "without low-rank part"
             end if
-            call arh%hess_x(x, hess_x, error, no_context)
+            call arh%hess_x(x, hess_x, error, level_context(arh, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_arh failed: Produced error "// &
                     case_name//"."
@@ -2232,7 +2250,9 @@ contains
         use otr_arh, only: arh_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
+        use opentrustregion_unit_tests, only: test_context_type
 
+        type(test_context_type), target :: context
         class(arh_type), allocatable, target :: arh
         type(mo_type), allocatable, target :: mo
         type(oao_type), allocatable, target :: oao
@@ -2345,7 +2365,7 @@ contains
                 ao_overlap = generate_random_ao_overlap(n_ao)
                 mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
                 call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, &
-                                              n_occ(:n_particle))
+                                              n_occ(:n_particle), context)
                 call setup_random_mo_channels(mo, n_occ(:n_particle), n_mo)
                 do k = 1, n_particle
                     associate (channel => mo%mo_channels(k))
@@ -2365,9 +2385,9 @@ contains
                     fock_vv(:, :, k) = fock_vv(:, :, k) + oao_shift * &
                                        (identity_matrix(n_ao) - dm_oao(:, :, k))
                 end do
-                call setup_arh_and_oao_objects(arh, oao, "ms_sr1", dm_oao, fock_oo, &
-                                               fock_vv, n_ao, n_particle, &
-                                               n_particle * n_ao * (n_ao - 1) / 2)
+                call setup_arh_and_oao_objects( &
+                    arh, oao, "ms_sr1", dm_oao, fock_oo, fock_vv, n_ao, n_particle, &
+                    n_particle * n_ao * (n_ao - 1) / 2, context)
 
                 ! cache a wrong eigendecomposition, which has to be refreshed since the
                 ! static part is marked as changed
@@ -2447,15 +2467,17 @@ contains
         ! preconditioner of the ARH approximate Hessian, which applies the
         ! level-shifted inverse of the approximate Hessian
         !
-        use test_reference, only: no_context
         use otr_arh, only: arh_type
+        use otr_common_unit_tests, only: level_context
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, &
                                      setup_identity_mo_eigenbasis
+        use opentrustregion_unit_tests, only: test_context_type
 
+        type(test_context_type), target :: context
         real(rp), parameter :: mu = 0.3_rp
 
         type(mo_type), allocatable, target :: mo
@@ -2474,13 +2496,14 @@ contains
         ! inverse of the approximate Hessian halves the residual
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ)
+        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
         call setup_identity_mo_eigenbasis(mo, 0.0_rp, (2.0_rp + mu) / 2.0_rp)
         allocate(residual(mo%n_param), precond_residual(mo%n_param))
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call arh%precond(residual, mu, precond_residual, error, no_context)
+        call arh%precond(residual, mu, precond_residual, error, &
+                         level_context(arh, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_precond_arh failed: Produced error."
             test_precond_arh = .false.
@@ -2502,15 +2525,17 @@ contains
         ! preconditioner of the ARH approximate Hessian, which applies the one of the
         ! orbital basis to the orbital object
         !
-        use test_reference, only: no_context
         use otr_arh, only: arh_type
+        use otr_common_unit_tests, only: level_context
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, &
                                      setup_identity_mo_eigenbasis
+        use opentrustregion_unit_tests, only: test_context_type
 
+        type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         class(arh_type), allocatable, target :: arh
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
@@ -2527,13 +2552,13 @@ contains
         ! by their magnitudes, halves the residual, unlike the level-shifted one
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ)
+        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
         call setup_identity_mo_eigenbasis(mo, 1.0_rp, 0.0_rp)
         allocate(residual(mo%n_param), precond_residual(mo%n_param))
         call random_number(residual)
 
         ! call routine and determine if the residual is halved
-        call arh%precond_pd(residual, precond_residual, error, no_context)
+        call arh%precond_pd(residual, precond_residual, error, level_context(arh, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_arh failed: Produced error."
             test_precond_pd_arh = .false.
@@ -2554,15 +2579,17 @@ contains
         ! this function tests the subroutine which returns the extra trial vectors of
         ! the orbital basis for the solver's initial trial space
         !
-        use test_reference, only: no_context
         use otr_arh, only: arh_type
+        use otr_common_unit_tests, only: level_context
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, &
                                      setup_identity_mo_eigenbasis
+        use opentrustregion_unit_tests, only: test_context_type
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_extra = 2
 
         type(mo_type), allocatable, target :: mo
@@ -2582,7 +2609,7 @@ contains
         ! it and the second vanishes
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ)
+        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
         call setup_identity_mo_eigenbasis(mo, 0.0_rp, 1.0_rp)
         mo%mo_channels(1)%occ_eigvals(1) = 1.5_rp
         mo%mo_channels(1)%virt_eigvals(2) = 2.0_rp
@@ -2592,7 +2619,7 @@ contains
 
         ! call routine and determine if the extra trial vectors of the orbital basis
         ! are returned
-        call arh%get_extra_trial_vectors(trial_vectors, error, no_context)
+        call arh%get_extra_trial_vectors(trial_vectors, error, level_context(arh, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_arh failed: Produced error."
             test_get_extra_trial_vectors_arh = .false.
@@ -2614,14 +2641,14 @@ contains
         !
         use otr_arh, only: arh_type, arh_oao_type
         use otr_oao, only: oao_type
-        use test_reference, only: no_context
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
-        use otr_common_unit_tests, only: generate_random_density_matrix
+        use otr_common_unit_tests, only: level_context, generate_random_density_matrix
         use otr_oao_unit_tests, only: ref_pack_asymm, ref_project_asymm, &
                                       ref_unpack_asymm
 
+        type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
         class(arh_type), allocatable, target :: arh
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), vector(n_param), expected(n_param)
@@ -2635,7 +2662,7 @@ contains
         dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_occ(1))
         dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, n_occ(2))
         allocate(oao)
-        call setup_settings(oao%settings)
+        call setup_settings(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%dm_oao = dm_oao
@@ -2645,7 +2672,7 @@ contains
         ! call routine and determine if the vector is projected by the OAO object
         expected = ref_pack_asymm(ref_project_asymm( &
             ref_unpack_asymm(vector, n_particle, n_ao), dm_oao), n_param)
-        call arh%project(vector, error, no_context)
+        call arh%project(vector, error, level_context(arh, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_project_arh_oao failed: Produced error."
             test_project_arh_oao = .false.
@@ -2851,13 +2878,14 @@ contains
         !
         use otr_arh, only: arh_mo_type
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_param_os
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, setup_mo_object, &
                                      ref_rotate_mo_coeff
 
+        type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         type(arh_mo_type) :: arh
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
@@ -2876,7 +2904,7 @@ contains
         mo_coeff_before = mo_coeff
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
         arh = arh_mo_type(mo)
-        call setup_settings(arh%settings)
+        call setup_settings(arh%settings, context)
 
         ! call routine and determine if the density matrix of the independently rotated
         ! orbitals is returned in the AO basis and multiplied by the AO overlap matrix
@@ -2925,8 +2953,9 @@ contains
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ
         use otr_common_unit_tests, only: identity_matrix, generate_random_density_matrix
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_param_oao = n_ao * (n_ao - 1) / 2
         real(rp), parameter :: basis_scale = 1.5_rp, angle = 0.3_rp
 
@@ -2945,7 +2974,7 @@ contains
         ! root c I, so that the density matrix in the AO basis is c^2 times the one in
         ! the OAO basis
         allocate(oao)
-        call setup_settings(oao%settings)
+        call setup_settings(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = 1
         oao%n_param = n_param_oao
@@ -2955,7 +2984,7 @@ contains
         oao%dm_ao => dm_ao
         oao%dm_oao = dm_oao
         arh = arh_oao_type(oao)
-        call setup_settings(arh%settings)
+        call setup_settings(arh%settings, context)
 
         ! call routine and determine if the density matrix is rotated consistently in
         ! both bases while the current density matrix is left untouched
@@ -3747,10 +3776,11 @@ contains
         !
         use otr_arh, only: arh_type, arh_oao_type, arh_types
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
         use otr_common_test_reference, only: n_particle_ref => n_particle, shell_names
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_param = 5, n_diff = 3, n_diff_nl = 2, &
                                   n_both = n_diff + n_diff_nl, dm_nl = 2 * n_diff, &
                                   pot_nl = 2 * n_diff + n_diff_nl
@@ -3783,7 +3813,7 @@ contains
         allocate(oao)
         oao%n_param = n_param
         allocate(arh, source=arh_oao_type(oao))
-        call setup_settings(arh%settings)
+        call setup_settings(arh%settings, context)
         arh%dm_dirs = density
         arh%dm_dirs_nonlinear = density_nl
         arh%linear_potential_dirs = linear
@@ -4754,8 +4784,9 @@ contains
         !
         use otr_arh, only: get_ms_a_inv, arh_settings_type
         use otr_common_test_reference, only: n_ao
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_diff = 3, n_accepted = 2, flat_len = n_ao * n_ao
 
         real(rp) :: chol(n_accepted, n_accepted), dm_cols(flat_len, n_diff), &
@@ -4769,7 +4800,7 @@ contains
         test_get_ms_a_inv = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! reorder and rebase into an arbitrary orthonormalized basis that also drops
         ! one history entry
@@ -4841,9 +4872,10 @@ contains
         ! holds if both terms are assembled from the responses of their own kernel
         !
         use otr_arh, only: get_ms_a_inv_jk_cs, arh_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_rows = 6, n_diff = 3
 
         real(rp) :: coulomb(n_rows, n_rows), exchange(n_rows, n_rows), &
@@ -4857,7 +4889,7 @@ contains
         test_get_ms_a_inv_jk_cs = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! history S = Q R in identity order, so that R is the Cholesky factor of its
         ! metric, positive semidefinite kernels of a lower rank than the history space
@@ -4925,9 +4957,10 @@ contains
         ! kernel and channels
         !
         use otr_arh, only: get_ms_a_inv_jk_os, arh_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_rows(2) = [4, 3], n_diff = 2, n_common = 3, &
                                   n_flat = sum(n_rows)
 
@@ -4944,7 +4977,7 @@ contains
         test_get_ms_a_inv_jk_os = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! rows of the two channels, which the packed columns share
         rows = reshape([1_ip, n_rows(1), &
@@ -5044,8 +5077,9 @@ contains
         ! empty history
         !
         use otr_arh, only: get_ms_jk_inv, arh_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_diff = 3, n_accepted = 2, n_param = 5
         real(rp), parameter :: noise = 1e-20_rp
 
@@ -5061,7 +5095,7 @@ contains
         test_get_ms_jk_inv = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! reorder and rebase into an arbitrary orthonormalized basis that also drops
         ! one history entry, and random directions of both terms

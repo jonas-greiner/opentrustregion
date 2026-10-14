@@ -523,10 +523,11 @@ contains
         ! function the host context of its settings, while its numerics are left to
         ! later tests
         !
+        use otr_common_unit_tests, only: level_context
         use otr_qn, only: sr1_updating_type
-        use test_reference, only: host_context, host_context_reached, no_context
+        use test_reference, only: host_context, host_context_reached
 
-        type(sr1_updating_type) :: object
+        type(sr1_updating_type), target :: object
         real(rp) :: x(n_param), hess_x(n_param)
         integer(ip) :: error
 
@@ -538,7 +539,7 @@ contains
         ! point
         call setup_updating_object(object)
         x = 1.0_rp
-        call object%hess_x(x, hess_x, error, no_context)
+        call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_hess_x_sr1 failed: Produced error."
             test_hess_x_sr1 = .false.
@@ -559,10 +560,11 @@ contains
         ! function the host context of its settings, while its numerics are left to
         ! later tests
         !
+        use otr_common_unit_tests, only: level_context
         use otr_qn, only: bfgs_updating_type
-        use test_reference, only: host_context, host_context_reached, no_context
+        use test_reference, only: host_context, host_context_reached
 
-        type(bfgs_updating_type) :: object
+        type(bfgs_updating_type), target :: object
         real(rp) :: x(n_param), hess_x(n_param)
         integer(ip) :: error
 
@@ -575,7 +577,7 @@ contains
         ! transformation is assembled
         call setup_updating_object(object)
         x = 1.0_rp
-        call object%hess_x(x, hess_x, error, no_context)
+        call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_hess_x_bfgs failed: Produced error."
             test_hess_x_bfgs = .false.

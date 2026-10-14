@@ -307,12 +307,13 @@ contains
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
                               obj_func_callback
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_test_reference, only: n_ao, n_occ
         use otr_common_unit_tests, only: identity_matrix, &
                                          generate_random_density_matrix, &
                                          mock_evaluate_dm_cs, wired_level
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_particle = 1
 
         real(rp), target :: dm_ao(n_ao, n_ao)
@@ -330,7 +331,7 @@ contains
         test_oao_factory_cs = .true.
 
         ! setup settings objects
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         solver_settings%solver_settings_type = default_solver_settings
 
         ! initialize density matrix and an orthonormal AO basis
@@ -426,12 +427,13 @@ contains
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
                               obj_func_callback
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
         use otr_common_unit_tests, only: identity_matrix, &
                                          generate_random_density_matrix, &
                                          mock_evaluate_dm_os, wired_level
 
+        type(test_context_type), target :: context
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
         integer(ip) :: i, error
@@ -447,7 +449,7 @@ contains
         test_oao_factory_os = .true.
 
         ! setup settings objects
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         solver_settings%solver_settings_type = default_solver_settings
 
         ! initialize density matrices and an orthonormal AO basis
@@ -701,7 +703,7 @@ contains
         ! untouched
         allocate(solver_settings)
         solver_settings%solver_settings_type = default_solver_settings
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         evaluate_dm_cs_funptr => mock_evaluate_dm_cs
         evaluate_dm_os_funptr => null()
         call oao_factory_common(dm_ao, ao_overlap, 3_ip, n_ao, evaluate_dm_cs_funptr, &
@@ -843,8 +845,9 @@ contains
         ! input parameters
         !
         use otr_oao, only: oao_settings_type, oao_sanity_check
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         type(oao_settings_type) :: settings
         integer(ip) :: n_particle, error
 
@@ -852,7 +855,7 @@ contains
         test_oao_sanity_check = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! check if a positive number of AOs is accepted for one and for two particle
         ! channels
@@ -890,19 +893,20 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! OAO basis
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
-        use otr_common_unit_tests, only: identity_matrix, &
+        use test_reference, only: arm_host_context, host_context_reached
+        use otr_common_unit_tests, only: level_context, identity_matrix, &
                                          generate_random_density_matrix, &
                                          generate_random_symm_matrix, mock_requests, &
                                          mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, shell_names
 
+        type(test_context_type), target :: context
         real(rp), parameter :: angle = 0.3_rp
 
-        type(oao_type) :: oao
+        type(oao_type), target :: oao
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), s_inv_sqrt(n_ao, n_ao), &
                     kappa(n_param), rotation(n_ao, n_ao), energy, expected_energy
         integer(ip) :: i, i_shell, error
@@ -914,8 +918,8 @@ contains
         ! set up the OAO object with a non-orthonormal AO basis, so that the density
         ! matrix has to be transformed to the AO basis before it is evaluated, and a
         ! different square root of the overlap matrix, which must not be used for it
-        call setup_settings(oao%settings)
-        call arm_host_context(oao%settings)
+        call setup_settings(oao%settings, context)
+        call arm_host_context(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%n_param = n_param
@@ -944,7 +948,7 @@ contains
             ! of the density matrix evaluating function is requested and returned for
             ! the density matrix in the AO basis
             mock_requests = [integer(ip) :: ]
-            energy = oao%obj_func(kappa, error, no_context)
+            energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_obj_func_oao failed: Produced error for the "// &
                     case_name//" case."
@@ -978,7 +982,7 @@ contains
         ! matrix is left untouched
         call random_number(kappa)
         kappa = 0.1_rp * kappa
-        energy = oao%obj_func(kappa, error, no_context)
+        energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_obj_func_oao failed: Produced error for an "// &
                 "orbital rotation."
@@ -1000,7 +1004,7 @@ contains
         rotation = identity_matrix(n_ao)
         rotation(1:2, 1:2) = reshape([cos(angle), -sin(angle), &
                                       sin(angle), cos(angle)], [2, 2])
-        energy = oao%obj_func(kappa, error, no_context)
+        energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_obj_func_oao failed: Produced error for a plane "// &
                 "rotation."
@@ -1016,13 +1020,14 @@ contains
         end if
 
         ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("obj_func_oao")) test_obj_func_oao = .false.
+        if (.not. host_context_reached("obj_func_oao", context)) &
+            test_obj_func_oao = .false.
 
         ! call routine without a density matrix evaluating function and determine if
         ! the error of its check is returned
         oao%evaluate_dm_cs => null()
         oao%evaluate_dm_os => null()
-        energy = oao%obj_func(kappa, error, no_context)
+        energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
         if (error == 0) then
             write(stderr, *) "test_obj_func_oao failed: No error returned without "// &
                 "a density matrix evaluating function."
@@ -1037,9 +1042,9 @@ contains
         ! Hessian diagonal evaluation in the OAO basis, for the closed-shell and the
         ! open-shell case
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
-            identity_matrix, generate_random_density_matrix, &
+            level_context, identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_fock_factor, mock_requests, &
             mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_cs, &
             mock_evaluate_dm_os, mock_evaluate_dm_failing_cs, &
@@ -1047,11 +1052,12 @@ contains
         use otr_oao, only: oao_type
         use otr_common, only: hess_x_callback
         use opentrustregion, only: hess_x_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
 
-        type(oao_type), allocatable :: oao
+        type(test_context_type), target :: context
+        type(oao_type), allocatable, target :: oao
         real(rp), allocatable, target :: dm_ao(:, :, :)
         real(rp), allocatable :: dm_oao(:, :, :), kappa(:), grad(:), h_diag(:)
         real(rp) :: s_inv_sqrt(n_ao, n_ao), fock_oao(n_ao, n_ao), func
@@ -1080,8 +1086,8 @@ contains
                 dm_ao(:, :, i) = matmul(s_inv_sqrt, matmul(dm_oao(:, :, i), s_inv_sqrt))
             end do
             allocate(oao)
-            call setup_settings(oao%settings)
-            call arm_host_context(oao%settings)
+            call setup_settings(oao%settings, context)
+            call arm_host_context(oao%settings, context)
             oao%n_ao = n_ao
             oao%n_particle = n_particle
             oao%n_param = n_param
@@ -1218,7 +1224,7 @@ contains
             end if
             kappa = 0.1_rp
             call oao%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(oao, 1_ip))
             if (error == 0) then
                 write(stderr, *) "test_update_orbs_oao failed: Error of the "// &
                     "density matrix evaluating function not passed on for the "// &
@@ -1270,7 +1276,7 @@ contains
             oao%evaluate_dm_cs => null()
             oao%evaluate_dm_os => null()
             call oao%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(oao, 1_ip))
             if (error == 0) then
                 write(stderr, *) "test_update_orbs_oao failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
@@ -1279,7 +1285,7 @@ contains
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("update_orbs_oao")) &
+            if (.not. host_context_reached("update_orbs_oao", context)) &
                 test_update_orbs_oao = .false.
 
             ! deallocate OAO object and case arrays
@@ -1305,7 +1311,7 @@ contains
             ! call routine and determine if it produces an error and if the density
             ! matrix evaluating function was called the expected number of times
             call oao%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 no_context)
+                                 level_context(oao, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_update_orbs_oao failed: Produced error for "// &
                     stage//" for the "//case_name//" case."
@@ -1327,18 +1333,19 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the OAO basis
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
-            identity_matrix, generate_random_density_matrix, &
+            level_context, identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_requests, mock_response_factor, &
             mock_get_response_cs, mock_get_response_os, mock_get_stale_response_os, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
 
-        type(oao_type) :: oao
+        type(test_context_type), target :: context
+        type(oao_type), target :: oao
         integer(ip) :: n_particle, n_param
         real(rp), target :: dm_oao(n_ao, n_ao, n_particle_ref)
         real(rp) :: fock_oo(n_ao, n_ao, n_particle_ref), &
@@ -1364,8 +1371,8 @@ contains
         s_inv_sqrt = identity_matrix(n_ao) + 0.1_rp * generate_random_symm_matrix(n_ao)
 
         ! set up the OAO object
-        call setup_settings(oao%settings)
-        call arm_host_context(oao%settings)
+        call setup_settings(oao%settings, context)
+        call arm_host_context(oao%settings, context)
         oao%n_ao = n_ao
         oao%dm_oao = dm_oao
         oao%fock_oo = fock_oo
@@ -1408,7 +1415,7 @@ contains
 
             ! call routine and determine if values of resulting Hessian linear
             ! transformation match
-            call oao%hess_x(x, hess_x, error, no_context)
+            call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_oao failed: Produced error for the "// &
                     case_name//" case."
@@ -1431,7 +1438,7 @@ contains
         oao%get_response_os => mock_get_stale_response_os
         oao%response_stale = .true.
         mock_requests = [integer(ip) :: ]
-        call oao%hess_x(x, hess_x, error, no_context)
+        call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_hess_x_oao failed: Produced error while "// &
                 "refreshing a stale response."
@@ -1459,13 +1466,13 @@ contains
         end if
 
         ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("hess_x_oao")) test_hess_x_oao = .false.
+        if (.not. host_context_reached("hess_x_oao", context)) test_hess_x_oao = .false.
 
         ! call routine without a density matrix evaluating function and determine if
         ! the error of its check is returned
         oao%evaluate_dm_cs => null()
         oao%evaluate_dm_os => null()
-        call oao%hess_x(x, hess_x, error, no_context)
+        call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
         if (error == 0) then
             write(stderr, *) "test_hess_x_oao failed: No error returned without a "// &
                 "density matrix evaluating function."
@@ -1480,14 +1487,14 @@ contains
         ! occupied-occupied and virtual-virtual rotations from a vector, retaining only
         ! its occupied-virtual and virtual-occupied contributions
         !
-        use test_reference, only: no_context
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
-        use otr_common_unit_tests, only: generate_random_density_matrix
+        use otr_common_unit_tests, only: level_context, generate_random_density_matrix
 
-        type(oao_type) :: oao
+        type(test_context_type), target :: context
+        type(oao_type), target :: oao
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), vector(n_param), expected(n_param)
         integer(ip) :: error
 
@@ -1500,7 +1507,7 @@ contains
         call random_number(vector)
 
         ! set up the OAO object
-        call setup_settings(oao%settings)
+        call setup_settings(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%dm_oao = dm_oao
@@ -1510,7 +1517,7 @@ contains
             ref_unpack_asymm(vector, n_particle, n_ao), dm_oao), n_param)
 
         ! call routine and determine if values of resulting vector match
-        call oao%project(vector, error, no_context)
+        call oao%project(vector, error, level_context(oao, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_project_oao failed: Produced error."
             test_project_oao = .false.
@@ -1561,8 +1568,9 @@ contains
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, generate_random_symm_matrix
         use otr_oao, only: oao_type, oao_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_ao = 2, n_particle = 1, n_occ = 1
         real(rp), parameter :: angle = 0.3_rp
 
@@ -1578,7 +1586,7 @@ contains
         test_rotate_orbitals_oao = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! set up the OAO object with a random transformation to the AO basis
         dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_occ)
@@ -1739,10 +1747,11 @@ contains
         ! Hessian and caches the result if the static part has changed
         !
         use otr_oao, only: oao_type, oao_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_test_reference, only: n_ao, n_particle
         use otr_common_unit_tests, only: generate_random_symm_matrix
 
+        type(test_context_type), target :: context
         type(oao_type) :: oao
         type(oao_settings_type) :: settings
         real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
@@ -1754,7 +1763,7 @@ contains
         test_refresh_hess_eigen_oao = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! generate random Fock matrix contributions
         do j = 1, n_particle
@@ -1881,14 +1890,15 @@ contains
         ! trial vectors, for the closed-shell and the open-shell case
         !
         use otr_oao, only: oao_type
-        use test_reference, only: no_context
-        use opentrustregion_unit_tests, only: setup_settings
-        use otr_common_unit_tests, only: generate_random_orthogonal_matrix, &
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use otr_common_unit_tests, only: level_context, &
+                                         generate_random_orthogonal_matrix, &
                                          generate_random_symm_matrix
         use otr_common_test_reference, only: n_particle_ref => n_particle, shell_names
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_ao = 3
-        type(oao_type) :: oao
+        type(oao_type), target :: oao
         integer(ip) :: n_particle, n_param, n_extra, i, k, error
         integer(ip), allocatable :: ref_idx(:), n_occ(:)
         real(rp), allocatable :: eigvals(:, :), eigvecs(:, :, :), dm_oao(:, :, :), &
@@ -1899,7 +1909,7 @@ contains
         test_get_extra_trial_vectors_oao = .true.
 
         ! setup settings object
-        call setup_settings(oao%settings)
+        call setup_settings(oao%settings, context)
 
         ! loop over the closed-shell and the open-shell case
         do n_particle = 1, n_particle_ref
@@ -1953,7 +1963,8 @@ contains
             ! unit vectors at the expected packed indices ordered by increasing
             ! eigenvalue sum, are returned and the trailing slot vanishes
             allocate(trial_vectors(n_param, n_extra), unit_vector(n_param))
-            call oao%get_extra_trial_vectors(trial_vectors, error, no_context)
+            call oao%get_extra_trial_vectors(trial_vectors, error, &
+                                             level_context(oao, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_get_extra_trial_vectors_oao failed: "// &
                     "Produced error for the "//case_name//" case."
@@ -1986,7 +1997,8 @@ contains
                 oao%fock_vv(:, :, k) = generate_random_symm_matrix(n_ao)
             end do
             oao%hess_eigen_stale = .true.
-            call oao%get_extra_trial_vectors(trial_vectors, error, no_context)
+            call oao%get_extra_trial_vectors(trial_vectors, error, &
+                                             level_context(oao, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_get_extra_trial_vectors_oao failed: "// &
                     "Produced error for a stale eigendecomposition for the "// &
@@ -2012,8 +2024,9 @@ contains
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, generate_random_symm_matrix
         use otr_oao, only: rotate_dm_ao, oao_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_ao = 2, n_particle = 1, n_occ = 1
         real(rp), parameter :: angle = 0.3_rp
 
@@ -2029,7 +2042,7 @@ contains
         test_rotate_dm_ao = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! set up a density matrix and a random transformation to the AO basis
         dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_occ)

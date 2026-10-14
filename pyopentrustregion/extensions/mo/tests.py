@@ -17,10 +17,11 @@ from ctypes import (
 )
 from unittest.mock import patch
 
+import numpy as np
+
 from pyopentrustregion.tests import (
     lib,
     n_param,
-    NUMPY_AVAILABLE,
     add_tests,
     print_separator,
     LegacyPyInterfaceHelpers,
@@ -42,10 +43,6 @@ from pyopentrustregion.extensions.common.tests import (
     release_mock_extension,
 )
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory
-
-if NUMPY_AVAILABLE:
-    import numpy as np
-
 
 # define all tests in alphabetical order
 fortran_tests = {
@@ -125,7 +122,6 @@ class MOCInterfaceTests(unittest.TestCase):
         return super().setUpClass()
 
 
-@unittest.skipUnless(NUMPY_AVAILABLE, "NumPy not available.")
 class MOPyInterfaceTests(unittest.TestCase):
     """
     this class contains unit tests for the Python interface

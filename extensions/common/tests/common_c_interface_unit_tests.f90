@@ -373,7 +373,7 @@ contains
         !
         use c_interface, only: c_callbacks_type
         use otr_common_c_interface, only: bundle_settings_c
-        use otr_common_mock, only: mock_logger_c
+        use c_interface_unit_tests, only: mock_logger
         use test_reference, only: host_context
 
         type(c_callbacks_type) :: callbacks
@@ -392,11 +392,11 @@ contains
         ! those with a logging function a logging function
         do i_case = 1, size(case_names)
             callbacks = c_callbacks_type()
-            logger_c_funptr = c_funloc(mock_logger_c)
+            logger_c_funptr = c_funloc(mock_logger)
             if (i_case == 2) logger_c_funptr = c_null_funptr
             call bundle_settings_c(callbacks, logical(i_case /= 3, kind=c_bool), &
                                    logger_c_funptr, c_loc(host_context))
-            if ((associated(callbacks%logger, mock_logger_c) .neqv. i_case == 1) .or. &
+            if ((associated(callbacks%logger, mock_logger) .neqv. i_case == 1) .or. &
                 (c_associated(callbacks%host_context, c_loc(host_context)) .neqv. &
                  i_case /= 3)) then
                 write(stderr, *) "test_bundle_settings_c failed: Logging function "// &
@@ -417,13 +417,12 @@ contains
                                               setup_error_logging
         use c_interface, only: solver_settings_type_c
         use c_interface_unit_tests, only: &
-            mock_update_orbs, mock_obj_func, mock_stability_precond, &
+            mock_logger, mock_update_orbs, mock_obj_func, mock_stability_precond, &
             mock_stability_project, mock_stability_logger, &
             mock_stability_get_extra_trial_vectors, mock_approx_hess_x, &
             mock_conv_check_stability
         use otr_common, only: orbital_settings_type
         use otr_common_c_interface, only: extension_holder_type, setup_extension_holder
-        use otr_common_mock, only: mock_logger_c
         use otr_common_unit_tests, only: mock_extension_type
         use c_interface, only: c_callbacks_type
         use test_reference, only: host_context_type, get_reference_solver_values, &
@@ -452,7 +451,7 @@ contains
         test_setup_extension_holder = .true.
 
         ! set up the settings of the extension
-        call setup_settings(settings)
+        call setup_settings(settings, log_context)
 
         ! set up the holder with C solver settings whose nested settings provide
         ! nothing or a single context or callback function of their own, and with a
@@ -465,7 +464,7 @@ contains
             call get_reference_solver_values(settings_c)
             call unset_callbacks(settings_c%stability_settings)
             settings_c%stability_settings%context = c_null_ptr
-            settings_c%logger = c_funloc(mock_logger_c)
+            settings_c%logger = c_funloc(mock_logger)
             settings_c%context = c_loc(host_context)
             associate (nested_c => settings_c%stability_settings)
                 select case (i_case)

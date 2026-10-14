@@ -26,14 +26,7 @@ from ctypes import (
 from unittest.mock import patch
 from pathlib import Path
 
-# check if numpy is available, which the extension tests still import
-try:
-    import numpy as np
-
-    NUMPY_AVAILABLE = True
-except:
-    NUMPY_AVAILABLE = False
-
+import numpy as np
 
 # check if pyopentrustregion is installed or import module in same directory
 try:

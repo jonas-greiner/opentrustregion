@@ -902,9 +902,10 @@ contains
     function level_context(extension, i_level) result(context)
         !
         ! this function returns the level of the solver (1) or of the stability check
-        ! (2) of a mock extension as the context a callback function receives
+        ! (2) of an extension object as the context a callback function receives, which
+        ! production hands to the type-bound procedures of the object's roles
         !
-        type(mock_extension_type), intent(in), target :: extension
+        class(extension_type), intent(in), target :: extension
         integer(ip), intent(in) :: i_level
         class(*), pointer :: context
 
@@ -1135,7 +1136,7 @@ contains
 
         ! set up the settings of the extension and the host's orbital update and
         ! objective function
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         update_orbs_funptr => mock_update_orbs
         obj_func_funptr => mock_obj_func
 
@@ -1525,7 +1526,7 @@ contains
         test_wire_extension_solver_settings = .true.
 
         ! set up the settings of the objects and initialized solver settings
-        call setup_settings(settings)
+        call setup_settings(settings, log_context)
         allocate(solver_settings)
         solver_settings%solver_settings_type = default_solver_settings
 
@@ -2796,7 +2797,7 @@ contains
 
         ! set up the mock orbital basis with only error messages passed to the logging
         ! function
-        call setup_settings(basis%settings)
+        call setup_settings(basis%settings, log_context)
         call setup_error_logging(basis%settings, log_context)
 
         ! check orbital bases with the density matrix evaluating function of either
@@ -2840,10 +2841,11 @@ contains
         ! this function tests the subroutine which rebuilds the response callbacks at
         ! the currently stored density matrix of an orbital basis
         !
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, shell_names
         use test_reference, only: arm_host_context, host_context_reached
 
+        type(test_context_type), target :: context
         type(mock_orbital_basis_type) :: basis
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         integer(ip) :: i, i_shell, error
@@ -2854,8 +2856,8 @@ contains
         test_refresh_response_orbital_basis = .true.
 
         ! set up the mock orbital basis and a density matrix for every particle channel
-        call setup_settings(basis%settings)
-        call arm_host_context(basis%settings)
+        call setup_settings(basis%settings, context)
+        call arm_host_context(basis%settings, context)
         basis%n_ao = n_ao
         do i = 1, n_particle
             dm_ao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
@@ -2924,7 +2926,7 @@ contains
         end do
 
         ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("refresh_response_orbital_basis")) &
+        if (.not. host_context_reached("refresh_response_orbital_basis", context)) &
             test_refresh_response_orbital_basis = .false.
 
         ! call routine with a failing density matrix evaluating function and determine
@@ -2952,10 +2954,11 @@ contains
         ! Hessian of an orbital basis
         !
         use opentrustregion, only: precond_floor
-        use opentrustregion_unit_tests, only: setup_settings
-        use test_reference, only: n_param, no_context
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use test_reference, only: n_param
 
-        type(mock_orbital_basis_type) :: basis
+        type(test_context_type), target :: context
+        type(mock_orbital_basis_type), target :: basis
         real(rp) :: residual(n_param), precond_residual(n_param), divisors(n_param), &
                     expected(n_param), mu
         integer(ip) :: error
@@ -2966,7 +2969,7 @@ contains
         ! set up the mock orbital basis with a stale eigendecomposition and settings,
         ! and a random residual and level shift
         call setup_mock_orbital_basis(basis, n_param)
-        call setup_settings(basis%settings)
+        call setup_settings(basis%settings, context)
         call random_number(residual)
         mu = 0.3_rp
 
@@ -2979,7 +2982,8 @@ contains
 
         ! call routine and determine if values of the preconditioned residual match,
         ! which requires the eigendecomposition to be refreshed
-        call basis%precond(residual, mu, precond_residual, error, no_context)
+        call basis%precond(residual, mu, precond_residual, error, &
+                           level_context(basis, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_precond_orbital_basis failed: Produced error."
             test_precond_orbital_basis = .false.
@@ -2999,10 +3003,11 @@ contains
         ! Hessian of an orbital basis
         !
         use opentrustregion, only: precond_floor, precond_rel_floor_factor
-        use opentrustregion_unit_tests, only: setup_settings
-        use test_reference, only: n_param, no_context
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use test_reference, only: n_param
 
-        type(mock_orbital_basis_type) :: basis
+        type(test_context_type), target :: context
+        type(mock_orbital_basis_type), target :: basis
         real(rp) :: residual(n_param), precond_residual(n_param), divisors(n_param), &
                     expected(n_param), floor_val
         integer(ip) :: error
@@ -3013,7 +3018,7 @@ contains
         ! set up the mock orbital basis with a stale eigendecomposition and settings,
         ! and a random residual
         call setup_mock_orbital_basis(basis, n_param)
-        call setup_settings(basis%settings)
+        call setup_settings(basis%settings, context)
         call random_number(residual)
 
         ! construct the expected preconditioned residual from the eigenvalue pairs of
@@ -3026,7 +3031,8 @@ contains
 
         ! call routine and determine if values of the preconditioned residual match,
         ! which requires the eigendecomposition to be refreshed
-        call basis%precond_pd(residual, precond_residual, error, no_context)
+        call basis%precond_pd(residual, precond_residual, error, &
+                              level_context(basis, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_precond_pd_orbital_basis failed: Produced error."
             test_precond_pd_orbital_basis = .false.
@@ -3086,8 +3092,9 @@ contains
         !
         use otr_common, only: matrix_exponential
         use opentrustregion, only: solver_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n = 2
         real(rp), parameter :: angle = 0.3_rp
 
@@ -3100,7 +3107,7 @@ contains
         test_matrix_exponential = .true.
 
         ! set up the settings the routine logs through
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! initialize antisymmetric matrix, whose exponential is the corresponding
         ! rotation matrix
@@ -3149,8 +3156,9 @@ contains
         !
         use otr_common, only: compute_sqrt_and_inv_sqrt
         use opentrustregion, only: solver_settings_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n = 3
 
         real(rp) :: a(n, n)
@@ -3162,7 +3170,7 @@ contains
         test_compute_sqrt_and_inv_sqrt = .true.
 
         ! set up the settings the routine logs through
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! initialize a random symmetric positive definite matrix
         call random_number(a)

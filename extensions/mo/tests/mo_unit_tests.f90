@@ -661,11 +661,12 @@ contains
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
                               obj_func_callback
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ
         use otr_common_unit_tests, only: mock_evaluate_dm_cs, wired_level
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_particle = 1
 
         real(rp), target :: mo_coeff(n_ao, n_mo)
@@ -683,7 +684,7 @@ contains
         test_mo_factory_cs = .true.
 
         ! setup settings objects
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         solver_settings%solver_settings_type = default_solver_settings
 
         ! initialize random orthonormal MO coefficients
@@ -787,11 +788,12 @@ contains
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
                               obj_func_callback
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
         use otr_common_unit_tests, only: mock_evaluate_dm_os, wired_level
 
+        type(test_context_type), target :: context
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
         integer(ip) :: i_sym, error
@@ -807,7 +809,7 @@ contains
         test_mo_factory_os = .true.
 
         ! setup settings objects
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         solver_settings%solver_settings_type = default_solver_settings
 
         ! initialize random orthonormal MO coefficients
@@ -1066,7 +1068,7 @@ contains
         ! settings untouched
         allocate(solver_settings)
         solver_settings%solver_settings_type = default_solver_settings
-        call setup_settings(settings)
+        call setup_settings(settings, context)
         evaluate_dm_cs_funptr => mock_evaluate_dm_cs
         evaluate_dm_os_funptr => null()
         call mo_factory_common(mo_coeff(:, :, :1), ao_overlap, n_occ(:1), 1_ip, n_ao, &
@@ -1412,15 +1414,16 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! MO basis
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
-        use otr_common_unit_tests, only: mock_requests, mock_evaluate_dm_cs, &
-                                         mock_evaluate_dm_os
+        use otr_common_unit_tests, only: level_context, mock_requests, &
+                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
 
+        type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao), &
@@ -1444,8 +1447,8 @@ contains
             ! set up the MO object
             call setup_mo_object(mo, mo_coeff(:, :, :n_particle), ao_overlap, &
                                  n_occ(:n_particle))
-            call setup_settings(mo%settings)
-            call arm_host_context(mo%settings)
+            call setup_settings(mo%settings, context)
+            call arm_host_context(mo%settings, context)
             if (n_particle == 1) then
                 mo%evaluate_dm_cs => mock_evaluate_dm_cs
             else
@@ -1458,7 +1461,7 @@ contains
             ! the current density matrix
             kappa = 0.0_rp
             mock_requests = [integer(ip) :: ]
-            energy = mo%obj_func(kappa, error, no_context)
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_obj_func_mo failed: Produced error without "// &
                     "an orbital rotation for the "//case_name//" case."
@@ -1497,7 +1500,7 @@ contains
             end do
             dm_ao_start = mo%dm_ao
             mock_requests = [integer(ip) :: ]
-            energy = mo%obj_func(kappa, error, no_context)
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_obj_func_mo failed: Produced error for an "// &
                     "orbital rotation for the "//case_name//" case."
@@ -1526,13 +1529,14 @@ contains
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("obj_func_mo")) test_obj_func_mo = .false.
+            if (.not. host_context_reached("obj_func_mo", context)) &
+                test_obj_func_mo = .false.
 
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
             mo%evaluate_dm_cs => null()
             mo%evaluate_dm_os => null()
-            energy = mo%obj_func(kappa, error, no_context)
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
             if (error == 0) then
                 write(stderr, *) "test_obj_func_mo failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
@@ -1552,19 +1556,20 @@ contains
         ! Hessian diagonal evaluation in the MO basis, for the closed-shell and the
         ! open-shell case
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
         use otr_common, only: hess_x_callback
         use opentrustregion, only: hess_x_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
         use otr_common_unit_tests, only: &
-            mock_fock_factor, mock_requests, mock_get_response_cs, &
+            level_context, mock_fock_factor, mock_requests, mock_get_response_cs, &
             mock_get_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os, &
             mock_evaluate_dm_failing_cs, mock_evaluate_dm_failing_os
 
+        type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle_ref)
         real(rp) :: ao_overlap(n_ao, n_ao), fock_mo(n_mo, n_mo), func
@@ -1588,8 +1593,8 @@ contains
             mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
             call setup_mo_object(mo, mo_coeff(:, :, :n_particle), ao_overlap, &
                                  n_occ(:n_particle))
-            call setup_settings(mo%settings)
-            call arm_host_context(mo%settings)
+            call setup_settings(mo%settings, context)
+            call arm_host_context(mo%settings, context)
             allocate(kappa(mo%n_param), grad(mo%n_param), h_diag(mo%n_param))
             if (n_particle == 1) then
                 mo%evaluate_dm_cs => mock_evaluate_dm_cs
@@ -1718,7 +1723,7 @@ contains
             end if
             kappa = 0.1_rp
             call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                no_context)
+                                level_context(mo, 1_ip))
             if (error == 0) then
                 write(stderr, *) "test_update_orbs_mo failed: Error of the density "// &
                     "matrix evaluating function not passed on for the "//case_name// &
@@ -1772,7 +1777,7 @@ contains
             mo%evaluate_dm_cs => null()
             mo%evaluate_dm_os => null()
             call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                no_context)
+                                level_context(mo, 1_ip))
             if (error == 0) then
                 write(stderr, *) "test_update_orbs_mo failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
@@ -1781,7 +1786,7 @@ contains
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("update_orbs_mo")) &
+            if (.not. host_context_reached("update_orbs_mo", context)) &
                 test_update_orbs_mo = .false.
 
             ! deallocate MO object and case arrays
@@ -1807,7 +1812,7 @@ contains
             ! call routine and determine if it produces an error and if the density
             ! matrix evaluating function was called the expected number of times
             call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                no_context)
+                                level_context(mo, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_update_orbs_mo failed: Produced error for "// &
                     stage//" for the "//case_name//" case."
@@ -1829,18 +1834,19 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the MO basis
         !
-        use test_reference, only: no_context, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
         use otr_common_unit_tests, only: &
-            generate_random_symm_matrix, mock_requests, mock_response_factor, &
-            mock_get_response_cs, mock_get_response_os, mock_get_stale_response_os, &
-            mock_evaluate_dm_cs, mock_evaluate_dm_os
+            level_context, generate_random_symm_matrix, mock_requests, &
+            mock_response_factor, mock_get_response_cs, mock_get_response_os, &
+            mock_get_stale_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os
 
+        type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         ! step of the finite difference and its tolerance relative to the second
         ! derivative it approximates
@@ -1873,8 +1879,8 @@ contains
             call setup_mo_object(mo, mo_coeff(:, :, :n_particle), ao_overlap, &
                                  case_n_occ(:n_particle, i_case), &
                                  case_irreps(:, :n_particle, i_case))
-            call setup_settings(mo%settings)
-            call arm_host_context(mo%settings)
+            call setup_settings(mo%settings, context)
+            call arm_host_context(mo%settings, context)
             call setup_random_mo_channels(mo, case_n_occ(:n_particle, i_case), n_mo)
             if (n_particle == 1) then
                 mo%evaluate_dm_cs => mock_evaluate_dm_cs
@@ -1891,7 +1897,7 @@ contains
             call random_number(x)
             expected_hess_x = ref_hess_x_mo( &
                 x, mo%mo_channels, mo_coeff(:, :, :n_particle), mock_response_factor)
-            call mo%hess_x(x, hess_x, error, no_context)
+            call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_mo failed: Produced error for the "// &
                     case_name//" case."
@@ -1904,7 +1910,8 @@ contains
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("hess_x_mo")) test_hess_x_mo = .false.
+            if (.not. host_context_reached("hess_x_mo", context)) &
+                test_hess_x_mo = .false.
 
             deallocate(mo, x, hess_x)
         end do
@@ -1915,7 +1922,7 @@ contains
         ! determine if this triggers the density matrix evaluating function to refresh
         ! the response, which is then used
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
-        call setup_settings(mo%settings)
+        call setup_settings(mo%settings, context)
         call setup_random_mo_channels(mo, n_occ, n_mo)
         mo%evaluate_dm_os => mock_evaluate_dm_os
         mo%get_response_os => mock_get_stale_response_os
@@ -1925,7 +1932,7 @@ contains
         expected_hess_x = &
             ref_hess_x_mo(x, mo%mo_channels, mo_coeff, mock_response_factor)
         mock_requests = [integer(ip) :: ]
-        call mo%hess_x(x, hess_x, error, no_context)
+        call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_hess_x_mo failed: Produced error while "// &
                 "refreshing a stale response."
@@ -1953,13 +1960,13 @@ contains
         end if
 
         ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("hess_x_mo")) test_hess_x_mo = .false.
+        if (.not. host_context_reached("hess_x_mo", context)) test_hess_x_mo = .false.
 
         ! call routine without a density matrix evaluating function and determine if
         ! the error of its check is returned
         mo%evaluate_dm_cs => null()
         mo%evaluate_dm_os => null()
-        call mo%hess_x(x, hess_x, error, no_context)
+        call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
         if (error == 0) then
             write(stderr, *) "test_hess_x_mo failed: No error returned without a "// &
                 "density matrix evaluating function."
@@ -1981,7 +1988,7 @@ contains
             model_scale = model_response_scale(n_particle)
             call setup_mo_object(mo, mo_coeff(:, :, :n_particle), ao_overlap, &
                                  n_occ(:n_particle))
-            call setup_settings(mo%settings)
+            call setup_settings(mo%settings, context)
             do i = 1, n_particle
                 fock_mo = ref_mo_transform(mo_coeff(:, :, i), &
                                            model_h + model_scale * mo%dm_ao(:, :, i))
@@ -1999,7 +2006,7 @@ contains
             allocate(x(mo%n_param), hess_x(mo%n_param))
             call random_number(x)
             x = x - 0.5_rp
-            call mo%hess_x(x, hess_x, error, no_context)
+            call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_mo failed: Produced error for the "// &
                     "quadratic model energy for the "//case_name//" case."
@@ -2086,10 +2093,11 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_param_os
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
 
+        type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), expected(n_ao, n_mo, n_particle), &
@@ -2101,7 +2109,7 @@ contains
         test_rotate_orbitals_mo = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! set up the MO object with random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -2289,11 +2297,12 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
         use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
 
+        type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         real(rp), allocatable :: eigvals_before(:)
         integer(ip) :: error, k, n_occ, n_virt, i_case, n_particle
@@ -2304,7 +2313,7 @@ contains
         test_refresh_hess_eigen_mo = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! loop over every occupation case, replace both Fock matrix blocks of every
         ! channel by random ones which also couple orbitals of different irreps, mark
@@ -2497,12 +2506,13 @@ contains
         ! the most negative eigenvalue pairs of the static part of the Hessian for the
         ! MO basis
         !
+        use otr_common_unit_tests, only: level_context
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_occ
-        use opentrustregion_unit_tests, only: setup_settings
-        use test_reference, only: no_context
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n_extra = 3
 
         type(mo_type), allocatable, target :: mo
@@ -2516,7 +2526,7 @@ contains
         ! set orbital energies with exactly two negative pairs in the first channel and
         ! none in the second, so that the last requested vector has to vanish
         call setup_minimal_mo_object(mo, n_occ)
-        call setup_settings(mo%settings)
+        call setup_settings(mo%settings, context)
         mo%mo_channels(1)%occ_eigvals = [-1.0_rp, 2.0_rp]
         mo%mo_channels(1)%virt_eigvals = [0.5_rp, 1.5_rp]
         mo%mo_channels(2)%occ_eigvals = [-3.0_rp]
@@ -2545,7 +2555,7 @@ contains
 
         ! call routine and determine if the trial vectors are correct
         allocate(trial_vectors(mo%n_param, n_extra))
-        call mo%get_extra_trial_vectors(trial_vectors, error, no_context)
+        call mo%get_extra_trial_vectors(trial_vectors, error, level_context(mo, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Produced error."
             test_get_extra_trial_vectors_mo = .false.
@@ -2576,7 +2586,7 @@ contains
             expected(min_idx, ivec) = 1.0_rp
             pairs(min_idx) = huge(1.0_rp)
         end do
-        call mo%get_extra_trial_vectors(trial_vectors, error, no_context)
+        call mo%get_extra_trial_vectors(trial_vectors, error, level_context(mo, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Produced "// &
                 "error for a stale eigendecomposition."
@@ -2631,12 +2641,13 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: rotate_mo_coeff, mo_channel_type
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ_ref => n_occ, &
                                              n_particle_ref => n_particle
 
+        type(test_context_type), target :: context
         real(rp) :: mo_coeff(n_ao, n_mo, n_particle_ref), ao_overlap(n_ao, n_ao), &
                     rot_mo_coeff(n_ao, n_mo, n_particle_ref), &
                     rot_dm_ao(n_ao, n_ao, n_particle_ref), &
@@ -2652,7 +2663,7 @@ contains
         test_rotate_mo_coeff = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! loop over every occupation case
         do i_case = 1, n_cases
@@ -2990,9 +3001,10 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: diagonalize_per_irrep
-        use opentrustregion_unit_tests, only: setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
 
+        type(test_context_type), target :: context
         integer(ip), parameter :: n = 4, n_matrices = 3
         integer(ip), parameter :: matrix_irreps(n, n_matrices) = &
             reshape([0_ip, 0_ip, 0_ip, 0_ip, &
@@ -3013,7 +3025,7 @@ contains
         test_diagonalize_per_irrep = .true.
 
         ! setup settings object
-        call setup_settings(settings)
+        call setup_settings(settings, context)
 
         ! loop over a random matrix of a single irrep, one of two irreps whose blocks
         ! are the same so that every eigenvalue is degenerate between the irreps, and a

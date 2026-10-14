@@ -9,8 +9,6 @@ module otr_common_mock
     use opentrustregion, only: rp, ip, obj_func_type, update_orbs_type, hess_x_type, &
                                precond_type, precond_pd_type, &
                                get_extra_trial_vectors_type
-    use c_interface, only: logger_c_type
-    use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_associated, c_f_pointer
 
     implicit none
 
@@ -22,7 +20,6 @@ module otr_common_mock
     procedure(precond_pd_type), pointer :: mock_precond_pd_ptr => mock_precond_pd
     procedure(get_extra_trial_vectors_type), pointer :: &
         mock_get_extra_trial_vectors_ptr => mock_get_extra_trial_vectors
-    procedure(logger_c_type), pointer :: mock_logger_c_ptr => mock_logger_c
 
     ! name of the mock host callback function called last, so that tests can check to
     ! which host callback function a callback function forwarded
@@ -169,30 +166,5 @@ contains
         error = record_host_call("get_extra_trial_vectors", context)
 
     end subroutine mock_get_extra_trial_vectors
-
-    subroutine mock_logger_c(message_c, context_c) bind(C)
-        !
-        ! this subroutine is a test subroutine for the C logging function, which
-        ! records a call with the test message in the host context
-        !
-        use test_reference, only: host_context_type, check_host_context_c
-
-        character(kind=c_char), intent(in) :: message_c(*)
-        type(c_ptr), intent(in), value :: context_c
-
-        character(len=4) :: message
-        type(host_context_type), pointer :: context
-
-        ! check host context
-        call check_host_context_c(context_c)
-
-        ! record call with test message in host context
-        message = transfer(message_c(1:4), message)
-        if (message == "test" .and. c_associated(context_c)) then
-            call c_f_pointer(context_c, context)
-            context%logger_called = .true.
-        end if
-
-    end subroutine mock_logger_c
 
 end module otr_common_mock

@@ -2129,22 +2129,20 @@ contains
     subroutine setup_settings(settings, context)
         !
         ! this subroutine sets up a settings object for tests, which hands the test
-        ! context, if given, to the mock callback functions
+        ! context to the mock callback functions
         !
         use opentrustregion, only: settings_type, verbosity_info
 
         class(settings_type), intent(inout) :: settings
-        class(test_context_type), intent(inout), target, optional :: context
+        class(test_context_type), intent(inout), target :: context
 
         integer(ip) :: error
 
         call settings%init(error)
         settings%verbose = verbosity_info
         settings%logger => logger
-        if (present(context)) then
-            settings%context => context
-            context%log_message = ""
-        end if
+        settings%context => context
+        context%log_message = ""
 
     end subroutine setup_settings
 

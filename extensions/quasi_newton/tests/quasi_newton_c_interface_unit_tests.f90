@@ -73,8 +73,7 @@ contains
                                test_passed_mock_qn_factory => test_passed
         use otr_qn_test_reference, only: assignment(=), ref_qn_settings
         use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
-        use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func
-        use otr_common_mock, only: mock_logger_c
+        use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func, mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(c_funptr) :: update_orbs_qn_c_funptr, obj_func_qn_c_funptr
@@ -97,7 +96,7 @@ contains
 
         ! associate optional settings with values
         settings = ref_qn_settings
-        settings%logger = c_funloc(mock_logger_c)
+        settings%logger = c_funloc(mock_logger)
 
         ! arm the host context of the settings, which the logging, transport and
         ! initial Hessian functions receive, and of the solver settings, which the
@@ -280,8 +279,8 @@ contains
         ! call the factory with a mock factory which produces an error, which has to be
         ! returned without functions, an extension or writing back the solver settings
         solver_settings_c = default_solver_settings
-        update_orbs_qn_c_funptr = c_funloc(mock_logger_c)
-        obj_func_qn_c_funptr = c_funloc(mock_logger_c)
+        update_orbs_qn_c_funptr = c_funloc(mock_update_orbs)
+        obj_func_qn_c_funptr = c_funloc(mock_obj_func)
         mock_qn_factory_error = 1
         error_c = qn_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
@@ -435,7 +434,7 @@ contains
         use otr_qn, only: qn_settings_type
         use otr_qn_test_reference, only: assignment(=), ref_qn_settings, operator(/=)
         use c_interface, only: c_callbacks_type
-        use otr_common_mock, only: mock_logger_c
+        use c_interface_unit_tests, only: mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(qn_settings_type_c) :: settings_c
@@ -447,12 +446,12 @@ contains
 
         ! initialize the C settings with custom values
         settings_c = ref_qn_settings
-        settings_c%logger = c_funloc(mock_logger_c)
+        settings_c%logger = c_funloc(mock_logger)
 
         ! convert to Fortran settings and hand them the C logging function in a bundle
         ! through context, as the factory does
         settings = settings_c
-        callbacks%logger => mock_logger_c
+        callbacks%logger => mock_logger
         settings%context => callbacks
 
         ! check logging function

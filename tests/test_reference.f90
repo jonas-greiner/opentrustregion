@@ -111,10 +111,6 @@ module test_reference
     type(solver_state_type_c), target :: armed_state_c
     logical :: state_armed = .false., state_not_copied = .false.
 
-    ! the extension tests call callback functions that ignore the host context without
-    ! one
-    class(*), pointer :: no_context => null()
-
     ! checks and operations on all callback functions of settings and callback bundles,
     ! so that a new callback function only needs to be added here
     interface same_callbacks
