@@ -7,7 +7,7 @@
 import gc
 import unittest
 import weakref
-from ctypes import c_bool
+from ctypes import c_bool, c_size_t
 from unittest.mock import patch
 
 import numpy as np
@@ -28,6 +28,7 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
+    check_settings_layout,
     n_ao,
     setup_wired_solver_settings,
     check_wired_solver_settings,
@@ -42,7 +43,7 @@ from pyopentrustregion.extensions.mo import MOSettings, mo_factory
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "mo_c_system_tests": ["mo_settings_init"],
+    "mo_c_integration_tests": ["mo_settings_init", "mo_settings_layout"],
     "mo_tests": [
         "calculate_grad_h_diag_mo",
         "count_mo_params",
@@ -685,14 +686,46 @@ class MOPyInterfaceTests(unittest.TestCase):
 
 
 @add_tests
-class MOCSystemTests(unittest.TestCase):
+class MOCIntegrationTests(unittest.TestCase):
     """
-    this class contains system tests for the MO C interface
+    this class contains integration tests that drive the real library through the
+    MO C header
     """
 
-    tests = fortran_tests["mo_c_system_tests"]
+    tests = fortran_tests["mo_c_integration_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running system tests for MO C interface...")
+        print_separator("Running integration tests for MO C interface...")
         return super().setUpClass()
+
+
+class MOPyIntegrationTests(unittest.TestCase):
+    """
+    this class contains integration tests that drive the real library (not the mock
+    library) through the MO Python interface
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running integration tests for MO Python interface...")
+        return super().setUpClass()
+
+    def test_mo_settings_layout(self):
+        """
+        this function checks that the Python MO settings structure has the size of
+        the bind(C) settings type and that every field is read back under its own name
+        from settings whose fields Fortran sets one by one to the reference values
+        """
+        lib.mo_settings_size.restype = c_size_t
+        self.assertTrue(
+            check_settings_layout(
+                "test_mo_settings_layout",
+                MOSettings,
+                lib.get_reference_mo_values,
+                lib.reference_mo_field,
+                lib.mo_settings_size(),
+            ),
+            "test_mo_settings_layout failed",
+        )
+        print(" test_mo_settings_layout PASSED")

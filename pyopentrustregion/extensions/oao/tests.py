@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_bool
+from ctypes import c_bool, c_size_t
 from unittest.mock import patch
 
 import numpy as np
@@ -24,6 +24,7 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
+    check_settings_layout,
     n_ao,
     setup_wired_solver_settings,
     check_wired_solver_settings,
@@ -39,7 +40,7 @@ from pyopentrustregion.extensions.oao import OAOSettings, oao_factory
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "oao_c_system_tests": ["oao_settings_init"],
+    "oao_c_integration_tests": ["oao_settings_init", "oao_settings_layout"],
     "oao_tests": [
         "calculate_grad_h_diag_oao",
         "get_extra_trial_vectors_oao",
@@ -491,14 +492,46 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
 
 @add_tests
-class OAOCSystemTests(unittest.TestCase):
+class OAOCIntegrationTests(unittest.TestCase):
     """
-    this class contains system tests for the OAO C interface
+    this class contains integration tests that drive the real library through the
+    OAO C header
     """
 
-    tests = fortran_tests["oao_c_system_tests"]
+    tests = fortran_tests["oao_c_integration_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running system tests for OAO C interface...")
+        print_separator("Running integration tests for OAO C interface...")
         return super().setUpClass()
+
+
+class OAOPyIntegrationTests(unittest.TestCase):
+    """
+    this class contains integration tests that drive the real library (not the mock
+    library) through the OAO Python interface
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running integration tests for OAO Python interface...")
+        return super().setUpClass()
+
+    def test_oao_settings_layout(self):
+        """
+        this function checks that the Python OAO settings structure has the size of
+        the bind(C) settings type and that every field is read back under its own name
+        from settings whose fields Fortran sets one by one to the reference values
+        """
+        lib.oao_settings_size.restype = c_size_t
+        self.assertTrue(
+            check_settings_layout(
+                "test_oao_settings_layout",
+                OAOSettings,
+                lib.get_reference_oao_values,
+                lib.reference_oao_field,
+                lib.oao_settings_size(),
+            ),
+            "test_oao_settings_layout failed",
+        )
+        print(" test_oao_settings_layout PASSED")

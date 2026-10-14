@@ -10,8 +10,9 @@ module otr_oao_test_reference
     use c_interface, only: c_ip, c_rp
     use otr_oao, only: oao_settings_type
     use otr_common_test_reference, only: n_particle, n_ao, ref_orbital_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_intptr_t, c_null_char, &
-                                           c_null_funptr, c_null_ptr, c_associated
+    use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_char, &
+                                           c_intptr_t, c_null_char, c_null_funptr, &
+                                           c_null_ptr, c_associated
 
     implicit none
 
@@ -104,6 +105,19 @@ contains
                                   .not. c_associated(settings_c%context)
 
     end function is_default_oao_settings
+
+    integer(c_size_t) function oao_settings_size() bind(C)
+        !
+        ! this function returns the size of the C OAO settings, so that the layout
+        ! tests detect a field missing from the C or Python settings
+        !
+        use otr_oao_c_interface, only: oao_settings_type_c
+
+        type(oao_settings_type_c) :: settings_c
+
+        oao_settings_size = c_sizeof(settings_c)
+
+    end function oao_settings_size
 
     logical function equal_oao(lhs, rhs)
         !

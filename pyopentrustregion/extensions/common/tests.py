@@ -7,7 +7,7 @@
 import functools
 import gc
 import unittest
-from ctypes import POINTER, Array, addressof, byref, c_bool, c_void_p
+from ctypes import POINTER, Array, addressof, byref, c_bool, c_void_p, sizeof
 from unittest.mock import patch
 
 import numpy as np
@@ -352,6 +352,35 @@ def settings_hold_reference(test_name, settings, lookup):
             match = value == ref_value
         if not match:
             print(f" {test_name} failed: Field {field_name} not initialized correctly.")
+            test_passed = False
+    return test_passed
+
+
+def check_settings_layout(test_name, settings, export, lookup, size):
+    """
+    this function checks that the ctypes structure of the settings of an extension has
+    the size of the bind(C) settings type and that every field is read back under its
+    own name from C settings whose fields Fortran sets one by one to the reference
+    values, compared against the value the lookup function returns for the field's
+    name, so that a stray field is caught as well as a misplaced one
+    """
+    if sizeof(settings.c_struct) != size:
+        print(
+            f" {test_name} failed: Size of {settings.__name__} structure differs from "
+            "the library's."
+        )
+        return False
+    settings_c = settings.c_struct()
+    export(byref(settings_c))
+    test_passed = True
+    for name, field_type in settings.c_struct._fields_:
+        value = getattr(settings_c, name)
+        if field_type == c_void_p:
+            value = value or 0
+        elif issubclass(field_type, Array):
+            value = value.decode()
+        if value != extension_reference(lookup, name, field_type):
+            print(f" {test_name} failed: Field {name} misplaced.")
             test_passed = False
     return test_passed
 

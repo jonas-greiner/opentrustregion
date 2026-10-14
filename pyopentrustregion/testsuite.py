@@ -31,7 +31,8 @@ try:
         MOTests,
         MOCInterfaceTests,
         MOPyInterfaceTests,
-        MOCSystemTests,
+        MOCIntegrationTests,
+        MOPyIntegrationTests,
     )
 except AttributeError:
     pass
@@ -41,7 +42,8 @@ try:
         OAOTests,
         OAOCInterfaceTests,
         OAOPyInterfaceTests,
-        OAOCSystemTests,
+        OAOCIntegrationTests,
+        OAOPyIntegrationTests,
     )
 except AttributeError:
     pass
@@ -51,7 +53,8 @@ try:
         QNTests,
         QNCInterfaceTests,
         QNPyInterfaceTests,
-        QNCSystemTests,
+        QNCIntegrationTests,
+        QNPyIntegrationTests,
     )
 except AttributeError:
     pass
@@ -61,7 +64,8 @@ try:
         ARHTests,
         ARHCInterfaceTests,
         ARHPyInterfaceTests,
-        ARHCSystemTests,
+        ARHCIntegrationTests,
+        ARHPyIntegrationTests,
     )
 except AttributeError:
     pass
@@ -71,7 +75,8 @@ try:
         SGEKTests,
         SGEKCInterfaceTests,
         SGEKPyInterfaceTests,
-        SGEKCSystemTests,
+        SGEKCIntegrationTests,
+        SGEKPyIntegrationTests,
     )
 except AttributeError:
     pass

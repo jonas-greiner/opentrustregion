@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_bool
+from ctypes import c_bool, c_size_t
 from unittest.mock import patch
 
 import numpy as np
@@ -29,6 +29,7 @@ from pyopentrustregion.extensions.common.python_interface import (
     OrbitalOwner,
 )
 from pyopentrustregion.extensions.common.tests import (
+    check_settings_layout,
     n_ao,
     setup_wired_solver_settings,
     check_wired_solver_settings,
@@ -41,7 +42,7 @@ from pyopentrustregion.extensions.common.tests import (
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "arh_c_system_tests": ["arh_settings_init"],
+    "arh_c_integration_tests": ["arh_settings_init", "arh_settings_layout"],
     "arh_tests": [
         "apply_ms_sr1_skip",
         "arh_factory_common",
@@ -409,14 +410,46 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
 
 @add_tests
-class ARHCSystemTests(unittest.TestCase):
+class ARHCIntegrationTests(unittest.TestCase):
     """
-    this class contains system tests for the ARH C interface
+    this class contains integration tests that drive the real library through the
+    ARH C header
     """
 
-    tests = fortran_tests["arh_c_system_tests"]
+    tests = fortran_tests["arh_c_integration_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running system tests for ARH C interface...")
+        print_separator("Running integration tests for ARH C interface...")
         return super().setUpClass()
+
+
+class ARHPyIntegrationTests(unittest.TestCase):
+    """
+    this class contains integration tests that drive the real library (not the mock
+    library) through the ARH Python interface
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running integration tests for ARH Python interface...")
+        return super().setUpClass()
+
+    def test_arh_settings_layout(self):
+        """
+        this function checks that the Python ARH settings structure has the size of
+        the bind(C) settings type and that every field is read back under its own name
+        from settings whose fields Fortran sets one by one to the reference values
+        """
+        lib.arh_settings_size.restype = c_size_t
+        self.assertTrue(
+            check_settings_layout(
+                "test_arh_settings_layout",
+                ARHSettings,
+                lib.get_reference_arh_values,
+                lib.reference_arh_field,
+                lib.arh_settings_size(),
+            ),
+            "test_arh_settings_layout failed",
+        )
+        print(" test_arh_settings_layout PASSED")

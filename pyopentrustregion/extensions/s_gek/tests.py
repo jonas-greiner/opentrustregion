@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_bool
+from ctypes import c_bool, c_size_t
 from unittest.mock import patch
 
 import numpy as np
@@ -26,6 +26,7 @@ from pyopentrustregion.extensions.s_gek import (
     s_gek_factory,
 )
 from pyopentrustregion.extensions.common.tests import (
+    check_settings_layout,
     setup_wired_solver_settings,
     check_wired_solver_settings,
     check_extension_owner,
@@ -37,7 +38,7 @@ from pyopentrustregion.extensions.common.tests import (
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "s_gek_c_system_tests": ["s_gek_settings_init"],
+    "s_gek_c_integration_tests": ["s_gek_settings_init", "s_gek_settings_layout"],
     "s_gek_c_interface_tests": [
         "assign_s_gek_c_f",
         "assign_s_gek_f_c",
@@ -376,14 +377,46 @@ class SGEKPyInterfaceTests(unittest.TestCase):
 
 
 @add_tests
-class SGEKCSystemTests(unittest.TestCase):
+class SGEKCIntegrationTests(unittest.TestCase):
     """
-    this class contains system tests for the S-GEK C interface
+    this class contains integration tests that drive the real library through the
+    S-GEK C header
     """
 
-    tests = fortran_tests["s_gek_c_system_tests"]
+    tests = fortran_tests["s_gek_c_integration_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running system tests for S-GEK C interface...")
+        print_separator("Running integration tests for S-GEK C interface...")
         return super().setUpClass()
+
+
+class SGEKPyIntegrationTests(unittest.TestCase):
+    """
+    this class contains integration tests that drive the real library (not the mock
+    library) through the S-GEK Python interface
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running integration tests for S-GEK Python interface...")
+        return super().setUpClass()
+
+    def test_s_gek_settings_layout(self):
+        """
+        this function checks that the Python S-GEK settings structure has the size of
+        the bind(C) settings type and that every field is read back under its own name
+        from settings whose fields Fortran sets one by one to the reference values
+        """
+        lib.s_gek_settings_size.restype = c_size_t
+        self.assertTrue(
+            check_settings_layout(
+                "test_s_gek_settings_layout",
+                SGEKSettings,
+                lib.get_reference_s_gek_values,
+                lib.reference_s_gek_field,
+                lib.s_gek_settings_size(),
+            ),
+            "test_s_gek_settings_layout failed",
+        )
+        print(" test_s_gek_settings_layout PASSED")

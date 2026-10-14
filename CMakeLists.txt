@@ -336,7 +336,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/mo/tests/mo_c_interface_unit_tests.f90
             extensions/mo/tests/mo_mock.f90
             extensions/mo/tests/mo_c_interface_mock.f90
-            extensions/mo/tests/mo_c_system_tests.c
+            extensions/mo/tests/mo_c_integration_tests.c
         )
     endif()
     if(ENABLE_OAO)
@@ -351,7 +351,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/oao/tests/oao_c_interface_unit_tests.f90
             extensions/oao/tests/oao_mock.f90
             extensions/oao/tests/oao_c_interface_mock.f90
-            extensions/oao/tests/oao_c_system_tests.c
+            extensions/oao/tests/oao_c_integration_tests.c
         )
     endif()
     if(ENABLE_QUASI_NEWTON)
@@ -366,7 +366,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/quasi_newton/tests/quasi_newton_c_interface_unit_tests.f90
             extensions/quasi_newton/tests/quasi_newton_mock.f90
             extensions/quasi_newton/tests/quasi_newton_c_interface_mock.f90
-            extensions/quasi_newton/tests/quasi_newton_c_system_tests.c
+            extensions/quasi_newton/tests/quasi_newton_c_integration_tests.c
         )
     endif()
     if(ENABLE_ARH)
@@ -381,7 +381,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/arh/tests/arh_c_interface_unit_tests.f90
             extensions/arh/tests/arh_mock.f90
             extensions/arh/tests/arh_c_interface_mock.f90
-            extensions/arh/tests/arh_c_system_tests.c
+            extensions/arh/tests/arh_c_integration_tests.c
         )
     endif()
     if(ENABLE_S_GEK)
@@ -396,7 +396,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/s_gek/tests/s_gek_c_interface_unit_tests.f90
             extensions/s_gek/tests/s_gek_mock.f90
             extensions/s_gek/tests/s_gek_c_interface_mock.f90
-            extensions/s_gek/tests/s_gek_c_system_tests.c
+            extensions/s_gek/tests/s_gek_c_integration_tests.c
         )
     endif()
 

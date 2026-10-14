@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_bool
+from ctypes import c_bool, c_size_t
 from unittest.mock import patch
 
 import numpy as np
@@ -26,6 +26,7 @@ from pyopentrustregion.extensions.quasi_newton import (
     qn_factory,
 )
 from pyopentrustregion.extensions.common.tests import (
+    check_settings_layout,
     setup_wired_solver_settings,
     check_wired_solver_settings,
     check_extension_owner,
@@ -37,7 +38,7 @@ from pyopentrustregion.extensions.common.tests import (
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "qn_c_system_tests": ["qn_settings_init"],
+    "qn_c_integration_tests": ["qn_settings_init", "qn_settings_layout"],
     "qn_c_interface_tests": [
         "assign_qn_c_f",
         "assign_qn_f_c",
@@ -401,14 +402,48 @@ class QNPyInterfaceTests(unittest.TestCase):
 
 
 @add_tests
-class QNCSystemTests(unittest.TestCase):
+class QNCIntegrationTests(unittest.TestCase):
     """
-    this class contains system tests for the quasi-Newton C interface
+    this class contains integration tests that drive the real library through the
+    quasi-Newton C header
     """
 
-    tests = fortran_tests["qn_c_system_tests"]
+    tests = fortran_tests["qn_c_integration_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running system tests for quasi-Newton C interface...")
+        print_separator("Running integration tests for quasi-Newton C interface...")
         return super().setUpClass()
+
+
+class QNPyIntegrationTests(unittest.TestCase):
+    """
+    this class contains integration tests that drive the real library (not the mock
+    library) through the quasi-Newton Python interface
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator(
+            "Running integration tests for quasi-Newton Python interface..."
+        )
+        return super().setUpClass()
+
+    def test_qn_settings_layout(self):
+        """
+        this function checks that the Python quasi-Newton settings structure has the size of
+        the bind(C) settings type and that every field is read back under its own name
+        from settings whose fields Fortran sets one by one to the reference values
+        """
+        lib.qn_settings_size.restype = c_size_t
+        self.assertTrue(
+            check_settings_layout(
+                "test_qn_settings_layout",
+                QNSettings,
+                lib.get_reference_qn_values,
+                lib.reference_qn_field,
+                lib.qn_settings_size(),
+            ),
+            "test_qn_settings_layout failed",
+        )
+        print(" test_qn_settings_layout PASSED")

@@ -10,9 +10,9 @@ module otr_qn_test_reference
     use c_interface, only: c_rp, c_ip
     use otr_qn, only: qn_settings_type
     use test_reference, only: n_param, tol, tol_c
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
-                                           c_f_procpointer, c_associated, c_intptr_t, &
-                                           c_null_char, c_null_funptr, c_null_ptr
+    use, intrinsic :: iso_c_binding, only: &
+        c_size_t, c_sizeof, c_bool, c_char, c_ptr, c_funptr, c_f_procpointer, &
+        c_associated, c_intptr_t, c_null_char, c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -339,6 +339,19 @@ contains
                                  .not. c_associated(settings_c%context)
 
     end function is_default_qn_settings
+
+    integer(c_size_t) function qn_settings_size() bind(C)
+        !
+        ! this function returns the size of the C quasi-Newton settings, so that the
+        ! layout tests detect a field missing from the C or Python settings
+        !
+        use otr_qn_c_interface, only: qn_settings_type_c
+
+        type(qn_settings_type_c) :: settings_c
+
+        qn_settings_size = c_sizeof(settings_c)
+
+    end function qn_settings_size
 
     logical function equal_qn(lhs, rhs)
         !

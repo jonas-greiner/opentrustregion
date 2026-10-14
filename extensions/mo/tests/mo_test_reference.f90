@@ -10,8 +10,9 @@ module otr_mo_test_reference
     use c_interface, only: c_ip, c_rp
     use otr_mo, only: mo_settings_type
     use otr_common_test_reference, only: n_particle, n_occ, ref_orbital_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_intptr_t, c_null_char, &
-                                           c_null_funptr, c_null_ptr, c_associated
+    use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_char, &
+                                           c_intptr_t, c_null_char, c_null_funptr, &
+                                           c_null_ptr, c_associated
 
     implicit none
 
@@ -161,6 +162,19 @@ contains
                                  .not. c_associated(settings_c%context)
 
     end function is_default_mo_settings
+
+    integer(c_size_t) function mo_settings_size() bind(C)
+        !
+        ! this function returns the size of the C MO settings, so that the layout
+        ! tests detect a field missing from the C or Python settings
+        !
+        use otr_mo_c_interface, only: mo_settings_type_c
+
+        type(mo_settings_type_c) :: settings_c
+
+        mo_settings_size = c_sizeof(settings_c)
+
+    end function mo_settings_size
 
     logical function equal_mo(lhs, rhs)
         !
