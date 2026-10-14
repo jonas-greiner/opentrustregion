@@ -153,9 +153,9 @@ contains
 
         ! set up the holder with the host's orbital update, objective function and
         ! record of the state and convert the solver settings
-        call setup_extension_holder(holder, solver_settings_c, settings, error, &
-                                    update_orbs_c_funptr, obj_func_c_funptr, &
-                                    solver_state_c)
+        call setup_extension_holder(holder, solver_settings_c, solver_state_c, &
+                                    settings, error, update_orbs_c_funptr, &
+                                    obj_func_c_funptr)
 
         ! the factory wires the solver settings of the holder, which then own the
         ! object, reaches the host's callback functions through the core's wrappers,

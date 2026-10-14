@@ -10,7 +10,7 @@ module otr_common_c_interface_mock
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, obj_func_c_type, &
                            hess_x_c_type, precond_c_type
     use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_funloc, c_loc, &
-                                           c_associated, c_null_ptr
+                                           c_f_pointer, c_associated, c_null_ptr
 
     implicit none
 
@@ -205,15 +205,21 @@ contains
         bind(C, name="mock_release_extension")
         !
         ! this subroutine is a mock routine for the release of an extension, which
-        ! records the extension it received and frees it with the real release
+        ! records the extension it received and frees the holder the mock factory
+        ! allocated
         !
-        use otr_common_c_interface, only: release_extension
+        use otr_common_c_interface, only: extension_holder_type
 
         type(c_ptr), intent(in), value :: extension_c
 
+        type(extension_holder_type), pointer :: holder
+
         released_extension = extension_c
         n_released_extensions = n_released_extensions + 1
-        call release_extension(extension_c)
+        if (c_associated(extension_c)) then
+            call c_f_pointer(extension_c, holder)
+            deallocate(holder)
+        end if
 
     end subroutine mock_release_extension
 

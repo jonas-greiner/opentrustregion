@@ -46,15 +46,24 @@ void init_mo_settings(mo_settings_type *settings);
  * @param n_particle_c                            Number of particles
  * @param n_ao_c                                  Number of AO basis functions
  * @param n_mo_c                                  Number of MOs
- * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback
+ * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback, may
+ *                                                be NULL for an object only ARH builds
+ *                                                on, whose returned functions then
+ *                                                return an error
  * @param update_orbs_mo_c_funptr                 Output: wrapped update_orbs function
  *                                                pointer
  * @param obj_func_mo_c_funptr                    Output: wrapped objective function
  *                                                pointer
+ * @param extension_c                             Output: MO extension, released with
+ *                                                release_extension
  * @param solver_settings_c                       Input/output: solver settings, whose
  *                                                context the returned functions have
  *                                                to be called with
- * @param settings_c                              MO settings
+ * @param solver_state_c                          Solver state the host also passes to
+ *                                                the solver, which has to outlive the
+ *                                                extension
+ * @param settings_c                              MO settings, may be NULL to use the
+ *                                                default settings
  * @param orbsym_c                                Irreps of the MOs of every particle
  *                                                channel (size n_mo * n_particle),
  *                                                or NULL if all MOs belong to the same
@@ -66,14 +75,10 @@ c_int mo_factory(c_real *mo_coeff_c, const c_real *ao_overlap_c, const c_int *n_
                  c_int n_particle_c, c_int n_ao_c, c_int n_mo_c,
                  evaluate_dm_fp evaluate_dm_c_funptr,
                  update_orbs_fp *update_orbs_mo_c_funptr,
-                 obj_func_fp *obj_func_mo_c_funptr,
+                 obj_func_fp *obj_func_mo_c_funptr, void **extension_c,
                  solver_settings_type *solver_settings_c,
-                 const mo_settings_type *settings_c, const c_int *orbsym_c);
-
-/**
- * Fortran-callable MO deconstructor.
- */
-void mo_deconstructor();
+                 solver_state_type *solver_state_c, const mo_settings_type *settings_c,
+                 const c_int *orbsym_c);
 
 #ifdef __cplusplus
 }

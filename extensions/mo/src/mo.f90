@@ -7,10 +7,10 @@
 module otr_mo
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_settings_type
+                               hess_x_type, solver_state_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
                           orbital_basis_type, channel_rows, evaluate_dm_cs_type, &
-                          evaluate_dm_os_type
+                          evaluate_dm_os_type, extension_solver_settings_type
 
     implicit none
 
@@ -59,9 +59,6 @@ module otr_mo
         final :: finalize_mo
     end type
 
-    ! global variables
-    type(mo_type), allocatable, target :: mo_object
-
     ! define module procedures for different spin cases
     interface mo_factory
         module procedure mo_factory_cs, mo_factory_os
@@ -71,159 +68,153 @@ contains
 
     subroutine mo_factory_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
                              evaluate_dm_cs, update_orbs_mo_funptr, &
-                             obj_func_mo_funptr, solver_settings, error, settings, &
-                             orbsym)
+                             obj_func_mo_funptr, solver_settings, solver_state, error, &
+                             settings, orbsym)
         !
         ! this function returns the MO orbital updating function and objective function
-        ! for the closed-shell case and wires the solver settings with the MO object,
-        ! whose preconditioners and extra trial vectors the solver then uses, while the
-        ! projection is left to the caller, since the parameters are non-redundant; the
-        ! MO coefficients are rotated in place, so they have to outlive the
-        ! calculation; if the irreps of the MOs are given, only the occupied-virtual
-        ! rotations between orbitals of the same irrep are parameters
+        ! for the closed-shell case and wires the solver settings with a new MO object,
+        ! which they own, whose preconditioners and extra trial vectors the solver then
+        ! uses, while the projection is left to the caller, since the parameters are
+        ! non-redundant, and which reads the state of the solver from the record the
+        ! host also passes to the solver; the MO coefficients are rotated in place, so
+        ! they have to outlive the calculation; if the irreps of the MOs are given, only
+        ! the occupied-virtual rotations between orbitals of the same irrep are
+        ! parameters; without a density matrix evaluating function, the orbital
+        ! updating function, objective function and Hessian linear transformation of
+        ! the object return an error when called, so that only the ARH factory can
+        ! build on it
         !
-        use otr_common, only: update_orbs_callback, obj_func_callback
-
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ, n_particle, n_ao, n_mo
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_mo_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_mo_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(mo_settings_type), intent(in) :: settings
+        type(mo_settings_type), intent(in), optional :: settings
         integer(ip), intent(in), optional :: orbsym(:)
 
         real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
         integer(ip), allocatable :: orbsym_2d(:, :)
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os
 
-        ! initialize error flag and the returned functions
-        error = 0
-        update_orbs_mo_funptr => null()
-        obj_func_mo_funptr => null()
-
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(mo_object)) then
-            call mo_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
-        end if
-
-        ! call common setup, passing the irreps of the MOs only if they are given
+        ! call common setup with the closed-shell density matrix evaluating function,
+        ! passing the irreps of the MOs only if they are given
         mo_coeff_3d(1:size(mo_coeff, 1), 1:size(mo_coeff, 2), 1:1) => mo_coeff
         if (present(orbsym)) orbsym_2d = reshape(orbsym, [size(orbsym, kind=ip), 1_ip])
-        call mo_factory_common(mo_coeff_3d, ao_overlap, [n_occ], n_particle, n_ao, &
-                               n_mo, error, settings, orbsym_2d)
-        if (error /= 0) return
-        nullify(mo_coeff_3d)
-
-        ! set pointers to functions
-        mo_object%evaluate_dm_cs => evaluate_dm_cs
-        mo_object%evaluate_dm_os => null()
-
-        ! wire the solver settings with the object
-        call mo_object%wire_solver_settings(solver_settings, mo_object%settings, error)
-        if (error /= 0) return
-
-        ! get the orbital updating function and the objective function of the object
-        update_orbs_mo_funptr => update_orbs_callback
-        obj_func_mo_funptr => obj_func_callback
+        evaluate_dm_os => null()
+        call mo_factory_common( &
+            mo_coeff_3d, ao_overlap, [n_occ], n_particle, n_ao, n_mo, evaluate_dm_cs, &
+            evaluate_dm_os, update_orbs_mo_funptr, obj_func_mo_funptr, &
+            solver_settings, solver_state, error, settings, orbsym_2d)
 
     end subroutine mo_factory_cs
 
     subroutine mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
                              evaluate_dm_os, update_orbs_mo_funptr, &
-                             obj_func_mo_funptr, solver_settings, error, settings, &
-                             orbsym)
+                             obj_func_mo_funptr, solver_settings, solver_state, error, &
+                             settings, orbsym)
         !
         ! this function returns the MO orbital updating function and objective function
-        ! for the open-shell case and wires the solver settings with the MO object,
-        ! whose preconditioners and extra trial vectors the solver then uses, while the
-        ! projection is left to the caller, since the parameters are non-redundant; the
-        ! MO coefficients are rotated in place, so they have to outlive the
-        ! calculation; if the irreps of the MOs of every particle channel are given,
-        ! only the occupied-virtual rotations between orbitals of the same irrep are
-        ! parameters
+        ! for the open-shell case and wires the solver settings with a new MO object,
+        ! which they own, whose preconditioners and extra trial vectors the solver then
+        ! uses, while the projection is left to the caller, since the parameters are
+        ! non-redundant, and which reads the state of the solver from the record the
+        ! host also passes to the solver; the MO coefficients are rotated in place, so
+        ! they have to outlive the calculation; if the irreps of the MOs of every
+        ! particle channel are given, only the occupied-virtual rotations between
+        ! orbitals of the same irrep are parameters; without a density matrix
+        ! evaluating function, the orbital updating function, objective function and
+        ! Hessian linear transformation of the object return an error when called, so
+        ! that only the ARH factory can build on it
         !
-        use otr_common, only: update_orbs_callback, obj_func_callback
-
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_mo_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_mo_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(mo_settings_type), intent(in) :: settings
+        type(mo_settings_type), intent(in), optional :: settings
         integer(ip), intent(in), optional :: orbsym(:, :)
+
+        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs
+
+        ! call common setup with the open-shell density matrix evaluating function
+        evaluate_dm_cs => null()
+        call mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                               evaluate_dm_cs, evaluate_dm_os, update_orbs_mo_funptr, &
+                               obj_func_mo_funptr, solver_settings, solver_state, &
+                               error, settings, orbsym)
+
+    end subroutine mo_factory_os
+
+    subroutine mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
+                                 evaluate_dm_cs, evaluate_dm_os, &
+                                 update_orbs_mo_funptr, obj_func_mo_funptr, &
+                                 solver_settings, solver_state, error, settings, orbsym)
+        !
+        ! this subroutine sets up a new MO object with the density matrix evaluating
+        ! function of either shell, if one is given, wires the solver settings with it
+        ! and returns its orbital updating function and objective function
+        !
+        use opentrustregion, only: warn_uninitialized_settings, verbosity_warning
+        use otr_common, only: extension_type, provided_roles_type, &
+                              update_orbs_callback, obj_func_callback, &
+                              evaluate_dm_missing_warning_msg
+
+        real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
+        integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
+        procedure(update_orbs_type), intent(out), pointer :: update_orbs_mo_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_mo_funptr
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
+        integer(ip), intent(out) :: error
+        type(mo_settings_type), intent(in), optional :: settings
+        integer(ip), intent(in), optional :: orbsym(:, :)
+
+        type(mo_settings_type) :: local_settings
+        class(extension_type), allocatable, target :: object
+        integer(ip) :: i, j
+        integer(ip), allocatable :: irreps(:, :)
+        external :: dgemm
 
         ! initialize error flag and the returned functions
         error = 0
         update_orbs_mo_funptr => null()
         obj_func_mo_funptr => null()
 
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(mo_object)) then
-            call mo_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
-        end if
-
-        ! call common setup
-        call mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                               error, settings, orbsym)
-        if (error /= 0) return
-
-        ! set pointers to functions
-        mo_object%evaluate_dm_os => evaluate_dm_os
-        mo_object%evaluate_dm_cs => null()
-
-        ! wire the solver settings with the object
-        call mo_object%wire_solver_settings(solver_settings, mo_object%settings, error)
-        if (error /= 0) return
-
-        ! get the orbital updating function and the objective function of the object
-        update_orbs_mo_funptr => update_orbs_callback
-        obj_func_mo_funptr => obj_func_callback
-
-    end subroutine mo_factory_os
-
-    subroutine mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                                 error, settings, orbsym)
-        !
-        ! this subroutine performs common MO initialization operations
-        !
-        use opentrustregion, only: warn_uninitialized_settings
-        use otr_common, only: provided_roles_type
-
-        real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
-        integer(ip), intent(out) :: error
-        class(orbital_settings_type), intent(in) :: settings
-        integer(ip), intent(in), optional :: orbsym(:, :)
-
-        class(orbital_settings_type), allocatable :: local_settings
-        logical :: reuse
-        integer(ip) :: i, j
-        integer(ip), allocatable :: irreps(:, :)
-        external :: dgemm
-
-        ! work on a copy of the settings, which is initialized if they were not, after
-        ! printing a warning regardless of the verbosity, since the default settings
-        ! would silence it
-        allocate(local_settings, source=settings)
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             mo_settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            if (error /= 0) return
+        ! work on a copy of the given settings, which is initialized if they were not,
+        ! after printing a warning regardless of the verbosity, since the default
+        ! settings would silence it, or, without any, of the default settings
+        if (present(settings)) then
+            local_settings = settings
+            if (.not. local_settings%initialized) then
+                call warn_uninitialized_settings(local_settings, &
+                                                 mo_settings_uninitialized_warning_msg)
+                call local_settings%init(error)
+                if (error /= 0) return
+            end if
+        else
+            local_settings = default_mo_settings
         end if
 
         ! perform sanity check
         call mo_sanity_check(local_settings, shape(mo_coeff, kind=ip), shape( &
             ao_overlap, kind=ip), n_occ, n_particle, n_ao, n_mo, error, orbsym)
         if (error /= 0) return
+
+        ! without a density matrix evaluating function, the roles which need one are
+        ! not available
+        if (.not. (associated(evaluate_dm_cs) .or. associated(evaluate_dm_os))) &
+            call local_settings%log(evaluate_dm_missing_warning_msg, verbosity_warning)
 
         ! irreps of the MOs of every particle channel
         if (present(orbsym)) then
@@ -232,47 +223,31 @@ contains
             allocate(irreps(n_mo, n_particle), source=0_ip)
         end if
 
-        ! allocate object, which performs every role but the projection itself
-        if (.not. allocated(mo_object)) allocate(mo_object)
-        mo_object%provides = provided_roles_type( &
-            update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
-            precond_pd=.true., get_extra_trial_vectors=.true.)
-
-        ! set (potentially new) settings
-        mo_object%settings = local_settings
-
-        ! determine whether the object was already set up for the same dimensions,
-        ! occupations and irreps, which the particle channels indicate, reading them
-        ! only once it was set up at all
-        reuse = allocated(mo_object%mo_channels)
-        if (reuse) reuse = mo_object%n_ao == n_ao .and. mo_object%n_mo == n_mo .and. &
-                           size(mo_object%mo_channels, kind=ip) == n_particle
-        if (reuse) reuse = all(mo_object%mo_channels%n_occ == n_occ)
-        do i = 1, n_particle
-            if (reuse) reuse = allocated(mo_object%mo_channels(i)%irreps)
-            if (reuse) reuse = all(mo_object%mo_channels(i)%irreps == irreps(:, i))
-        end do
-
-        ! set up the object anew otherwise
-        if (.not. reuse) then
-            ! deallocate arrays if they are already allocated
-            if (allocated(mo_object%mo_channels)) deallocate(mo_object%mo_channels)
-            if (associated(mo_object%dm_ao)) deallocate(mo_object%dm_ao)
-            if (allocated(mo_object%grad)) deallocate(mo_object%grad)
-            if (allocated(mo_object%h_diag)) deallocate(mo_object%h_diag)
+        ! set up the object, which performs every role but the projection itself, in
+        ! place, since its finalizer frees the density matrix it allocates, for the MO
+        ! coefficients of the caller, which it points to
+        allocate(mo_type :: object)
+        select type (object)
+        type is (mo_type)
+            object%provides = provided_roles_type( &
+                update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
+                precond_pd=.true., get_extra_trial_vectors=.true.)
+            object%settings = local_settings%orbital_settings_type
+            object%evaluate_dm_cs => evaluate_dm_cs
+            object%evaluate_dm_os => evaluate_dm_os
 
             ! number of atomic orbitals, MOs and particles
-            mo_object%n_ao = n_ao
-            mo_object%n_mo = n_mo
-            mo_object%n_particle = n_particle
+            object%n_ao = n_ao
+            object%n_mo = n_mo
+            object%n_particle = n_particle
 
             ! set occupations and irreps of every particle channel, whose parameters
             ! are the occupied-virtual pairs of the same irrep
-            allocate(mo_object%mo_channels(n_particle))
-            mo_object%mo_channels%n_occ = n_occ
-            mo_object%mo_channels%n_virt = n_mo - n_occ
+            allocate(object%mo_channels(n_particle))
+            object%mo_channels%n_occ = n_occ
+            object%mo_channels%n_virt = n_mo - n_occ
             do i = 1, n_particle
-                associate (channel => mo_object%mo_channels(i))
+                associate (channel => object%mo_channels(i))
                     channel%irreps = irreps(:, i)
                     allocate(channel%param_mask(n_occ(i), n_mo - n_occ(i)))
                     do j = 1, n_mo - n_occ(i)
@@ -283,36 +258,35 @@ contains
             end do
 
             ! number of parameters is the number of these pairs of every channel
-            mo_object%n_param = count_mo_params(n_occ, n_mo, orbsym)
+            object%n_param = count_mo_params(n_occ, n_mo, orbsym)
 
-            ! allocate density matrix
-            allocate(mo_object%dm_ao(n_ao, n_ao, n_particle))
-        end if
+            ! starting MO coefficients, which are rotated in place, and AO overlap
+            ! matrix
+            object%mo_coeff => mo_coeff
+            object%ao_overlap = ao_overlap
 
-        ! starting MO coefficients, which are rotated in place, and AO overlap matrix
-        mo_object%mo_coeff => mo_coeff
-        mo_object%ao_overlap = ao_overlap
+            ! construct the starting density matrix in the AO basis from the occupied
+            ! orbitals
+            allocate(object%dm_ao(n_ao, n_ao, n_particle))
+            do i = 1, n_particle
+                call dgemm("N", "T", n_ao, n_ao, n_occ(i), 1.0_rp, mo_coeff(:, :, i), &
+                           n_ao, mo_coeff(:, :, i), n_ao, 0.0_rp, &
+                           object%dm_ao(:, :, i), n_ao)
+            end do
 
-        ! construct the starting density matrix in the AO basis from the occupied
-        ! orbitals
-        do i = 1, n_particle
-            call dgemm("N", "T", n_ao, n_ao, n_occ(i), 1.0_rp, mo_coeff(:, :, i), &
-                       n_ao, mo_coeff(:, :, i), n_ao, 0.0_rp, &
-                       mo_object%dm_ao(:, :, i), n_ao)
-        end do
+            ! allocate gradient and Hessian diagonal
+            allocate(object%grad(object%n_param), object%h_diag(object%n_param))
+        end select
 
-        ! nothing has been evaluated at the starting orbitals yet, so drop any
-        ! quantities left from a previous calculation
-        mo_object%evaluation_stale = .true.
-        mo_object%response_stale = .true.
-        mo_object%hess_eigen_stale = .true.
-        mo_object%get_response_cs => null()
-        mo_object%get_response_os => null()
+        ! wire the solver settings with the object, which reads the record of the state
+        ! and saves the host's callback functions and host contexts, and let the
+        ! settings own it
+        call solver_settings%wire(object, solver_state, local_settings, error)
+        if (error /= 0) return
 
-        ! allocate gradient and Hessian diagonal
-        if (.not. allocated(mo_object%grad)) allocate(mo_object%grad(mo_object%n_param))
-        if (.not. allocated(mo_object%h_diag)) &
-            allocate(mo_object%h_diag(mo_object%n_param))
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_mo_funptr => update_orbs_callback
+        obj_func_mo_funptr => obj_func_callback
 
     end subroutine mo_factory_common
 
@@ -431,6 +405,10 @@ contains
         ! initialize energy in case of error
         energy = 0.0_rp
 
+        ! the energy needs the density matrix evaluating function
+        call self%check_evaluate_dm(error)
+        if (error /= 0) return
+
         ! get rotated density matrix in AO basis without moving the current orbitals
         allocate(rot_mo_coeff, mold=self%mo_coeff)
         allocate(rot_dm_ao, mold=self%dm_ao)
@@ -471,6 +449,10 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! the evaluation needs the density matrix evaluating function
+        call self%check_evaluate_dm(error)
+        if (error /= 0) return
 
         ! evaluate at the rotated orbitals, or at the current ones if these have not
         ! been evaluated yet or their response is stale
@@ -543,6 +525,10 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! the response part needs the density matrix evaluating function
+        call self%check_evaluate_dm(error)
+        if (error /= 0) return
 
         ! number of AOs
         n_ao = self%n_ao
@@ -641,14 +627,6 @@ contains
         end select
 
     end subroutine init_mo_settings
-
-    subroutine mo_deconstructor()
-        !
-        ! this subroutine deallocates the MO objects
-        !
-        if (allocated(mo_object)) deallocate(mo_object)
-
-    end subroutine mo_deconstructor
 
     subroutine rotate_orbitals_mo(self, kappa, settings, error)
         !

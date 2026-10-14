@@ -71,8 +71,9 @@ contains
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
-        use otr_common, only: extension_level_type, extension_level
-        use otr_common_c_interface, only: extension_holder_type, release_extension
+        use otr_common, only: extension_level_type
+        use otr_common_unit_tests, only: wired_level
+        use otr_common_c_interface, only: extension_holder_type
         use otr_s_gek_c_interface, only: s_gek_settings_type_c, &
                                          s_gek_c_callbacks_type, s_gek_factory, &
                                          s_gek_factory_c_wrapper
@@ -170,7 +171,7 @@ contains
         ! check that the settings of the holder, which own the object, were wired with
         ! it, that it reads the state of the holder and that the holder holds the
         ! bundle of the change of reference function and the host's record of the state
-        level => extension_level(holder%solver_settings%context)
+        level => wired_level(holder%solver_settings)
         if (.not. associated(level)) then
             write(stderr, *) "test_s_gek_factory_c_wrapper failed: Settings of the "// &
                 "holder not wired with an object."
@@ -222,9 +223,13 @@ contains
                 "already wired not stacked with a new holder."
             test_s_gek_factory_c_wrapper = .false.
         else
-            call release_extension(stacked_extension_c)
+            call c_f_pointer(stacked_extension_c, holder)
+            deallocate(holder)
         end if
-        call release_extension(extension_c)
+        if (c_associated(extension_c)) then
+            call c_f_pointer(extension_c, holder)
+            deallocate(holder)
+        end if
 
         ! call the factory with settings that were not initialized and without any, for
         ! which the factory is handed the default settings with the context through
@@ -270,7 +275,10 @@ contains
                     end if
                 end select
             end if
-            call release_extension(extension_c)
+            if (c_associated(extension_c)) then
+                call c_f_pointer(extension_c, holder)
+                deallocate(holder)
+            end if
         end do
 
         ! call the factory without a record of the state, which has to produce an error

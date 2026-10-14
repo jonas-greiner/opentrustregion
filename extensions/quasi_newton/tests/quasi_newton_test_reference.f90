@@ -346,14 +346,14 @@ contains
         ! this subroutine overloads the assignment operator to convert reference values
         ! to their C counterpart
         !
-        use c_interface, only: character_to_c
+        use test_reference, only: ref_character_to_c
 
         type(ref_qn_settings_type_c), intent(out) :: lhs
         type(ref_qn_settings_type), intent(in) :: rhs
 
         lhs%verbose = int(rhs%verbose, kind=c_ip)
         lhs%max_points = int(rhs%max_points, kind=c_ip)
-        lhs%hess_update_scheme = character_to_c(rhs%hess_update_scheme)
+        lhs%hess_update_scheme = ref_character_to_c(rhs%hess_update_scheme)
 
     end subroutine assign_ref_to_ref_c
 

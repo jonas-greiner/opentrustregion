@@ -7,9 +7,10 @@
 module otr_oao
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_settings_type
+                               hess_x_type, solver_state_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
-                          orbital_basis_type, evaluate_dm_cs_type, evaluate_dm_os_type
+                          orbital_basis_type, evaluate_dm_cs_type, &
+                          evaluate_dm_os_type, extension_solver_settings_type
 
     implicit none
 
@@ -45,9 +46,6 @@ module otr_oao
         procedure :: get_hess_eigval_pairs => get_hess_eigval_pairs_oao
     end type
 
-    ! global variables
-    type(oao_type), allocatable, target :: oao_object
-
     ! define module procedures for different spin cases
     interface oao_factory
         module procedure oao_factory_cs, oao_factory_os
@@ -57,209 +55,178 @@ contains
 
     subroutine oao_factory_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
                               update_orbs_oao_funptr, obj_func_oao_funptr, &
-                              solver_settings, error, settings)
+                              solver_settings, solver_state, error, settings)
         !
         ! this function returns the OAO orbital updating function and objective
-        ! function for the closed-shell case and wires the solver settings with the OAO
-        ! object, whose preconditioners, projection and extra trial vectors the solver
-        ! then uses; the density matrix is updated in place, so it has to outlive the
-        ! calculation
+        ! function for the closed-shell case and wires the solver settings with a new
+        ! OAO object, which they own, whose preconditioners, projection and extra trial
+        ! vectors the solver then uses and which reads the state of the solver from the
+        ! record the host also passes to the solver; the density matrix is updated in
+        ! place, so it has to outlive the calculation; without a density matrix
+        ! evaluating function, the orbital updating function, objective function and
+        ! Hessian linear transformation of the object return an error when called, so
+        ! that only the ARH factory can build on it
         !
-        use otr_common, only: update_orbs_callback, obj_func_callback
-
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(oao_settings_type), intent(in) :: settings
+        type(oao_settings_type), intent(in), optional :: settings
 
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os
 
-        ! initialize error flag and the returned functions
-        error = 0
-        update_orbs_oao_funptr => null()
-        obj_func_oao_funptr => null()
-
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(oao_object)) then
-            call oao_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
-        end if
-
-        ! call common setup
+        ! call common setup with the closed-shell density matrix evaluating function
         dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
-        call oao_factory_common(dm_ao_3d, ao_overlap, n_particle, n_ao, error, settings)
-        if (error /= 0) return
-        nullify(dm_ao_3d)
-
-        ! set pointers to functions
-        oao_object%evaluate_dm_cs => evaluate_dm_cs
-        oao_object%evaluate_dm_os => null()
-
-        ! wire the solver settings with the object
-        call oao_object%wire_solver_settings(solver_settings, oao_object%settings, &
-                                             error)
-        if (error /= 0) return
-
-        ! get the orbital updating function and the objective function of the object
-        update_orbs_oao_funptr => update_orbs_callback
-        obj_func_oao_funptr => obj_func_callback
+        evaluate_dm_os => null()
+        call oao_factory_common(dm_ao_3d, ao_overlap, n_particle, n_ao, &
+                                evaluate_dm_cs, evaluate_dm_os, &
+                                update_orbs_oao_funptr, obj_func_oao_funptr, &
+                                solver_settings, solver_state, error, settings)
 
     end subroutine oao_factory_cs
 
     subroutine oao_factory_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
                               update_orbs_oao_funptr, obj_func_oao_funptr, &
-                              solver_settings, error, settings)
+                              solver_settings, solver_state, error, settings)
         !
         ! this function returns the OAO orbital updating function and objective
-        ! function for the open-shell case and wires the solver settings with the OAO
-        ! object, whose preconditioners, projection and extra trial vectors the solver
-        ! then uses; the density matrix is updated in place, so it has to outlive the
-        ! calculation
+        ! function for the open-shell case and wires the solver settings with a new OAO
+        ! object, which they own, whose preconditioners, projection and extra trial
+        ! vectors the solver then uses and which reads the state of the solver from the
+        ! record the host also passes to the solver; the density matrix is updated in
+        ! place, so it has to outlive the calculation; without a density matrix
+        ! evaluating function, the orbital updating function, objective function and
+        ! Hessian linear transformation of the object return an error when called, so
+        ! that only the ARH factory can build on it
         !
-        use otr_common, only: update_orbs_callback, obj_func_callback
-
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(oao_settings_type), intent(in) :: settings
+        type(oao_settings_type), intent(in), optional :: settings
+
+        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs
+
+        ! call common setup with the open-shell density matrix evaluating function
+        evaluate_dm_cs => null()
+        call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
+                                evaluate_dm_os, update_orbs_oao_funptr, &
+                                obj_func_oao_funptr, solver_settings, solver_state, &
+                                error, settings)
+
+    end subroutine oao_factory_os
+
+    subroutine oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
+                                  evaluate_dm_os, update_orbs_oao_funptr, &
+                                  obj_func_oao_funptr, solver_settings, solver_state, &
+                                  error, settings)
+        !
+        ! this subroutine sets up a new OAO object with the density matrix evaluating
+        ! function of either shell, if one is given, wires the solver settings with it
+        ! and returns its orbital updating function and objective function
+        !
+        use opentrustregion, only: warn_uninitialized_settings, verbosity_warning
+        use otr_common, only: extension_type, provided_roles_type, &
+                              compute_sqrt_and_inv_sqrt, update_orbs_callback, &
+                              obj_func_callback, evaluate_dm_missing_warning_msg
+
+        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
+        real(rp), intent(in) :: ao_overlap(:, :)
+        integer(ip), intent(in) :: n_particle, n_ao
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
+        procedure(update_orbs_type), intent(out), pointer :: update_orbs_oao_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_oao_funptr
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
+        integer(ip), intent(out) :: error
+        type(oao_settings_type), intent(in), optional :: settings
+
+        type(oao_settings_type) :: local_settings
+        class(extension_type), allocatable, target :: object
 
         ! initialize error flag and the returned functions
         error = 0
         update_orbs_oao_funptr => null()
         obj_func_oao_funptr => null()
 
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(oao_object)) then
-            call oao_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
-        end if
-
-        ! call common setup
-        call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
-        if (error /= 0) return
-
-        ! set pointers to functions
-        oao_object%evaluate_dm_os => evaluate_dm_os
-        oao_object%evaluate_dm_cs => null()
-
-        ! wire the solver settings with the object
-        call oao_object%wire_solver_settings(solver_settings, oao_object%settings, &
-                                             error)
-        if (error /= 0) return
-
-        ! get the orbital updating function and the objective function of the object
-        update_orbs_oao_funptr => update_orbs_callback
-        obj_func_oao_funptr => obj_func_callback
-
-    end subroutine oao_factory_os
-
-    subroutine oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, settings)
-        !
-        ! this subroutine performs common OAO initialization operations
-        !
-        use opentrustregion, only: warn_uninitialized_settings
-        use otr_common, only: compute_sqrt_and_inv_sqrt, provided_roles_type
-
-        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_particle, n_ao
-        integer(ip), intent(out) :: error
-        class(orbital_settings_type), intent(in) :: settings
-
-        class(orbital_settings_type), allocatable :: local_settings
-        logical :: reuse
-
-        ! work on a copy of the settings, which is initialized if they were not, after
-        ! printing a warning regardless of the verbosity, since the default settings
-        ! would silence it
-        allocate(local_settings, source=settings)
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             oao_settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            if (error /= 0) return
+        ! work on a copy of the given settings, which is initialized if they were not,
+        ! after printing a warning regardless of the verbosity, since the default
+        ! settings would silence it, or, without any, of the default settings
+        if (present(settings)) then
+            local_settings = settings
+            if (.not. local_settings%initialized) then
+                call warn_uninitialized_settings(local_settings, &
+                                                 oao_settings_uninitialized_warning_msg)
+                call local_settings%init(error)
+                if (error /= 0) return
+            end if
+        else
+            local_settings = default_oao_settings
         end if
 
         ! perform sanity check
         call oao_sanity_check(local_settings, n_particle, n_ao, error)
         if (error /= 0) return
 
-        ! allocate object, which performs every role itself
-        if (.not. allocated(oao_object)) allocate(oao_object)
-        oao_object%provides = provided_roles_type( &
-            update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
-            precond_pd=.true., project=.true., get_extra_trial_vectors=.true.)
+        ! without a density matrix evaluating function, the roles which need one are
+        ! not available
+        if (.not. (associated(evaluate_dm_cs) .or. associated(evaluate_dm_os))) &
+            call local_settings%log(evaluate_dm_missing_warning_msg, verbosity_warning)
 
-        ! set (potentially new) settings
-        oao_object%settings = local_settings
+        ! set up the object, which performs every role itself, in place, for the
+        ! density matrix of the caller, which it points to
+        allocate(oao_type :: object)
+        select type (object)
+        type is (oao_type)
+            object%provides = provided_roles_type( &
+                update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
+                precond_pd=.true., project=.true., get_extra_trial_vectors=.true.)
+            object%settings = local_settings%orbital_settings_type
+            object%evaluate_dm_cs => evaluate_dm_cs
+            object%evaluate_dm_os => evaluate_dm_os
 
-        ! determine whether the object was already set up for the same dimensions,
-        ! which the square roots of the overlap matrix, allocated only once computed,
-        ! indicate, reading the dimensions only once it was set up at all
-        reuse = allocated(oao_object%s_inv_sqrt)
-        if (reuse) &
-            reuse = oao_object%n_particle == n_particle .and. oao_object%n_ao == n_ao
-
-        ! set up the object anew otherwise
-        if (.not. reuse) then
-            ! deallocate arrays if they are already allocated
-            if (allocated(oao_object%s_sqrt)) deallocate(oao_object%s_sqrt)
-            if (allocated(oao_object%s_inv_sqrt)) deallocate(oao_object%s_inv_sqrt)
-            if (allocated(oao_object%dm_oao)) deallocate(oao_object%dm_oao)
-            if (allocated(oao_object%fock_oo)) deallocate(oao_object%fock_oo)
-            if (allocated(oao_object%fock_vv)) deallocate(oao_object%fock_vv)
-            if (allocated(oao_object%hess_eigvecs)) &
-                deallocate(oao_object%hess_eigvecs, oao_object%hess_eigvals)
-            if (allocated(oao_object%grad)) deallocate(oao_object%grad)
-            if (allocated(oao_object%h_diag)) deallocate(oao_object%h_diag)
-
-            ! number of particles
-            oao_object%n_particle = n_particle
-
-            ! get number of atomic orbitals
-            oao_object%n_ao = n_ao
-
-            ! get number of non-redundant parameters
-            oao_object%n_param = n_particle * n_ao * (n_ao - 1) / 2
+            ! number of particles, atomic orbitals and non-redundant parameters
+            object%n_particle = n_particle
+            object%n_ao = n_ao
+            object%n_param = n_particle * n_ao * (n_ao - 1) / 2
 
             ! get square root and inverse square root of AO overlap matrix
-            call compute_sqrt_and_inv_sqrt(ao_overlap, oao_object%s_sqrt, &
-                                           oao_object%s_inv_sqrt, oao_object%settings, &
-                                           error)
+            call compute_sqrt_and_inv_sqrt(ao_overlap, object%s_sqrt, &
+                                           object%s_inv_sqrt, object%settings, error)
             if (error /= 0) return
 
-            ! allocate matrices
-            allocate(oao_object%fock_oo(n_ao, n_ao, oao_object%n_particle), &
-                     oao_object%fock_vv(n_ao, n_ao, oao_object%n_particle))
-        end if
+            ! starting density matrix, also in the orthogonalized AO basis
+            object%dm_ao => dm_ao
+            object%dm_oao = symmetric_transformation(object%s_sqrt, dm_ao)
 
-        ! starting density matrix, also in the orthogonalized AO basis
-        oao_object%dm_ao => dm_ao
-        oao_object%dm_oao = symmetric_transformation(oao_object%s_sqrt, dm_ao)
+            ! allocate the occupied-occupied and virtual-virtual blocks of the Fock
+            ! matrix, the gradient and the Hessian diagonal
+            allocate(object%fock_oo(n_ao, n_ao, n_particle), &
+                     object%fock_vv(n_ao, n_ao, n_particle), &
+                     object%grad(object%n_param), object%h_diag(object%n_param))
+        end select
 
-        ! nothing has been evaluated at the starting density yet, so drop any
-        ! quantities left from a previous calculation
-        oao_object%evaluation_stale = .true.
-        oao_object%response_stale = .true.
-        oao_object%hess_eigen_stale = .true.
-        oao_object%get_response_cs => null()
-        oao_object%get_response_os => null()
+        ! wire the solver settings with the object, which reads the record of the state
+        ! and saves the host's callback functions and host contexts, and let the
+        ! settings own it
+        call solver_settings%wire(object, solver_state, local_settings, error)
+        if (error /= 0) return
 
-        ! allocate gradient and Hessian diagonal
-        if (.not. allocated(oao_object%grad)) &
-            allocate(oao_object%grad(oao_object%n_param))
-        if (.not. allocated(oao_object%h_diag)) &
-            allocate(oao_object%h_diag(oao_object%n_param))
+        ! get the orbital updating function and the objective function of the object
+        update_orbs_oao_funptr => update_orbs_callback
+        obj_func_oao_funptr => obj_func_callback
 
     end subroutine oao_factory_common
 
@@ -310,6 +277,10 @@ contains
         ! initialize energy in case of error
         energy = 0.0_rp
 
+        ! the energy needs the density matrix evaluating function
+        call self%check_evaluate_dm(error)
+        if (error /= 0) return
+
         ! get rotated density matrix in AO basis
         allocate(rot_dm_ao(self%n_ao, self%n_ao, self%n_particle))
         call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, &
@@ -349,6 +320,10 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! the evaluation needs the density matrix evaluating function
+        call self%check_evaluate_dm(error)
+        if (error /= 0) return
 
         ! evaluate at the rotated orbitals, or at the current ones if these have not
         ! been evaluated yet or their response is stale
@@ -420,6 +395,10 @@ contains
 
         ! initialize error flag
         error = 0
+
+        ! the response part needs the density matrix evaluating function
+        call self%check_evaluate_dm(error)
+        if (error /= 0) return
 
         ! number of AOs
         n_ao = self%n_ao
@@ -537,14 +516,6 @@ contains
         end select
 
     end subroutine init_oao_settings
-
-    subroutine oao_deconstructor()
-        !
-        ! this subroutine deallocates the OAO objects
-        !
-        if (allocated(oao_object)) deallocate(oao_object)
-
-    end subroutine oao_deconstructor
 
     subroutine rotate_orbitals_oao(self, kappa, settings, error)
         !

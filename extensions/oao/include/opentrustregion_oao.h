@@ -40,29 +40,34 @@ void init_oao_settings(oao_settings_type *settings);
  *                                                n_ao^2)
  * @param n_particle_c                            Number of particles
  * @param n_ao_c                                  Number of AO basis functions
- * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback
+ * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback, may
+ *                                                be NULL for an object only ARH builds
+ *                                                on, whose returned functions then
+ *                                                return an error
  * @param update_orbs_oao_c_funptr                Output: wrapped update_orbs function
  *                                                pointer
  * @param obj_func_oao_c_funptr                   Output: wrapped objective function
  *                                                pointer
+ * @param extension_c                             Output: OAO extension, released with
+ *                                                release_extension
  * @param solver_settings_c                       Input/output: solver settings, whose
  *                                                context the returned functions have
  *                                                to be called with
- * @param settings_c                              OAO settings
+ * @param solver_state_c                          Solver state the host also passes to
+ *                                                the solver, which has to outlive the
+ *                                                extension
+ * @param settings_c                              OAO settings, may be NULL to use the
+ *                                                default settings
  *
  * @return                                        Integer error code from Fortran
  */
 c_int oao_factory(c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_c,
                   c_int n_ao_c, evaluate_dm_fp evaluate_dm_c_funptr,
                   update_orbs_fp *update_orbs_oao_c_funptr,
-                  obj_func_fp *obj_func_oao_c_funptr,
+                  obj_func_fp *obj_func_oao_c_funptr, void **extension_c,
                   solver_settings_type *solver_settings_c,
+                  solver_state_type *solver_state_c,
                   const oao_settings_type *settings_c);
-
-/**
- * Fortran-callable OAO deconstructor.
- */
-void oao_deconstructor();
 
 #ifdef __cplusplus
 }

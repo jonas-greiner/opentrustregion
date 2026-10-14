@@ -8,10 +8,9 @@ module otr_arh_c_interface_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol
     use otr_arh_c_interface, only: evaluate_dm_c_type
     use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_ptr, c_funptr, &
-                                           c_funloc, c_f_procpointer, c_loc
+                                           c_funloc, c_loc, c_f_pointer, c_null_ptr
 
     implicit none
 
@@ -105,385 +104,276 @@ contains
 
     end function mock_arh_evaluate_dm_os
 
-    logical(c_bool) function test_arh_factory_mo_c_wrapper() bind(C)
+    logical(c_bool) function test_arh_factory_c_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the ARH factory for orbitals
-        ! parameterized in the MO basis for the closed- and the open-shell case,
-        ! without and with irreps of the MOs
+        ! this function tests the C wrapper for the ARH factory on a closed-shell MO
+        ! object and an open-shell OAO object, held by holders whose level of the
+        ! solver is the context of the C solver settings
         !
         use opentrustregion, only: default_solver_settings
-        use c_interface, only: solver_settings_type_c, assignment(=)
-        use otr_arh, only: arh_object, arh_n_micro
-        use otr_arh_c_interface, only: arh_callbacks, arh_settings_type_c, &
-                                       arh_factory_mo_cs, arh_factory_mo_os, &
-                                       arh_factory_mo_c_wrapper, arh_holder
-        use otr_arh_mock, only: mock_arh_factory_mo_cs, mock_arh_factory_mo_os, &
-                                mock_arh_factory_error, test_passed
-        use otr_mo_mock, only: orbsym_passed
-        use otr_mo_c_interface, only: update_orbs_mo_c_wrapper
+        use c_interface, only: solver_settings_type_c, solver_state_type_c, &
+                               assignment(=)
+        use otr_common, only: extension_type, extension_level_type, orbital_basis_type
+        use otr_common_unit_tests, only: wired_level
+        use otr_common_c_interface, only: extension_holder_type
+        use otr_mo, only: mo_type
+        use otr_oao, only: oao_type
+        use otr_arh_c_interface, only: arh_settings_type_c, arh_c_callbacks_type, &
+                                       arh_factory_common, arh_factory_c_wrapper
+        use otr_arh_mock, only: mock_arh_factory_common, mock_arh_factory_error, &
+                                mock_arh_factory_defaults, received_arh_level, &
+                                test_passed
         use otr_arh_test_reference, only: assignment(=), ref_arh_settings
-        use otr_mo_test_reference, only: mo_coeff_pattern, n_mo, case_irreps, case_names
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ, n_ao_c, &
-                                             shell_names
         use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
         use otr_common_mock, only: mock_logger_c
-        use test_reference, only: host_context_type, arm_host_context_c, host_context, &
-                                  host_context_reached
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
-        real(c_rp), allocatable :: ao_overlap_c(:, :), mo_coeff_c(:, :, :)
+        type(extension_holder_type), target :: orbitals_holder
+        class(extension_type), allocatable, target :: orbitals
         type(c_funptr) :: evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr
         type(arh_settings_type_c) :: settings_c
         type(solver_settings_type_c) :: solver_settings_c
-        integer(c_ip) :: n_particle_c, error_c, n_mo_c, n_occ_c(n_particle)
-        integer(c_ip), allocatable :: orbsym_c(:)
-        integer(ip) :: irreps(n_mo, n_particle), i_call, i_sym
-        logical :: with_irreps
+        type(solver_state_type_c), target :: state_c
+        type(c_ptr) :: extension_c
+        type(extension_holder_type), pointer :: holder
+        type(extension_level_type), pointer :: level
+        real(rp), target :: copy(1, 1, 1)
+        real(c_rp), target :: host_array(1, 1, 1)
+        integer(ip) :: n_particle, i_case
+        integer(c_ip) :: error_c
         character(len=:), allocatable :: case_name
-        type(host_context_type), target :: other_host_context
+        character(len=34), parameter :: default_cases(2) = &
+            [character(len=34) :: "settings that were not initialized", "no settings"]
 
         ! assume tests pass
-        test_arh_factory_mo_c_wrapper = .true.
+        test_arh_factory_c_wrapper = .true.
 
-        ! inject mock functions
-        arh_factory_mo_cs => mock_arh_factory_mo_cs
-        arh_factory_mo_os => mock_arh_factory_mo_os
-
-        ! dimensions differ between AOs and MOs and occupations between the spin
-        ! channels, so that the shapes are checked
-        n_mo_c = int(n_mo, kind=c_ip)
-        n_occ_c = int(n_occ, kind=c_ip)
-
-        ! initialize AO overlap matrix
-        allocate(ao_overlap_c(n_ao, n_ao))
-        ao_overlap_c = 2.0_c_rp
+        ! inject mock function
+        arh_factory_common => mock_arh_factory_common
 
         ! associate optional settings with values
         settings_c = ref_arh_settings
         settings_c%logger = c_funloc(mock_logger_c)
 
-        ! both spin cases pass through the same C wrapper, first without and then with
-        ! the irreps of the MOs of the symmetric occupation case of the shell
-        do i_call = 1, 2 * n_particle
-            n_particle_c = int(1 + mod(i_call - 1, n_particle), kind=c_ip)
-            with_irreps = i_call > n_particle
-            case_name = trim(shell_names(n_particle_c))
-            if (with_irreps) case_name = case_name//" with symmetry"
-
-            ! initialize MO coefficients with values encoding their indices
-            mo_coeff_c = mo_coeff_pattern(n_ao_c, n_mo_c, n_particle_c, 0.0_c_rp)
-
-            ! get C function pointers to Fortran functions
-            if (n_particle_c == 1) then
+        ! the factory builds on a closed-shell MO object and on an open-shell OAO
+        ! object, whose holders hold the copy of the orbitals the orbital update copies
+        ! back
+        do n_particle = 1, 2
+            if (n_particle == 1) then
+                case_name = "closed-shell MO"
+                allocate(mo_type :: orbitals)
                 evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_cs)
             else
+                case_name = "open-shell OAO"
+                allocate(oao_type :: orbitals)
                 evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_os)
             end if
+            select type (orbitals)
+            class is (orbital_basis_type)
+                orbitals%n_particle = n_particle
+            end select
+            orbitals%solver_level%extension => orbitals
+            orbitals_holder%solver_level%level => orbitals%solver_level
+            orbitals_holder%solver_level%orbitals => copy
+            orbitals_holder%solver_level%orbitals_c => host_array
 
             ! arm the host context of the ARH settings, which the logging and density
             ! matrix evaluating functions receive
             call arm_host_context_c(settings_c%context)
             solver_settings_c = default_solver_settings
-
-            ! set the irreps of the MOs passed to the wrapper, which an unallocated
-            ! array passes as absent
-            irreps = 0
-            if (allocated(orbsym_c)) deallocate(orbsym_c)
-            if (with_irreps) then
-                i_sym = findloc(case_names, case_name, dim=1, kind=ip)
-                irreps(:, :n_particle_c) = case_irreps(:, :n_particle_c, i_sym)
-                orbsym_c = int( &
-                    reshape(irreps(:, :n_particle_c), [n_mo * n_particle_c]), kind=c_ip)
-            end if
+            solver_settings_c%context = c_loc(orbitals_holder%solver_level)
 
             ! call ARH factory C wrapper
             test_passed = .false.
-            mock_arh_factory_error = 0
-            error_c = arh_factory_mo_c_wrapper( &
-                mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
+            error_c = arh_factory_c_wrapper( &
                 evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
-                solver_settings_c, settings_c, orbsym_c)
+                extension_c, solver_settings_c, c_loc(state_c), settings_c)
 
-            ! check if the mock factory received the correct input and called the
-            ! logging function
-            if (.not. test_passed) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Mock "// &
-                    "factory received wrong input for the "//case_name//" case."
+            ! check if the mock factory received the correct input, which includes the
+            ! level of the orbital basis object, and called the logging function
+            if (.not. test_passed .or. &
+                .not. associated(received_arh_level, orbitals%solver_level)) then
+                test_arh_factory_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Mock factory "// &
+                    "received wrong input for the "//case_name//" case."
             end if
             if (.not. host_context%logger_called) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Called "// &
+                test_arh_factory_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Called "// &
                     "logging subroutine wrong for the "//case_name//" case."
-            end if
-            if (orbsym_passed .neqv. with_irreps) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Irreps of "// &
-                    "the MOs passed on wrongly for the "//case_name//" case."
             end if
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("arh_factory_mo_c_wrapper")) &
-                test_arh_factory_mo_c_wrapper = .false.
+            if (.not. host_context_reached("arh_factory_c_wrapper")) &
+                test_arh_factory_c_wrapper = .false.
 
-            ! check if output variables are as expected
-            if (error_c /= 0) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Returned "// &
-                    "error code wrong for the "//case_name//" case."
+            ! check if output variables are as expected, the returned extension being
+            ! the holder, whose inspection would crash without one
+            if (error_c /= 0 .or. .not. c_associated(extension_c)) then
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Error "// &
+                    "returned or no extension returned for the "//case_name//" case."
+                test_arh_factory_c_wrapper = .false.
+                return
             end if
+            call c_f_pointer(extension_c, holder)
 
-            ! check that the factory received the MO coefficients of the caller in
-            ! place, unless the kinds differ and the object updates a copy
-            if (rp == c_rp .and. any(abs(mo_coeff_c - 2.0_c_rp) > tol)) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: MO "// &
-                    "coefficients of the caller not passed in place for the "// &
+            ! check that the settings of the holder, which own the object, were wired
+            ! with it, that it reads the state of the holder and that the holder holds
+            ! the bundle of the density matrix evaluating function, the host's record
+            ! of the state and the copy of the orbitals of the orbital basis object
+            level => wired_level(holder%solver_settings)
+            if (.not. associated(level)) then
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Settings of "// &
+                    "the holder not wired with an object for the "//case_name//" case."
+                test_arh_factory_c_wrapper = .false.
+                return
+            end if
+            if (.not. associated(level%extension%state, holder%state)) then
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Object does "// &
+                    "not read the state of the holder for the "//case_name//" case."
+                test_arh_factory_c_wrapper = .false.
+            end if
+            select type (callbacks => holder%extension_callbacks)
+            type is (arh_c_callbacks_type)
+                if (.not. ( &
+                    associated(callbacks%evaluate_dm, mock_arh_evaluate_dm_cs) .or. &
+                    associated(callbacks%evaluate_dm, mock_arh_evaluate_dm_os))) then
+                    write(stderr, *) "test_arh_factory_c_wrapper failed: Density "// &
+                        "matrix evaluating function not held for the "//case_name// &
+                        " case."
+                    test_arh_factory_c_wrapper = .false.
+                end if
+            class default
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Bundle of the "// &
+                    "callback functions not held for the "//case_name//" case."
+                test_arh_factory_c_wrapper = .false.
+            end select
+            if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
+                       associated(holder%stability_level%state_c, state_c))) then
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Host's record "// &
+                    "of the state not held for the "//case_name//" case."
+                test_arh_factory_c_wrapper = .false.
+            end if
+            if (.not. (associated(holder%solver_level%orbitals, copy) .and. &
+                       associated(holder%solver_level%orbitals_c, host_array))) then
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Copy of the "// &
+                    "orbitals of the orbital basis object not held for the "// &
                     case_name//" case."
+                test_arh_factory_c_wrapper = .false.
             end if
 
-            ! check that the factory returned the C wrappers of the object, wired the
-            ! solver settings with its holder and adjusted them to the approximate
-            ! Hessian
-            if (.not. check_c_factory_wiring("arh_factory_mo_c_wrapper", arh_holder, &
-                                             arh_object, update_orbs_c_funptr, &
-                                             obj_func_c_funptr, solver_settings_c, &
-                                             c_funloc(update_orbs_mo_c_wrapper))) &
-                test_arh_factory_mo_c_wrapper = .false.
-            if (.not. solver_settings_c%refresh_hess .or. &
-                solver_settings_c%n_micro /= arh_n_micro .or. &
-                solver_settings_c%hess_symm) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Solver "// &
-                    "settings not adjusted to the approximate Hessian for the "// &
-                    case_name//" case."
+            ! check that the factory returned the C wrappers of the object and wired the
+            ! solver settings with its holder
+            if (.not. check_c_factory_wiring("arh_factory_c_wrapper", holder, &
+                                             level%extension, update_orbs_c_funptr, &
+                                             obj_func_c_funptr, solver_settings_c)) &
+                test_arh_factory_c_wrapper = .false.
+            if (c_associated(extension_c)) then
+                call c_f_pointer(extension_c, holder)
+                deallocate(holder)
             end if
 
-            ! call the factory with the solver settings it wired and another host
-            ! context, which has to produce an error without calling the factory,
-            ! returning functions or replacing the bundle holding the callback functions
-            ! of the object
-            settings_c%context = c_loc(other_host_context)
-            error_c = arh_factory_mo_c_wrapper( &
-                mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
-                evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
-                solver_settings_c, settings_c, orbsym_c)
-            if (error_c == 0 .or. c_associated(update_orbs_c_funptr) .or. &
-                c_associated(obj_func_c_funptr) .or. .not. c_associated( &
-                    arh_callbacks%host_context, c_loc(host_context))) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Solver "// &
-                    "settings the holder was wired into not refused before the "// &
-                    "object was changed for the "//case_name//" case."
-            end if
-
-            ! call the factory for the initial MO coefficients with a mock factory
-            ! which produces an error, which has to be returned without functions or
-            ! writing back the solver settings or changing the holder or the bundle of
-            ! the object
-            mo_coeff_c = mo_coeff_pattern(n_ao_c, n_mo_c, n_particle_c, 0.0_c_rp)
+            ! call the factory with a mock factory which produces an error, which has
+            ! to be returned without functions, an extension or writing back the solver
+            ! settings
             solver_settings_c = default_solver_settings
+            solver_settings_c%context = c_loc(orbitals_holder%solver_level)
             update_orbs_c_funptr = c_funloc(mock_logger_c)
             obj_func_c_funptr = c_funloc(mock_logger_c)
             mock_arh_factory_error = 1
-            error_c = arh_factory_mo_c_wrapper( &
-                mo_coeff_c, ao_overlap_c, n_occ_c, n_particle_c, n_ao_c, n_mo_c, &
+            error_c = arh_factory_c_wrapper( &
                 evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
-                solver_settings_c, settings_c, orbsym_c)
+                extension_c, solver_settings_c, c_loc(state_c), settings_c)
             mock_arh_factory_error = 0
             if (error_c /= 1 .or. c_associated(update_orbs_c_funptr) .or. &
-                c_associated(obj_func_c_funptr) .or. &
-                c_associated(solver_settings_c%context)) then
-                test_arh_factory_mo_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Error of "// &
-                    "the factory not passed on for the "//case_name//" case."
+                c_associated(obj_func_c_funptr) .or. c_associated(extension_c) .or. &
+                .not. c_associated(solver_settings_c%context, &
+                                   c_loc(orbitals_holder%solver_level))) then
+                test_arh_factory_c_wrapper = .false.
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Error of the "// &
+                    "factory not passed on for the "//case_name//" case."
             end if
-            if (.not. associated(arh_holder%solver_level%level, &
-                                 arh_object%solver_level) .or. &
-                .not. c_associated(arh_callbacks%host_context, c_loc(host_context))) &
-                then
-                write(stderr, *) "test_arh_factory_mo_c_wrapper failed: Holder or "// &
-                    "callback functions of the object not restored after an error "// &
-                    "of the factory for the "//case_name//" case."
-                test_arh_factory_mo_c_wrapper = .false.
-            end if
+            if (n_particle == 1) deallocate(orbitals)
         end do
-        deallocate(ao_overlap_c)
-        if (allocated(arh_object)) deallocate(arh_object)
 
-    end function test_arh_factory_mo_c_wrapper
-
-    logical(c_bool) function test_arh_factory_oao_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the ARH factory for orbitals
-        ! parameterized in the OAO basis for the closed- and the open-shell case
-        !
-        use opentrustregion, only: default_solver_settings
-        use c_interface, only: solver_settings_type_c, assignment(=)
-        use otr_arh, only: arh_object, arh_n_micro
-        use otr_arh_c_interface, only: arh_callbacks, arh_settings_type_c, &
-                                       arh_factory_oao_cs, arh_factory_oao_os, &
-                                       arh_factory_oao_c_wrapper, arh_holder
-        use otr_arh_mock, only: mock_arh_factory_oao_cs, mock_arh_factory_oao_os, &
-                                mock_arh_factory_error, test_passed
-        use otr_arh_test_reference, only: assignment(=), ref_arh_settings
-        use otr_oao_c_interface, only: update_orbs_oao_c_wrapper
-        use otr_common_test_reference, only: n_ao, n_particle, n_ao_c, shell_names
-        use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
-        use otr_common_mock, only: mock_logger_c
-        use test_reference, only: host_context_type, arm_host_context_c, host_context, &
-                                  host_context_reached
-
-        real(c_rp), allocatable :: ao_overlap_c(:, :), dm_ao_c(:, :, :)
-        type(c_funptr) :: evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr
-        type(arh_settings_type_c) :: settings_c
-        type(solver_settings_type_c) :: solver_settings_c
-        integer(c_ip) :: n_particle_c, error_c
-        character(len=:), allocatable :: case_name
-        type(host_context_type), target :: other_host_context
-
-        ! assume tests pass
-        test_arh_factory_oao_c_wrapper = .true.
-
-        ! inject mock functions
-        arh_factory_oao_cs => mock_arh_factory_oao_cs
-        arh_factory_oao_os => mock_arh_factory_oao_os
-
-        ! initialize AO overlap matrix
-        allocate(ao_overlap_c(n_ao, n_ao))
-        ao_overlap_c = 2.0_c_rp
-
-        ! associate optional settings with values
-        settings_c = ref_arh_settings
-        settings_c%logger = c_funloc(mock_logger_c)
-
-        ! both spin cases pass through the same C wrapper
-        do n_particle_c = 1, int(n_particle, kind=c_ip)
-            case_name = trim(shell_names(n_particle_c))
-
-            ! initialize density matrix and get C function pointer to the density
-            ! matrix evaluating function of the spin case
-            allocate(dm_ao_c(n_ao, n_ao, n_particle_c))
-            dm_ao_c = 1.0_c_rp
-            if (n_particle_c == 1) then
-                evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_cs)
+        ! call the factory with settings that were not initialized and without any, for
+        ! which the factory is handed the default settings with the context through
+        ! which the density matrix evaluating function is found, which the mock checks,
+        ! and the bundle keeps no logging function or host context
+        do i_case = 1, size(default_cases)
+            solver_settings_c = default_solver_settings
+            solver_settings_c%context = c_loc(orbitals_holder%solver_level)
+            mock_arh_factory_defaults = .true.
+            test_passed = .false.
+            if (i_case == 1) then
+                settings_c%initialized = .false.
+                error_c = arh_factory_c_wrapper( &
+                    evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
+                    extension_c, solver_settings_c, c_loc(state_c), settings_c)
+                settings_c%initialized = .true.
             else
-                evaluate_dm_c_funptr = c_funloc(mock_arh_evaluate_dm_os)
+                error_c = arh_factory_c_wrapper( &
+                    evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
+                    extension_c, solver_settings_c, c_loc(state_c))
             end if
-
-            ! arm the host context of the ARH settings, which the logging and density
-            ! matrix evaluating functions receive
-            call arm_host_context_c(settings_c%context)
-            solver_settings_c = default_solver_settings
-
-            ! call ARH factory C wrapper
-            test_passed = .false.
-            mock_arh_factory_error = 0
-            error_c = arh_factory_oao_c_wrapper( &
-                dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-                update_orbs_c_funptr, obj_func_c_funptr, solver_settings_c, settings_c)
-
-            ! check if the mock factory received the correct input and called the
-            ! logging function
-            if (.not. test_passed) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Mock "// &
-                    "factory received wrong input for the "//case_name//" case."
+            mock_arh_factory_defaults = .false.
+            if (error_c /= 0 .or. .not. test_passed) then
+                write(stderr, *) "test_arh_factory_c_wrapper failed: Default "// &
+                    "settings not handed to the factory for "// &
+                    trim(default_cases(i_case))//"."
+                test_arh_factory_c_wrapper = .false.
+            else
+                call c_f_pointer(extension_c, holder)
+                select type (callbacks => holder%extension_callbacks)
+                type is (arh_c_callbacks_type)
+                    if (associated(callbacks%logger) .or. &
+                        c_associated(callbacks%host_context)) then
+                        write(stderr, *) "test_arh_factory_c_wrapper failed: "// &
+                            "Logging function or host context kept for "// &
+                            trim(default_cases(i_case))//"."
+                        test_arh_factory_c_wrapper = .false.
+                    end if
+                end select
             end if
-            if (.not. host_context%logger_called) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Called "// &
-                    "logging subroutine wrong for the "//case_name//" case."
+            if (c_associated(extension_c)) then
+                call c_f_pointer(extension_c, holder)
+                deallocate(holder)
             end if
-
-            ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("arh_factory_oao_c_wrapper")) &
-                test_arh_factory_oao_c_wrapper = .false.
-
-            ! check if output variables are as expected
-            if (error_c /= 0) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Returned "// &
-                    "error code wrong for the "//case_name//" case."
-            end if
-
-            ! check that the factory received the density matrix of the caller in place,
-            ! unless the kinds differ and the object updates a copy
-            if (rp == c_rp .and. any(abs(dm_ao_c - 2.0_c_rp) > tol)) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Density "// &
-                    "matrix of the caller not passed in place for the "//case_name// &
-                    " case."
-            end if
-
-            ! check that the factory returned the C wrappers of the object, wired the
-            ! solver settings with its holder and adjusted them to the approximate
-            ! Hessian
-            if (.not. check_c_factory_wiring("arh_factory_oao_c_wrapper", arh_holder, &
-                                             arh_object, update_orbs_c_funptr, &
-                                             obj_func_c_funptr, solver_settings_c, &
-                                             c_funloc(update_orbs_oao_c_wrapper))) &
-                test_arh_factory_oao_c_wrapper = .false.
-            if (.not. solver_settings_c%refresh_hess .or. &
-                solver_settings_c%n_micro /= arh_n_micro .or. &
-                solver_settings_c%hess_symm) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Solver "// &
-                    "settings not adjusted to the approximate Hessian for the "// &
-                    case_name//" case."
-            end if
-
-            ! call the factory with the solver settings it wired and another host
-            ! context, which has to produce an error without calling the factory,
-            ! returning functions or replacing the bundle holding the callback functions
-            ! of the object
-            settings_c%context = c_loc(other_host_context)
-            error_c = arh_factory_oao_c_wrapper( &
-                dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-                update_orbs_c_funptr, obj_func_c_funptr, solver_settings_c, settings_c)
-            if (error_c == 0 .or. c_associated(update_orbs_c_funptr) .or. &
-                c_associated(obj_func_c_funptr) .or. .not. c_associated( &
-                    arh_callbacks%host_context, c_loc(host_context))) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Solver "// &
-                    "settings the holder was wired into not refused before the "// &
-                    "object was changed for the "//case_name//" case."
-            end if
-
-            ! call the factory for the initial density matrix with a mock factory which
-            ! produces an error, which has to be returned without functions or writing
-            ! back the solver settings or changing the holder or the bundle of the
-            ! object
-            dm_ao_c = 1.0_c_rp
-            solver_settings_c = default_solver_settings
-            update_orbs_c_funptr = c_funloc(mock_logger_c)
-            obj_func_c_funptr = c_funloc(mock_logger_c)
-            mock_arh_factory_error = 1
-            error_c = arh_factory_oao_c_wrapper( &
-                dm_ao_c, ao_overlap_c, n_particle_c, n_ao_c, evaluate_dm_c_funptr, &
-                update_orbs_c_funptr, obj_func_c_funptr, solver_settings_c, settings_c)
-            mock_arh_factory_error = 0
-            if (error_c /= 1 .or. c_associated(update_orbs_c_funptr) .or. &
-                c_associated(obj_func_c_funptr) .or. &
-                c_associated(solver_settings_c%context)) then
-                test_arh_factory_oao_c_wrapper = .false.
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Error of "// &
-                    "the factory not passed on for the "//case_name//" case."
-            end if
-            if (.not. associated(arh_holder%solver_level%level, &
-                                 arh_object%solver_level) .or. &
-                .not. c_associated(arh_callbacks%host_context, c_loc(host_context))) &
-                then
-                write(stderr, *) "test_arh_factory_oao_c_wrapper failed: Holder or "// &
-                    "callback functions of the object not restored after an error "// &
-                    "of the factory for the "//case_name//" case."
-                test_arh_factory_oao_c_wrapper = .false.
-            end if
-            deallocate(dm_ao_c)
         end do
-        deallocate(ao_overlap_c)
-        if (allocated(arh_object)) deallocate(arh_object)
 
-    end function test_arh_factory_oao_c_wrapper
+        ! call the factory for C solver settings without a context, which no factory
+        ! wired, for which the factory has to be handed no level
+        solver_settings_c = default_solver_settings
+        error_c = arh_factory_c_wrapper(evaluate_dm_c_funptr, update_orbs_c_funptr, &
+                                        obj_func_c_funptr, extension_c, &
+                                        solver_settings_c, c_loc(state_c), settings_c)
+        if (associated(received_arh_level)) then
+            write(stderr, *) "test_arh_factory_c_wrapper failed: Level handed to "// &
+                "the factory for C solver settings without a context."
+            test_arh_factory_c_wrapper = .false.
+        end if
+        if (c_associated(extension_c)) then
+            call c_f_pointer(extension_c, holder)
+            deallocate(holder)
+        end if
+
+        ! call the factory without a record of the state, which has to produce an error
+        ! without calling the factory or returning functions or an extension
+        solver_settings_c = default_solver_settings
+        solver_settings_c%context = c_loc(orbitals_holder%solver_level)
+        test_passed = .false.
+        error_c = arh_factory_c_wrapper(evaluate_dm_c_funptr, update_orbs_c_funptr, &
+                                        obj_func_c_funptr, extension_c, &
+                                        solver_settings_c, c_null_ptr, settings_c)
+        if (error_c == 0 .or. test_passed .or. c_associated(update_orbs_c_funptr) .or. &
+            c_associated(obj_func_c_funptr) .or. c_associated(extension_c)) then
+            write(stderr, *) "test_arh_factory_c_wrapper failed: No error produced "// &
+                "without a record of the state."
+            test_arh_factory_c_wrapper = .false.
+        end if
+        deallocate(orbitals)
+
+    end function test_arh_factory_c_wrapper
 
     logical(c_bool) function test_evaluate_dm_cs_f_wrapper() bind(C)
         !
@@ -492,11 +382,12 @@ contains
         ! for the closed-shell case
         !
         use otr_arh, only: evaluate_dm_cs_type
-        use otr_arh_c_interface, only: arh_callbacks, evaluate_dm_cs_f_wrapper
+        use otr_arh_c_interface, only: arh_c_callbacks_type, evaluate_dm_cs_f_wrapper
         use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr
         use otr_common_unit_tests, only: mock_requests
         use test_reference, only: arm_host_context_c, host_context_reached
 
+        type(arh_c_callbacks_type), target :: callbacks
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
         class(*), pointer :: context
         integer(ip) :: request
@@ -505,9 +396,9 @@ contains
         test_evaluate_dm_cs_f_wrapper = .true.
 
         ! inject mock C function and hand the bundle to the wrapper as its context
-        arh_callbacks%evaluate_dm => mock_arh_evaluate_dm_cs
-        call arm_host_context_c(arh_callbacks%host_context)
-        context => arh_callbacks
+        callbacks%evaluate_dm => mock_arh_evaluate_dm_cs
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
 
         ! get pointer to subroutine
         evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
@@ -540,22 +431,24 @@ contains
         ! for the open-shell case
         !
         use otr_arh, only: evaluate_dm_os_type
-        use otr_arh_c_interface, only: arh_callbacks, evaluate_dm_os_f_wrapper
+        use otr_arh_c_interface, only: arh_c_callbacks_type, evaluate_dm_os_f_wrapper
         use otr_arh_test_reference, only: test_evaluate_dm_os_funptr
         use otr_common_unit_tests, only: mock_requests
         use test_reference, only: arm_host_context_c, host_context_reached
 
+        type(arh_c_callbacks_type), target :: callbacks
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
         class(*), pointer :: context
-        integer(ip) :: request
+        real(rp) :: dm(1, 1, 1), energy
+        integer(ip) :: request, error
 
         ! assume tests pass
         test_evaluate_dm_os_f_wrapper = .true.
 
         ! inject mock C function and hand the bundle to the wrapper as its context
-        arh_callbacks%evaluate_dm => mock_arh_evaluate_dm_os
-        call arm_host_context_c(arh_callbacks%host_context)
-        context => arh_callbacks
+        callbacks%evaluate_dm => mock_arh_evaluate_dm_os
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
 
         ! get pointer to subroutine
         evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
@@ -577,6 +470,16 @@ contains
         ! check that the wrapper handed the host context to the C function
         if (.not. host_context_reached("evaluate_dm_os_f_wrapper")) &
             test_evaluate_dm_os_f_wrapper = .false.
+
+        ! a context that is no bundle has to produce an error
+        dm = 0.0_rp
+        context => null()
+        call evaluate_dm_os_f_wrapper(dm, energy, error=error, context=context)
+        if (error == 0) then
+            write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: No error "// &
+                "produced without a bundle."
+            test_evaluate_dm_os_f_wrapper = .false.
+        end if
 
     end function test_evaluate_dm_os_f_wrapper
 
@@ -605,37 +508,6 @@ contains
         end if
 
     end function test_init_arh_settings_c
-
-    logical(c_bool) function test_arh_deconstructor_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the ARH deconstructor
-        !
-        use otr_arh_c_interface, only: arh_deconstructor, arh_deconstructor_c_wrapper
-        use otr_arh_mock, only: mock_arh_deconstructor, test_passed
-
-        ! assume tests pass
-        test_arh_deconstructor_c_wrapper = .true.
-
-        ! inject mock functions
-        arh_deconstructor => mock_arh_deconstructor
-
-        ! initialize test logical
-        test_passed = .false.
-
-        ! call ARH orbital updating deconstructor C wrapper
-        call arh_deconstructor_c_wrapper()
-
-        ! check if test has passed
-        test_arh_deconstructor_c_wrapper = test_passed
-
-        ! check if test has passed
-        if (.not. test_passed) then
-            test_arh_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_arh_deconstructor_c_wrapper failed: "// &
-                "Deconstructor called wrong."
-        end if
-
-    end function test_arh_deconstructor_c_wrapper
 
     logical(c_bool) function test_assign_arh_f_c() bind(C)
         !

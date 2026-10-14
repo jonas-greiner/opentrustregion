@@ -208,6 +208,30 @@ class ExtensionOwner:
         solver_settings._extension_owner = self
 
 
+class OrbitalOwner(ExtensionOwner):
+    """
+    this class owns the orbital basis object an MO or OAO factory created for a Python
+    host like ExtensionOwner and also holds the dimensions of its orbitals and, if the
+    library moves a copy of the orbitals of the caller, the function that copies them
+    back, which the ARH factory, which builds on the object, needs for its own callback
+    interfaces and orbital updating function
+    """
+
+    def __init__(
+        self,
+        extension: Optional[int],
+        solver_settings: SolverSettings,
+        saved_objects: Dict[str, Any],
+        n_ao: int,
+        n_particle: int,
+        copy_back: Optional[Callable[[], None]] = None,
+    ):
+        super().__init__(extension, solver_settings, saved_objects)
+        self.n_ao = n_ao
+        self.n_particle = n_particle
+        self.copy_back = copy_back
+
+
 def check_callback_arguments(
     callback: Any, name: str, arguments: Sequence[str]
 ) -> None:
@@ -270,6 +294,9 @@ class UpdateOrbsPyInterface:
     # a user callback of its own
     _otr_exception: Optional[Dict[str, Exception]] = None
     context: Optional[int] = None
+    # function copying the orbitals back to the array of the caller after every update
+    # if the library moves a copy of them
+    copy_back: Optional[Callable[[], None]] = None
 
     def __call__(
         self, kappa: np.ndarray, grad: np.ndarray, h_diag: np.ndarray
@@ -285,15 +312,20 @@ class UpdateOrbsPyInterface:
         # initialize Hessian linear transformation function pointer
         hess_x_funptr = hess_x_interface_type()
 
-        # update orbital function
-        error = self.update_orbs_funptr(
-            kappa_ptr,
-            byref(func),
-            grad_ptr,
-            h_diag_ptr,
-            byref(hess_x_funptr),
-            self.context,
-        )
+        # update orbital function and copy the orbitals back, also on failure, since
+        # they may have been moved by then
+        try:
+            error = self.update_orbs_funptr(
+                kappa_ptr,
+                byref(func),
+                grad_ptr,
+                h_diag_ptr,
+                byref(hess_x_funptr),
+                self.context,
+            )
+        finally:
+            if self.copy_back is not None:
+                self.copy_back()
         if error != 0:
             msg = "Orbital updating function raised error."
             if self._otr_exception is not None and "exc" in self._otr_exception:

@@ -84,7 +84,6 @@ module otr_common
         procedure :: precond_pd => precond_pd_extension
         procedure :: project => project_extension
         procedure :: get_extra_trial_vectors => get_extra_trial_vectors_extension
-        procedure :: check_unwired => check_unwired_extension
         procedure :: wire_solver_settings => wire_solver_settings_extension
     end type
 
@@ -104,11 +103,11 @@ module otr_common
         procedure :: wire => wire_extension_solver_settings
     end type
 
-    ! error message for solver settings an extension object has already been wired
-    ! into, whose callback functions would forward to the object itself
-    character(len=*), parameter :: settings_wired_twice_error_msg = &
-        "The solver settings were already wired by this extension object. Pass the "// &
-        "settings of the host or of another extension instead."
+    ! warning for orbital bases set up without a density matrix evaluating function
+    character(len=*), parameter :: evaluate_dm_missing_warning_msg = &
+        "No density matrix evaluating function was given, so the orbital updating "// &
+        "function, objective function and Hessian linear transformation of the "// &
+        "orbital basis are not available and return an error when called."
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_type), pointer :: update_orbs_callback_ptr => &
@@ -214,6 +213,7 @@ module otr_common
         procedure(rotate_hess_eigenbasis_basis_type), deferred :: &
             rotate_from_hess_eigenbasis
         procedure(get_hess_eigval_pairs_basis_type), deferred :: get_hess_eigval_pairs
+        procedure :: check_evaluate_dm => check_evaluate_dm_orbital_basis
         procedure :: refresh_response => refresh_response_orbital_basis
         procedure :: precond => precond_orbital_basis
         procedure :: precond_pd => precond_pd_orbital_basis
@@ -290,31 +290,6 @@ contains
 
     end subroutine init_orbital_settings
 
-    subroutine check_unwired_extension(self, solver_settings, settings, error)
-        !
-        ! this subroutine produces an error for solver settings the object already
-        ! wired, whose callback functions wired with it would forward to themselves,
-        ! which the factories check before they change any state
-        !
-        use opentrustregion, only: verbosity_error
-
-        class(extension_type), intent(in), target :: self
-        type(solver_settings_type), intent(in) :: solver_settings
-        class(settings_type), intent(in) :: settings
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! the context of settings the object wired is one of its levels
-        if (associated(solver_settings%context, self%solver_level) .or. associated( &
-            solver_settings%stability_settings%context, self%stability_level)) then
-            call settings%log(settings_wired_twice_error_msg, verbosity_error, .true.)
-            error = 1
-        end if
-
-    end subroutine check_unwired_extension
-
     subroutine wire_solver_settings_extension(self, solver_settings, settings, error, &
                                               update_orbs, obj_func)
         !
@@ -343,9 +318,8 @@ contains
         type(solver_settings_type) :: inherited
         logical :: wired, wire_nested
 
-        ! refuse settings the object already wired
-        call self%check_unwired(solver_settings, settings, error)
-        if (error /= 0) return
+        ! initialize error flag
+        error = 0
 
         ! the orbital update and objective function the object wraps have to be those
         ! the factory that wired the settings last returned, which reach its object
@@ -985,6 +959,29 @@ contains
         if (associated(level)) call level%host%logger(message, level%host%context)
 
     end subroutine logger_callback
+
+    subroutine check_evaluate_dm_orbital_basis(self, error)
+        !
+        ! this subroutine produces an error for an orbital basis set up without a
+        ! density matrix evaluating function, whose orbital update, objective function
+        ! and Hessian linear transformation need one
+        !
+        use opentrustregion, only: verbosity_error
+
+        class(orbital_basis_type), intent(in) :: self
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! one of the density matrix evaluating functions is set if one was given
+        if (associated(self%evaluate_dm_cs) .or. associated(self%evaluate_dm_os)) return
+        call self%settings%log("The orbital basis was set up without a density "// &
+                               "matrix evaluating function, which this function "// &
+                               "needs.", verbosity_error, .true.)
+        error = 1
+
+    end subroutine check_evaluate_dm_orbital_basis
 
     subroutine refresh_response_orbital_basis(self, error)
         !

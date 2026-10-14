@@ -23,6 +23,8 @@ from pyopentrustregion.python_interface import (
     Settings,
     SolverSettings,
     SolverSettingsC,
+    SolverState,
+    SolverStateC,
     auto_bind_fields,
     bind_callback_fields,
 )
@@ -30,6 +32,7 @@ from pyopentrustregion.extensions.common.python_interface import (
     evaluate_dm_interface_type,
     EvaluateDMInterface,
     ObjFuncPyInterface,
+    OrbitalOwner,
     UpdateOrbsPyInterface,
     check_callback_arguments,
 )
@@ -115,9 +118,10 @@ def oao_factory(
     ao_overlap: np.ndarray,
     n_particle: int,
     n_ao: int,
-    evaluate_dm: EvaluateDMType,
+    evaluate_dm: Optional[EvaluateDMType],
     solver_settings: SolverSettings,
-    settings: OAOSettings,
+    solver_state: SolverState,
+    settings: Optional[OAOSettings] = None,
 ) -> Tuple[
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -140,14 +144,20 @@ def oao_factory(
     exception = adopt_collector(evaluate_dm)
 
     # define interfaces for callback functions, whose arguments the C interface cannot
-    # check
-    check_callback_arguments(evaluate_dm, "evaluate_dm", ("dm", "fock", "get_response"))
-    evaluate_dm_interface = evaluate_dm_interface_type(
-        EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
-    )
+    # check, without a density matrix evaluating function for an object only the ARH
+    # factory builds on
+    evaluate_dm_interface = evaluate_dm_interface_type()
+    if evaluate_dm is not None:
+        check_callback_arguments(
+            evaluate_dm, "evaluate_dm", ("dm", "fock", "get_response")
+        )
+        evaluate_dm_interface = evaluate_dm_interface_type(
+            EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
+        )
 
     # hand the logging function of the settings the exception collector of the call
-    settings.prepare_call(None, exception)
+    if settings is not None:
+        settings.prepare_call(None, exception)
 
     if not hasattr(lib, "oao_factory"):
         raise RuntimeError(
@@ -165,13 +175,16 @@ def oao_factory(
         evaluate_dm_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
+        POINTER(c_void_p),
         POINTER(SolverSettingsC),
+        POINTER(SolverStateC),
         POINTER(OAOSettingsC),
     ]
 
     # call Fortran function
     update_orbs_oao_funptr = update_orbs_interface_type()
     obj_func_oao_funptr = obj_func_interface_type()
+    extension = c_void_p()
     error = lib.oao_factory(
         dm_ao_ptr,
         ao_overlap_ptr,
@@ -180,8 +193,10 @@ def oao_factory(
         evaluate_dm_interface,
         byref(update_orbs_oao_funptr),
         byref(obj_func_oao_funptr),
+        byref(extension),
         byref(solver_settings.settings_c),
-        byref(settings.settings_c),
+        byref(solver_state.state_c),
+        None if settings is None else byref(settings.settings_c),
     )
 
     if error:
@@ -194,45 +209,35 @@ def oao_factory(
                 f"OpenTrustRegion OAO factory produced error (code {error})."
             )
 
-    # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the object, and keep the settings
-    # alive, whose callback functions the object calls
+    # the owner of the OAO object, which the solver settings keep alive, keeps alive
+    # what the object calls and the density matrix it updates in place and holds the
+    # dimensions of the orbitals for the ARH factory, and the returned functions are
+    # called with the context the factory has written into the solver settings,
+    # through which they reach the object, and keep the solver settings alive
+    OrbitalOwner(
+        extension.value,
+        solver_settings,
+        {
+            "settings": settings,
+            "solver_state": solver_state,
+            "evaluate_dm_interface": evaluate_dm_interface,
+            "dm_ao": dm_ao,
+        },
+        n_ao,
+        n_particle,
+    )
+    saved_objects = {"solver_settings": solver_settings}
     return (
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_oao_funptr,
+            saved_objects=saved_objects,
             _otr_exception=exception,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-            },
             context=solver_settings.settings_c.context,
         ),
         ObjFuncPyInterface(
             obj_func_funptr=obj_func_oao_funptr,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-            },
+            saved_objects=saved_objects,
             _otr_exception=exception,
             context=solver_settings.settings_c.context,
         ),
     )
-
-
-def oao_deconstructor():
-    if not hasattr(lib, "oao_deconstructor"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_OAO=ON' pip install ."
-        )
-
-    # define result and argument types
-    lib.oao_deconstructor.restype = None
-    lib.oao_deconstructor.argtypes = []
-
-    # call Fortran function
-    lib.oao_deconstructor()
-
-    return

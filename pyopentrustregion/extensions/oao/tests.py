@@ -27,14 +27,18 @@ from pyopentrustregion.python_interface import (
     c_real,
     c_int,
     SolverSettings,
+    SolverState,
     logger_interface_type,
 )
+from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
     n_ao,
     setup_wired_solver_settings,
     check_wired_solver_settings,
+    check_extension_owner,
+    release_mock_extension,
 )
-from pyopentrustregion.extensions.oao import OAOSettings, oao_factory, oao_deconstructor
+from pyopentrustregion.extensions.oao import OAOSettings, oao_factory
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -50,7 +54,6 @@ fortran_tests = {
         "hess_x_oao",
         "hess_x_static_oao",
         "init_oao_settings",
-        "oao_deconstructor",
         "oao_factory_common",
         "oao_factory_cs",
         "oao_factory_os",
@@ -73,12 +76,8 @@ fortran_tests = {
     "oao_c_interface_tests": [
         "assign_oao_c_f",
         "assign_oao_f_c",
-        "evaluate_dm_oao_f_wrapper",
-        "get_response_oao_f_wrapper",
         "init_oao_settings_c",
-        "oao_deconstructor_c_wrapper",
         "oao_factory_c_wrapper",
-        "update_orbs_oao_c_wrapper",
     ],
 }
 
@@ -186,8 +185,13 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
         return
 
-    # replace original library with mock library
+    # replace original library with mock library, also for the release of the
+    # extensions the factory returns
     @patch("pyopentrustregion.python_interface.lib.oao_factory", lib.mock_oao_factory)
+    @patch(
+        "pyopentrustregion.extensions.common.python_interface.release_extension",
+        release_mock_extension,
+    )
     def test_oao_factory_py_interface(self):
         """
         this function tests the OAO factory python interface
@@ -218,8 +222,21 @@ class OAOPyInterfaceTests(unittest.TestCase):
             n_ao,
             self.mock_evaluate_dm,
             solver_settings,
+            SolverState(),
             settings,
         )
+
+        # check that the settings and the density matrix evaluating function were
+        # passed
+        if not (
+            c_bool.in_dll(lib, "oao_settings_passed").value
+            and c_bool.in_dll(lib, "oao_evaluate_dm_passed").value
+        ):
+            print(
+                " test_oao_factory_py_interface failed: Settings or density matrix "
+                "evaluating function not passed."
+            )
+            test_passed = False
 
         # check the solver settings the factory wired
         if not check_wired_solver_settings(
@@ -333,8 +350,71 @@ class OAOPyInterfaceTests(unittest.TestCase):
             n_ao,
             self.mock_evaluate_dm,
             setup_wired_solver_settings()[0],
+            SolverState(),
             settings,
         )
+
+        # call OAO factory python interface without settings and without a density
+        # matrix evaluating function, which have to be passed as none, and determine if
+        # the owner of the object holds the dimensions of the orbitals for the ARH
+        # factory and keeps the density matrix alive
+        settings_flag = c_bool.in_dll(lib, "oao_settings_passed")
+        evaluate_dm_flag = c_bool.in_dll(lib, "oao_evaluate_dm_passed")
+        settings_flag.value = True
+        evaluate_dm_flag.value = True
+        dm_ao = np.full((n_particle, n_ao, n_ao), 1.0, dtype=np.float64)
+        solver_settings = setup_wired_solver_settings()[0]
+        try:
+            oao_factory(
+                dm_ao,
+                ao_overlap,
+                n_particle,
+                n_ao,
+                None,
+                solver_settings,
+                SolverState(),
+            )
+        except RuntimeError:
+            print(
+                " test_oao_factory_py_interface failed: Call without settings and "
+                "density matrix evaluating function raises error."
+            )
+            test_passed = False
+        if settings_flag.value or evaluate_dm_flag.value:
+            print(
+                " test_oao_factory_py_interface failed: Settings or density matrix "
+                "evaluating function passed although none were given."
+            )
+            test_passed = False
+        owner = getattr(solver_settings, "_extension_owner", None)
+        if (
+            not isinstance(owner, OrbitalOwner)
+            or owner.n_ao != n_ao
+            or owner.n_particle != n_particle
+            or owner.saved_objects.get("dm_ao") is not dm_ao
+        ):
+            print(
+                " test_oao_factory_py_interface failed: Owner of the object does not "
+                "hold the dimensions of the orbitals or the density matrix."
+            )
+            test_passed = False
+
+        # the factory hands the extension it receives to an owner, which the solver
+        # settings keep alive and which keeps the state alive
+        if not check_extension_owner(
+            lambda solver_settings, solver_state: oao_factory(
+                np.full(2 * (n_ao,), 1.0, dtype=np.float64),
+                ao_overlap,
+                1,
+                n_ao,
+                self.mock_evaluate_dm,
+                solver_settings,
+                solver_state,
+                settings,
+            ),
+            "oao_factory_py_interface",
+        ):
+            test_passed = False
 
         # call oao_factory python interface for invalid density and overlap matrices,
         # which have to raise an error before the Fortran factory is called
@@ -409,7 +489,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         )
         for case, args, error_type in invalid_cases:
             try:
-                oao_factory(*args, SolverSettings(), settings)
+                oao_factory(*args, SolverSettings(), SolverState(), settings)
                 print(
                     f" test_oao_factory_py_interface failed: {case} did not raise an "
                     "error."
@@ -423,32 +503,6 @@ class OAOPyInterfaceTests(unittest.TestCase):
             "test_oao_factory_py_interface failed",
         )
         print(" test_oao_factory_py_interface PASSED")
-
-    # replace original library with mock library
-    @patch(
-        "pyopentrustregion.python_interface.lib.oao_deconstructor",
-        lib.mock_oao_deconstructor,
-    )
-    def test_oao_deconstructor_py_interface(self):
-        """
-        this function tests the OAO deconstructor python interface
-        """
-        # initialize test flag
-        test_passed = True
-
-        # call OAO deconstructor python interface
-        oao_deconstructor()
-
-        # check if deconstructor was called correctly
-        if not c_bool.in_dll(lib, "test_oao_deconstructor_interface").value:
-            print(
-                " test_oao_deconstructor_py_interface failed: Deconstructor called "
-                "wrong."
-            )
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_oao_deconstructor_py_interface failed")
-        print(" test_oao_deconstructor_py_interface PASSED")
 
     @patch.object(OAOSettings, "init_c_struct", lib.mock_init_oao_settings)
     def test_oao_settings(self):

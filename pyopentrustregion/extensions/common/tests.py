@@ -40,7 +40,7 @@ fortran_tests = {
     "common_tests": [
         "approx_hess_x_callback",
         "channel_rows",
-        "check_unwired_extension",
+        "check_evaluate_dm_orbital_basis",
         "compute_sqrt_and_inv_sqrt",
         "conv_check_callback",
         "conv_check_stability_callback",
@@ -80,8 +80,10 @@ fortran_tests = {
         "bundle_settings_c",
         "conv_check_c_wrapper",
         "conv_check_stability_c_wrapper",
+        "evaluate_dm_f_wrapper",
         "finish_extension_holder",
         "get_extra_trial_vectors_c_wrapper",
+        "get_response_f_wrapper",
         "hess_x_c_wrapper",
         "holder_level",
         "logger_c_wrapper",
@@ -103,6 +105,18 @@ getattr(lib, "test_" + fortran_tests["common_tests"][0])
 
 # number of AOs
 n_ao = c_int.in_dll(lib, "test_n_ao").value
+
+
+def release_mock_extension(extension):
+    """
+    this function frees an extension a mock factory returned through the mock release
+    of the library, so that the owners the Python factories set up in their tests,
+    whose finalizers keep the release they were set up with, never call the release of
+    the library, also when they are finalized after the test
+    """
+    lib.mock_release_extension.restype = None
+    lib.mock_release_extension.argtypes = [c_void_p]
+    lib.mock_release_extension(extension)
 
 
 def setup_wired_solver_settings():
@@ -170,7 +184,8 @@ def check_wired_solver_settings(
             test_passed = False
 
     # assign a Hessian linear transformation for the stability check after the wiring
-    # and call it through the C settings with the context the mock factory wrote
+    # and call it through the C settings with the context the mock factory wrote and
+    # the number of parameters and exception collector the solver would hand it
     x = np.ones(n_param, dtype=np.float64)
     hess_x = np.zeros(n_param, dtype=np.float64)
 
@@ -178,7 +193,8 @@ def check_wired_solver_settings(
         hess_x[:] = 4 * x
 
     solver_settings.stability_hess_x = stability_hess_x
-    solver_settings.prepare_call(n_param, {})
+    solver_settings._n_param = n_param
+    solver_settings._exception = {}
     error = hess_x_interface_type(solver_settings.settings_c.stability_hess_x)(
         x.ctypes.data_as(POINTER(c_real)),
         hess_x.ctypes.data_as(POINTER(c_real)),
@@ -474,7 +490,9 @@ class CommonPyInterfaceTests(unittest.TestCase):
             print(" test_extension_owner failed: Owners not kept alive.")
             test_passed = False
 
-        # dropping the earlier owner releases nothing, since the latest keeps it alive
+        # dropping the earlier owner releases nothing, since the latest keeps it alive,
+        # after releasing the owners earlier tests left in reference cycles
+        gc.collect()
         n_released_extensions.value = 0
         del first
         gc.collect()

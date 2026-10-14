@@ -6,7 +6,7 @@
 
 module otr_common_c_interface_unit_tests
 
-    use opentrustregion, only: ip, stderr, solver_state_type
+    use opentrustregion, only: rp, ip, stderr, solver_state_type
     use c_interface, only: c_rp, c_ip, solver_state_type_c
     use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type
     use test_reference, only: tol_c, n_param
@@ -227,16 +227,15 @@ contains
 
     end subroutine setup_mock_extension_holder
 
-    function check_c_factory_wiring( &
-        test_name, holder, extension, update_orbs_c_funptr, obj_func_c_funptr, &
-        solver_settings_c, update_orbs_c_wrapper_funptr) result(test_passed)
+    function check_c_factory_wiring(test_name, holder, extension, &
+                                    update_orbs_c_funptr, obj_func_c_funptr, &
+                                    solver_settings_c) result(test_passed)
         !
-        ! this function checks that the C wrapper of a factory returned the C wrappers
-        ! of the orbital update, the given one or otherwise the shared one, and of the
-        ! objective function and wrote the solver settings back with the address of the
-        ! level of the solver of its holder as context, which has to hold the levels of
-        ! the extension object and the settings it wired with the object's level of the
-        ! solver as context
+        ! this function checks that the C wrapper of a factory returned the shared C
+        ! wrappers of the orbital update and the objective function and wrote the
+        ! solver settings back with the address of the level of the solver of its
+        ! holder as context, which has to hold the levels of the extension object and
+        ! the settings it wired with the object's level of the solver as context
         !
         use c_interface, only: solver_settings_type_c
         use otr_common, only: extension_type
@@ -248,22 +247,13 @@ contains
         class(extension_type), intent(in), target :: extension
         type(c_funptr), intent(in) :: update_orbs_c_funptr, obj_func_c_funptr
         type(solver_settings_type_c), intent(in) :: solver_settings_c
-        type(c_funptr), intent(in), optional :: update_orbs_c_wrapper_funptr
         logical :: test_passed
-
-        type(c_funptr) :: expected_update_orbs_c_funptr
 
         ! assume tests pass
         test_passed = .true.
 
-        ! the factory returns the shared C wrapper of the orbital update unless another
-        ! one is given
-        expected_update_orbs_c_funptr = c_funloc(update_orbs_c_wrapper)
-        if (present(update_orbs_c_wrapper_funptr)) &
-            expected_update_orbs_c_funptr = update_orbs_c_wrapper_funptr
-
         if (.not. c_associated(update_orbs_c_funptr, &
-                               expected_update_orbs_c_funptr) .or. &
+                               c_funloc(update_orbs_c_wrapper)) .or. &
             .not. c_associated(obj_func_c_funptr, c_funloc(obj_func_c_wrapper))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: C wrappers of the object not returned."
@@ -500,8 +490,8 @@ contains
             if (i_case == 10) settings_c%initialized = .false.
             holder%solver_level%level => extension%solver_level
 
-            call setup_extension_holder(holder, settings_c, settings, error, &
-                                        c_funloc(mock_update_orbs), &
+            call setup_extension_holder(holder, settings_c, c_loc(state_c), settings, &
+                                        error, c_funloc(mock_update_orbs), &
                                         c_funloc(mock_obj_func))
             if (error /= 0) then
                 write(stderr, *) "test_setup_extension_holder failed: Produced "// &
@@ -548,17 +538,11 @@ contains
         ! set up the holder for an object which wraps no orbital update or objective
         ! function of the host, whose bundle has to hold neither
         call get_reference_solver_values(settings_c)
-        call setup_extension_holder(holder, settings_c, settings, error)
+        call setup_extension_holder(holder, settings_c, c_loc(state_c), settings, error)
         if (error /= 0 .or. associated(holder%solver_level%callbacks%update_orbs) .or. &
             associated(holder%solver_level%callbacks%obj_func)) then
             write(stderr, *) "test_setup_extension_holder failed: Holder set up "// &
                 "wrong without the host's orbital update and objective function."
-            test_setup_extension_holder = .false.
-        end if
-        if (associated(holder%solver_level%state_c) .or. &
-            associated(holder%stability_level%state_c)) then
-            write(stderr, *) "test_setup_extension_holder failed: Record of the "// &
-                "state held although none was given."
             test_setup_extension_holder = .false.
         end if
 
@@ -570,8 +554,7 @@ contains
         call get_reference_solver_state_values(state_c)
         holder%state%max_precision_reached = .true.
         allocate(c_callbacks_type :: holder%extension_callbacks)
-        call setup_extension_holder(holder, settings_c, settings, error, &
-                                    solver_state_c=c_loc(state_c))
+        call setup_extension_holder(holder, settings_c, c_loc(state_c), settings, error)
         if (error /= 0 .or. .not. allocated(holder%extension_callbacks)) then
             write(stderr, *) "test_setup_extension_holder failed: Holder set up "// &
                 "wrong with a record of the state."
@@ -588,53 +571,19 @@ contains
             test_setup_extension_holder = .false.
         end if
 
-        ! set up the holder without a record of the state where one is required, which
-        ! has to produce an error and leave the holder untouched
+        ! set up the holder without a record of the state, which has to produce an
+        ! error and leave the holder untouched
         call setup_error_logging(settings, log_context)
         call get_reference_solver_values(settings_c)
         holder%solver_level%level => extension%solver_level
         log_context%log_message = ""
-        call setup_extension_holder(holder, settings_c, settings, error, &
-                                    solver_state_c=c_null_ptr)
+        call setup_extension_holder(holder, settings_c, c_null_ptr, settings, error)
         if (error == 0 .or. log_context%log_message == "" .or. &
             .not. associated(holder%solver_level%level, extension%solver_level)) then
             write(stderr, *) "test_setup_extension_holder failed: No error "// &
                 "returned and printed or holder changed without a record of the state."
             test_setup_extension_holder = .false.
         end if
-
-        ! set up the holder with C solver settings or nested settings that the holder
-        ! was already wired into, which has to produce an error and leave the holder
-        ! untouched
-        do i_case = 1, 2
-            call get_reference_solver_values(settings_c)
-            if (i_case == 1) then
-                settings_c%context = c_loc(holder%solver_level)
-            else
-                settings_c%stability_settings%context = c_loc(holder%stability_level)
-            end if
-            holder%solver_level%level => extension%solver_level
-            log_context%log_message = ""
-            call setup_extension_holder(holder, settings_c, settings, error, &
-                                        c_funloc(mock_update_orbs), &
-                                        c_funloc(mock_obj_func))
-            if (error == 0) then
-                write(stderr, *) "test_setup_extension_holder failed: No error "// &
-                    "returned for settings the holder was wired into."
-                test_setup_extension_holder = .false.
-            end if
-            if (log_context%log_message == "") then
-                write(stderr, *) "test_setup_extension_holder failed: No error "// &
-                    "message printed for settings the holder was wired into."
-                test_setup_extension_holder = .false.
-            end if
-            if (.not. associated(holder%solver_level%level, extension%solver_level)) &
-                then
-                write(stderr, *) "test_setup_extension_holder failed: Holder "// &
-                    "changed for settings the holder was wired into."
-                test_setup_extension_holder = .false.
-            end if
-        end do
 
     end function test_setup_extension_holder
 
@@ -909,7 +858,8 @@ contains
         ! callback function with the level of an extension object held at the address
         ! it receives as context, or the host's C function for an object that does not
         ! perform it, whose Hessian linear transformation it keeps in the bundles of
-        ! both levels, and returns the C wrapper of the Hessian linear transformation
+        ! both levels, returns the C wrapper of the Hessian linear transformation and
+        ! copies the orbitals back to the host's array if the object updates a copy
         !
         use c_interface_unit_tests, only: mock_update_orbs, &
                                           mock_update_orbs_no_hess_x, mock_hess_x
@@ -923,6 +873,8 @@ contains
         real(c_rp) :: kappa_c(n_param + 1), func_c, grad_c(n_param + 1), &
                       h_diag_c(n_param + 1)
         type(c_funptr) :: hess_x_c_funptr
+        real(rp), target :: orbitals(2, 2, 1)
+        real(c_rp), target :: orbitals_c(2, 2, 1)
         integer(c_ip) :: error_c
         integer(ip) :: i_case
         character(len=*), parameter :: no_hess_x_case_names(3) = &
@@ -1032,6 +984,24 @@ contains
                 test_update_orbs_c_wrapper = .false.
             end if
         end do
+
+        ! call the orbital update of an object performing it whose holder holds a copy
+        ! of the host's orbitals of another real kind and the host's array, as the C
+        ! factories of the orbital bases hold them if the real kinds differ, and
+        ! determine if the orbitals are copied back to the host's array
+        extension%provides%update_orbs = .true.
+        call setup_mock_extension_holder(holder, extension, 1_ip)
+        call random_number(orbitals)
+        orbitals_c = 0.0_c_rp
+        holder%solver_level%orbitals => orbitals
+        holder%solver_level%orbitals_c => orbitals_c
+        error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
+                                        hess_x_c_funptr, c_loc(holder%solver_level))
+        if (any(abs(orbitals_c - real(orbitals, kind=c_rp)) > tol_c)) then
+            write(stderr, *) "test_update_orbs_c_wrapper failed: Orbitals not "// &
+                "copied back to the host's array."
+            test_update_orbs_c_wrapper = .false.
+        end if
 
         ! call the orbital update without a holder, which has to produce an error and
         ! no Hessian linear transformation
@@ -1773,5 +1743,161 @@ contains
         call logger_c_wrapper("test"//c_null_char, c_null_ptr)
 
     end function test_logger_c_wrapper
+
+    logical(c_bool) function test_evaluate_dm_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrappers for the density matrix evaluating
+        ! function of an orbital basis, which find the C function in the bundle they
+        ! receive as context
+        !
+        use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type
+        use otr_common_c_interface, only: &
+            orbital_c_callbacks_type, evaluate_dm_cs_f_wrapper, evaluate_dm_os_f_wrapper
+        use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
+                                             test_evaluate_dm_os_funptr, n_ao
+        use otr_common_unit_tests, only: mock_requests
+        use test_reference, only: arm_host_context_c, host_context_reached
+
+        type(orbital_c_callbacks_type), target :: callbacks
+        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        class(*), pointer :: context
+        real(rp) :: dm(n_ao, n_ao, 1), energy
+        integer(ip) :: request, error
+
+        ! assume tests pass
+        test_evaluate_dm_f_wrapper = .true.
+
+        ! inject mock C function into a bundle, which the wrapper receives as context
+        callbacks%evaluate_dm => mock_evaluate_dm_cs
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
+
+        ! get pointer to subroutine
+        evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
+
+        ! test density matrix evaluating wrapper, which is called once for every
+        ! combination of requested outputs and has to pass each on to the C function
+        ! unchanged
+        mock_requests = [integer(ip) :: ]
+        if (.not. test_evaluate_dm_cs_funptr(evaluate_dm_cs_funptr, &
+                                             "evaluate_dm_f_wrapper", "", context)) &
+            test_evaluate_dm_f_wrapper = .false.
+        if (size(mock_requests) /= 4 .or. &
+            .not. all([(any(mock_requests == request), request=0, 3)])) then
+            write(stderr, *) "test_evaluate_dm_f_wrapper failed: Outputs passed on "// &
+                "to density matrix evaluating C function for closed-shell case wrong."
+            test_evaluate_dm_f_wrapper = .false.
+        end if
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("evaluate_dm_f_wrapper")) &
+            test_evaluate_dm_f_wrapper = .false.
+
+        ! inject mock C function and arm the host context again
+        callbacks%evaluate_dm => mock_evaluate_dm_os
+        call arm_host_context_c(callbacks%host_context)
+
+        ! get pointer to subroutine
+        evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
+
+        ! test density matrix evaluating wrapper, which is called once for every
+        ! combination of requested outputs and has to pass each on to the C function
+        ! unchanged
+        mock_requests = [integer(ip) :: ]
+        if (.not. test_evaluate_dm_os_funptr(evaluate_dm_os_funptr, &
+                                             "evaluate_dm_f_wrapper", "", context)) &
+            test_evaluate_dm_f_wrapper = .false.
+        if (size(mock_requests) /= 4 .or. &
+            .not. all([(any(mock_requests == request), request=0, 3)])) then
+            write(stderr, *) "test_evaluate_dm_f_wrapper failed: Outputs passed on "// &
+                "to density matrix evaluating C function for open-shell case wrong."
+            test_evaluate_dm_f_wrapper = .false.
+        end if
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("evaluate_dm_f_wrapper")) &
+            test_evaluate_dm_f_wrapper = .false.
+
+        ! a context that is no bundle has to produce an error
+        dm = 0.0_rp
+        context => null()
+        call evaluate_dm_os_f_wrapper(dm, energy, error=error, context=context)
+        if (error == 0) then
+            write(stderr, *) "test_evaluate_dm_f_wrapper failed: No error produced "// &
+                "without a bundle."
+            test_evaluate_dm_f_wrapper = .false.
+        end if
+
+    end function test_evaluate_dm_f_wrapper
+
+    logical(c_bool) function test_get_response_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrappers for the response function of an
+        ! orbital basis, which find the C function the density matrix evaluating
+        ! function returned last in the bundle they receive as context
+        !
+        use otr_common, only: get_response_cs_type, get_response_os_type
+        use otr_common_c_interface, only: orbital_c_callbacks_type, &
+                                          get_response_cs_f_wrapper, &
+                                          get_response_os_f_wrapper
+        use otr_common_test_reference, only: test_get_response_cs_funptr, &
+                                             test_get_response_os_funptr, n_ao
+        use test_reference, only: arm_host_context_c, host_context_reached
+
+        type(orbital_c_callbacks_type), target :: callbacks
+        procedure(get_response_cs_type), pointer :: get_response_cs_funptr
+        procedure(get_response_os_type), pointer :: get_response_os_funptr
+        class(*), pointer :: context
+        real(rp) :: dm(n_ao, n_ao, 1), response(n_ao, n_ao, 1)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_get_response_f_wrapper = .true.
+
+        ! inject mock C function into a bundle, which the wrapper receives as context
+        callbacks%get_response => mock_get_response_cs
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
+
+        ! get pointer to subroutine
+        get_response_cs_funptr => get_response_cs_f_wrapper
+
+        ! test response function wrapper
+        if (.not. test_get_response_cs_funptr(get_response_cs_funptr, &
+                                              "get_response_f_wrapper", "", context)) &
+            test_get_response_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("get_response_f_wrapper")) &
+            test_get_response_f_wrapper = .false.
+
+        ! inject mock C function and arm the host context again
+        callbacks%get_response => mock_get_response_os
+        call arm_host_context_c(callbacks%host_context)
+
+        ! get pointer to subroutine
+        get_response_os_funptr => get_response_os_f_wrapper
+
+        ! test response function wrapper
+        if (.not. test_get_response_os_funptr(get_response_os_funptr, &
+                                              "get_response_f_wrapper", "", context)) &
+            test_get_response_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("get_response_f_wrapper")) &
+            test_get_response_f_wrapper = .false.
+
+        ! a context that is no bundle has to produce an error
+        dm = 0.0_rp
+        context => null()
+        call get_response_os_f_wrapper(dm, response, error, context)
+        if (error == 0) then
+            write(stderr, *) "test_get_response_f_wrapper failed: No error "// &
+                "produced without a bundle."
+            test_get_response_f_wrapper = .false.
+        end if
+
+    end function test_get_response_f_wrapper
 
 end module otr_common_c_interface_unit_tests

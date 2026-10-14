@@ -7,10 +7,8 @@
 from __future__ import annotations
 
 import operator
-import weakref
 import numpy as np
 from ctypes import POINTER, byref, c_bool, c_void_p, Structure
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
@@ -25,6 +23,8 @@ from pyopentrustregion.python_interface import (
     Settings,
     SolverSettings,
     SolverSettingsC,
+    SolverState,
+    SolverStateC,
     auto_bind_fields,
     bind_callback_fields,
 )
@@ -32,12 +32,13 @@ from pyopentrustregion.extensions.common.python_interface import (
     evaluate_dm_interface_type,
     EvaluateDMInterface,
     ObjFuncPyInterface,
+    OrbitalOwner,
     UpdateOrbsPyInterface,
     check_callback_arguments,
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any, Union, Sequence, Dict
+    from typing import Tuple, Callable, Optional, Any, Union, Sequence
     from pyopentrustregion.extensions.common.python_interface import EvaluateDMType
 
 
@@ -74,12 +75,6 @@ auto_bind_fields(MOSettings)
 bind_callback_fields(MOSettings)
 
 
-# column-major copies of the MO coefficient arrays of the callers which cannot be
-# rotated in place, which the factories of every MO-basis extension share per array,
-# keyed by the identity of the array of the caller, which is only referenced weakly
-_mo_coeff_buffers: Dict[int, Tuple[weakref.ref, np.ndarray]] = {}
-
-
 def check_mo_coeff(
     mo_coeff: np.ndarray,
     ao_overlap: np.ndarray,
@@ -93,10 +88,9 @@ def check_mo_coeff(
     (n_ao, n_mo) array for the closed-shell case and as a (2, n_ao, n_mo) array for the
     open-shell case, with one number of occupied orbitals per particle channel, and
     that they can be rotated in place, and returns the column-major buffer the library
-    rotates, whether it is the array of the caller itself, the occupations as a C array
-    and the AO overlap matrix as a contiguous array; the buffer is shared by every
-    factory called with the same array object, since all of them point the same MO
-    object at it, and takes over the current values of the array of the caller
+    rotates, which is the array of the caller itself if it is stored like that and a
+    copy of it otherwise, whether it is the array of the caller, the occupations as a C
+    array and the AO overlap matrix as a contiguous array
     """
     n_particle, n_ao, n_mo = (operator.index(n) for n in (n_particle, n_ao, n_mo))
     shape = (n_ao, n_mo) if n_particle == 1 else (n_particle, n_ao, n_mo)
@@ -127,29 +121,12 @@ def check_mo_coeff(
         )
 
     # pass the MO coefficients column-major, rotating the caller's array in place if it
-    # is stored like that, which every factory then does through its own view, and a
-    # buffer copied back after every update otherwise, taking over the buffer of a
-    # previous factory called with the same array
+    # is stored like that and a copy otherwise
     mo_coeff_t = mo_coeff.swapaxes(-1, -2)
     in_place = mo_coeff.dtype == np.float64 and mo_coeff_t.flags.c_contiguous
-    if in_place:
-        mo_coeff_buffer = mo_coeff_t
-    else:
-        entry = _mo_coeff_buffers.get(id(mo_coeff))
-        if (
-            entry is not None
-            and entry[0]() is mo_coeff
-            and entry[1].shape == mo_coeff_t.shape
-        ):
-            mo_coeff_buffer = entry[1]
-            np.copyto(mo_coeff_buffer, mo_coeff_t)
-        else:
-            mo_coeff_buffer = np.ascontiguousarray(mo_coeff_t, dtype=np.float64)
-            key = id(mo_coeff)
-            _mo_coeff_buffers[key] = (
-                weakref.ref(mo_coeff, lambda _: _mo_coeff_buffers.pop(key, None)),
-                mo_coeff_buffer,
-            )
+    mo_coeff_buffer = (
+        mo_coeff_t if in_place else np.ascontiguousarray(mo_coeff_t, dtype=np.float64)
+    )
 
     return mo_coeff_buffer, in_place, n_occ_c, ao_overlap
 
@@ -180,42 +157,6 @@ def check_orbsym(
     return (c_int * orbsym.size)(*(int(irrep) for irrep in orbsym.ravel()))
 
 
-# define interface factories
-@dataclass
-class ObjFuncMOPyInterface(ObjFuncPyInterface):
-    """
-    this class provides the Python interface to the objective function for orbitals
-    parameterized in the MO basis, mo_coeff_buffer is stored to ensure that the MO
-    coefficients the library works on are not garbage collected
-    """
-
-    mo_coeff_buffer: Optional[np.ndarray] = None
-
-
-@dataclass
-class UpdateOrbsMOPyInterface(UpdateOrbsPyInterface):
-    """
-    this class provides the Python interface to the orbital updating function for
-    orbitals parameterized in the MO basis, which additionally copies the rotated MO
-    coefficients back into the array of the caller whenever the library could not
-    rotate that array in place
-    """
-
-    mo_coeff: Optional[np.ndarray] = None
-    mo_coeff_buffer: Optional[np.ndarray] = None
-
-    def __call__(
-        self, kappa: np.ndarray, grad: np.ndarray, h_diag: np.ndarray
-    ) -> Tuple[float, Callable[[np.ndarray, np.ndarray], None]]:
-        try:
-            return super().__call__(kappa, grad, h_diag)
-        finally:
-            # copy rotated MO coefficients back, also on failure since the buffer may
-            # have been rotated by then
-            if self.mo_coeff is not None and self.mo_coeff_buffer is not None:
-                np.copyto(self.mo_coeff, self.mo_coeff_buffer.swapaxes(-1, -2))
-
-
 def mo_factory(
     mo_coeff: np.ndarray,
     ao_overlap: np.ndarray,
@@ -223,9 +164,10 @@ def mo_factory(
     n_particle: int,
     n_ao: int,
     n_mo: int,
-    evaluate_dm: EvaluateDMType,
+    evaluate_dm: Optional[EvaluateDMType],
     solver_settings: SolverSettings,
-    settings: MOSettings,
+    solver_state: SolverState,
+    settings: Optional[MOSettings] = None,
     orbsym: Optional[Union[Sequence[int], np.ndarray]] = None,
 ) -> Tuple[
     Callable[
@@ -252,14 +194,20 @@ def mo_factory(
     exception = adopt_collector(evaluate_dm)
 
     # define interfaces for callback functions, whose arguments the C interface cannot
-    # check
-    check_callback_arguments(evaluate_dm, "evaluate_dm", ("dm", "fock", "get_response"))
-    evaluate_dm_interface = evaluate_dm_interface_type(
-        EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
-    )
+    # check, without a density matrix evaluating function for an object only the ARH
+    # factory builds on
+    evaluate_dm_interface = evaluate_dm_interface_type()
+    if evaluate_dm is not None:
+        check_callback_arguments(
+            evaluate_dm, "evaluate_dm", ("dm", "fock", "get_response")
+        )
+        evaluate_dm_interface = evaluate_dm_interface_type(
+            EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
+        )
 
     # hand the logging function of the settings the exception collector of the call
-    settings.prepare_call(None, exception)
+    if settings is not None:
+        settings.prepare_call(None, exception)
 
     if not hasattr(lib, "mo_factory"):
         raise RuntimeError(
@@ -279,7 +227,9 @@ def mo_factory(
         evaluate_dm_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
+        POINTER(c_void_p),
         POINTER(SolverSettingsC),
+        POINTER(SolverStateC),
         POINTER(MOSettingsC),
         POINTER(c_int),
     ]
@@ -287,6 +237,7 @@ def mo_factory(
     # call Fortran function
     update_orbs_mo_funptr = update_orbs_interface_type()
     obj_func_mo_funptr = obj_func_interface_type()
+    extension = c_void_p()
     error = lib.mo_factory(
         mo_coeff_ptr,
         ao_overlap_ptr,
@@ -297,8 +248,10 @@ def mo_factory(
         evaluate_dm_interface,
         byref(update_orbs_mo_funptr),
         byref(obj_func_mo_funptr),
+        byref(extension),
         byref(solver_settings.settings_c),
-        byref(settings.settings_c),
+        byref(solver_state.state_c),
+        None if settings is None else byref(settings.settings_c),
         orbsym_c,
     )
 
@@ -312,49 +265,42 @@ def mo_factory(
                 f"OpenTrustRegion MO factory produced error (code {error})."
             )
 
-    # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the object, and keep the settings
-    # alive, whose callback functions the object calls
-    return (
-        UpdateOrbsMOPyInterface(
-            update_orbs_funptr=update_orbs_mo_funptr,
-            _otr_exception=exception,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-                "mo_coeff_buffer": mo_coeff_buffer,
-            },
-            mo_coeff=None if in_place else mo_coeff,
-            mo_coeff_buffer=None if in_place else mo_coeff_buffer,
-            context=solver_settings.settings_c.context,
+    # the owner of the MO object, which the solver settings keep alive, keeps alive
+    # what the object calls and the MO coefficients it rotates and holds the dimensions
+    # of the orbitals and, if the library rotates a copy of the MO coefficients, the
+    # function copying them back for the ARH factory, and the returned functions are
+    # called with the context the factory has written into the solver settings,
+    # through which they reach the object, and keep the solver settings alive
+    owner = OrbitalOwner(
+        extension.value,
+        solver_settings,
+        {
+            "settings": settings,
+            "solver_state": solver_state,
+            "evaluate_dm_interface": evaluate_dm_interface,
+            "mo_coeff_buffer": mo_coeff_buffer,
+        },
+        n_ao,
+        n_particle,
+        (
+            None
+            if in_place
+            else lambda: np.copyto(mo_coeff, mo_coeff_buffer.swapaxes(-1, -2))
         ),
-        ObjFuncMOPyInterface(
-            obj_func_funptr=obj_func_mo_funptr,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-            },
+    )
+    saved_objects = {"solver_settings": solver_settings}
+    return (
+        UpdateOrbsPyInterface(
+            update_orbs_funptr=update_orbs_mo_funptr,
+            saved_objects=saved_objects,
             _otr_exception=exception,
-            mo_coeff_buffer=mo_coeff_buffer,
+            context=solver_settings.settings_c.context,
+            copy_back=owner.copy_back,
+        ),
+        ObjFuncPyInterface(
+            obj_func_funptr=obj_func_mo_funptr,
+            saved_objects=saved_objects,
+            _otr_exception=exception,
             context=solver_settings.settings_c.context,
         ),
     )
-
-
-def mo_deconstructor():
-    if not hasattr(lib, "mo_deconstructor"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_MO=ON' pip install ."
-        )
-
-    # define result and argument types
-    lib.mo_deconstructor.restype = None
-    lib.mo_deconstructor.argtypes = []
-
-    # call Fortran function
-    lib.mo_deconstructor()
-
-    return

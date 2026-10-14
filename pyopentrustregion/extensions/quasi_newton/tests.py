@@ -38,6 +38,7 @@ from pyopentrustregion.extensions.common.tests import (
     setup_wired_solver_settings,
     check_wired_solver_settings,
     check_extension_owner,
+    release_mock_extension,
 )
 
 if NUMPY_AVAILABLE:
@@ -169,10 +170,15 @@ class QNPyInterfaceTests(unittest.TestCase):
 
     mock_logger = LegacyPyInterfaceHelpers.mock_logger
 
-    # replace original library with mock library
+    # replace original library with mock library, also for the release of the
+    # extensions the factory returns
     @patch(
         "pyopentrustregion.python_interface.lib.qn_factory",
         lib.mock_qn_factory,
+    )
+    @patch(
+        "pyopentrustregion.extensions.common.python_interface.release_extension",
+        release_mock_extension,
     )
     def test_qn_factory_py_interface(self):
         """

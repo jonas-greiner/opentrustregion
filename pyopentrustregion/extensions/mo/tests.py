@@ -30,15 +30,18 @@ from pyopentrustregion.python_interface import (
     c_int,
     update_orbs_interface_type,
     SolverSettings,
+    SolverState,
     logger_interface_type,
 )
+from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
     n_ao,
     setup_wired_solver_settings,
     check_wired_solver_settings,
+    check_extension_owner,
+    release_mock_extension,
 )
-from pyopentrustregion.extensions.mo import MOSettings, mo_factory, mo_deconstructor
-from pyopentrustregion.extensions.mo.python_interface import UpdateOrbsMOPyInterface
+from pyopentrustregion.extensions.mo import MOSettings, mo_factory
 
 if NUMPY_AVAILABLE:
     import numpy as np
@@ -57,7 +60,6 @@ fortran_tests = {
         "hess_x_mo",
         "hess_x_static_mo",
         "init_mo_settings",
-        "mo_deconstructor",
         "mo_factory_common",
         "mo_factory_cs",
         "mo_factory_os",
@@ -77,12 +79,8 @@ fortran_tests = {
     "mo_c_interface_tests": [
         "assign_mo_c_f",
         "assign_mo_f_c",
-        "evaluate_dm_mo_f_wrapper",
-        "get_response_mo_f_wrapper",
         "init_mo_settings_c",
-        "mo_deconstructor_c_wrapper",
         "mo_factory_c_wrapper",
-        "update_orbs_mo_c_wrapper",
     ],
 }
 
@@ -198,8 +196,13 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         return
 
-    # replace original library with mock library
+    # replace original library with mock library, also for the release of the
+    # extensions the factory returns
     @patch("pyopentrustregion.python_interface.lib.mo_factory", lib.mock_mo_factory)
+    @patch(
+        "pyopentrustregion.extensions.common.python_interface.release_extension",
+        release_mock_extension,
+    )
     def test_mo_factory_py_interface(self):
         """
         this function tests the MO factory python interface
@@ -268,6 +271,7 @@ class MOPyInterfaceTests(unittest.TestCase):
                 n_mo,
                 self.mock_evaluate_dm,
                 solver_settings,
+                SolverState(),
                 settings,
                 orbsym=(
                     (orbsym[0] if n_particle == 1 else orbsym) if with_irreps else None
@@ -346,9 +350,13 @@ class MOPyInterfaceTests(unittest.TestCase):
                 test_passed = False
 
             # check if MO coefficients stored column-major in double precision are
-            # rotated in place and all others copied back
+            # rotated in place and all others copied back, by the returned orbital
+            # updating function and for the ARH factory by the owner of the object
             in_place = column_major and dtype == np.float64
-            if (update_orbs_mo.mo_coeff is None) != in_place:
+            owner = solver_settings._extension_owner
+            if (
+                update_orbs_mo.copy_back is None
+            ) != in_place or owner.copy_back is not update_orbs_mo.copy_back:
                 print(
                     " test_mo_factory_py_interface failed: MO coefficients "
                     f"{'not ' if in_place else ''}rotated in place for the {case} case."
@@ -366,57 +374,73 @@ class MOPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
-        # call MO factory python interface for row-major MO coefficients and its
-        # orbital updating function, set new starting orbitals in the same array and
-        # call the factory again, which has to take them over and share the buffer the
-        # library rotates with the first call, since the MO object only points to the
-        # buffer of the latest call
-        mo_coeff = initial_mo_coeff(1, False, np.float64)
-        kappa = np.ones(n_param, dtype=np.float64)
-        grad = np.empty(n_param, dtype=np.float64)
-        h_diag = np.empty(n_param, dtype=np.float64)
-        args = (mo_coeff, ao_overlap, n_occ[0], 1, n_ao, n_mo, self.mock_evaluate_dm)
-        returned = [mo_factory(*args, setup_wired_solver_settings()[0], settings)]
-        returned[0][0](kappa, grad, h_diag)
-        mo_coeff[:] = mo_coeff_pattern(1, 0.0)[0]
-        returned.append(mo_factory(*args, setup_wired_solver_settings()[0], settings))
-        if not mock_passed.value:
+        # call MO factory python interface without settings and without a density
+        # matrix evaluating function, which have to be passed as none, and determine if
+        # the owner of the object holds the dimensions of the orbitals for the ARH
+        # factory
+        settings_flag = c_bool.in_dll(lib, "mo_settings_passed")
+        evaluate_dm_flag = c_bool.in_dll(lib, "mo_evaluate_dm_passed")
+        settings_flag.value = True
+        evaluate_dm_flag.value = True
+        solver_settings = setup_wired_solver_settings()[0]
+        try:
+            mo_factory(
+                initial_mo_coeff(2, True, np.float64),
+                ao_overlap,
+                n_occ,
+                2,
+                n_ao,
+                n_mo,
+                None,
+                solver_settings,
+                SolverState(),
+            )
+        except RuntimeError:
             print(
-                " test_mo_factory_py_interface failed: New starting orbitals not "
-                "taken over by a repeated factory call for the same array."
+                " test_mo_factory_py_interface failed: Call without settings and "
+                "density matrix evaluating function raises error."
             )
             test_passed = False
-        mock_passed.value = True
-        if returned[0][1].mo_coeff_buffer is not returned[1][1].mo_coeff_buffer:
+        if settings_flag.value or evaluate_dm_flag.value:
             print(
-                " test_mo_factory_py_interface failed: Buffer of the MO coefficients "
-                "not shared between factory calls for the same array."
+                " test_mo_factory_py_interface failed: Settings or density matrix "
+                "evaluating function passed although none were given."
+            )
+            test_passed = False
+        owner = getattr(solver_settings, "_extension_owner", None)
+        if not isinstance(owner, OrbitalOwner) or (owner.n_ao, owner.n_particle) != (
+            n_ao,
+            2,
+        ):
+            print(
+                " test_mo_factory_py_interface failed: Owner of the object does not "
+                "hold the dimensions of the orbitals."
             )
             test_passed = False
 
-        # call MO factory python interface twice for new row-major MO coefficients and
-        # the orbital updating function the first call returned, whose rotated MO
-        # coefficients have to reach the caller, which they would not if it copied back
-        # a buffer of its own, which the library no longer rotates
-        mo_coeff = initial_mo_coeff(1, False, np.float64)
-        args = (mo_coeff, ao_overlap, n_occ[0], 1, n_ao, n_mo, self.mock_evaluate_dm)
-        returned = [
-            mo_factory(*args, setup_wired_solver_settings()[0], settings)
-            for _ in range(2)
-        ]
-        returned[0][0](kappa, grad, h_diag)
-        if not np.allclose(mo_coeff, mo_coeff_pattern(1, 1000.0)[0]):
-            print(
-                " test_mo_factory_py_interface failed: MO coefficients rotated "
-                "through a later factory call not updated by the orbital updating "
-                "function of an earlier one."
-            )
+        # the factory hands the extension it receives to an owner, which the solver
+        # settings keep alive and which keeps the state alive
+        if not check_extension_owner(
+            lambda solver_settings, solver_state: mo_factory(
+                initial_mo_coeff(1, True, np.float64),
+                ao_overlap,
+                n_occ[0],
+                1,
+                n_ao,
+                n_mo,
+                self.mock_evaluate_dm,
+                solver_settings,
+                solver_state,
+                settings,
+            ),
+            "mo_factory_py_interface",
+        ):
             test_passed = False
 
         # call MO factory python interface for MO coefficients stored row-major and
-        # column-major, release them together with the returned functions, and
-        # determine if neither the array owning their memory nor the buffer the library
-        # rotates is kept alive by the buffers shared between factories
+        # column-major, release them together with the returned functions and the
+        # solver settings, and determine if neither the array owning their memory nor
+        # the buffer the library rotates is kept alive
         for column_major in (False, True):
             mo_coeff = initial_mo_coeff(1, column_major, np.float64)
             mo_coeff_ref = weakref.ref(
@@ -431,9 +455,12 @@ class MOPyInterfaceTests(unittest.TestCase):
                 n_mo,
                 self.mock_evaluate_dm,
             )
-            returned = [mo_factory(*args, setup_wired_solver_settings()[0], settings)]
-            mo_coeff_buffer_ref = weakref.ref(returned[0][1].mo_coeff_buffer)
-            del mo_coeff, args, returned
+            solver_settings = setup_wired_solver_settings()[0]
+            returned = mo_factory(*args, solver_settings, SolverState(), settings)
+            mo_coeff_buffer_ref = weakref.ref(
+                solver_settings._extension_owner.saved_objects["mo_coeff_buffer"]
+            )
+            del mo_coeff, args, returned, solver_settings
             gc.collect()
             if mo_coeff_ref() is not None or mo_coeff_buffer_ref() is not None:
                 print(
@@ -444,11 +471,27 @@ class MOPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
-        # call an MO orbital updating function whose library routine rotates the buffer
-        # of row-major MO coefficients and fails, which has to raise an error and still
-        # copy the rotated MO coefficients back to the caller
+        # call the MO orbital updating function the factory returned for row-major MO
+        # coefficients with a library routine which rotates their buffer and fails,
+        # which has to raise an error and still copy the rotated MO coefficients back
+        # to the caller
         mo_coeff = initial_mo_coeff(1, False, np.float64)
-        mo_coeff_buffer = np.ascontiguousarray(mo_coeff.swapaxes(-1, -2))
+        solver_settings = setup_wired_solver_settings()[0]
+        update_orbs_mo = mo_factory(
+            mo_coeff,
+            ao_overlap,
+            n_occ[0],
+            1,
+            n_ao,
+            n_mo,
+            self.mock_evaluate_dm,
+            solver_settings,
+            SolverState(),
+            settings,
+        )[0]
+        mo_coeff_buffer = solver_settings._extension_owner.saved_objects[
+            "mo_coeff_buffer"
+        ]
 
         def failing_update_orbs(
             kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_ptr, context
@@ -456,12 +499,8 @@ class MOPyInterfaceTests(unittest.TestCase):
             mo_coeff_buffer[:] = mo_coeff_pattern(1, 1000.0)[0].T
             return 1
 
-        failing_update_orbs_funptr = update_orbs_interface_type(failing_update_orbs)
-        update_orbs_mo = UpdateOrbsMOPyInterface(
-            update_orbs_funptr=failing_update_orbs_funptr,
-            saved_objects={},
-            mo_coeff=mo_coeff,
-            mo_coeff_buffer=mo_coeff_buffer,
+        update_orbs_mo.update_orbs_funptr = update_orbs_interface_type(
+            failing_update_orbs
         )
         try:
             update_orbs_mo(kappa, grad, h_diag)
@@ -478,6 +517,7 @@ class MOPyInterfaceTests(unittest.TestCase):
                 "failing MO orbital updating function not copied back."
             )
             test_passed = False
+        mock_passed.value = True
 
         # invalid inputs have to raise an error before the library is called
         read_only_mo_coeff = mo_coeff_pattern(1, 0.0)[0]
@@ -617,7 +657,7 @@ class MOPyInterfaceTests(unittest.TestCase):
         )
         for case, args, error_type in invalid_cases:
             try:
-                mo_factory(*args, SolverSettings(), settings)
+                mo_factory(*args, SolverSettings(), SolverState(), settings)
                 print(
                     f" test_mo_factory_py_interface failed: {case} did not raise an "
                     "error."
@@ -643,6 +683,7 @@ class MOPyInterfaceTests(unittest.TestCase):
                     n_mo,
                     self.mock_evaluate_dm,
                     SolverSettings(),
+                    SolverState(),
                     settings,
                     invalid_orbsym,
                 )
@@ -656,32 +697,6 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         self.assertTrue(test_passed, "test_mo_factory_py_interface failed")
         print(" test_mo_factory_py_interface PASSED")
-
-    # replace original library with mock library
-    @patch(
-        "pyopentrustregion.python_interface.lib.mo_deconstructor",
-        lib.mock_mo_deconstructor,
-    )
-    def test_mo_deconstructor_py_interface(self):
-        """
-        this function tests the MO deconstructor python interface
-        """
-        # initialize test flag
-        test_passed = True
-
-        # call MO deconstructor python interface
-        mo_deconstructor()
-
-        # check if deconstructor was called correctly
-        if not c_bool.in_dll(lib, "test_mo_deconstructor_interface").value:
-            print(
-                " test_mo_deconstructor_py_interface failed: Deconstructor called "
-                "wrong."
-            )
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_mo_deconstructor_py_interface failed")
-        print(" test_mo_deconstructor_py_interface PASSED")
 
     @patch.object(MOSettings, "init_c_struct", lib.mock_init_mo_settings)
     def test_mo_settings(self):

@@ -15,7 +15,9 @@ module otr_common_c_interface
     use otr_common, only: extension_level_type, extension_solver_settings_type, &
                           extension_level, update_orbs_callback, obj_func_callback, &
                           hess_x_callback, precond_callback, precond_pd_callback, &
-                          project_callback, get_extra_trial_vectors_callback
+                          project_callback, get_extra_trial_vectors_callback, &
+                          evaluate_dm_cs_type, evaluate_dm_os_type, &
+                          get_response_cs_type, get_response_os_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, c_funloc, &
                                            c_loc, c_f_pointer, c_f_procpointer, &
                                            c_associated, c_null_funptr
@@ -61,12 +63,16 @@ module otr_common_c_interface
     ! one level of the holder of an extension object for C hosts, whose address is the
     ! context of the C wrappers wired into the C settings of the level, holding the
     ! level of the object, the bundle of the host's C callback functions and context of
-    ! the level and, for an object reading the state of the solver, the host's record
-    ! of the state, from which the state the object reads is refreshed
+    ! the level, for an object reading the state of the solver, the host's record of
+    ! the state, from which the state the object reads is refreshed, and, for an object
+    ! updating a copy of the host's orbitals since their real kind differs from C's,
+    ! the copy and the host's array, to which the orbital update copies them back
     type :: holder_level_type
         type(extension_level_type), pointer :: level => null()
         type(c_callbacks_type) :: callbacks
         type(solver_state_type_c), pointer :: state_c => null()
+        real(rp), pointer :: orbitals(:, :, :) => null()
+        real(c_rp), pointer :: orbitals_c(:, :, :) => null()
     end type
 
     ! holder of an extension object for C hosts, with the levels of the solver and of
@@ -110,6 +116,14 @@ module otr_common_c_interface
     procedure(conv_check_stability_c_type), pointer :: &
         conv_check_stability_c_wrapper_ptr => conv_check_stability_c_wrapper
     procedure(logger_c_type), pointer :: logger_c_wrapper_ptr => logger_c_wrapper
+    procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_f_wrapper_ptr => &
+        evaluate_dm_cs_f_wrapper
+    procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_f_wrapper_ptr => &
+        evaluate_dm_os_f_wrapper
+    procedure(get_response_cs_type), pointer :: get_response_cs_f_wrapper_ptr => &
+        get_response_cs_f_wrapper
+    procedure(get_response_os_type), pointer :: get_response_os_f_wrapper_ptr => &
+        get_response_os_f_wrapper
 
 contains
 
@@ -145,57 +159,41 @@ contains
 
     end subroutine bundle_settings_c
 
-    subroutine setup_extension_holder(holder, solver_settings_c, settings, error, &
-                                      update_orbs_c_funptr, obj_func_c_funptr, &
-                                      solver_state_c)
+    subroutine setup_extension_holder(holder, solver_settings_c, solver_state_c, &
+                                      settings, error, update_orbs_c_funptr, &
+                                      obj_func_c_funptr)
         !
         ! this subroutine sets up the holder of an extension object for a C factory by
         ! bundling the callback functions and host contexts of the host's C solver
         ! settings, which it converts to the Fortran solver settings of the holder the
         ! Fortran factory wires, and, for an object wrapping the host's, the host's
-        ! orbital update and objective function, and, for an object reading the state
-        ! of the solver, by holding the host's record of the state, which starts from
-        ! the default state as the solver's does and from which the state the object
-        ! reads is refreshed, after checking that the holder was not already wired into
-        ! the settings
+        ! orbital update and objective function, and by holding the host's record of
+        ! the state, which starts from the default state as the solver's does and from
+        ! which the state the object reads is refreshed
         !
         use opentrustregion, only: settings_type, verbosity_error
         use c_interface, only: solver_settings_type_c, convert_solver_settings_c, &
                                assignment(=)
-        use otr_common, only: settings_wired_twice_error_msg
 
         type(extension_holder_type), intent(inout), target :: holder
         type(solver_settings_type_c), intent(in) :: solver_settings_c
+        type(c_ptr), intent(in) :: solver_state_c
         class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         type(c_funptr), intent(in), optional :: update_orbs_c_funptr, obj_func_c_funptr
-        type(c_ptr), intent(in), optional :: solver_state_c
 
         logical :: nested_own
 
         ! initialize error flag
         error = 0
 
-        ! settings already wired by the holder would let the callback functions wired
-        ! with its levels forward to themselves, which is detected before the holder is
-        ! set up anew
-        if (c_associated(solver_settings_c%context, c_loc(holder%solver_level)) .or. &
-            c_associated(solver_settings_c%stability_settings%context, &
-                         c_loc(holder%stability_level))) then
-            call settings%log(settings_wired_twice_error_msg, verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
         ! the object reads the state of the solver from the host's record, which is
         ! therefore required
-        if (present(solver_state_c)) then
-            if (.not. c_associated(solver_state_c)) then
-                call settings%log("A record of the solver state is required.", &
-                                  verbosity_error, .true.)
-                error = 1
-                return
-            end if
+        if (.not. c_associated(solver_state_c)) then
+            call settings%log("A record of the solver state is required.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
         end if
 
         ! bundle the host's callback functions and convert the solver settings, whose
@@ -230,12 +228,10 @@ contains
         ! hold the host's record of the state at both levels and the state the object
         ! reads, both starting from the default state, since a C host's record need not
         ! be defined before the solver writes it
-        if (present(solver_state_c)) then
-            call c_f_pointer(solver_state_c, holder%solver_level%state_c)
-            holder%state = solver_state_type()
-            holder%solver_level%state_c = holder%state
-            holder%stability_level%state_c => holder%solver_level%state_c
-        end if
+        call c_f_pointer(solver_state_c, holder%solver_level%state_c)
+        holder%state = solver_state_type()
+        holder%solver_level%state_c = holder%state
+        holder%stability_level%state_c => holder%solver_level%state_c
 
     end subroutine setup_extension_holder
 
@@ -503,8 +499,9 @@ contains
         call update_orbs_callback(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                   context)
 
-        ! convert arguments to C kind and return the C wrapper of the Hessian linear
-        ! transformation if the orbital update returned one
+        ! convert arguments to C kind, copy the orbitals back to the host's array if
+        ! the object updates a copy of them and return the C wrapper of the Hessian
+        ! linear transformation if the orbital update returned one
         func_c = real(func, kind=c_rp)
         error_c = int(error, kind=c_ip)
         if (rp /= c_rp) then
@@ -512,6 +509,8 @@ contains
             h_diag_c(:n_param) = real(h_diag, kind=c_rp)
             deallocate(kappa, grad, h_diag)
         end if
+        if (associated(held%orbitals_c)) &
+            held%orbitals_c = real(held%orbitals, kind=c_rp)
         if (associated(hess_x_funptr)) hess_x_c_funptr = c_funloc(hess_x_c_wrapper)
 
     end function update_orbs_c_wrapper
@@ -1023,96 +1022,170 @@ contains
 
     end subroutine logger_c_wrapper
 
-    subroutine evaluate_dm_f_wrapper_impl(callbacks, dm, energy, get_response, error, &
-                                          fock)
+    subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, &
+                                        error, context)
         !
-        ! this subroutine wraps the density matrix evaluating C function of a callback
-        ! bundle to convert Fortran variables to C variables, handing the host context
-        ! of the bundle to it, and keeps the response C function it returns in the
-        ! bundle if one is requested
+        ! this subroutine wraps the density matrix evaluating C function of an orbital
+        ! basis to convert Fortran variables to C variables for the closed-shell case
         !
-        type(orbital_c_callbacks_type), intent(inout) :: callbacks
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target, contiguous :: fock(:, :)
+        procedure(get_response_cs_type), intent(out), optional, pointer :: &
+            get_response_cs_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        real(rp), pointer :: dm_3d(:, :, :), fock_3d(:, :, :)
+        procedure(get_response_os_type), pointer :: get_response_funptr
+
+        dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
+        nullify(fock_3d, get_response_funptr)
+        if (present(fock)) fock_3d(1:size(fock, 1), 1:size(fock, 2), 1:1) => fock
+        if (present(get_response_cs_funptr)) then
+            call evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, get_response_funptr, &
+                                          error, context)
+            get_response_cs_funptr => null()
+            if (error == 0) get_response_cs_funptr => get_response_cs_f_wrapper
+        else
+            call evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, error=error, &
+                                          context=context)
+        end if
+
+    end subroutine evaluate_dm_cs_f_wrapper
+
+    subroutine evaluate_dm_os_f_wrapper(dm, energy, fock, get_response_funptr, error, &
+                                        context)
+        !
+        ! this subroutine wraps the density matrix evaluating C function of an orbital
+        ! basis to convert Fortran variables to C variables for the open-shell case,
+        ! finding the C function and the host context in the bundle it receives as
+        ! context, in which it keeps the response C function the C function returns if
+        ! one is requested
+        !
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
-        logical, intent(in) :: get_response
-        integer(ip), intent(out) :: error
         real(rp), intent(out), optional, target :: fock(:, :, :)
+        procedure(get_response_os_type), intent(out), optional, pointer :: &
+            get_response_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(c_rp) :: energy_c
         real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :)
         type(c_funptr) :: get_response_c_funptr
         integer(c_ip) :: error_c
 
-        ! convert arguments to C kind
-        nullify(fock_c)
-        if (rp == c_rp) then
-            dm_c => dm
-            if (present(fock)) fock_c => fock
-        else
-            allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-            dm_c = real(dm, kind=c_rp)
-            if (present(fock)) allocate(fock_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-        end if
-
-        ! call density matrix evaluating C function and keep the response C function it
-        ! returns in the bundle
-        if (get_response) then
-            error_c = callbacks%evaluate_dm( &
-                dm_c, energy_c, fock_c, get_response_c_funptr, callbacks%host_context)
-            if (error_c == 0) call c_f_procpointer(cptr=get_response_c_funptr, &
-                                                   fptr=callbacks%get_response)
-        else
-            error_c = callbacks%evaluate_dm(dm_c, energy_c, fock_c, &
-                                            context_c=callbacks%host_context)
-        end if
-
-        ! convert arguments to Fortran kind
-        energy = real(energy_c, kind=rp)
-        error = int(error_c, kind=ip)
-        if (rp /= c_rp) then
-            if (present(fock)) then
-                fock = real(fock_c, kind=rp)
-                deallocate(fock_c)
+        ! the bundle holds the C function
+        energy = 0.0_rp
+        error = 1
+        if (present(get_response_funptr)) get_response_funptr => null()
+        if (.not. associated(context)) return
+        select type (callbacks => context)
+        type is (orbital_c_callbacks_type)
+            ! convert arguments to C kind
+            nullify(fock_c)
+            if (rp == c_rp) then
+                dm_c => dm
+                if (present(fock)) fock_c => fock
+            else
+                allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)))
+                dm_c = real(dm, kind=c_rp)
+                if (present(fock)) &
+                    allocate(fock_c(size(dm, 1), size(dm, 2), size(dm, 3)))
             end if
-            deallocate(dm_c)
-        end if
 
-    end subroutine evaluate_dm_f_wrapper_impl
+            ! call density matrix evaluating C function and keep the response C
+            ! function it returns in the bundle
+            if (present(get_response_funptr)) then
+                error_c = callbacks%evaluate_dm(dm_c, energy_c, fock_c, &
+                                                get_response_c_funptr, &
+                                                callbacks%host_context)
+                if (error_c == 0) call c_f_procpointer(cptr=get_response_c_funptr, &
+                                                       fptr=callbacks%get_response)
+            else
+                error_c = callbacks%evaluate_dm(dm_c, energy_c, fock_c, &
+                                                context_c=callbacks%host_context)
+            end if
 
-    subroutine get_response_f_wrapper_impl(callbacks, dm, response, error)
+            ! convert arguments to Fortran kind
+            energy = real(energy_c, kind=rp)
+            error = int(error_c, kind=ip)
+            if (rp /= c_rp) then
+                if (present(fock)) then
+                    fock = real(fock_c, kind=rp)
+                    deallocate(fock_c)
+                end if
+                deallocate(dm_c)
+            end if
+        end select
+
+        ! associate the Fortran procedure pointer with the wrapper of the response
+        ! function
+        if (present(get_response_funptr) .and. error == 0) &
+            get_response_funptr => get_response_os_f_wrapper
+
+    end subroutine evaluate_dm_os_f_wrapper
+
+    subroutine get_response_cs_f_wrapper(dm, response, error, context)
         !
-        ! this subroutine wraps the response C function of a callback bundle to convert
-        ! Fortran variables to C variables, handing the host context of the bundle to
-        ! it
+        ! this subroutine wraps the response C function of an orbital basis to convert
+        ! Fortran variables to C variables for the closed-shell case
         !
-        type(orbital_c_callbacks_type), intent(in) :: callbacks
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out), target, contiguous :: response(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        real(rp), pointer :: dm_3d(:, :, :), response_3d(:, :, :)
+
+        dm_3d(1:size(dm, 1), 1:size(dm, 2), 1:1) => dm
+        response_3d(1:size(response, 1), 1:size(response, 2), 1:1) => response
+        call get_response_os_f_wrapper(dm_3d, response_3d, error, context)
+
+    end subroutine get_response_cs_f_wrapper
+
+    subroutine get_response_os_f_wrapper(dm, response, error, context)
+        !
+        ! this subroutine wraps the response C function of an orbital basis to convert
+        ! Fortran variables to C variables for the open-shell case, finding the C
+        ! function the density matrix evaluating function returned last and the host
+        ! context in the bundle it receives as context
+        !
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
         real(c_rp), pointer :: dm_c(:, :, :), response_c(:, :, :)
         integer(c_ip) :: error_c
 
-        ! convert arguments to C kind
-        if (rp == c_rp) then
-            dm_c => dm
-            response_c => response
-        else
-            allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)), &
-                     response_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-            dm_c = real(dm, kind=c_rp)
-        end if
+        ! the bundle holds the C function
+        error = 1
+        if (.not. associated(context)) return
+        select type (callbacks => context)
+        type is (orbital_c_callbacks_type)
+            ! convert arguments to C kind
+            if (rp == c_rp) then
+                dm_c => dm
+                response_c => response
+            else
+                allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)), &
+                         response_c(size(dm, 1), size(dm, 2), size(dm, 3)))
+                dm_c = real(dm, kind=c_rp)
+            end if
 
-        ! call response C function
-        error_c = callbacks%get_response(dm_c, response_c, callbacks%host_context)
+            ! call response C function
+            error_c = callbacks%get_response(dm_c, response_c, callbacks%host_context)
 
-        ! convert arguments to Fortran kind
-        error = int(error_c, kind=ip)
-        if (rp /= c_rp) then
-            response = real(response_c, kind=rp)
-            deallocate(dm_c, response_c)
-        end if
+            ! convert arguments to Fortran kind
+            error = int(error_c, kind=ip)
+            if (rp /= c_rp) then
+                response = real(response_c, kind=rp)
+                deallocate(dm_c, response_c)
+            end if
+        end select
 
-    end subroutine get_response_f_wrapper_impl
+    end subroutine get_response_os_f_wrapper
 
 end module otr_common_c_interface

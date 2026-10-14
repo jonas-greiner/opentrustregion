@@ -920,6 +920,25 @@ contains
 
     end subroutine setup_owned_mock_extension
 
+    function wired_level(solver_settings) result(level)
+        !
+        ! this function returns the level of the solver of the extension object the
+        ! solver settings own last if their context is this level, or a disassociated
+        ! pointer otherwise
+        !
+        use otr_common, only: extension_solver_settings_type, extension_level_type
+
+        type(extension_solver_settings_type), intent(in), target :: solver_settings
+        type(extension_level_type), pointer :: level
+
+        level => null()
+        if (.not. allocated(solver_settings%extensions)) return
+        level => solver_settings%extensions( &
+            size(solver_settings%extensions))%object%solver_level
+        if (.not. associated(solver_settings%context, level)) level => null()
+
+    end function wired_level
+
     subroutine setup_mock_orbital_basis(basis, n_param)
         !
         ! this subroutine sets up a mock orbital basis with a random orthogonal
@@ -1050,68 +1069,6 @@ contains
         end if
 
     end function test_init_orbital_settings
-
-    logical(c_bool) function test_check_unwired_extension() bind(C)
-        !
-        ! this function tests the subroutine which produces an error for solver
-        ! settings an extension already wired
-        !
-        use opentrustregion, only: solver_settings_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
-                                              setup_error_logging
-        use otr_common, only: orbital_settings_type
-
-        type(mock_extension_type), target :: extension
-        type(solver_settings_type) :: solver_settings
-        type(orbital_settings_type) :: settings
-        type(test_context_type), target :: context, log_context
-        integer(ip) :: error, i_case
-        character(len=15), parameter :: case_names(2) = &
-            [character(len=15) :: "solver settings", "nested settings"]
-
-        ! assume tests pass
-        test_check_unwired_extension = .true.
-
-        ! check solver settings whose solver and nested settings hold the host context,
-        ! which have to be accepted without an error message
-        call setup_settings(settings)
-        call setup_error_logging(settings, log_context)
-        call setup_settings(solver_settings)
-        solver_settings%context => context
-        solver_settings%stability_settings%context => context
-        call extension%check_unwired(solver_settings, settings, error)
-        if (error /= 0 .or. log_context%log_message /= "") then
-            write(stderr, *) "test_check_unwired_extension failed: Solver settings "// &
-                "not wired by the extension refused."
-            test_check_unwired_extension = .false.
-        end if
-
-        ! check solver settings whose solver or nested settings the extension wired,
-        ! which have to be refused with an error message
-        do i_case = 1, size(case_names)
-            log_context%log_message = ""
-            solver_settings%context => context
-            solver_settings%stability_settings%context => context
-            if (i_case == 1) then
-                solver_settings%context => extension%solver_level
-            else
-                solver_settings%stability_settings%context => extension%stability_level
-            end if
-            call extension%check_unwired(solver_settings, settings, error)
-            if (error == 0) then
-                write(stderr, *) "test_check_unwired_extension failed: No error "// &
-                    "returned for "//case_names(i_case)//" wired by the extension."
-                test_check_unwired_extension = .false.
-            end if
-            if (log_context%log_message == "") then
-                write(stderr, *) "test_check_unwired_extension failed: No error "// &
-                    "message printed for "//case_names(i_case)// &
-                    " wired by the extension."
-                test_check_unwired_extension = .false.
-            end if
-        end do
-
-    end function test_check_unwired_extension
 
     logical(c_bool) function test_wire_solver_settings_extension() bind(C)
         !
@@ -1314,7 +1271,7 @@ contains
         ! nonetheless, also into the nested settings with the level of the stability
         ! check, since the stability check does not inherit the extra trial vectors,
         ! while the host records stay empty
-        call solver_settings%init(error)
+        solver_settings = default_solver_settings
         extension%provides = provided_roles_type(precond=.true., precond_pd=.true., &
                                                  project=.true., &
                                                  get_extra_trial_vectors=.true.)
@@ -1389,25 +1346,11 @@ contains
             end associate
         end do
 
-        ! wire solver settings again which the extension already wired, which the check
-        ! of the settings refuses, so that an error has to be returned and the settings
-        ! left unwired
-        call setup_error_logging(settings, log_context)
-        call setup_host_solver_settings()
-        solver_settings%context => extension%solver_level
-        call extension%wire_solver_settings(solver_settings, settings, error, &
-                                            update_orbs_funptr, obj_func_funptr)
-        if (error == 0 .or. .not. associated(solver_settings%precond, mock_precond)) &
-            then
-            write(stderr, *) "test_wire_solver_settings_extension failed: Solver "// &
-                "settings wired by the extension not refused."
-            test_wire_solver_settings_extension = .false.
-        end if
-
         ! wire solver settings another extension wired with the host's orbital update
         ! or objective function, or settings no extension wired with one a factory
         ! returned, which has to be refused with an error message, leaving the settings
         ! unwired
+        call setup_error_logging(settings, log_context)
         do i_case = 1, size(function_cases)
             call setup_host_solver_settings()
             if (i_case <= 2) solver_settings%context => wired_extension%solver_level
@@ -1458,7 +1401,7 @@ contains
             ! callback function of the solver except the convergence check and with the
             ! host context, and nested settings that provide nothing
             !
-            call solver_settings%init(error)
+            solver_settings = default_solver_settings
             solver_settings%context => context
             solver_settings%precond => mock_precond
             solver_settings%precond_pd => mock_precond_pd
@@ -1550,7 +1493,7 @@ contains
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
-                              extension_level, orbital_settings_type
+                              orbital_settings_type
         use otr_common_mock, only: mock_update_orbs
 
         type(extension_solver_settings_type), allocatable, target :: solver_settings
@@ -1584,23 +1527,33 @@ contains
             end if
         end do
 
-        ! the context of the settings reaches the latest object through its level, and
-        ! the host context its wiring saved reaches the earlier one, since the objects
-        ! are moved rather than copied, both have to read the record of the state, and
-        ! no object may have been freed
-        level => extension_level(solver_settings%context)
-        if (.not. associated(level)) then
-            write(stderr, *) "test_wire_extension_solver_settings failed: Settings "// &
-                "not wired with the latest object."
+        ! the settings own both objects in the order of their wiring, their context
+        ! reaches the latest one through its level and the host context its wiring
+        ! saved the earlier one, since the objects are moved rather than copied, both
+        ! have to read the record of the state, and no object may have been freed
+        if (.not. allocated(solver_settings%extensions)) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Objects "// &
+                "not owned by the settings."
             test_wire_extension_solver_settings = .false.
             return
         end if
-        earlier_level => extension_level(level%host%context)
-        if (.not. associated(earlier_level)) then
+        if (size(solver_settings%extensions) /= 2) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Objects "// &
+                "not owned by the settings."
+            test_wire_extension_solver_settings = .false.
+            return
+        end if
+        level => solver_settings%extensions(2)%object%solver_level
+        earlier_level => solver_settings%extensions(1)%object%solver_level
+        if (.not. associated(solver_settings%context, level)) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Settings "// &
+                "not wired with the latest object."
+            test_wire_extension_solver_settings = .false.
+        end if
+        if (.not. associated(level%host%context, earlier_level)) then
             write(stderr, *) "test_wire_extension_solver_settings failed: Latest "// &
                 "object not wired over the earlier one."
             test_wire_extension_solver_settings = .false.
-            return
         end if
         if (owned_id(level) /= 2 .or. owned_id(earlier_level) /= 1) then
             write(stderr, *) "test_wire_extension_solver_settings failed: Objects "// &
@@ -2809,6 +2762,63 @@ contains
         call logger_callback("message", context)
 
     end function test_logger_callback
+
+    logical(c_bool) function test_check_evaluate_dm_orbital_basis() bind(C)
+        !
+        ! this function tests the subroutine which produces an error for an orbital
+        ! basis set up without a density matrix evaluating function
+        !
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use otr_common_test_reference, only: shell_names
+
+        type(mock_orbital_basis_type) :: basis
+        type(test_context_type), target :: log_context
+        integer(ip) :: i_shell, error
+
+        ! assume tests pass
+        test_check_evaluate_dm_orbital_basis = .true.
+
+        ! set up the mock orbital basis with only error messages passed to the logging
+        ! function
+        call setup_settings(basis%settings)
+        call setup_error_logging(basis%settings, log_context)
+
+        ! check orbital bases with the density matrix evaluating function of either
+        ! shell, which have to be accepted without an error message
+        do i_shell = 1, 2
+            basis%evaluate_dm_cs => null()
+            basis%evaluate_dm_os => null()
+            if (i_shell == 1) then
+                basis%evaluate_dm_cs => mock_evaluate_dm_cs
+            else
+                basis%evaluate_dm_os => mock_evaluate_dm_os
+            end if
+            call basis%check_evaluate_dm(error)
+            if (error /= 0 .or. log_context%log_message /= "") then
+                write(stderr, *) "test_check_evaluate_dm_orbital_basis failed: "// &
+                    "Orbital basis with a density matrix evaluating function "// &
+                    "refused for the "//trim(shell_names(i_shell))//" case."
+                test_check_evaluate_dm_orbital_basis = .false.
+            end if
+        end do
+
+        ! check an orbital basis without one, which has to be refused with an error
+        ! message
+        basis%evaluate_dm_os => null()
+        call basis%check_evaluate_dm(error)
+        if (error == 0) then
+            write(stderr, *) "test_check_evaluate_dm_orbital_basis failed: No "// &
+                "error returned without a density matrix evaluating function."
+            test_check_evaluate_dm_orbital_basis = .false.
+        end if
+        if (log_context%log_message == "") then
+            write(stderr, *) "test_check_evaluate_dm_orbital_basis failed: No "// &
+                "error message printed without a density matrix evaluating function."
+            test_check_evaluate_dm_orbital_basis = .false.
+        end if
+
+    end function test_check_evaluate_dm_orbital_basis
 
     logical(c_bool) function test_refresh_response_orbital_basis() bind(C)
         !

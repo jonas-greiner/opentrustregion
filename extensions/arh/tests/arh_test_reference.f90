@@ -9,8 +9,8 @@ module otr_arh_test_reference
     use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
     use otr_common_test_reference, only: ref_orbital_settings_type, ref_orbital_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
-                                           c_f_procpointer, c_associated
+    use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_funptr, c_f_procpointer, &
+                                           c_associated
 
     implicit none
 
@@ -397,13 +397,13 @@ contains
         ! this subroutine overloads the assignment operator to convert reference values
         ! to their C counterpart
         !
-        use c_interface, only: character_to_c
+        use test_reference, only: ref_character_to_c
 
         type(ref_arh_settings_type_c), intent(out) :: lhs
         type(ref_arh_settings_type), intent(in) :: rhs
 
         lhs%verbose = int(rhs%verbose, kind=c_ip)
-        lhs%arh_type = character_to_c(rhs%arh_type)
+        lhs%arh_type = ref_character_to_c(rhs%arh_type)
 
     end subroutine assign_ref_to_ref_c
 

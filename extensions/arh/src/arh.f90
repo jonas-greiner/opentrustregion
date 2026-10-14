@@ -7,9 +7,10 @@
 module otr_arh
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_settings_type
+                               hess_x_type, solver_settings_type, solver_state_type
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
-                          orbital_basis_type, extension_type, channel_rows
+                          orbital_basis_type, extension_type, &
+                          extension_solver_settings_type, channel_rows
     use otr_oao, only: oao_type
     use otr_mo, only: mo_channel_type, mo_type
 
@@ -93,6 +94,12 @@ module otr_arh
         procedure :: precond => precond_arh
         procedure :: precond_pd => precond_pd_arh
         procedure :: get_extra_trial_vectors => get_extra_trial_vectors_arh
+        procedure :: inv_hess_x => inv_hess_x_arh
+        procedure :: build_hess_model_cs
+        procedure :: build_hess_model_os
+        procedure :: rebuild_stale_hess_model
+        procedure :: get_low_rank_hess_factors
+        procedure :: density_in_history
         procedure(rotate_trial_arh_type), deferred :: rotate_trial
         procedure(history_dm_arh_type), deferred :: history_dm
         procedure(to_history_basis_arh_type), deferred :: to_history_basis
@@ -190,373 +197,174 @@ module otr_arh
         module procedure construct_arh_oao
     end interface
 
-    ! global variables
-    class(arh_type), allocatable, target :: arh_object
-
-    ! define module procedures for different spin cases in every orbital basis, which
-    ! share their call structure with the C and Python interfaces
-    interface arh_factory_mo
-        module procedure arh_factory_mo_cs, arh_factory_mo_os
-    end interface
-
-    interface arh_factory_oao
-        module procedure arh_factory_oao_cs, arh_factory_oao_os
-    end interface
-
-    ! define module procedures for different spin cases and orbital bases
-    interface arh_factory
-        module procedure arh_factory_mo_cs, arh_factory_mo_os, arh_factory_oao_cs, &
-            arh_factory_oao_os
-    end interface
-
 contains
 
-    subroutine arh_factory_mo_cs(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                                 evaluate_dm_cs, update_orbs_arh_funptr, &
-                                 obj_func_arh_funptr, solver_settings, error, &
-                                 settings, orbsym)
+    subroutine arh_factory_cs(evaluate_dm_cs, update_orbs_arh_funptr, &
+                              obj_func_arh_funptr, solver_settings, solver_state, &
+                              error, settings)
         !
         ! this function returns the ARH orbital updating function and objective
-        ! function for the closed-shell case, with the orbitals parameterized in the MO
-        ! basis, and wires the solver settings with the ARH object, whose
-        ! preconditioners and extra trial vectors the solver then uses, while the
-        ! projection is left to the caller, since the parameters are non-redundant,
-        ! which it also asks to rebuild the Hessian information of the subsystem solver
-        ! after rejected steps and tells whether the approximate Hessian is symmetric;
-        ! the MO coefficients are rotated in place, so they have to outlive the
-        ! calculation; if the irreps of the MOs are given, only the occupied-virtual
-        ! rotations between orbitals of the same irrep are parameters
+        ! function for the closed-shell case and wires the solver settings with a new
+        ! ARH object, which they own, building on the orbital basis object the settings
+        ! were last wired with by an MO or OAO factory, whose orbitals it moves; see
+        ! arh_factory_common
         !
-        use otr_common, only: update_orbs_callback, obj_func_callback
+        use otr_common, only: extension_level
 
-        real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_occ, n_particle, n_ao, n_mo
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
-        integer(ip), intent(in), optional :: orbsym(:)
+        type(arh_settings_type), intent(in), optional :: settings
 
-        real(rp), pointer, contiguous :: mo_coeff_3d(:, :, :)
-        integer(ip), allocatable :: orbsym_2d(:, :)
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os
 
-        ! initialize error flag and the returned functions
-        error = 0
-        update_orbs_arh_funptr => null()
-        obj_func_arh_funptr => null()
+        ! call common setup with the closed-shell density matrix evaluating function on
+        ! the level of the orbital basis object, which is the context of the settings
+        evaluate_dm_os => null()
+        call arh_factory_common(extension_level(solver_settings%context), &
+                                evaluate_dm_cs, evaluate_dm_os, &
+                                update_orbs_arh_funptr, obj_func_arh_funptr, &
+                                solver_settings, solver_state, error, settings)
 
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(arh_object)) then
-            call arh_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
-        end if
+    end subroutine arh_factory_cs
 
-        ! call common setup, passing the irreps of the MOs only if they are given
-        mo_coeff_3d(1:size(mo_coeff, 1), 1:size(mo_coeff, 2), 1:1) => mo_coeff
-        if (present(orbsym)) orbsym_2d = reshape(orbsym, [size(orbsym, kind=ip), 1_ip])
-        call arh_factory_mo_common(mo_coeff_3d, ao_overlap, [n_occ], n_particle, n_ao, &
-                                   n_mo, error, settings, orbsym_2d)
-        if (error /= 0) return
-        nullify(mo_coeff_3d)
-
-        ! set pointers to functions
-        arh_object%evaluate_dm_cs => evaluate_dm_cs
-
-        ! wire the solver settings with the object and adjust them to the approximate
-        ! Hessian
-        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
-                                             error)
-        if (error /= 0) return
-        call arh_set_solver_settings(solver_settings, arh_object)
-
-        ! get the orbital updating function and the objective function of the object
-        update_orbs_arh_funptr => update_orbs_callback
-        obj_func_arh_funptr => obj_func_callback
-
-    end subroutine arh_factory_mo_cs
-
-    subroutine arh_factory_mo_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                                 evaluate_dm_os, update_orbs_arh_funptr, &
-                                 obj_func_arh_funptr, solver_settings, error, &
-                                 settings, orbsym)
+    subroutine arh_factory_os(evaluate_dm_os, update_orbs_arh_funptr, &
+                              obj_func_arh_funptr, solver_settings, solver_state, &
+                              error, settings)
         !
         ! this function returns the ARH orbital updating function and objective
-        ! function for the open-shell case, with the orbitals parameterized in the MO
-        ! basis, and wires the solver settings with the ARH object, whose
-        ! preconditioners and extra trial vectors the solver then uses, while the
-        ! projection is left to the caller, since the parameters are non-redundant,
-        ! which it also asks to rebuild the Hessian information of the subsystem solver
-        ! after rejected steps and tells whether the approximate Hessian is symmetric;
-        ! the MO coefficients are rotated in place, so they have to outlive the
-        ! calculation; if the irreps of the MOs of every particle channel are given,
-        ! only the occupied-virtual rotations between orbitals of the same irrep are
-        ! parameters
+        ! function for the open-shell case and wires the solver settings with a new ARH
+        ! object, which they own, building on the orbital basis object the settings
+        ! were last wired with by an MO or OAO factory, whose orbitals it moves; see
+        ! arh_factory_common
         !
-        use otr_common, only: update_orbs_callback, obj_func_callback
+        use otr_common, only: extension_level
 
-        real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
-        integer(ip), intent(in), optional :: orbsym(:, :)
+        type(arh_settings_type), intent(in), optional :: settings
 
-        ! initialize error flag and the returned functions
-        error = 0
-        update_orbs_arh_funptr => null()
-        obj_func_arh_funptr => null()
+        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs
 
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(arh_object)) then
-            call arh_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
-        end if
+        ! call common setup with the open-shell density matrix evaluating function on
+        ! the level of the orbital basis object, which is the context of the settings
+        evaluate_dm_cs => null()
+        call arh_factory_common(extension_level(solver_settings%context), &
+                                evaluate_dm_cs, evaluate_dm_os, &
+                                update_orbs_arh_funptr, obj_func_arh_funptr, &
+                                solver_settings, solver_state, error, settings)
 
-        ! call common setup
-        call arh_factory_mo_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                   n_mo, error, settings, orbsym)
-        if (error /= 0) return
+    end subroutine arh_factory_os
 
-        ! set pointers to functions
-        arh_object%evaluate_dm_os => evaluate_dm_os
-
-        ! wire the solver settings with the object and adjust them to the approximate
-        ! Hessian
-        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
-                                             error)
-        if (error /= 0) return
-        call arh_set_solver_settings(solver_settings, arh_object)
-
-        ! get the orbital updating function and the objective function of the object
-        update_orbs_arh_funptr => update_orbs_callback
-        obj_func_arh_funptr => obj_func_callback
-
-    end subroutine arh_factory_mo_os
-
-    subroutine arh_factory_mo_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, &
-                                     n_mo, error, settings, orbsym)
-        !
-        ! this subroutine performs common ARH initialization operations for orbitals
-        ! parameterized in the MO basis
-        !
-        use opentrustregion, only: warn_uninitialized_settings
-        use otr_mo, only: mo_factory_common, mo_object
-
-        real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_occ(:), n_particle, n_ao, n_mo
-        integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
-        integer(ip), intent(in), optional :: orbsym(:, :)
-
-        type(arh_settings_type) :: local_settings
-
-        ! work on a copy of the settings, which is initialized if they were not, after
-        ! printing a warning regardless of the verbosity, since the default settings
-        ! would silence it
-        local_settings = settings
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             arh_settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            if (error /= 0) return
-        end if
-
-        ! perform ARH sanity check
-        call arh_sanity_check(local_settings, error)
-        if (error /= 0) return
-
-        ! call common MO setup, which performs the sanity check of the MO basis
-        call mo_factory_common(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
-                               error, local_settings, orbsym)
-        if (error /= 0) return
-
-        ! discard any state (in particular history and derived quantities) from a
-        ! previous calculation
-        if (allocated(arh_object)) deallocate(arh_object)
-
-        ! parameterize the orbitals in the MO basis
-        allocate(arh_object, source=arh_mo_type(mo_object))
-
-        ! set (potentially new) settings
-        arh_object%settings = local_settings
-
-    end subroutine arh_factory_mo_common
-
-    subroutine arh_factory_oao_cs(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_cs, &
+    subroutine arh_factory_common(level, evaluate_dm_cs, evaluate_dm_os, &
                                   update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                  solver_settings, error, settings)
+                                  solver_settings, solver_state, error, settings)
         !
-        ! this function returns the ARH orbital updating function and objective
-        ! function for the closed-shell case, with the orbitals parameterized in the
-        ! OAO basis, and wires the solver settings with the ARH object, whose
-        ! preconditioners, projection and extra trial vectors the solver then uses,
-        ! which it also asks to rebuild the Hessian information of the subsystem solver
-        ! after rejected steps and tells whether the approximate Hessian is symmetric;
-        ! the density matrix is updated in place, so it has to outlive the calculation
+        ! this subroutine sets up a new ARH object on the orbital basis object of the
+        ! given level, with the density matrix evaluating function of the shell of its
+        ! orbitals, wires the solver settings with it and returns its orbital updating
+        ! function and objective function; the object moves the orbitals of the orbital
+        ! basis object, whose preconditioners and extra trial vectors and, in the OAO
+        ! basis, whose projection it uses, while the projection in the MO basis is left
+        ! to the caller, since the parameters are non-redundant, and reads the state of
+        ! the solver from the record the host also passes to the solver; the settings
+        ! are also asked to rebuild the Hessian information of the subsystem solver
+        ! after rejected steps and told whether the approximate Hessian is symmetric
         !
-        use otr_common, only: update_orbs_callback, obj_func_callback
+        use opentrustregion, only: warn_uninitialized_settings, verbosity_error
+        use otr_common, only: extension_level_type, update_orbs_callback, &
+                              obj_func_callback
 
-        real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_particle, n_ao
+        type(extension_level_type), intent(in), pointer :: level
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
-        integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
-
-        real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
-
-        ! initialize error flag and the returned functions
-        error = 0
-        update_orbs_arh_funptr => null()
-        obj_func_arh_funptr => null()
-
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(arh_object)) then
-            call arh_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
-        end if
-
-        ! call common setup
-        dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
-        call arh_factory_oao_common(dm_ao_3d, ao_overlap, n_particle, n_ao, error, &
-                                    settings)
-        if (error /= 0) return
-        nullify(dm_ao_3d)
-
-        ! set pointers to functions
-        arh_object%evaluate_dm_cs => evaluate_dm_cs
-
-        ! wire the solver settings with the object and adjust them to the approximate
-        ! Hessian
-        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
-                                             error)
-        if (error /= 0) return
-        call arh_set_solver_settings(solver_settings, arh_object)
-
-        ! get the orbital updating function and the objective function of the object
-        update_orbs_arh_funptr => update_orbs_callback
-        obj_func_arh_funptr => obj_func_callback
-
-    end subroutine arh_factory_oao_cs
-
-    subroutine arh_factory_oao_os(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_os, &
-                                  update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                  solver_settings, error, settings)
-        !
-        ! this function returns the ARH orbital updating function and objective
-        ! function for the open-shell case, with the orbitals parameterized in the OAO
-        ! basis, and wires the solver settings with the ARH object, whose
-        ! preconditioners, projection and extra trial vectors the solver then uses,
-        ! which it also asks to rebuild the Hessian information of the subsystem solver
-        ! after rejected steps and tells whether the approximate Hessian is symmetric;
-        ! the density matrix is updated in place, so it has to outlive the calculation
-        !
-        use otr_common, only: update_orbs_callback, obj_func_callback
-
-        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_particle, n_ao
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
+        type(arh_settings_type), intent(in), optional :: settings
+
+        type(arh_settings_type) :: local_settings
+        class(extension_type), allocatable, target :: object
 
         ! initialize error flag and the returned functions
         error = 0
         update_orbs_arh_funptr => null()
         obj_func_arh_funptr => null()
 
-        ! refuse solver settings the object already wired before changing any state
-        if (allocated(arh_object)) then
-            call arh_object%check_unwired(solver_settings, settings, error)
-            if (error /= 0) return
+        ! work on a copy of the given settings, which is initialized if they were not,
+        ! after printing a warning regardless of the verbosity, since the default
+        ! settings would silence it, or, without any, of the default settings
+        if (present(settings)) then
+            local_settings = settings
+            if (.not. local_settings%initialized) then
+                call warn_uninitialized_settings(local_settings, &
+                                                 arh_settings_uninitialized_warning_msg)
+                call local_settings%init(error)
+                if (error /= 0) return
+            end if
+        else
+            local_settings = default_arh_settings
         end if
 
-        ! call common setup
-        call arh_factory_oao_common(dm_ao, ao_overlap, n_particle, n_ao, error, &
-                                    settings)
+        ! perform sanity check, which also converts the ARH type to lowercase
+        call arh_sanity_check(local_settings, error)
         if (error /= 0) return
 
-        ! set pointers to functions
-        arh_object%evaluate_dm_os => evaluate_dm_os
+        ! set up the object in the basis of the orbital basis object of the level,
+        ! pointing to its orbitals
+        if (associated(level)) then
+            select type (orbitals => level%extension)
+            type is (mo_type)
+                allocate(object, source=arh_mo_type(orbitals))
+            type is (oao_type)
+                allocate(object, source=arh_oao_type(orbitals))
+            end select
+        end if
+        if (.not. allocated(object)) then
+            call local_settings%log("The solver settings have to be those an MO or "// &
+                                    "OAO factory wired last.", verbosity_error, .true.)
+            error = 1
+            return
+        end if
 
-        ! wire the solver settings with the object and adjust them to the approximate
-        ! Hessian
-        call arh_object%wire_solver_settings(solver_settings, arh_object%settings, &
-                                             error)
+        ! the object evaluates the density matrices of the shell of the orbitals with
+        ! its own settings
+        select type (object)
+        class is (arh_type)
+            if (associated(evaluate_dm_cs) .neqv. object%orbitals%n_particle == 1) then
+                call local_settings%log("The density matrix evaluating function "// &
+                                        "has to be that of the shell of the "// &
+                                        "orbitals.", verbosity_error, .true.)
+                error = 1
+                return
+            end if
+            object%settings = local_settings
+            object%evaluate_dm_cs => evaluate_dm_cs
+            object%evaluate_dm_os => evaluate_dm_os
+        end select
+
+        ! wire the solver settings with the object, which reads the record of the state
+        ! and saves the host's callback functions and host contexts, let the settings
+        ! own it and adjust them to the approximate Hessian
+        call solver_settings%wire(object, solver_state, local_settings, error)
         if (error /= 0) return
-        call arh_set_solver_settings(solver_settings, arh_object)
+        call arh_set_solver_settings(solver_settings%solver_settings_type, &
+                                     local_settings)
 
         ! get the orbital updating function and the objective function of the object
         update_orbs_arh_funptr => update_orbs_callback
         obj_func_arh_funptr => obj_func_callback
 
-    end subroutine arh_factory_oao_os
-
-    subroutine arh_factory_oao_common(dm_ao, ao_overlap, n_particle, n_ao, error, &
-                                      settings)
-        !
-        ! this subroutine performs common ARH initialization operations for orbitals
-        ! parameterized in the OAO basis
-        !
-        use opentrustregion, only: warn_uninitialized_settings
-        use otr_oao, only: oao_factory_common, oao_object
-
-        real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
-        real(rp), intent(in) :: ao_overlap(:, :)
-        integer(ip), intent(in) :: n_particle, n_ao
-        integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in) :: settings
-
-        type(arh_settings_type) :: local_settings
-
-        ! work on a copy of the settings, which is initialized if they were not, after
-        ! printing a warning regardless of the verbosity, since the default settings
-        ! would silence it
-        local_settings = settings
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             arh_settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            if (error /= 0) return
-        end if
-
-        ! perform ARH sanity check
-        call arh_sanity_check(local_settings, error)
-        if (error /= 0) return
-
-        ! call common OAO setup, which performs the sanity check of the OAO basis
-        call oao_factory_common(dm_ao, ao_overlap, n_particle, n_ao, error, &
-                                local_settings)
-        if (error /= 0) return
-
-        ! discard any state (in particular history and derived quantities) from a
-        ! previous calculation: the ARH factories are only ever called to start a new
-        ! calculation, never to resume one, so state from an unrelated trajectory must
-        ! never be reused, regardless of whether the new dimensions happen to match the
-        ! old ones
-        if (allocated(arh_object)) deallocate(arh_object)
-
-        ! parameterize the orbitals in the OAO basis
-        allocate(arh_object, source=arh_oao_type(oao_object))
-
-        ! set (potentially new) settings
-        arh_object%settings = local_settings
-
-    end subroutine arh_factory_oao_common
+    end subroutine arh_factory_common
 
     subroutine arh_sanity_check(settings, error)
         !
@@ -587,17 +395,17 @@ contains
 
     end subroutine arh_sanity_check
 
-    subroutine arh_set_solver_settings(solver_settings, arh)
+    subroutine arh_set_solver_settings(solver_settings, settings)
         !
         ! this subroutine asks the solver to rebuild the Hessian information of the
         ! subsystem solver after rejected steps, since the objective function adds the
         ! rejected point to the history, which changes the approximate Hessian, raises
         ! the micro iteration limit, since the linear transformations of the
         ! approximate Hessian are cheap, and tells it whether the approximate Hessian
-        ! of the given ARH type is symmetric
+        ! of the ARH type of the given ARH settings is symmetric
         !
         type(solver_settings_type), intent(inout) :: solver_settings
-        class(arh_type), intent(in) :: arh
+        type(arh_settings_type), intent(in) :: settings
 
         ! rebuild the Hessian information after rejected steps
         solver_settings%refresh_hess = .true.
@@ -606,7 +414,7 @@ contains
         solver_settings%n_micro = arh_n_micro
 
         ! only the standard ARH type breaks the symmetry of the approximate Hessian
-        solver_settings%hess_symm = arh%settings%arh_type /= "arh"
+        solver_settings%hess_symm = settings%arh_type /= "arh"
 
     end subroutine arh_set_solver_settings
 
@@ -659,7 +467,7 @@ contains
 
         ! update list of density and potential matrices
         if (allocated(self%dm_list)) then
-            if (.not. density_in_history(rot_dm_hist)) then
+            if (.not. self%density_in_history(rot_dm_hist)) then
                 call prepend(self%dm_list, rot_dm_hist)
                 call prepend(self%v_coulomb_list, self%to_history_basis(v_coulomb_ao))
                 call prepend(self%v_exchange_list, self%to_history_basis(v_exchange_ao))
@@ -713,7 +521,7 @@ contains
                          self%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
             else if (.not. self%evaluation_stale) then
                 dm_current = self%history_dm()
-                if (.not. density_in_history(dm_current)) then
+                if (.not. self%density_in_history(dm_current)) then
                     call prepend(self%dm_list, dm_current)
                     call prepend(self%v_coulomb_list, self%v_coulomb)
                     call prepend(self%v_exchange_list, self%v_exchange)
@@ -763,9 +571,9 @@ contains
             ! assemble the approximate Hessian model from the history for the closed- or
             ! open-shell case
             if (associated(self%evaluate_dm_cs)) then
-                call build_hess_model_cs(error)
+                call self%build_hess_model_cs(error)
             else
-                call build_hess_model_os(error)
+                call self%build_hess_model_os(error)
             end if
             if (error /= 0) return
 
@@ -781,11 +589,12 @@ contains
 
     end subroutine update_orbs_arh
 
-    subroutine build_hess_model_cs(error)
+    subroutine build_hess_model_cs(self, error)
         !
-        ! this subroutine assembles the closed-shell approximate Hessian model from the
-        ! history relative to the current point
+        ! this subroutine assembles the closed-shell approximate Hessian model of the
+        ! object from its history relative to the current point
         !
+        class(arh_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc, n_acc_nonlinear
@@ -804,38 +613,36 @@ contains
         error = 0
 
         ! number of AOs and number of particles
-        n_ao = arh_object%orbitals%n_ao
-        n_particle = arh_object%orbitals%n_particle
+        n_ao = self%orbitals%n_ao
+        n_particle = self%orbitals%n_particle
 
         ! prepare the density matrix and potential differences: the linear potential is
         ! split into its Coulomb and exact-exchange parts, whose difference it is, and
         ! the non-linear (XC) potential is kept apart
-        n_list = size(arh_object%dm_list, 4)
-        dm_current = arh_object%history_dm()
+        n_list = size(self%dm_list, 4)
+        dm_current = self%history_dm()
         allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
                  v_coulomb_diff(n_ao, n_ao, n_particle, n_list), &
                  v_exchange_diff(n_ao, n_ao, n_particle, n_list), &
                  v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
         do i = 1, n_list
-            dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - dm_current
-            v_coulomb_diff(:, :, :, i) = arh_object%v_coulomb_list(:, :, :, i) - &
-                                         arh_object%v_coulomb
-            v_exchange_diff(:, :, :, i) = arh_object%v_exchange_list(:, :, :, i) - &
-                                          arh_object%v_exchange
-            v_nonlinear_diff(:, :, :, i) = arh_object%v_nonlinear_list(:, :, :, i) - &
-                                           arh_object%v_nonlinear
+            dm_diff(:, :, :, i) = self%dm_list(:, :, :, i) - dm_current
+            v_coulomb_diff(:, :, :, i) = self%v_coulomb_list(:, :, :, i) - &
+                                         self%v_coulomb
+            v_exchange_diff(:, :, :, i) = self%v_exchange_list(:, :, :, i) - &
+                                          self%v_exchange
+            v_nonlinear_diff(:, :, :, i) = self%v_nonlinear_list(:, :, :, i) - &
+                                           self%v_nonlinear
         end do
 
         ! express the differences as history and packed columns, and the linear
         ! potential differences as the difference of their Coulomb and exact-exchange
         ! parts, which the transformation to columns preserves
-        call arh_object%history_columns(dm_diff, dm_cols, dm_packed)
-        call arh_object%history_columns(v_coulomb_diff, v_coulomb_cols, &
-                                        v_coulomb_packed)
-        call arh_object%history_columns(v_exchange_diff, v_exchange_cols, &
-                                        v_exchange_packed)
-        call arh_object%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
-                                        v_nonlinear_packed)
+        call self%history_columns(dm_diff, dm_cols, dm_packed)
+        call self%history_columns(v_coulomb_diff, v_coulomb_cols, v_coulomb_packed)
+        call self%history_columns(v_exchange_diff, v_exchange_cols, v_exchange_packed)
+        call self%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
+                                  v_nonlinear_packed)
         deallocate(dm_diff, v_coulomb_diff, v_exchange_diff, v_nonlinear_diff)
         v_linear_cols = v_coulomb_cols - v_exchange_cols
         v_linear_packed = v_coulomb_packed - v_exchange_packed
@@ -855,69 +662,67 @@ contains
                                n_acc_nonlinear, keep_nonlinear, min_residual)
 
         ! MS-SR1
-        if (arh_object%settings%arh_type == "ms_sr1") then
+        if (self%settings%arh_type == "ms_sr1") then
             ! linear part: the difference of a Coulomb and an exact-exchange
             ! multisecant term, each exact since Coulomb and exact exchange are linear
             ! in the density matrix, and each bounded by its kernel, which is positive
             ! semidefinite, unlike the linear kernel itself; this also caches the
             ! packed potential difference directions the low-rank Hessian factors are
             ! assembled from, rebased into the orthonormalized S-basis
-            call get_ms_a_inv_jk_cs( &
-                dm_cols, v_coulomb_cols, v_exchange_cols, v_coulomb_packed, &
-                v_exchange_packed, map, chol, arh_object%a_inv, &
-                arh_object%linear_potential_dirs, arh_object%settings, error)
+            call get_ms_a_inv_jk_cs(dm_cols, v_coulomb_cols, v_exchange_cols, &
+                                    v_coulomb_packed, v_exchange_packed, map, chol, &
+                                    self%a_inv, self%linear_potential_dirs, &
+                                    self%settings, error)
             if (error /= 0) return
             ! non-linear part: kept on its own system so that it contracts against its
             ! own inverse and the exact linear secant relationship is not averaged with
             ! the approximate one
             call get_ms_a_inv(dm_cols, v_nonlinear_cols, map_nonlinear, &
-                              chol_nonlinear, arh_object%a_inv_comb, &
-                              arh_object%settings, error)
+                              chol_nonlinear, self%a_inv_comb, self%settings, error)
             if (error /= 0) return
 
             ! cache the packed non-linear potential difference directions, rebased into
             ! the orthonormalized S-basis
-            arh_object%nonlinear_potential_dirs = &
+            self%nonlinear_potential_dirs = &
                 rebase_dirs(v_nonlinear_packed, map_nonlinear, chol_nonlinear)
         ! ARH and related methods
         else
             ! cache the packed history-projection directions the low-rank Hessian
             ! factors are assembled from, rebased into the orthonormalized S-basis
             ! belonging to the linear and non-linear systems
-            arh_object%dm_dirs = rebase_dirs(dm_packed, map, chol)
-            arh_object%dm_dirs_nonlinear = &
+            self%dm_dirs = rebase_dirs(dm_packed, map, chol)
+            self%dm_dirs_nonlinear = &
                 rebase_dirs(dm_packed, map_nonlinear, chol_nonlinear)
-            if (arh_object%settings%arh_type /= "ms_sp") then
-                arh_object%linear_potential_dirs = &
-                    rebase_dirs(v_linear_packed, map, chol)
-                arh_object%nonlinear_potential_dirs = &
+            if (self%settings%arh_type /= "ms_sp") then
+                self%linear_potential_dirs = rebase_dirs(v_linear_packed, map, chol)
+                self%nonlinear_potential_dirs = &
                     rebase_dirs(v_nonlinear_packed, map_nonlinear, chol_nonlinear)
             end if
 
             ! construct A = S^T Y for the linear and non-linear system,
             ! congruence-transformed into its own orthonormalized S-basis
-            if (arh_object%settings%arh_type == "ms_sp" .or. &
-                arh_object%settings%arh_type == "ms_psb") then
-                arh_object%a_sym = &
-                    build_a_transformed(dm_cols, v_linear_cols, map, chol)
-                arh_object%a_sym_nonlinear = build_a_transformed( &
+            if (self%settings%arh_type == "ms_sp" .or. &
+                self%settings%arh_type == "ms_psb") then
+                self%a_sym = build_a_transformed(dm_cols, v_linear_cols, map, chol)
+                self%a_sym_nonlinear = build_a_transformed( &
                     dm_cols, v_nonlinear_cols, map_nonlinear, chol_nonlinear)
             end if
         end if
 
         ! assemble the low-rank (response) part of the approximate Hessian
-        call get_low_rank_hess_factors()
+        call self%get_low_rank_hess_factors()
 
         ! the model now reflects the whole history
-        arh_object%model_stale = .false.
+        self%model_stale = .false.
 
     end subroutine build_hess_model_cs
 
-    subroutine build_hess_model_os(error)
+    subroutine build_hess_model_os(self, error)
         !
-        ! this subroutine assembles the open-shell approximate Hessian model from the
-        ! history relative to the current point
+        ! this subroutine assembles the open-shell approximate Hessian model of the
+        ! object from its history relative to the current point
         !
+        class(arh_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc1, n_acc2, n_acc_nl, &
@@ -946,8 +751,8 @@ contains
         error = 0
 
         ! number of AOs and number of particles
-        n_ao = arh_object%orbitals%n_ao
-        n_particle = arh_object%orbitals%n_particle
+        n_ao = self%orbitals%n_ao
+        n_particle = self%orbitals%n_particle
 
         ! prepare the density matrix and potential differences; the Coulomb and
         ! exact-exchange potential differences are kept separate from the non-linear one
@@ -955,27 +760,27 @@ contains
         ! therefore take the full history, while the non-linear one describes a
         ! drifting Hessian and is fitted only to the history entries the screening
         ! below admits
-        n_list = size(arh_object%dm_list, 4)
-        dm_current = arh_object%history_dm()
+        n_list = size(self%dm_list, 4)
+        dm_current = self%history_dm()
         allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
                  v_coulomb_diff(n_ao, n_ao, n_particle, n_list), &
                  v_exchange_diff(n_ao, n_ao, n_particle, n_list), &
                  v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
         do i = 1, n_list
-            dm_diff(:, :, :, i) = arh_object%dm_list(:, :, :, i) - dm_current
-            v_coulomb_diff(:, :, :, i) = arh_object%v_coulomb_list(:, :, :, i) - &
-                                         arh_object%v_coulomb
-            v_exchange_diff(:, :, :, i) = arh_object%v_exchange_list(:, :, :, i) - &
-                                          arh_object%v_exchange
-            v_nonlinear_diff(:, :, :, i) = arh_object%v_nonlinear_list(:, :, :, i) - &
-                                           arh_object%v_nonlinear
+            dm_diff(:, :, :, i) = self%dm_list(:, :, :, i) - dm_current
+            v_coulomb_diff(:, :, :, i) = self%v_coulomb_list(:, :, :, i) - &
+                                         self%v_coulomb
+            v_exchange_diff(:, :, :, i) = self%v_exchange_list(:, :, :, i) - &
+                                          self%v_exchange
+            v_nonlinear_diff(:, :, :, i) = self%v_nonlinear_list(:, :, :, i) - &
+                                           self%v_nonlinear
         end do
 
         ! express the density matrix and non-linear potential differences as history
         ! and packed columns
-        call arh_object%history_columns(dm_diff, dm_cols, dm_packed)
-        call arh_object%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
-                                        v_nonlinear_packed)
+        call self%history_columns(dm_diff, dm_cols, dm_packed)
+        call self%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
+                                  v_nonlinear_packed)
         deallocate(dm_diff, v_nonlinear_diff)
 
         ! express the linear potential differences as history and packed columns:
@@ -986,28 +791,28 @@ contains
         ! its own Coulomb minus exact-exchange potential, and the opposite-spin
         ! potential, the Coulomb potential of the other channel; the history basis is
         ! shared by both channels, so that a potential can be moved between them
-        if (arh_object%settings%arh_type == "ms_sr1") then
+        if (self%settings%arh_type == "ms_sr1") then
             v_coulomb_alpha_diff = spread(v_coulomb_diff(:, :, 1, :), 3, n_particle)
             v_coulomb_beta_diff = spread(v_coulomb_diff(:, :, 2, :), 3, n_particle)
-            call arh_object%history_columns( &
-                v_coulomb_alpha_diff, v_coulomb_alpha_cols, v_coulomb_alpha_packed)
-            call arh_object%history_columns(v_coulomb_beta_diff, v_coulomb_beta_cols, &
-                                            v_coulomb_beta_packed)
-            call arh_object%history_columns(v_exchange_diff, v_exchange_cols, &
-                                            v_exchange_packed)
+            call self%history_columns(v_coulomb_alpha_diff, v_coulomb_alpha_cols, &
+                                      v_coulomb_alpha_packed)
+            call self%history_columns(v_coulomb_beta_diff, v_coulomb_beta_cols, &
+                                      v_coulomb_beta_packed)
+            call self%history_columns(v_exchange_diff, v_exchange_cols, &
+                                      v_exchange_packed)
             deallocate(v_coulomb_alpha_diff, v_coulomb_beta_diff)
         else
             v_same_spin_diff = v_coulomb_diff - v_exchange_diff
             v_opposite_spin_diff = v_coulomb_diff(:, :, [2, 1], :)
-            call arh_object%history_columns(v_same_spin_diff, v_same_spin_cols, &
-                                            v_same_spin_packed)
-            call arh_object%history_columns( &
-                v_opposite_spin_diff, v_opposite_spin_cols, v_opposite_spin_packed)
+            call self%history_columns(v_same_spin_diff, v_same_spin_cols, &
+                                      v_same_spin_packed)
+            call self%history_columns(v_opposite_spin_diff, v_opposite_spin_cols, &
+                                      v_opposite_spin_packed)
             deallocate(v_same_spin_diff, v_opposite_spin_diff)
         end if
         deallocate(v_coulomb_diff, v_exchange_diff)
-        history_rows = arh_object%history_channel_rows()
-        packed_rows = arh_object%packed_channel_rows()
+        history_rows = self%history_channel_rows()
+        packed_rows = self%packed_channel_rows()
 
         ! copy the rows of the individual spin channels for the density matrix
         ! differences, which are factorized per channel
@@ -1027,7 +832,7 @@ contains
         call combine_channels(chol1, map1, chol2, map2, n_list, chol_comb, map_comb)
 
         ! MS-SR1
-        if (arh_object%settings%arh_type == "ms_sr1") then
+        if (self%settings%arh_type == "ms_sr1") then
             ! linear part: spin-separated, which is exact since Coulomb and exact
             ! exchange are linear in the density matrix, and the difference of a
             ! Coulomb and an exact-exchange multisecant term, each bounded by its
@@ -1038,8 +843,8 @@ contains
             call get_ms_a_inv_jk_os( &
                 dm_cols, v_coulomb_alpha_cols, v_coulomb_beta_cols, v_exchange_cols, &
                 v_coulomb_alpha_packed, v_coulomb_beta_packed, v_exchange_packed, &
-                history_rows, packed_rows, map_comb, chol_comb, arh_object%a_inv, &
-                arh_object%linear_potential_dirs, arh_object%settings, error)
+                history_rows, packed_rows, map_comb, chol_comb, self%a_inv, &
+                self%linear_potential_dirs, self%settings, error)
             if (error /= 0) return
             ! non-linear part: get spin-combined multisecant SR1 matrix; the non-linear
             ! response mixes both channels at once, so this needs its own, separate
@@ -1050,12 +855,12 @@ contains
             call factorize_history(dm_cols, chol_nl, map_nl, n_acc_nl, keep_nonlinear, &
                                    min_residual)
             call get_ms_a_inv(dm_cols, v_nonlinear_cols, map_nl, chol_nl, &
-                              arh_object%a_inv_comb, arh_object%settings, error)
+                              self%a_inv_comb, self%settings, error)
             if (error /= 0) return
 
             ! cache the packed non-linear potential difference directions, which need
             ! no channel-splitting, rebased into the orthonormalized S-basis
-            arh_object%nonlinear_potential_dirs = &
+            self%nonlinear_potential_dirs = &
                 rebase_dirs(v_nonlinear_packed, map_nl, chol_nl)
         ! ARH and related methods
         else
@@ -1086,58 +891,59 @@ contains
             ! channel-combined for the linear potential, each rebased into the S-basis
             ! of its own system
             call cache_channel_split_dirs(dm_packed, packed_rows, map_comb, chol_comb, &
-                                          arh_object%dm_dirs)
+                                          self%dm_dirs)
             call cache_channel_split_dirs(dm_packed, packed_rows, map_comb_nl, &
-                                          chol_comb_nl, arh_object%dm_dirs_nonlinear)
-            if (arh_object%settings%arh_type /= "ms_sp") then
+                                          chol_comb_nl, self%dm_dirs_nonlinear)
+            if (self%settings%arh_type /= "ms_sp") then
                 call cache_combined_channel_dirs( &
                     v_same_spin_packed, v_opposite_spin_packed, packed_rows, map_comb, &
-                    chol_comb, arh_object%linear_potential_dirs)
+                    chol_comb, self%linear_potential_dirs)
                 call cache_channel_split_dirs(v_nonlinear_packed, packed_rows, &
                                               map_comb_nl, chol_comb_nl, &
-                                              arh_object%nonlinear_potential_dirs)
+                                              self%nonlinear_potential_dirs)
             end if
 
             ! construct A = S^T Y for the linear and non-linear system,
             ! congruence-transformed into its own combined orthonormalized S-basis
-            if (arh_object%settings%arh_type == "ms_sp" .or. &
-                arh_object%settings%arh_type == "ms_psb") then
-                arh_object%a_sym = build_a_block_linear_os( &
-                    dm_cols, v_same_spin_cols, v_opposite_spin_cols, history_rows, &
-                    map_comb, chol_comb)
-                arh_object%a_sym_nonlinear = build_a_block_nonlinear_os( &
+            if (self%settings%arh_type == "ms_sp" .or. &
+                self%settings%arh_type == "ms_psb") then
+                self%a_sym = build_a_block_linear_os(dm_cols, v_same_spin_cols, &
+                                                     v_opposite_spin_cols, &
+                                                     history_rows, map_comb, chol_comb)
+                self%a_sym_nonlinear = build_a_block_nonlinear_os( &
                     dm_cols, v_nonlinear_cols, history_rows, map_comb_nl, chol_comb_nl)
             end if
         end if
 
         ! assemble the low-rank (response) part of the approximate Hessian
-        call get_low_rank_hess_factors()
+        call self%get_low_rank_hess_factors()
 
         ! the model now reflects the whole history
-        arh_object%model_stale = .false.
+        self%model_stale = .false.
 
     end subroutine build_hess_model_os
 
-    subroutine rebuild_stale_hess_model(error)
+    subroutine rebuild_stale_hess_model(self, error)
         !
-        ! this subroutine rebuilds the approximate Hessian model if the objective
-        ! function has added points to the history since it was last assembled, so that
-        ! the Hessian linear transformation and the preconditioner always use the whole
-        ! history
+        ! this subroutine rebuilds the approximate Hessian model of the object if the
+        ! objective function has added points to the history since it was last
+        ! assembled, so that the Hessian linear transformation and the preconditioner
+        ! always use the whole history
         !
+        class(arh_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         ! initialize error flag
         error = 0
 
         ! nothing to rebuild if the model reflects the whole history
-        if (.not. arh_object%model_stale) return
+        if (.not. self%model_stale) return
 
         ! rebuild model for the closed- or open-shell case
-        if (associated(arh_object%evaluate_dm_cs)) then
-            call build_hess_model_cs(error)
+        if (associated(self%evaluate_dm_cs)) then
+            call self%build_hess_model_cs(error)
         else
-            call build_hess_model_os(error)
+            call self%build_hess_model_os(error)
         end if
 
     end subroutine rebuild_stale_hess_model
@@ -1162,7 +968,7 @@ contains
         error = 0
 
         ! rebuild the approximate Hessian model if it is stale
-        call rebuild_stale_hess_model(error)
+        call self%rebuild_stale_hess_model(error)
         if (error /= 0) return
 
         ! get static part
@@ -1187,7 +993,7 @@ contains
 
     end subroutine hess_x_arh
 
-    subroutine inv_hess_x_arh(x, inv_hess_x, error, level_shift)
+    subroutine inv_hess_x_arh(self, x, inv_hess_x, error, level_shift)
         !
         ! this subroutine applies the exact inverse of the approximate Hessian to a
         ! vector, optionally level-shifted as (G - level_shift*I)^-1; G is the static
@@ -1202,6 +1008,7 @@ contains
         use opentrustregion, only: verbosity_error
         use otr_common, only: level_shifted_divisors
 
+        class(arh_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: inv_hess_x(:)
         integer(ip), intent(out) :: error
@@ -1222,7 +1029,7 @@ contains
         error = 0
 
         ! rebuild the approximate Hessian model if it is stale
-        call rebuild_stale_hess_model(error)
+        call self%rebuild_stale_hess_model(error)
         if (error /= 0) return
 
         ! an absent level shift gives the plain inverse of the approximate Hessian
@@ -1230,34 +1037,33 @@ contains
         if (present(level_shift)) mu = level_shift
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call arh_object%orbitals%refresh_hess_eigen(arh_object%settings, error)
+        call self%orbitals%refresh_hess_eigen(self%settings, error)
         if (error /= 0) return
 
         ! rotate x into the static-Hessian eigenbasis and apply the level-shifted
         ! diagonal D^-1
-        rotated_x = arh_object%orbitals%rotate_to_hess_eigenbasis(x)
-        divisors = level_shifted_divisors(arh_object%orbitals%get_hess_eigval_pairs(), &
-                                          mu)
+        rotated_x = self%orbitals%rotate_to_hess_eigenbasis(x)
+        divisors = level_shifted_divisors(self%orbitals%get_hess_eigval_pairs(), mu)
         scaled_x = rotated_x / divisors
 
         ! fall back to the static part alone if there is no low-rank correction
-        if (.not. allocated(arh_object%coupling_matrix)) then
-            inv_hess_x = arh_object%orbitals%rotate_from_hess_eigenbasis(scaled_x)
+        if (.not. allocated(self%coupling_matrix)) then
+            inv_hess_x = self%orbitals%rotate_from_hess_eigenbasis(scaled_x)
             return
         end if
 
         ! get parameters
         n_param = size(x)
-        n_dirs = size(arh_object%expansion_dirs, 2)
+        n_dirs = size(self%expansion_dirs, 2)
 
         ! rotate both sets of directions into the same eigenbasis
         allocate(rotated_expansion(n_param, n_dirs), &
                  rotated_projection(n_param, n_dirs))
         do i = 1, n_dirs
-            rotated_expansion(:, i) = arh_object%orbitals%rotate_to_hess_eigenbasis( &
-                arh_object%expansion_dirs(:, i))
-            rotated_projection(:, i) = arh_object%orbitals%rotate_to_hess_eigenbasis( &
-                arh_object%projection_dirs(:, i))
+            rotated_expansion(:, i) = &
+                self%orbitals%rotate_to_hess_eigenbasis(self%expansion_dirs(:, i))
+            rotated_projection(:, i) = &
+                self%orbitals%rotate_to_hess_eigenbasis(self%projection_dirs(:, i))
         end do
 
         ! projected_x = P^T D^-1 x
@@ -1277,14 +1083,13 @@ contains
 
         ! solve (I + C * P^T D^-1 E) bracket_solution = C * projected_x
         allocate(bracket_matrix(n_dirs, n_dirs))
-        call dgemm("N", "N", n_dirs, n_dirs, n_dirs, 1.0_rp, &
-                   arh_object%coupling_matrix, n_dirs, dirs_overlap, n_dirs, 0.0_rp, &
-                   bracket_matrix, n_dirs)
+        call dgemm("N", "N", n_dirs, n_dirs, n_dirs, 1.0_rp, self%coupling_matrix, &
+                   n_dirs, dirs_overlap, n_dirs, 0.0_rp, bracket_matrix, n_dirs)
         do i = 1, n_dirs
             bracket_matrix(i, i) = bracket_matrix(i, i) + 1.0_rp
         end do
         allocate(bracket_rhs(n_dirs))
-        call dgemv("N", n_dirs, n_dirs, 1.0_rp, arh_object%coupling_matrix, n_dirs, &
+        call dgemv("N", n_dirs, n_dirs, 1.0_rp, self%coupling_matrix, n_dirs, &
                    projected_x, 1_ip, 0.0_rp, bracket_rhs, 1_ip)
         allocate(bracket_solution(n_dirs), ipiv(n_dirs))
         bracket_solution = bracket_rhs
@@ -1293,7 +1098,7 @@ contains
         if (info /= 0) then
             write(msg, '(A, I0)') "Level-shifted approximate Hessian is singular: "// &
                 "Error in DGESV, info = ", info
-            call arh_object%settings%log(msg, verbosity_error, .true.)
+            call self%settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
@@ -1303,8 +1108,7 @@ contains
         call dgemv("N", n_param, n_dirs, 1.0_rp, rotated_expansion, n_param, &
                    bracket_solution, 1_ip, 0.0_rp, correction, 1_ip)
         correction = correction / divisors
-        inv_hess_x = &
-            arh_object%orbitals%rotate_from_hess_eigenbasis(scaled_x - correction)
+        inv_hess_x = self%orbitals%rotate_from_hess_eigenbasis(scaled_x - correction)
 
     end subroutine inv_hess_x_arh
 
@@ -1319,7 +1123,7 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        call inv_hess_x_arh(residual, precond_residual, error, mu)
+        call self%inv_hess_x(residual, precond_residual, error, mu)
 
     end subroutine precond_arh
 
@@ -1391,19 +1195,6 @@ contains
         end select
 
     end subroutine init_arh_settings
-
-    subroutine arh_deconstructor()
-        !
-        ! this subroutine deallocates the ARH objects
-        !
-        use otr_oao, only: oao_deconstructor
-        use otr_mo, only: mo_deconstructor
-
-        if (allocated(arh_object)) deallocate(arh_object)
-        call mo_deconstructor()
-        call oao_deconstructor()
-
-    end subroutine arh_deconstructor
 
     function construct_arh_mo(mo) result(arh)
         !
@@ -1823,7 +1614,7 @@ contains
 
     end subroutine cache_combined_channel_dirs
 
-    subroutine get_low_rank_hess_factors()
+    subroutine get_low_rank_hess_factors(self)
         !
         ! this subroutine assembles the low-rank part of the approximate Hessian in the
         ! packed parameter space, as
@@ -1854,156 +1645,154 @@ contains
         ! the factor of 2 above, times a factor of 4 (or 2) for the closed- (or
         ! open-)shell scaling of the Hessian linear transformation
         !
+        class(arh_type), intent(inout) :: self
+
         integer(ip) :: n_linear, n_nonlinear, n_total, i
         real(rp) :: shell_scale
 
         ! discard the factors assembled for the previous history
-        if (allocated(arh_object%expansion_dirs)) deallocate(arh_object%expansion_dirs)
-        if (allocated(arh_object%projection_dirs)) &
-            deallocate(arh_object%projection_dirs)
-        if (allocated(arh_object%coupling_matrix)) &
-            deallocate(arh_object%coupling_matrix)
+        if (allocated(self%expansion_dirs)) deallocate(self%expansion_dirs)
+        if (allocated(self%projection_dirs)) deallocate(self%projection_dirs)
+        if (allocated(self%coupling_matrix)) deallocate(self%coupling_matrix)
 
         ! set scaling factor for closed- and open-shell systems
-        shell_scale = merge(1.0_rp, 0.5_rp, arh_object%orbitals%n_particle == 1)
+        shell_scale = merge(1.0_rp, 0.5_rp, self%orbitals%n_particle == 1)
 
-        select case (arh_object%settings%arh_type)
+        select case (self%settings%arh_type)
         ! multisecant SR1: the linear and non-linear parts of the potential enter as
         ! independent blocks, each contracted against its own inverse rather than
         ! against a single inverse of the summed potential
         case ("ms_sr1")
-            if (.not. allocated(arh_object%linear_potential_dirs) .or. &
-                .not. allocated(arh_object%nonlinear_potential_dirs)) return
-            n_linear = size(arh_object%linear_potential_dirs, 2)
-            n_nonlinear = size(arh_object%nonlinear_potential_dirs, 2)
+            if (.not. allocated(self%linear_potential_dirs) .or. &
+                .not. allocated(self%nonlinear_potential_dirs)) return
+            n_linear = size(self%linear_potential_dirs, 2)
+            n_nonlinear = size(self%nonlinear_potential_dirs, 2)
             n_total = n_linear + n_nonlinear
             if (n_total == 0) return
 
-            allocate(arh_object%expansion_dirs(arh_object%orbitals%n_param, n_total), &
-                     arh_object%coupling_matrix(n_total, n_total))
-            arh_object%expansion_dirs(:, :n_linear) = arh_object%linear_potential_dirs
-            arh_object%expansion_dirs(:, n_linear + 1:) = &
-                arh_object%nonlinear_potential_dirs
-            arh_object%coupling_matrix = 0.0_rp
-            arh_object%coupling_matrix(:n_linear, :n_linear) = 8.0_rp * shell_scale * &
-                                                               arh_object%a_inv
-            arh_object%coupling_matrix(n_linear + 1:, n_linear + 1:) = &
-                8.0_rp * shell_scale * arh_object%a_inv_comb
+            allocate(self%expansion_dirs(self%orbitals%n_param, n_total), &
+                     self%coupling_matrix(n_total, n_total))
+            self%expansion_dirs(:, :n_linear) = self%linear_potential_dirs
+            self%expansion_dirs(:, n_linear + 1:) = self%nonlinear_potential_dirs
+            self%coupling_matrix = 0.0_rp
+            self%coupling_matrix(:n_linear, :n_linear) = 8.0_rp * shell_scale * &
+                                                         self%a_inv
+            self%coupling_matrix(n_linear + 1:, n_linear + 1:) = &
+                8.0_rp * shell_scale * self%a_inv_comb
 
         ! subspace-projected multisecant: the response both expands in and contracts
         ! against the density difference history alone
         case ("ms_sp")
-            if (.not. allocated(arh_object%dm_dirs) .or. &
-                .not. allocated(arh_object%dm_dirs_nonlinear)) return
-            n_linear = size(arh_object%dm_dirs, 2)
-            n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+            if (.not. allocated(self%dm_dirs) .or. &
+                .not. allocated(self%dm_dirs_nonlinear)) return
+            n_linear = size(self%dm_dirs, 2)
+            n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = n_linear + n_nonlinear
             if (n_total == 0) return
 
-            allocate(arh_object%expansion_dirs(arh_object%orbitals%n_param, n_total), &
-                     arh_object%coupling_matrix(n_total, n_total))
-            arh_object%expansion_dirs(:, :n_linear) = arh_object%dm_dirs
-            arh_object%expansion_dirs(:, n_linear + 1:) = arh_object%dm_dirs_nonlinear
-            arh_object%coupling_matrix = 0.0_rp
-            arh_object%coupling_matrix(:n_linear, :n_linear) = 8.0_rp * shell_scale * &
-                                                               arh_object%a_sym
-            arh_object%coupling_matrix(n_linear + 1:, n_linear + 1:) = &
-                8.0_rp * shell_scale * arh_object%a_sym_nonlinear
+            allocate(self%expansion_dirs(self%orbitals%n_param, n_total), &
+                     self%coupling_matrix(n_total, n_total))
+            self%expansion_dirs(:, :n_linear) = self%dm_dirs
+            self%expansion_dirs(:, n_linear + 1:) = self%dm_dirs_nonlinear
+            self%coupling_matrix = 0.0_rp
+            self%coupling_matrix(:n_linear, :n_linear) = 8.0_rp * shell_scale * &
+                                                         self%a_sym
+            self%coupling_matrix(n_linear + 1:, n_linear + 1:) = &
+                8.0_rp * shell_scale * self%a_sym_nonlinear
 
         ! symmetrized ARH: the density and potential difference histories couple in
         ! both directions, so the coupling matrix is purely off-diagonal; also
         ! introduces an additional factor of 1/2
         case ("symm_arh")
-            if (.not. allocated(arh_object%dm_dirs) .or. &
-                .not. allocated(arh_object%linear_potential_dirs)) return
-            n_linear = size(arh_object%dm_dirs, 2)
-            n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+            if (.not. allocated(self%dm_dirs) .or. &
+                .not. allocated(self%linear_potential_dirs)) return
+            n_linear = size(self%dm_dirs, 2)
+            n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = 2 * (n_linear + n_nonlinear)
             if (n_total == 0) return
 
-            allocate(arh_object%expansion_dirs(arh_object%orbitals%n_param, n_total), &
-                     arh_object%coupling_matrix(n_total, n_total))
-            arh_object%expansion_dirs(:, :n_linear) = arh_object%dm_dirs
-            arh_object%expansion_dirs(:, n_linear + 1:2 * n_linear) = &
-                arh_object%linear_potential_dirs
-            arh_object%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + &
-                                      n_nonlinear) = arh_object%dm_dirs_nonlinear
-            arh_object%expansion_dirs(:, 2 * n_linear + n_nonlinear + 1:) = &
-                arh_object%nonlinear_potential_dirs
+            allocate(self%expansion_dirs(self%orbitals%n_param, n_total), &
+                     self%coupling_matrix(n_total, n_total))
+            self%expansion_dirs(:, :n_linear) = self%dm_dirs
+            self%expansion_dirs(:, n_linear + 1:2 * n_linear) = &
+                self%linear_potential_dirs
+            self%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + n_nonlinear) = &
+                self%dm_dirs_nonlinear
+            self%expansion_dirs(:, 2 * n_linear + n_nonlinear + 1:) = &
+                self%nonlinear_potential_dirs
             ! the metric scaling collapses in the orthonormalized S-basis
-            arh_object%coupling_matrix = 0.0_rp
+            self%coupling_matrix = 0.0_rp
             do i = 1, n_linear
-                arh_object%coupling_matrix(i, n_linear + i) = 4.0_rp * shell_scale
-                arh_object%coupling_matrix(n_linear + i, i) = 4.0_rp * shell_scale
+                self%coupling_matrix(i, n_linear + i) = 4.0_rp * shell_scale
+                self%coupling_matrix(n_linear + i, i) = 4.0_rp * shell_scale
             end do
             do i = 1, n_nonlinear
-                arh_object%coupling_matrix(2 * n_linear + i, 2 * n_linear + &
-                                           n_nonlinear + i) = 4.0_rp * shell_scale
-                arh_object%coupling_matrix(2 * n_linear + n_nonlinear + i, &
-                                           2 * n_linear + i) = 4.0_rp * shell_scale
+                self%coupling_matrix(2 * n_linear + i, 2 * n_linear + n_nonlinear + &
+                                     i) = 4.0_rp * shell_scale
+                self%coupling_matrix(2 * n_linear + n_nonlinear + i, &
+                                     2 * n_linear + i) = 4.0_rp * shell_scale
             end do
 
         ! multisecant PSB: the symmetrized ARH coupling with an additional
         ! density-density block subtracting the doubly counted curvature
         case ("ms_psb")
-            if (.not. allocated(arh_object%dm_dirs) .or. &
-                .not. allocated(arh_object%linear_potential_dirs)) return
-            n_linear = size(arh_object%dm_dirs, 2)
-            n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+            if (.not. allocated(self%dm_dirs) .or. &
+                .not. allocated(self%linear_potential_dirs)) return
+            n_linear = size(self%dm_dirs, 2)
+            n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = 2 * (n_linear + n_nonlinear)
             if (n_total == 0) return
 
-            allocate(arh_object%expansion_dirs(arh_object%orbitals%n_param, n_total), &
-                     arh_object%coupling_matrix(n_total, n_total))
-            arh_object%expansion_dirs(:, :n_linear) = arh_object%dm_dirs
-            arh_object%expansion_dirs(:, n_linear + 1:2 * n_linear) = &
-                arh_object%linear_potential_dirs
-            arh_object%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + &
-                                      n_nonlinear) = arh_object%dm_dirs_nonlinear
-            arh_object%expansion_dirs(:, 2 * n_linear + n_nonlinear + 1:) = &
-                arh_object%nonlinear_potential_dirs
-            arh_object%coupling_matrix = 0.0_rp
-            arh_object%coupling_matrix(:n_linear, :n_linear) = -8.0_rp * shell_scale * &
-                                                               arh_object%a_sym
-            arh_object%coupling_matrix(2 * n_linear + 1:2 * n_linear + n_nonlinear, &
-                                       2 * n_linear + 1:2 * n_linear + n_nonlinear) = &
-                -8.0_rp * shell_scale * arh_object%a_sym_nonlinear
+            allocate(self%expansion_dirs(self%orbitals%n_param, n_total), &
+                     self%coupling_matrix(n_total, n_total))
+            self%expansion_dirs(:, :n_linear) = self%dm_dirs
+            self%expansion_dirs(:, n_linear + 1:2 * n_linear) = &
+                self%linear_potential_dirs
+            self%expansion_dirs(:, 2 * n_linear + 1:2 * n_linear + n_nonlinear) = &
+                self%dm_dirs_nonlinear
+            self%expansion_dirs(:, 2 * n_linear + n_nonlinear + 1:) = &
+                self%nonlinear_potential_dirs
+            self%coupling_matrix = 0.0_rp
+            self%coupling_matrix(:n_linear, :n_linear) = -8.0_rp * shell_scale * &
+                                                         self%a_sym
+            self%coupling_matrix(2 * n_linear + 1:2 * n_linear + n_nonlinear, &
+                                 2 * n_linear + 1:2 * n_linear + n_nonlinear) = &
+                -8.0_rp * shell_scale * self%a_sym_nonlinear
             ! the metric scaling in the off-diagonal blocks collapses in the
             ! orthonormalized S-basis
             do i = 1, n_linear
-                arh_object%coupling_matrix(i, n_linear + i) = 8.0_rp * shell_scale
-                arh_object%coupling_matrix(n_linear + i, i) = 8.0_rp * shell_scale
+                self%coupling_matrix(i, n_linear + i) = 8.0_rp * shell_scale
+                self%coupling_matrix(n_linear + i, i) = 8.0_rp * shell_scale
             end do
             do i = 1, n_nonlinear
-                arh_object%coupling_matrix(2 * n_linear + i, 2 * n_linear + &
-                                           n_nonlinear + i) = 8.0_rp * shell_scale
-                arh_object%coupling_matrix(2 * n_linear + n_nonlinear + i, &
-                                           2 * n_linear + i) = 8.0_rp * shell_scale
+                self%coupling_matrix(2 * n_linear + i, 2 * n_linear + n_nonlinear + &
+                                     i) = 8.0_rp * shell_scale
+                self%coupling_matrix(2 * n_linear + n_nonlinear + i, &
+                                     2 * n_linear + i) = 8.0_rp * shell_scale
             end do
 
         ! standard ARH: the response expands in the potential difference history while
         ! contracting against the density difference history, so unlike every other
         ! type the two sets of directions differ
         case ("arh")
-            if (.not. allocated(arh_object%dm_dirs) .or. &
-                .not. allocated(arh_object%linear_potential_dirs)) return
-            n_linear = size(arh_object%dm_dirs, 2)
-            n_nonlinear = size(arh_object%dm_dirs_nonlinear, 2)
+            if (.not. allocated(self%dm_dirs) .or. &
+                .not. allocated(self%linear_potential_dirs)) return
+            n_linear = size(self%dm_dirs, 2)
+            n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = n_linear + n_nonlinear
             if (n_total == 0) return
 
-            allocate(arh_object%expansion_dirs(arh_object%orbitals%n_param, n_total), &
-                     arh_object%projection_dirs(arh_object%orbitals%n_param, n_total), &
-                     arh_object%coupling_matrix(n_total, n_total))
-            arh_object%expansion_dirs(:, :n_linear) = arh_object%linear_potential_dirs
-            arh_object%expansion_dirs(:, n_linear + 1:) = &
-                arh_object%nonlinear_potential_dirs
-            arh_object%projection_dirs(:, :n_linear) = arh_object%dm_dirs
-            arh_object%projection_dirs(:, n_linear + 1:) = arh_object%dm_dirs_nonlinear
-            arh_object%coupling_matrix = 0.0_rp
+            allocate(self%expansion_dirs(self%orbitals%n_param, n_total), &
+                     self%projection_dirs(self%orbitals%n_param, n_total), &
+                     self%coupling_matrix(n_total, n_total))
+            self%expansion_dirs(:, :n_linear) = self%linear_potential_dirs
+            self%expansion_dirs(:, n_linear + 1:) = self%nonlinear_potential_dirs
+            self%projection_dirs(:, :n_linear) = self%dm_dirs
+            self%projection_dirs(:, n_linear + 1:) = self%dm_dirs_nonlinear
+            self%coupling_matrix = 0.0_rp
             ! the metric scaling collapses in the orthonormalized S-basis
             do i = 1, n_total
-                arh_object%coupling_matrix(i, i) = 8.0_rp * shell_scale
+                self%coupling_matrix(i, i) = 8.0_rp * shell_scale
             end do
 
         case default
@@ -2012,9 +1801,9 @@ contains
 
         ! every type except standard ARH expands in and contracts against the same set
         ! of directions
-        if (allocated(arh_object%expansion_dirs) .and. &
-            .not. allocated(arh_object%projection_dirs)) &
-            arh_object%projection_dirs = arh_object%expansion_dirs
+        if (allocated(self%expansion_dirs) .and. &
+            .not. allocated(self%projection_dirs)) &
+            self%projection_dirs = self%expansion_dirs
 
     end subroutine get_low_rank_hess_factors
 
@@ -2875,12 +2664,14 @@ contains
 
     end function spectral_to_dense
 
-    function density_in_history(dm) result(in_history)
+    function density_in_history(self, dm) result(in_history)
         !
-        ! this function reports whether a density is already held in the history
+        ! this function reports whether a density is already held in the history of the
+        ! object
         !
         use opentrustregion, only: numerical_zero
 
+        class(arh_type), intent(in) :: self
         real(rp), intent(in) :: dm(:, :, :)
         logical :: in_history
 
@@ -2888,13 +2679,13 @@ contains
         real(rp) :: dm_scale
 
         in_history = .false.
-        if (.not. allocated(arh_object%dm_list)) return
+        if (.not. allocated(self%dm_list)) return
 
         ! judge the difference against the size of the density, so that the test is a
         ! relative one
         dm_scale = max(maxval(abs(dm)), numerical_zero)
-        do i = 1, size(arh_object%dm_list, 4)
-            if (maxval(abs(arh_object%dm_list(:, :, :, i) - dm)) <= &
+        do i = 1, size(self%dm_list, 4)
+            if (maxval(abs(self%dm_list(:, :, :, i) - dm)) <= &
                 numerical_zero * dm_scale) then
                 in_history = .true.
                 return

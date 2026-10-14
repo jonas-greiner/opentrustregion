@@ -94,7 +94,8 @@ contains
                                    default_solver_settings
         use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
-                              extension_level, update_orbs_callback, obj_func_callback
+                              update_orbs_callback, obj_func_callback
+        use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_qn, only: qn_factory, qn_settings_type, updating_type, &
                           sr1_updating_type, bfgs_updating_type, default_qn_settings, &
@@ -180,7 +181,7 @@ contains
                     "not returned "//trim(case_names(i_case))//"."
                 test_qn_factory = .false.
             end if
-            level => extension_level(solver_settings%context)
+            level => wired_level(solver_settings)
             if (.not. associated(level)) then
                 write(stderr, *) "test_qn_factory failed: Solver settings not "// &
                     "wired with an object "//trim(case_names(i_case))//"."
@@ -277,8 +278,8 @@ contains
                         transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
                         obj_func_qn_funptr, other_settings, other_state, error, &
                         settings)
-        level => extension_level(solver_settings%context)
-        other_level => extension_level(other_settings%context)
+        level => wired_level(solver_settings)
+        other_level => wired_level(other_settings)
         if (.not. (associated(level) .and. associated(other_level))) then
             write(stderr, *) "test_qn_factory failed: Separate solver settings not "// &
                 "wired."

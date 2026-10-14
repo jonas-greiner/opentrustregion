@@ -9,7 +9,6 @@ from __future__ import annotations
 import numpy as np
 from ctypes import POINTER, c_bool, c_void_p, c_char, Structure, byref
 from dataclasses import dataclass
-from inspect import signature
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
@@ -27,24 +26,21 @@ from pyopentrustregion.python_interface import (
     Settings,
     SolverSettings,
     SolverSettingsC,
+    SolverState,
+    SolverStateC,
     auto_bind_fields,
     bind_callback_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
+    ExtensionOwner,
     ObjFuncPyInterface,
+    OrbitalOwner,
     UpdateOrbsPyInterface,
     check_callback_arguments,
 )
-from pyopentrustregion.extensions.mo.python_interface import (
-    check_mo_coeff,
-    check_orbsym,
-    ObjFuncMOPyInterface,
-    UpdateOrbsMOPyInterface,
-)
-from pyopentrustregion.extensions.oao.python_interface import check_dm_ao
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any, Union, Dict, Sequence
+    from typing import Tuple, Callable, Optional, Dict
 
     ARHEvaluateDMType = Callable[
         [
@@ -164,17 +160,11 @@ class ARHEvaluateDMInterface(CallbackInterface):
         return 0
 
 
-def arh_factory_mo(
-    mo_coeff: np.ndarray,
-    ao_overlap: np.ndarray,
-    n_occ: Union[int, Sequence[int]],
-    n_particle: int,
-    n_ao: int,
-    n_mo: int,
+def arh_factory(
     evaluate_dm: ARHEvaluateDMType,
     solver_settings: SolverSettings,
-    settings: ARHSettings,
-    orbsym: Optional[Union[Sequence[int], np.ndarray]] = None,
+    solver_state: SolverState,
+    settings: Optional[ARHSettings] = None,
 ) -> Tuple[
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -182,17 +172,15 @@ def arh_factory_mo(
     ],
     Callable[[np.ndarray], float],
 ]:
-    # check the MO irreps, MO coefficients and overlap matrix against the dimensions
-    # and determine if closed-shell or open-shell formalism is used
-    orbsym_c = check_orbsym(orbsym, n_particle, n_mo)
-    mo_coeff_buffer, in_place, n_occ_c, ao_overlap = check_mo_coeff(
-        mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo
-    )
-    closed_shell = n_particle == 1
-
-    # get pointers to arrays
-    mo_coeff_ptr = mo_coeff_buffer.ctypes.data_as(POINTER(c_real))
-    ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
+    # the ARH object builds on the orbital basis object of the MO or OAO factory which
+    # wired the solver settings last, whose owner holds the dimensions of the orbitals
+    # the callback interfaces need, which the C interface does not receive
+    orbitals = getattr(solver_settings, "_extension_owner", None)
+    if not isinstance(orbitals, OrbitalOwner):
+        raise ValueError(
+            "The solver settings have to be those an MO or OAO factory wired last."
+        )
+    n_ao, n_particle = orbitals.n_ao, orbitals.n_particle
 
     # collector for exceptions raised inside the wrapped user callbacks; adopted from
     # evaluate_dm when it is itself factory-produced so a whole chain of factories
@@ -207,255 +195,85 @@ def arh_factory_mo(
         ("dm", "fock", "v_coulomb", "v_exchange", "v_nonlinear"),
     )
     evaluate_dm_interface = arh_evaluate_dm_interface_type(
-        ARHEvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
+        ARHEvaluateDMInterface(
+            evaluate_dm, n_ao, n_particle, n_particle == 1, exception
+        )
     )
 
     # hand the logging function of the settings the exception collector of the call
-    settings.prepare_call(None, exception)
+    if settings is not None:
+        settings.prepare_call(None, exception)
 
-    if not hasattr(lib, "arh_factory_mo"):
+    if not hasattr(lib, "arh_factory"):
         raise RuntimeError(
             "Please reinstall the package with: "
             "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
         )
 
     # define result and argument types
-    lib.arh_factory_mo.restype = c_int
-    lib.arh_factory_mo.argtypes = [
-        POINTER(c_real),
-        POINTER(c_real),
-        POINTER(c_int),
-        c_int,
-        c_int,
-        c_int,
+    lib.arh_factory.restype = c_int
+    lib.arh_factory.argtypes = [
         arh_evaluate_dm_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
+        POINTER(c_void_p),
         POINTER(SolverSettingsC),
-        POINTER(ARHSettingsC),
-        POINTER(c_int),
-    ]
-
-    # call Fortran function
-    update_orbs_arh_funptr = update_orbs_interface_type()
-    obj_func_arh_funptr = obj_func_interface_type()
-    error = lib.arh_factory_mo(
-        mo_coeff_ptr,
-        ao_overlap_ptr,
-        n_occ_c,
-        n_particle,
-        n_ao,
-        n_mo,
-        evaluate_dm_interface,
-        byref(update_orbs_arh_funptr),
-        byref(obj_func_arh_funptr),
-        byref(solver_settings.settings_c),
-        byref(settings.settings_c),
-        orbsym_c,
-    )
-
-    if error:
-        if "exc" in exception:
-            raise RuntimeError(
-                f"OpenTrustRegion ARH MO factory produced error (code {error})."
-            ) from exception["exc"]
-        else:
-            raise RuntimeError(
-                f"OpenTrustRegion ARH MO factory produced error (code {error})."
-            )
-
-    # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the object, and keep the settings
-    # alive, whose callback functions the object calls
-    return (
-        UpdateOrbsMOPyInterface(
-            update_orbs_funptr=update_orbs_arh_funptr,
-            _otr_exception=exception,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-                "mo_coeff_buffer": mo_coeff_buffer,
-            },
-            mo_coeff=None if in_place else mo_coeff,
-            mo_coeff_buffer=None if in_place else mo_coeff_buffer,
-            context=solver_settings.settings_c.context,
-        ),
-        ObjFuncMOPyInterface(
-            obj_func_funptr=obj_func_arh_funptr,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-            },
-            _otr_exception=exception,
-            mo_coeff_buffer=mo_coeff_buffer,
-            context=solver_settings.settings_c.context,
-        ),
-    )
-
-
-def arh_factory_oao(
-    dm_ao: np.ndarray,
-    ao_overlap: np.ndarray,
-    n_particle: int,
-    n_ao: int,
-    evaluate_dm: ARHEvaluateDMType,
-    solver_settings: SolverSettings,
-    settings: ARHSettings,
-) -> Tuple[
-    Callable[
-        [np.ndarray, np.ndarray, np.ndarray],
-        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
-    ],
-    Callable[[np.ndarray], float],
-]:
-    # check the density and overlap matrices against the dimensions and determine if
-    # closed-shell or open-shell formalism is used
-    ao_overlap = check_dm_ao(dm_ao, ao_overlap, n_particle, n_ao)
-    closed_shell = n_particle == 1
-
-    # get pointers to arrays
-    dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
-    ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
-
-    # collector for exceptions raised inside the wrapped user callbacks; adopted from
-    # evaluate_dm when it is itself factory-produced so a whole chain of factories
-    # shares one, and handed to solver through the returned object
-    exception = adopt_collector(evaluate_dm)
-
-    # define interfaces for callback functions, whose arguments the C interface cannot
-    # check
-    check_callback_arguments(
-        evaluate_dm,
-        "evaluate_dm",
-        ("dm", "fock", "v_coulomb", "v_exchange", "v_nonlinear"),
-    )
-    evaluate_dm_interface = arh_evaluate_dm_interface_type(
-        ARHEvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
-    )
-
-    # hand the logging function of the settings the exception collector of the call
-    settings.prepare_call(None, exception)
-
-    if not hasattr(lib, "arh_factory_oao"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
-        )
-
-    # define result and argument types
-    lib.arh_factory_oao.restype = c_int
-    lib.arh_factory_oao.argtypes = [
-        POINTER(c_real),
-        POINTER(c_real),
-        c_int,
-        c_int,
-        arh_evaluate_dm_interface_type,
-        POINTER(update_orbs_interface_type),
-        POINTER(obj_func_interface_type),
-        POINTER(SolverSettingsC),
+        POINTER(SolverStateC),
         POINTER(ARHSettingsC),
     ]
 
     # call Fortran function
     update_orbs_arh_funptr = update_orbs_interface_type()
     obj_func_arh_funptr = obj_func_interface_type()
-    error = lib.arh_factory_oao(
-        dm_ao_ptr,
-        ao_overlap_ptr,
-        n_particle,
-        n_ao,
+    extension = c_void_p()
+    error = lib.arh_factory(
         evaluate_dm_interface,
         byref(update_orbs_arh_funptr),
         byref(obj_func_arh_funptr),
+        byref(extension),
         byref(solver_settings.settings_c),
-        byref(settings.settings_c),
+        byref(solver_state.state_c),
+        None if settings is None else byref(settings.settings_c),
     )
 
     if error:
         if "exc" in exception:
             raise RuntimeError(
-                f"OpenTrustRegion ARH OAO factory produced error (code {error})."
+                f"OpenTrustRegion ARH factory produced error (code {error})."
             ) from exception["exc"]
         else:
             raise RuntimeError(
-                f"OpenTrustRegion ARH OAO factory produced error (code {error})."
+                f"OpenTrustRegion ARH factory produced error (code {error})."
             )
 
-    # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the object, and keep the settings
-    # alive, whose callback functions the object calls
+    # the owner of the ARH object, which the solver settings keep alive, keeps alive
+    # what the object calls and the owner of the orbital basis object, which the
+    # settings were wired with before, and the returned functions are called with the
+    # context the factory has written into the solver settings, through which they
+    # reach the object, keep the solver settings alive and copy the orbitals back like
+    # those of the orbital basis object
+    ExtensionOwner(
+        extension.value,
+        solver_settings,
+        {
+            "settings": settings,
+            "solver_state": solver_state,
+            "evaluate_dm_interface": evaluate_dm_interface,
+        },
+    )
+    saved_objects = {"solver_settings": solver_settings}
     return (
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_arh_funptr,
+            saved_objects=saved_objects,
             _otr_exception=exception,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-            },
             context=solver_settings.settings_c.context,
+            copy_back=orbitals.copy_back,
         ),
         ObjFuncPyInterface(
             obj_func_funptr=obj_func_arh_funptr,
-            saved_objects={
-                "evaluate_dm_interface": evaluate_dm_interface,
-                "solver_settings": solver_settings,
-                "settings": settings,
-            },
+            saved_objects=saved_objects,
             _otr_exception=exception,
             context=solver_settings.settings_c.context,
         ),
     )
-
-
-# signatures of the factories the ARH factory selects from
-arh_factory_signatures = (
-    ("arh_factory_mo", signature(arh_factory_mo)),
-    ("arh_factory_oao", signature(arh_factory_oao)),
-)
-
-
-def arh_factory(*args: Any, **kwargs: Any) -> Tuple[
-    Callable[
-        [np.ndarray, np.ndarray, np.ndarray],
-        Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
-    ],
-    Callable[[np.ndarray], float],
-]:
-    # select the orbital basis from the arguments, like the generic arh_factory of the
-    # Fortran interface: the arguments of arh_factory_oao (an AO density matrix) select
-    # the OAO basis and those of arh_factory_mo (MO coefficients with their
-    # occupations and number of MOs) the MO basis
-    matches = []
-    for name, factory_signature in arh_factory_signatures:
-        try:
-            factory_signature.bind(*args, **kwargs)
-        except TypeError:
-            continue
-        matches.append(name)
-    if len(matches) != 1:
-        raise TypeError(
-            "The arguments have to match those of exactly one of arh_factory_mo and "
-            "arh_factory_oao."
-        )
-    factory = arh_factory_mo if matches[0] == "arh_factory_mo" else arh_factory_oao
-    return factory(*args, **kwargs)
-
-
-def arh_deconstructor():
-    if not hasattr(lib, "arh_deconstructor"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
-        )
-
-    # define result and argument types
-    lib.arh_deconstructor.restype = None
-    lib.arh_deconstructor.argtypes = []
-
-    # call Fortran function
-    lib.arh_deconstructor()
-
-    return
