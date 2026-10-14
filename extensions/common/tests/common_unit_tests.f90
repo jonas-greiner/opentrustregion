@@ -503,6 +503,21 @@ contains
 
     end subroutine mock_get_response_os
 
+    subroutine mock_get_stale_response_os(dm, response, error, context)
+        !
+        ! this subroutine is a mock response function for the open-shell case which
+        ! belongs to outdated orbitals and returns a vanishing response
+        !
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out), target :: response(:, :, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = 0
+        response = 0.0_rp * dm
+
+    end subroutine mock_get_stale_response_os
+
     subroutine mock_evaluate_dm_cs(dm, energy, fock, get_response_funptr, error, &
                                    context)
         !

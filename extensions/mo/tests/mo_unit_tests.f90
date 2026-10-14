@@ -12,7 +12,41 @@ module otr_mo_unit_tests
 
     implicit none
 
+    ! factor of the density matrix in the Fock matrix of the quadratic model energy of
+    ! the closed-shell and the open-shell case, which is also its response
+    real(rp), parameter :: model_response_scale(2) = [1.0_rp, 0.5_rp]
+
 contains
+
+    subroutine model_response_cs(dm, response, error, context)
+        !
+        ! this subroutine is the response function of the closed-shell quadratic model
+        ! energy
+        !
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out), target, contiguous :: response(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = 0
+        response = model_response_scale(1) * dm
+
+    end subroutine model_response_cs
+
+    subroutine model_response_os(dm, response, error, context)
+        !
+        ! this subroutine is the response function of the open-shell quadratic model
+        ! energy
+        !
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out), target :: response(:, :, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = 0
+        response = model_response_scale(2) * dm
+
+    end subroutine model_response_os
 
     function diagonal_matrix(values) result(matrix)
         !
@@ -1802,10 +1836,10 @@ contains
                                          case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
-        use otr_common_unit_tests, only: generate_random_symm_matrix, mock_requests, &
-                                         mock_response_factor, mock_get_response_cs, &
-                                         mock_get_response_os, mock_evaluate_dm_cs, &
-                                         mock_evaluate_dm_os
+        use otr_common_unit_tests, only: &
+            generate_random_symm_matrix, mock_requests, mock_response_factor, &
+            mock_get_response_cs, mock_get_response_os, mock_get_stale_response_os, &
+            mock_evaluate_dm_cs, mock_evaluate_dm_os
 
         type(mo_type), allocatable, target :: mo
         ! step of the finite difference and its tolerance relative to the second
@@ -1944,7 +1978,7 @@ contains
         model_h = generate_random_symm_matrix(n_ao)
         do n_particle = 1, n_particle_ref
             case_name = trim(shell_names(n_particle))
-            model_scale = merge(1.0_rp, 0.5_rp, n_particle == 1)
+            model_scale = model_response_scale(n_particle)
             call setup_mo_object(mo, mo_coeff(:, :, :n_particle), ao_overlap, &
                                  n_occ(:n_particle))
             call setup_settings(mo%settings)
@@ -2011,51 +2045,6 @@ contains
             end do
 
         end function model_energy
-
-        subroutine model_response_cs(dm, response_out, error_out, context_out)
-            !
-            ! this subroutine is the response function of the closed-shell quadratic
-            ! model energy
-            !
-            real(rp), intent(in), target, contiguous :: dm(:, :)
-            real(rp), intent(out), target, contiguous :: response_out(:, :)
-            integer(ip), intent(out) :: error_out
-            class(*), intent(in), pointer :: context_out
-
-            error_out = 0
-            response_out = model_scale * dm
-
-        end subroutine model_response_cs
-
-        subroutine model_response_os(dm, response_out, error_out, context_out)
-            !
-            ! this subroutine is the response function of the open-shell quadratic
-            ! model energy
-            !
-            real(rp), intent(in), target :: dm(:, :, :)
-            real(rp), intent(out), target :: response_out(:, :, :)
-            integer(ip), intent(out) :: error_out
-            class(*), intent(in), pointer :: context_out
-
-            error_out = 0
-            response_out = model_scale * dm
-
-        end subroutine model_response_os
-
-        subroutine mock_get_stale_response_os(dm, response_out, error_out, context_out)
-            !
-            ! this subroutine is a mock response function for the open-shell case which
-            ! belongs to outdated orbitals and returns a vanishing response
-            !
-            real(rp), intent(in), target :: dm(:, :, :)
-            real(rp), intent(out), target :: response_out(:, :, :)
-            integer(ip), intent(out) :: error_out
-            class(*), intent(in), pointer :: context_out
-
-            error_out = 0
-            response_out = 0.0_rp * dm
-
-        end subroutine mock_get_stale_response_os
 
     end function test_hess_x_mo
 

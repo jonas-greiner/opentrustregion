@@ -1331,8 +1331,8 @@ contains
         use otr_common_unit_tests, only: &
             identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_requests, mock_response_factor, &
-            mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_cs, &
-            mock_evaluate_dm_os
+            mock_get_response_cs, mock_get_response_os, mock_get_stale_response_os, &
+            mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: setup_settings
         use otr_common_test_reference, only: n_ao, n_occ, &
@@ -1471,23 +1471,6 @@ contains
                 "density matrix evaluating function."
             test_hess_x_oao = .false.
         end if
-
-    contains
-
-        subroutine mock_get_stale_response_os(dm, response_out, error_out, context_out)
-            !
-            ! this subroutine is a mock response function for the open-shell case which
-            ! belongs to an outdated density and returns a vanishing response
-            !
-            real(rp), intent(in), target :: dm(:, :, :)
-            real(rp), intent(out), target :: response_out(:, :, :)
-            integer(ip), intent(out) :: error_out
-            class(*), intent(in), pointer :: context_out
-
-            error_out = 0
-            response_out = 0.0_rp * dm
-
-        end subroutine mock_get_stale_response_os
 
     end function test_hess_x_oao
 

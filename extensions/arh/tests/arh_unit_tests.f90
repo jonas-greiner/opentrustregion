@@ -155,6 +155,50 @@ contains
 
     end subroutine mock_evaluate_dm_os
 
+    subroutine mock_evaluate_dm_failing_cs(dm, energy, fock, v_coulomb, v_exchange, &
+                                           v_nonlinear, error, context)
+        !
+        ! this subroutine is a mock density matrix evaluating function for the
+        ! closed-shell case, which fails
+        !
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target, contiguous :: &
+            fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = 1
+        energy = sum(dm)
+        if (present(fock)) fock = 0.0_rp
+        if (present(v_coulomb)) v_coulomb = 0.0_rp
+        if (present(v_exchange)) v_exchange = 0.0_rp
+        if (present(v_nonlinear)) v_nonlinear = 0.0_rp
+
+    end subroutine mock_evaluate_dm_failing_cs
+
+    subroutine mock_evaluate_dm_failing_os(dm, energy, fock, v_coulomb, v_exchange, &
+                                           v_nonlinear, error, context)
+        !
+        ! this subroutine is a mock density matrix evaluating function for the
+        ! open-shell case, which fails
+        !
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out) :: energy
+        real(rp), intent(out), optional, target :: &
+            fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = 1
+        energy = sum(dm)
+        if (present(fock)) fock = 0.0_rp
+        if (present(v_coulomb)) v_coulomb = 0.0_rp
+        if (present(v_exchange)) v_exchange = 0.0_rp
+        if (present(v_nonlinear)) v_nonlinear = 0.0_rp
+
+    end subroutine mock_evaluate_dm_failing_os
+
     subroutine generate_random_fock_partition(n_ao, n_occ, dm_oao, fock_oo, fock_vv)
         !
         ! this subroutine generates a random density matrix with the given number of
@@ -964,56 +1008,6 @@ contains
 
         ! deallocate ARH and OAO objects
         deallocate(arh, oao)
-
-    contains
-
-        subroutine mock_evaluate_dm_failing_cs(dm, energy_out, fock_out, &
-                                               v_coulomb_out, v_exchange_out, &
-                                               v_nonlinear_out, error_out, context_out)
-            !
-            ! this subroutine is a mock density matrix evaluating function for the
-            ! closed-shell case, which fails
-            !
-            real(rp), intent(in), target, contiguous :: dm(:, :)
-            real(rp), intent(out) :: energy_out
-            real(rp), intent(out), optional, target, contiguous :: &
-                fock_out(:, :), v_coulomb_out(:, :), v_exchange_out(:, :), &
-                v_nonlinear_out(:, :)
-            integer(ip), intent(out) :: error_out
-            class(*), intent(in), pointer :: context_out
-
-            error_out = 1
-            energy_out = sum(dm)
-            if (present(fock_out)) fock_out = 0.0_rp
-            if (present(v_coulomb_out)) v_coulomb_out = 0.0_rp
-            if (present(v_exchange_out)) v_exchange_out = 0.0_rp
-            if (present(v_nonlinear_out)) v_nonlinear_out = 0.0_rp
-
-        end subroutine mock_evaluate_dm_failing_cs
-
-        subroutine mock_evaluate_dm_failing_os(dm, energy_out, fock_out, &
-                                               v_coulomb_out, v_exchange_out, &
-                                               v_nonlinear_out, error_out, context_out)
-            !
-            ! this subroutine is a mock density matrix evaluating function for the
-            ! open-shell case, which fails
-            !
-            real(rp), intent(in), target :: dm(:, :, :)
-            real(rp), intent(out) :: energy_out
-            real(rp), intent(out), optional, target :: &
-                fock_out(:, :, :), v_coulomb_out(:, :, :), v_exchange_out(:, :, :), &
-                v_nonlinear_out(:, :, :)
-            integer(ip), intent(out) :: error_out
-            class(*), intent(in), pointer :: context_out
-
-            error_out = 1
-            energy_out = sum(dm)
-            if (present(fock_out)) fock_out = 0.0_rp
-            if (present(v_coulomb_out)) v_coulomb_out = 0.0_rp
-            if (present(v_exchange_out)) v_exchange_out = 0.0_rp
-            if (present(v_nonlinear_out)) v_nonlinear_out = 0.0_rp
-
-        end subroutine mock_evaluate_dm_failing_os
 
     end function check_update_orbs_arh
 
