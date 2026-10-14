@@ -4,6 +4,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import functools
 import gc
 import unittest
 from ctypes import POINTER, addressof, c_void_p
@@ -318,6 +319,13 @@ class CommonPyInterfaceTests(unittest.TestCase):
         def host_obj_func(kappa):
             return 0.0
 
+        def marked_wrapper(function):
+            @functools.wraps(function)
+            def wrapper(*args):
+                return function(*args)
+
+            return wrapper
+
         level, other_level = 0x1000, 0x2000
         returned_update_orbs = {
             address: UpdateOrbsPyInterface(
@@ -396,6 +404,29 @@ class CommonPyInterfaceTests(unittest.TestCase):
                 level,
                 returned_update_orbs[other_level],
                 returned_obj_func[other_level],
+                False,
+            ),
+            (
+                "wrappers made with functools.wraps of the functions returned for the "
+                "wired settings",
+                level,
+                marked_wrapper(returned_update_orbs[level]),
+                marked_wrapper(returned_obj_func[level]),
+                True,
+            ),
+            (
+                "wrappers made with functools.wraps of functions returned for settings "
+                "wired before",
+                level,
+                marked_wrapper(returned_update_orbs[other_level]),
+                marked_wrapper(returned_obj_func[other_level]),
+                False,
+            ),
+            (
+                "unmarked wrappers of the functions returned for the wired settings",
+                level,
+                lambda *args: returned_update_orbs[level](*args),
+                lambda *args: returned_obj_func[level](*args),
                 False,
             ),
         )

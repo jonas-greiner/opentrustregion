@@ -10,7 +10,7 @@ import numpy as np
 import weakref
 from ctypes import POINTER, byref, c_void_p
 from dataclasses import dataclass
-from inspect import signature
+from inspect import signature, unwrap
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     lib,
@@ -256,14 +256,15 @@ def check_wrapped_functions(
     """
     this function raises if the orbital updating function or the objective function a
     factory wraps is not the one the factory that wired the solver settings last
-    returned, which reaches its object through the context of the settings, or, for
-    settings no factory wired, the host's own, which the C interface cannot check, since
-    it cannot tell the level of an extension object from a host's context
+    returned, which reaches its object through the context of the settings, or a
+    wrapper of it marked with functools.wraps, or, for settings no factory wired, the
+    host's own, which the C interface cannot check, since it cannot tell the level of an
+    extension object from a host's context
     """
     context = solver_settings.settings_c.context
     for function, returned_type in (
-        (update_orbs, UpdateOrbsPyInterface),
-        (obj_func, ObjFuncPyInterface),
+        (unwrap(update_orbs), UpdateOrbsPyInterface),
+        (unwrap(obj_func), ObjFuncPyInterface),
     ):
         returned = isinstance(function, returned_type)
         if (returned and function.context != context) or (
@@ -271,8 +272,9 @@ def check_wrapped_functions(
         ):
             raise ValueError(
                 "update_orbs and obj_func have to be the functions the factory that "
-                "wired the solver settings last returned, or the host's own for "
-                "settings no factory wired."
+                "wired the solver settings last returned, or wrappers of these made "
+                "with functools.wraps, or the host's own for settings no factory "
+                "wired."
             )
 
 
