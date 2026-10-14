@@ -308,7 +308,7 @@ contains
         ! the same and routines using the eigendecomposition reduce to a scaling
         !
         use otr_mo, only: mo_type
-        use otr_common_unit_tests, only: identity_matrix
+        use opentrustregion_unit_tests, only: identity_matrix
 
         type(mo_type), intent(inout) :: mo
         real(rp), intent(in) :: occ_eigval, virt_eigval
@@ -581,7 +581,7 @@ contains
             ! this function independently reproduces the exponential of a small matrix
             ! by summing its Taylor series until the terms vanish at working precision
             !
-            use otr_common_unit_tests, only: identity_matrix
+            use opentrustregion_unit_tests, only: identity_matrix
 
             real(rp), intent(in) :: a(:, :)
             real(rp) :: exp_a(size(a, 1), size(a, 1))
@@ -1827,15 +1827,16 @@ contains
         !
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              generate_random_symm_matrix
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
         use otr_common_unit_tests, only: &
-            level_context, generate_random_symm_matrix, mock_requests, &
-            mock_response_factor, mock_get_response_cs, mock_get_response_os, &
-            mock_get_stale_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os
+            level_context, mock_requests, mock_response_factor, mock_get_response_cs, &
+            mock_get_response_os, mock_get_stale_response_os, mock_evaluate_dm_cs, &
+            mock_evaluate_dm_os
 
         type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
@@ -2155,7 +2156,7 @@ contains
                                          case_n_occ, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ_ref => n_occ, &
                                              n_particle_ref => n_particle
-        use otr_common_unit_tests, only: generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
 
         real(rp), parameter :: fd_step = 1e-4_rp
 
@@ -2288,10 +2289,11 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
         use otr_mo_test_reference, only: n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
-        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
 
         type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
@@ -2992,8 +2994,9 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: diagonalize_per_irrep
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
 
         type(test_context_type), target :: context
         integer(ip), parameter :: n = 4, n_matrices = 3

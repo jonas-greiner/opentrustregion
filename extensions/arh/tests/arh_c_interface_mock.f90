@@ -45,8 +45,8 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c
         use otr_arh_test_reference, only: check_arh_evaluate_dm_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
-            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
-            mock_extension
+            mock_level_update_orbs, mock_level_obj_func, &
+            check_and_wire_solver_settings_c, mock_extension
 
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
         type(c_funptr), intent(out) :: update_orbs_arh_c_funptr, obj_func_arh_c_funptr
@@ -86,8 +86,8 @@ contains
 
         ! check the passed solver settings, wire them and adjust them as the factory
         ! does
-        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
-                                              "arh_factory_py_interface")) &
+        if (.not. check_and_wire_solver_settings_c(solver_settings_c, &
+                                                   "arh_factory_py_interface")) &
             test_arh_factory_interface = .false.
         solver_settings_c%refresh_hess = .true._c_bool
         solver_settings_c%n_micro = int(arh_n_micro, kind=c_ip)

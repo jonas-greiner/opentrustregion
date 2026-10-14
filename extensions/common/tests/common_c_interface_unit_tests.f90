@@ -706,6 +706,40 @@ contains
 
     end function test_assign_stability_state_f_c
 
+    logical(c_bool) function test_release_extension() bind(C)
+        !
+        ! this function tests the subroutine which frees the holder of an extension
+        ! object a C factory returned, together with the object
+        !
+        use c_interface, only: c_callbacks_type
+        use otr_common, only: extension_type
+        use otr_common_c_interface, only: extension_holder_type, release_extension
+        use otr_common_unit_tests, only: setup_owned_mock_extension, freed_extension_ids
+
+        type(extension_holder_type), pointer :: holder
+        class(extension_type), allocatable, target :: object
+
+        ! assume tests pass
+        test_release_extension = .true.
+
+        ! release a holder whose settings own an object and which holds a bundle, which
+        ! frees the object
+        allocate(holder)
+        call setup_owned_mock_extension(object, 1_ip)
+        allocate(holder%solver_settings%extensions(1))
+        call move_alloc(object, holder%solver_settings%extensions(1)%object)
+        allocate(c_callbacks_type :: holder%extension_callbacks)
+        call release_extension(c_loc(holder))
+        if (size(freed_extension_ids) /= 1) then
+            write(stderr, *) "test_release_extension failed: Object not freed."
+            test_release_extension = .false.
+        end if
+
+        ! releasing no extension does nothing
+        call release_extension(c_null_ptr)
+
+    end function test_release_extension
+
     logical(c_bool) function test_wire_solver_settings_c() bind(C)
         !
         ! this function tests the subroutine which writes the solver settings a Fortran
@@ -871,40 +905,6 @@ contains
 
     end function test_finish_extension_holder
 
-    logical(c_bool) function test_release_extension() bind(C)
-        !
-        ! this function tests the subroutine which frees the holder of an extension
-        ! object a C factory returned, together with the object
-        !
-        use c_interface, only: c_callbacks_type
-        use otr_common, only: extension_type
-        use otr_common_c_interface, only: extension_holder_type, release_extension
-        use otr_common_unit_tests, only: setup_owned_mock_extension, freed_extension_ids
-
-        type(extension_holder_type), pointer :: holder
-        class(extension_type), allocatable, target :: object
-
-        ! assume tests pass
-        test_release_extension = .true.
-
-        ! release a holder whose settings own an object and which holds a bundle, which
-        ! frees the object
-        allocate(holder)
-        call setup_owned_mock_extension(object, 1_ip)
-        allocate(holder%solver_settings%extensions(1))
-        call move_alloc(object, holder%solver_settings%extensions(1)%object)
-        allocate(c_callbacks_type :: holder%extension_callbacks)
-        call release_extension(c_loc(holder))
-        if (size(freed_extension_ids) /= 1) then
-            write(stderr, *) "test_release_extension failed: Object not freed."
-            test_release_extension = .false.
-        end if
-
-        ! releasing no extension does nothing
-        call release_extension(c_null_ptr)
-
-    end function test_release_extension
-
     logical(c_bool) function test_update_orbs_c_wrapper() bind(C)
         !
         ! this function tests the C wrapper of the orbital update, which calls the
@@ -1060,7 +1060,7 @@ contains
         ! no Hessian linear transformation
         error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                         hess_x_c_funptr, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_update_orbs_c_wrapper failed: No error produced "// &
                 "without a holder."
             test_update_orbs_c_wrapper = .false.
@@ -1128,7 +1128,7 @@ contains
 
         ! call the objective function without a holder, which has to produce an error
         error_c = obj_func_c_wrapper(kappa_c, func_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_obj_func_c_wrapper failed: No error produced "// &
                 "without a holder."
             test_obj_func_c_wrapper = .false.
@@ -1201,7 +1201,7 @@ contains
         ! call the Hessian linear transformation without a holder, which has to produce
         ! an error
         error_c = hess_x_c_wrapper(x_c, hess_x_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_hess_x_c_wrapper failed: No error produced "// &
                 "without a holder."
             test_hess_x_c_wrapper = .false.
@@ -1275,7 +1275,7 @@ contains
         ! an error
         error_c = &
             precond_c_wrapper(residual_c, 2.0_c_rp, precond_residual_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_precond_c_wrapper failed: No error produced "// &
                 "without a holder."
             test_precond_c_wrapper = .false.
@@ -1348,7 +1348,7 @@ contains
         ! call the positive-definite preconditioner without a holder, which has to
         ! produce an error
         error_c = precond_pd_c_wrapper(residual_c, precond_residual_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_precond_pd_c_wrapper failed: No error produced "// &
                 "without a holder."
             test_precond_pd_c_wrapper = .false.
@@ -1419,7 +1419,7 @@ contains
 
         ! call the projection without a holder, which has to produce an error
         error_c = project_c_wrapper(projected_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_project_c_wrapper failed: No error produced "// &
                 "without a holder."
             test_project_c_wrapper = .false.
@@ -1497,7 +1497,7 @@ contains
         ! call the extra trial vector function without a holder, which has to produce
         ! an error
         error_c = get_extra_trial_vectors_c_wrapper(trial_vectors_c, 2_c_ip, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_get_extra_trial_vectors_c_wrapper failed: No "// &
                 "error produced without a holder."
             test_get_extra_trial_vectors_c_wrapper = .false.
@@ -1554,7 +1554,7 @@ contains
 
         ! call the convergence check without a holder, which has to produce an error
         error_c = conv_check_c_wrapper(converged_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_conv_check_c_wrapper failed: No error produced "// &
                 "without a holder."
             test_conv_check_c_wrapper = .false.
@@ -1617,7 +1617,7 @@ contains
         ! call the Hessian linear transformation without a holder, which has to produce
         ! an error
         error_c = stability_hess_x_c_wrapper(x_c, hess_x_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_stability_hess_x_c_wrapper failed: No error "// &
                 "produced without a holder."
             test_stability_hess_x_c_wrapper = .false.
@@ -1679,7 +1679,7 @@ contains
         ! call the approximate Hessian linear transformation without a holder, which
         ! has to produce an error
         error_c = approx_hess_x_c_wrapper(x_c, hess_x_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_approx_hess_x_c_wrapper failed: No error "// &
                 "produced without a holder."
             test_approx_hess_x_c_wrapper = .false.
@@ -1746,7 +1746,7 @@ contains
         ! call the convergence check without a holder, which has to produce an error
         error_c = conv_check_stability_c_wrapper(residual_c, sum(residual_c), &
                                                  converged_c, c_null_ptr)
-        if (error_c == 0) then
+        if (error_c /= 1) then
             write(stderr, *) "test_conv_check_stability_c_wrapper failed: No error "// &
                 "produced without a holder."
             test_conv_check_stability_c_wrapper = .false.
@@ -1945,7 +1945,7 @@ contains
         ! a context that is no bundle has to produce an error
         context => null()
         call evaluate_dm_os_f_wrapper(dm, energy, error=error, context=context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: No error "// &
                 "produced without a bundle."
             test_evaluate_dm_os_f_wrapper = .false.
@@ -2058,7 +2058,7 @@ contains
         ! a context that is no bundle has to produce an error
         context => null()
         call get_response_os_f_wrapper(dm, response, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_get_response_os_f_wrapper failed: No error "// &
                 "produced without a bundle."
             test_get_response_os_f_wrapper = .false.

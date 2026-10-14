@@ -45,6 +45,20 @@ module otr_arh_test_reference
 
 contains
 
+    function capitalized(text) result(capital)
+        !
+        ! this function returns a text with its first letter capitalized, so that the
+        ! name of an output can start a failure message
+        !
+        character(len=*), intent(in) :: text
+        character(len=len(text)) :: capital
+
+        capital = text
+        if (lge(text(1:1), "a") .and. lle(text(1:1), "z")) &
+            capital(1:1) = achar(iachar(text(1:1)) - iachar("a") + iachar("A"))
+
+    end function capitalized
+
     function check_arh_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
                                              context) result(test_passed)
         !
@@ -53,7 +67,7 @@ contains
         ! closed-shell case for every combination of requested outputs
         !
         use otr_arh, only: arh_evaluate_dm_cs_type
-        use otr_common_test_reference, only: n_ao, request_label, capitalized
+        use otr_common_test_reference, only: n_ao, request_label
         use test_reference, only: tol
 
         procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
@@ -137,8 +151,7 @@ contains
         ! open-shell case for every combination of requested outputs
         !
         use otr_arh, only: arh_evaluate_dm_os_type
-        use otr_common_test_reference, only: n_ao, n_particle, request_label, &
-                                             capitalized
+        use otr_common_test_reference, only: n_ao, n_particle, request_label
         use test_reference, only: tol
 
         procedure(arh_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
@@ -225,8 +238,7 @@ contains
         ! combination of requested outputs
         !
         use otr_arh_c_interface, only: arh_evaluate_dm_c_type
-        use otr_common_test_reference, only: n_ao, request_label, capitalized, &
-                                             shell_names
+        use otr_common_test_reference, only: n_ao, request_label, shell_names
         use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr

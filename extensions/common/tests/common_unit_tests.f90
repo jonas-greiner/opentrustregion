@@ -714,40 +714,13 @@ contains
 
     end function mock_get_hess_eigval_pairs
 
-    function identity_matrix(n) result(matrix)
-        !
-        ! this function returns the identity matrix
-        !
-        integer(ip), intent(in) :: n
-        real(rp) :: matrix(n, n)
-
-        integer(ip) :: i
-
-        matrix = 0.0_rp
-        do i = 1, n
-            matrix(i, i) = 1.0_rp
-        end do
-
-    end function identity_matrix
-
-    function generate_random_symm_matrix(n) result(matrix)
-        !
-        ! this function generates a random symmetric matrix, corresponding to a valid
-        ! density matrix displacement
-        !
-        integer(ip), intent(in) :: n
-        real(rp) :: matrix(n, n)
-
-        call random_number(matrix)
-        matrix = matrix + transpose(matrix)
-
-    end function generate_random_symm_matrix
-
     function generate_random_orthogonal_matrix(n) result(matrix)
         !
         ! this function returns a random orthogonal matrix, obtained as the
         ! eigenvectors of a random symmetric matrix
         !
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
+
         integer(ip), intent(in) :: n
         real(rp) :: matrix(n, n)
 
@@ -1026,7 +999,11 @@ contains
                               default_settings => default_orbital_settings
         use otr_common_test_reference, only: operator(==)
 
+        type, extends(orbital_settings_type) :: extended_settings_type
+        end type
+
         type(orbital_settings_type) :: settings
+        type(extended_settings_type) :: extended_settings
         integer(ip) :: error
 
         ! assume tests pass
@@ -1045,6 +1022,15 @@ contains
         if (.not. (settings == default_settings)) then
             write(stderr, *) "test_init_orbital_settings failed: Settings not "// &
                 "initialized correctly."
+            test_init_orbital_settings = .false.
+        end if
+
+        ! initialize settings of a type extending these settings, which cannot be set to
+        ! the default values, and check that an error is returned
+        call extended_settings%init(error)
+        if (error /= 1) then
+            write(stderr, *) "test_init_orbital_settings failed: No error returned "// &
+                "for extended settings type."
             test_init_orbital_settings = .false.
         end if
 
@@ -2111,7 +2097,7 @@ contains
         context => null()
         call update_orbs_callback(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                   context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_update_orbs_callback failed: No error produced "// &
                 "without a level."
             test_update_orbs_callback = .false.
@@ -2171,7 +2157,7 @@ contains
         ! call the objective function without a level, which has to produce an error
         context => null()
         func = obj_func_callback(kappa, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_obj_func_callback failed: No error produced "// &
                 "without a level."
             test_obj_func_callback = .false.
@@ -2227,7 +2213,7 @@ contains
         ! an error
         context => null()
         call hess_x_callback(x, hess_x, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_hess_x_callback failed: No error produced "// &
                 "without a level."
             test_hess_x_callback = .false.
@@ -2283,7 +2269,7 @@ contains
         ! an error
         context => null()
         call precond_callback(residual, 2.0_rp, precond_residual, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_precond_callback failed: No error produced "// &
                 "without a level."
             test_precond_callback = .false.
@@ -2339,7 +2325,7 @@ contains
         ! produce an error
         context => null()
         call precond_pd_callback(residual, precond_residual, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_precond_pd_callback failed: No error produced "// &
                 "without a level."
             test_precond_pd_callback = .false.
@@ -2396,7 +2382,7 @@ contains
         context => null()
         projected = vector
         call project_callback(projected, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_project_callback failed: No error produced "// &
                 "without a level."
             test_project_callback = .false.
@@ -2452,7 +2438,7 @@ contains
         ! error
         context => null()
         call get_extra_trial_vectors_callback(trial_vectors, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_get_extra_trial_vectors_callback failed: No "// &
                 "error produced without a level."
             test_get_extra_trial_vectors_callback = .false.
@@ -2508,7 +2494,7 @@ contains
         ! call the convergence check without a level, which has to produce an error
         context => null()
         converged = conv_check_callback(error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_conv_check_callback failed: No error produced "// &
                 "without a level."
             test_conv_check_callback = .false.
@@ -2569,7 +2555,7 @@ contains
         ! an error
         context => null()
         call stability_hess_x_callback(x, hess_x, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_stability_hess_x_callback failed: No error "// &
                 "produced without a level."
             test_stability_hess_x_callback = .false.
@@ -2631,7 +2617,7 @@ contains
         ! to produce an error
         context => null()
         call approx_hess_x_callback(x, hess_x, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_approx_hess_x_callback failed: No error "// &
                 "produced without a level."
             test_approx_hess_x_callback = .false.
@@ -2692,7 +2678,7 @@ contains
         ! call the convergence check without a level, which has to produce an error
         context => null()
         converged = conv_check_stability_callback(residual, 1.0_rp, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_conv_check_stability_callback failed: No error "// &
                 "produced without a level."
             test_conv_check_stability_callback = .false.
@@ -2787,7 +2773,7 @@ contains
         ! message
         basis%evaluate_dm_os => null()
         call basis%check_evaluate_dm(error)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_check_evaluate_dm_orbital_basis failed: No "// &
                 "error returned without a density matrix evaluating function."
             test_check_evaluate_dm_orbital_basis = .false.
@@ -2898,7 +2884,7 @@ contains
         context%mock_error = 1
         basis%response_stale = .true.
         call basis%refresh_response(error)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_refresh_response_orbital_basis failed: Error of "// &
                 "the density matrix evaluating function not passed on."
             test_refresh_response_orbital_basis = .false.
@@ -3049,70 +3035,6 @@ contains
 
     end function test_fill_extra_trial_vectors_orbital_basis
 
-    logical(c_bool) function test_matrix_exponential() bind(C)
-        !
-        ! this function tests the function which calculates the matrix exponential of a
-        ! real antisymmetric matrix
-        !
-        use otr_common, only: matrix_exponential
-        use opentrustregion, only: solver_settings_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
-
-        type(test_context_type), target :: context
-        integer(ip), parameter :: n = 2
-        real(rp), parameter :: angle = 0.3_rp
-
-        real(rp) :: a(n, n), expected(n, n)
-        real(rp), allocatable :: exp_a(:, :)
-        type(solver_settings_type) :: settings
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_matrix_exponential = .true.
-
-        ! set up the settings the routine logs through
-        call setup_settings(settings, context)
-
-        ! initialize antisymmetric matrix, whose exponential is the corresponding
-        ! rotation matrix
-        a = reshape([0.0_rp, -angle, &
-                     angle, 0.0_rp], [n, n])
-
-        ! initialize expected rotation matrix
-        expected = reshape([cos(angle), -sin(angle), &
-                            sin(angle), cos(angle)], [n, n])
-
-        ! call routine and determine if dimensions and values of resulting matrix match
-        exp_a = matrix_exponential(a, settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_matrix_exponential failed: Produced error."
-            test_matrix_exponential = .false.
-        end if
-        if (size(exp_a, 1) /= n .or. size(exp_a, 2) /= n) then
-            write(stderr, *) "test_matrix_exponential failed: Incorrect matrix "// &
-                "dimensions."
-            test_matrix_exponential = .false.
-            return
-        end if
-        if (norm2(exp_a - expected) > tol) then
-            write(stderr, *) "test_matrix_exponential failed: Incorrect matrix values."
-            test_matrix_exponential = .false.
-        end if
-        deallocate(exp_a)
-
-        ! call routine for a vanishing matrix and determine if the identity matrix is
-        ! returned
-        a = 0.0_rp
-        exp_a = matrix_exponential(a, settings, error)
-        if (norm2(exp_a - identity_matrix(n)) > tol) then
-            write(stderr, *) "test_matrix_exponential failed: Incorrect matrix "// &
-                "values for vanishing matrix."
-            test_matrix_exponential = .false.
-        end if
-        deallocate(exp_a)
-
-    end function test_matrix_exponential
-
     logical(c_bool) function test_compute_sqrt_and_inv_sqrt() bind(C)
         !
         ! this function tests the subroutine which calculates the square root and
@@ -3120,7 +3042,8 @@ contains
         !
         use otr_common, only: compute_sqrt_and_inv_sqrt
         use opentrustregion, only: solver_settings_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix
 
         type(test_context_type), target :: context
         integer(ip), parameter :: n = 3
@@ -3171,6 +3094,66 @@ contains
         deallocate(sqrt_a, inv_sqrt_a)
 
     end function test_compute_sqrt_and_inv_sqrt
+
+    logical(c_bool) function test_matrix_exponential() bind(C)
+        !
+        ! this function tests the function which calculates the matrix exponential of a
+        ! real antisymmetric matrix
+        !
+        use otr_common, only: matrix_exponential
+        use opentrustregion, only: solver_settings_type
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+
+        type(test_context_type), target :: context
+        integer(ip), parameter :: n = 2
+        real(rp), parameter :: angles(3) = [0.0_rp, 0.3_rp, 200.0_rp]
+        character(len=9), parameter :: case_names(3) = &
+            [character(len=9) :: "vanishing", "small", "large"]
+
+        real(rp) :: a(n, n), expected(n, n)
+        real(rp), allocatable :: exp_a(:, :)
+        type(solver_settings_type) :: settings
+        integer(ip) :: i, error
+
+        ! assume tests pass
+        test_matrix_exponential = .true.
+
+        ! set up the settings the routine logs through
+        call setup_settings(settings, context)
+
+        ! call routine for a vanishing angle, a small angle and a large angle, whose
+        ! matrix the routine has to scale down further before the expansion to stay
+        ! accurate
+        do i = 1, size(angles)
+            ! initialize antisymmetric matrix, whose exponential is the rotation matrix
+            ! of the angle
+            a = reshape([0.0_rp, -angles(i), &
+                         angles(i), 0.0_rp], [n, n])
+            expected = reshape([cos(angles(i)), -sin(angles(i)), &
+                                sin(angles(i)), cos(angles(i))], [n, n])
+
+            ! call routine and determine if dimensions and values of resulting matrix
+            ! match
+            exp_a = matrix_exponential(a, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_matrix_exponential failed for "// &
+                    trim(case_names(i))//" angle: Produced error."
+                test_matrix_exponential = .false.
+            end if
+            if (size(exp_a, 1) /= n .or. size(exp_a, 2) /= n) then
+                write(stderr, *) "test_matrix_exponential failed for "// &
+                    trim(case_names(i))//" angle: Incorrect matrix dimensions."
+                test_matrix_exponential = .false.
+                cycle
+            end if
+            if (norm2(exp_a - expected) > tol) then
+                write(stderr, *) "test_matrix_exponential failed for "// &
+                    trim(case_names(i))//" angle: Incorrect matrix values."
+                test_matrix_exponential = .false.
+            end if
+        end do
+
+    end function test_matrix_exponential
 
     logical(c_bool) function test_level_shifted_divisors() bind(C)
         !

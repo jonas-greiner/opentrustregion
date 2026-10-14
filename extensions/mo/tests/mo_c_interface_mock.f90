@@ -88,7 +88,7 @@ contains
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c, &
                                              check_evaluate_dm_c_funptr
         use otr_common_c_interface_mock, only: &
-            mock_level_obj_func, mock_wire_solver_settings_c, mock_extension
+            mock_level_obj_func, check_and_wire_solver_settings_c, mock_extension
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
@@ -188,8 +188,8 @@ contains
         ! check the passed solver settings and wire them, set function pointers to the
         ! mock functions of the level of the solver and return an extension, recording
         ! the record of the state
-        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
-                                              "mo_factory_py_interface")) &
+        if (.not. check_and_wire_solver_settings_c(solver_settings_c, &
+                                                   "mo_factory_py_interface")) &
             test_mo_factory_interface = .false.
         update_orbs_mo_c_funptr = c_funloc(mock_update_orbs_mo)
         obj_func_mo_c_funptr = c_funloc(mock_level_obj_func)

@@ -137,7 +137,7 @@ contains
 
     end function mock_level_stability_precond
 
-    function mock_wire_solver_settings_c(solver_settings_c, test_name) &
+    function check_and_wire_solver_settings_c(solver_settings_c, test_name) &
         result(test_passed)
         !
         ! this function checks that a factory was handed the C solver settings of the
@@ -177,7 +177,7 @@ contains
         solver_settings_c%stability_settings%precond = &
             c_funloc(mock_level_stability_precond)
 
-    end function mock_wire_solver_settings_c
+    end function check_and_wire_solver_settings_c
 
     function mock_extension(solver_state_c) result(extension_c) &
         bind(C, name="mock_extension")

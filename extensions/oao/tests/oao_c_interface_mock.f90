@@ -48,8 +48,8 @@ contains
         use otr_oao_test_reference, only: operator(/=)
         use otr_common_test_reference, only: check_evaluate_dm_c_funptr
         use otr_common_c_interface_mock, only: &
-            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
-            mock_extension
+            mock_level_update_orbs, mock_level_obj_func, &
+            check_and_wire_solver_settings_c, mock_extension
 
         real(c_rp), intent(inout), target :: dm_ao_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
@@ -116,8 +116,8 @@ contains
         ! mark the density matrix of the caller, which the factory receives in place,
         ! and check the passed solver settings and wire them
         dm_ao_c(:n_ao_c**2 * n_particle_c) = 2.0_c_rp
-        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
-                                              "oao_factory_py_interface")) &
+        if (.not. check_and_wire_solver_settings_c(solver_settings_c, &
+                                                   "oao_factory_py_interface")) &
             test_oao_factory_interface = .false.
 
         ! set function pointers to the mock functions of the level of the solver and

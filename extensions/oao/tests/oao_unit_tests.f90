@@ -71,7 +71,7 @@ contains
         ! corresponding OAO routine so that tests of routines which project internally
         ! do not depend on it
         !
-        use otr_common_unit_tests, only: identity_matrix
+        use opentrustregion_unit_tests, only: identity_matrix
 
         real(rp), intent(in) :: matrix(:, :, :), dm_oao(:, :, :)
         real(rp) :: projected_matrix(size(matrix, 1), size(matrix, 2), size(matrix, 3))
@@ -307,10 +307,10 @@ contains
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
                               obj_func_callback
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix
         use otr_common_test_reference, only: n_ao, n_occ
-        use otr_common_unit_tests, only: identity_matrix, &
-                                         generate_random_density_matrix, &
+        use otr_common_unit_tests, only: generate_random_density_matrix, &
                                          mock_evaluate_dm_cs, wired_level
 
         type(test_context_type), target :: context
@@ -427,10 +427,10 @@ contains
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
                               obj_func_callback
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
-        use otr_common_unit_tests, only: identity_matrix, &
-                                         generate_random_density_matrix, &
+        use otr_common_unit_tests, only: generate_random_density_matrix, &
                                          mock_evaluate_dm_os, wired_level
 
         type(test_context_type), target :: context
@@ -894,12 +894,13 @@ contains
         ! OAO basis
         !
         use test_reference, only: arm_host_context, host_context_reached
-        use otr_common_unit_tests, only: level_context, identity_matrix, &
-                                         generate_random_density_matrix, &
-                                         generate_random_symm_matrix, mock_requests, &
-                                         mock_evaluate_dm_cs, mock_evaluate_dm_os
+        use otr_common_unit_tests, only: &
+            level_context, generate_random_density_matrix, mock_requests, &
+            mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, shell_names
 
@@ -1044,14 +1045,15 @@ contains
         !
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
-            level_context, identity_matrix, generate_random_density_matrix, &
-            generate_random_symm_matrix, mock_fock_factor, mock_requests, &
-            mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_cs, &
-            mock_evaluate_dm_os
+            level_context, generate_random_density_matrix, mock_fock_factor, &
+            mock_requests, mock_get_response_cs, mock_get_response_os, &
+            mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
         use otr_common, only: hess_x_callback
         use opentrustregion, only: hess_x_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
 
@@ -1326,12 +1328,13 @@ contains
         !
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
-            level_context, identity_matrix, generate_random_density_matrix, &
-            generate_random_symm_matrix, mock_requests, mock_response_factor, &
-            mock_get_response_cs, mock_get_response_os, mock_get_stale_response_os, &
-            mock_evaluate_dm_cs, mock_evaluate_dm_os
+            level_context, generate_random_density_matrix, mock_requests, &
+            mock_response_factor, mock_get_response_cs, mock_get_response_os, &
+            mock_get_stale_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
 
@@ -1556,10 +1559,11 @@ contains
         ! this function tests the subroutine which moves the current orbitals by an
         ! orbital rotation, updating the density matrix in the AO and in the OAO basis
         !
-        use otr_common_unit_tests, only: &
-            identity_matrix, generate_random_density_matrix, generate_random_symm_matrix
+        use otr_common_unit_tests, only: generate_random_density_matrix
         use otr_oao, only: oao_type, oao_settings_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
 
         type(test_context_type), target :: context
         integer(ip), parameter :: n_ao = 2, n_particle = 1, n_occ = 1
@@ -1628,8 +1632,9 @@ contains
         ! diagonal and the occupied-occupied and virtual-virtual parts of the Fock
         ! matrix in the OAO basis
         !
-        use otr_common_unit_tests, only: &
-            identity_matrix, generate_random_density_matrix, generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: identity_matrix, &
+                                              generate_random_symm_matrix
+        use otr_common_unit_tests, only: generate_random_density_matrix
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
@@ -1738,9 +1743,9 @@ contains
         ! Hessian and caches the result if the static part has changed
         !
         use otr_oao, only: oao_type, oao_settings_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              generate_random_symm_matrix
         use otr_common_test_reference, only: n_ao, n_particle
-        use otr_common_unit_tests, only: generate_random_symm_matrix
 
         type(test_context_type), target :: context
         type(oao_type) :: oao
@@ -1881,10 +1886,10 @@ contains
         ! trial vectors, for the closed-shell and the open-shell case
         !
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              generate_random_symm_matrix
         use otr_common_unit_tests, only: level_context, &
-                                         generate_random_orthogonal_matrix, &
-                                         generate_random_symm_matrix
+                                         generate_random_orthogonal_matrix
         use otr_common_test_reference, only: n_particle_ref => n_particle, shell_names
 
         type(test_context_type), target :: context
@@ -2012,10 +2017,11 @@ contains
         ! this function tests the subroutine which returns the rotated density matrix
         ! in the AO basis
         !
-        use otr_common_unit_tests, only: &
-            identity_matrix, generate_random_density_matrix, generate_random_symm_matrix
+        use otr_common_unit_tests, only: generate_random_density_matrix
         use otr_oao, only: rotate_dm_ao, oao_settings_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
 
         type(test_context_type), target :: context
         integer(ip), parameter :: n_ao = 2, n_particle = 1, n_occ = 1
@@ -2090,7 +2096,7 @@ contains
         ! this function tests the function which applies the static part of the Hessian
         ! in the OAO basis to unpacked trial vectors
         !
-        use otr_common_unit_tests, only: generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
         use otr_oao, only: hess_x_static_oao
         use otr_common_test_reference, only: n_ao, n_particle_ref => n_particle, &
                                              shell_names

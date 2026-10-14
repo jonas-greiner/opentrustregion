@@ -529,20 +529,6 @@ contains
 
     end function request_label
 
-    function capitalized(text) result(capital)
-        !
-        ! this function returns a text with its first letter capitalized, so that the
-        ! name of an output can start a failure message
-        !
-        character(len=*), intent(in) :: text
-        character(len=len(text)) :: capital
-
-        capital = text
-        if (lge(text(1:1), "a") .and. lle(text(1:1), "z")) &
-            capital(1:1) = achar(iachar(text(1:1)) - iachar("a") + iachar("A"))
-
-    end function capitalized
-
     logical function equal_orbital(lhs, rhs)
         !
         ! this function overloads the comparison operator to compare the settings

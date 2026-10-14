@@ -46,8 +46,8 @@ contains
         use otr_s_gek_test_reference, only: check_change_reference_c_funptr, &
                                             operator(/=)
         use otr_common_c_interface_mock, only: &
-            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
-            mock_extension
+            mock_level_update_orbs, mock_level_obj_func, &
+            check_and_wire_solver_settings_c, mock_extension
 
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
@@ -104,8 +104,8 @@ contains
         end if
 
         ! check the passed solver settings and wire them
-        if (.not. mock_wire_solver_settings_c(solver_settings_c, &
-                                              "s_gek_factory_py_interface")) &
+        if (.not. check_and_wire_solver_settings_c(solver_settings_c, &
+                                                   "s_gek_factory_py_interface")) &
             test_s_gek_factory_interface = .false.
 
         ! set function pointers to the mock functions of the level of the solver and

@@ -175,8 +175,9 @@ contains
         ! occupied orbitals per particle/spin channel and the corresponding
         ! occupied-occupied and virtual-virtual Fock matrix blocks
         !
-        use otr_common_unit_tests, only: &
-            identity_matrix, generate_random_density_matrix, generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: identity_matrix, &
+                                              generate_random_symm_matrix
+        use otr_common_unit_tests, only: generate_random_density_matrix
 
         integer(ip), intent(in) :: n_ao, n_occ(:)
         real(rp), intent(out) :: dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
@@ -346,8 +347,9 @@ contains
         !
         use otr_arh, only: arh_type, arh_oao_type
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_common_unit_tests, only: identity_matrix, generate_random_density_matrix
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix
+        use otr_common_unit_tests, only: generate_random_density_matrix
         use otr_common_test_reference, only: n_occ
 
         class(arh_type), allocatable, intent(out) :: arh
@@ -727,9 +729,8 @@ contains
         use otr_arh, only: arh_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao
-        use otr_common_unit_tests, only: level_context, identity_matrix, &
-                                         mock_requests, mock_fock_factor
-        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common_unit_tests, only: level_context, mock_requests, mock_fock_factor
+        use opentrustregion_unit_tests, only: test_context_type, identity_matrix
 
         type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
@@ -999,10 +1000,12 @@ contains
         use otr_oao, only: oao_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_common_unit_tests, only: &
-            identity_matrix, mock_requests, generate_random_density_matrix, &
-            generate_random_symm_matrix, generate_random_orthogonal_matrix
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
+        use otr_common_unit_tests, only: mock_requests, &
+                                         generate_random_density_matrix, &
+                                         generate_random_orthogonal_matrix
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, ref_mo_transform, &
                                      ref_pack_ov, ref_unpack_ov
@@ -2294,7 +2297,7 @@ contains
             !
             use otr_mo_test_reference, only: n_mo
             use otr_common_test_reference, only: n_ao, n_occ, shell_names
-            use otr_common_unit_tests, only: identity_matrix
+            use opentrustregion_unit_tests, only: identity_matrix
             use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
 
             logical, intent(in) :: mo_basis
@@ -2914,8 +2917,9 @@ contains
         use otr_arh, only: arh_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ
-        use otr_common_unit_tests, only: identity_matrix, generate_random_density_matrix
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use otr_common_unit_tests, only: generate_random_density_matrix
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix
 
         type(test_context_type), target :: context
         integer(ip), parameter :: n_param_oao = n_ao * (n_ao - 1) / 2
@@ -3097,7 +3101,7 @@ contains
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use otr_common_unit_tests, only: generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, setup_mo_object
 
@@ -3139,7 +3143,7 @@ contains
         use otr_arh, only: arh_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_particle
-        use otr_common_unit_tests, only: generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
 
         type(oao_type), allocatable, target :: oao
         type(arh_oao_type) :: arh
@@ -3185,7 +3189,7 @@ contains
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle
-        use otr_common_unit_tests, only: generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, setup_mo_object, &
                                      ref_mo_transform, ref_pack_ov
@@ -3273,8 +3277,8 @@ contains
         use otr_oao, only: oao_type
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
-        use otr_common_unit_tests, only: generate_random_density_matrix, &
-                                         generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
+        use otr_common_unit_tests, only: generate_random_density_matrix
 
         integer(ip), parameter :: n_list = 2
 
@@ -3537,7 +3541,7 @@ contains
         use otr_mo, only: mo_type
         use otr_common_test_reference, only: n_occ
         use otr_mo_unit_tests, only: setup_minimal_mo_object
-        use otr_common_unit_tests, only: identity_matrix
+        use opentrustregion_unit_tests, only: identity_matrix
 
         type(mo_type), allocatable, target :: mo
         type(arh_mo_type) :: arh
@@ -3738,8 +3742,9 @@ contains
         !
         use otr_arh, only: arh_type, arh_oao_type, arh_types
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_common_unit_tests, only: identity_matrix, generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix, &
+                                              generate_random_symm_matrix
         use otr_common_test_reference, only: n_particle_ref => n_particle, shell_names
 
         type(test_context_type), target :: context
@@ -4656,7 +4661,7 @@ contains
         ! same factor must reproduce the gathered, reordered original matrix exactly
         !
         use otr_arh, only: congruence_transform
-        use otr_common_unit_tests, only: generate_random_symm_matrix
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
 
         integer(ip), parameter :: n_dm = 3, n_accepted = 2
 
@@ -5224,7 +5229,7 @@ contains
         ! the multisecant SR1 skipping criterion
         !
         use otr_arh, only: apply_ms_sr1_skip, ms_sr1_skip_thresh
-        use otr_common_unit_tests, only: identity_matrix
+        use opentrustregion_unit_tests, only: identity_matrix
 
         integer(ip), parameter :: n = 4
         integer(ip) :: i
