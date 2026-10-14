@@ -38,41 +38,15 @@ _Static_assert(offsetof(qn_settings_type, initialized) == 1 * sizeof(void *),
 // ---------------------------------------------------------------------------
 
 bool test_qn_settings_init(void) {
-  // get defaults
-  void get_default_qn_values(qn_settings_type * settings);
-  qn_settings_type defaults = {0};
-  get_default_qn_values(&defaults);
-
-  // call function
-  qn_settings_type s = qn_settings_init();
-
-  // compare values
+  bool is_default_qn_settings(const qn_settings_type *settings);
   bool ok = true;
-  if (!s.initialized) {
-    fprintf(stderr, "test_qn_settings_init failed: Settings not initialized.\n");
-    ok = false;
-  }
-  if (s.verbose != defaults.verbose) {
-    fprintf(stderr, "test_qn_settings_init failed: Verbosity parameter wrong.\n");
-    ok = false;
-  }
-  if (s.max_points != defaults.max_points) {
-    fprintf(stderr, "test_qn_settings_init failed: Maximum number of "
-                    "points parameter wrong.\n");
-    ok = false;
-  }
-  if (strcmp(s.hess_update_scheme, defaults.hess_update_scheme) != 0) {
-    fprintf(stderr, "test_qn_settings_init failed: Hessian update scheme parameter "
-                    "wrong.\n");
-    ok = false;
-  }
-  if (s.logger) {
-    fprintf(stderr, "test_qn_settings_init failed: Callback pointers should be "
-                    "NULL.\n");
-    ok = false;
-  }
-  if (s.context) {
-    fprintf(stderr, "test_qn_settings_init failed: Host context should be NULL.\n");
+
+  // call function and compare with the default settings without logging function and
+  // host context
+  qn_settings_type s = qn_settings_init();
+  if (!is_default_qn_settings(&s)) {
+    fprintf(stderr, "test_qn_settings_init failed: Settings not initialized to the "
+                    "default values without logging function and host context.\n");
     ok = false;
   }
 

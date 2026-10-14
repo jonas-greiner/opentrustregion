@@ -80,7 +80,7 @@ contains
         use otr_s_gek_mock, only: mock_s_gek_factory, mock_s_gek_factory_error, &
                                   mock_s_gek_factory_defaults, &
                                   test_passed_mock_s_gek_factory => test_passed
-        use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings
+        use otr_s_gek_test_reference, only: get_reference_s_gek_values
         use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
         use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func, mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
@@ -106,8 +106,8 @@ contains
         ! inject mock function
         s_gek_factory => mock_s_gek_factory
 
-        ! associate optional settings with values
-        settings = ref_s_gek_settings
+        ! associate optional settings with the reference values
+        call get_reference_s_gek_values(settings)
         settings%logger = c_funloc(mock_logger)
 
         ! arm the host context of the settings, which the logging and change of
@@ -417,8 +417,8 @@ contains
         !
         use otr_s_gek_c_interface, only: s_gek_settings_type_c, assignment(=)
         use otr_s_gek, only: s_gek_settings_type
-        use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings, &
-                                            operator(/=)
+        use otr_s_gek_test_reference, only: get_reference_s_gek_values, &
+                                            ref_s_gek_settings, operator(/=)
         use c_interface, only: c_callbacks_type
         use c_interface_unit_tests, only: mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
@@ -430,8 +430,8 @@ contains
         ! assume test passes
         test_assign_s_gek_f_c = .true.
 
-        ! initialize the C settings with custom values
-        settings_c = ref_s_gek_settings
+        ! initialize the C settings with the reference values
+        call get_reference_s_gek_values(settings_c)
         settings_c%logger = c_funloc(mock_logger)
 
         ! convert to Fortran settings and hand them the C logging function in a bundle
@@ -491,8 +491,7 @@ contains
         !
         use otr_s_gek, only: s_gek_settings_type
         use otr_s_gek_c_interface, only: s_gek_settings_type_c, assignment(=)
-        use otr_s_gek_test_reference, only: ref_s_gek_settings, assignment(=), &
-                                            operator(/=)
+        use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
 
         type(s_gek_settings_type) :: settings
         type(s_gek_settings_type_c) :: settings_c

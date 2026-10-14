@@ -37,31 +37,15 @@ _Static_assert(offsetof(oao_settings_type, initialized) == 1 * sizeof(void *),
 // ---------------------------------------------------------------------------
 
 bool test_oao_settings_init(void) {
-  // get defaults
-  void get_default_oao_values(oao_settings_type * settings);
-  oao_settings_type defaults = {0};
-  get_default_oao_values(&defaults);
-
-  // call function
-  oao_settings_type s = oao_settings_init();
-
-  // compare values
+  bool is_default_oao_settings(const oao_settings_type *settings);
   bool ok = true;
-  if (!s.initialized) {
-    fprintf(stderr, "test_oao_settings_init failed: Settings not initialized.\n");
-    ok = false;
-  }
-  if (s.verbose != defaults.verbose) {
-    fprintf(stderr, "test_oao_settings_init failed: Verbosity parameter wrong.\n");
-    ok = false;
-  }
-  if (s.logger) {
-    fprintf(stderr, "test_oao_settings_init failed: Callback pointers should be "
-                    "NULL.\n");
-    ok = false;
-  }
-  if (s.context) {
-    fprintf(stderr, "test_oao_settings_init failed: Host context should be NULL.\n");
+
+  // call function and compare with the default settings without logging function and
+  // host context
+  oao_settings_type s = oao_settings_init();
+  if (!is_default_oao_settings(&s)) {
+    fprintf(stderr, "test_oao_settings_init failed: Settings not initialized to the "
+                    "default values without logging function and host context.\n");
     ok = false;
   }
 

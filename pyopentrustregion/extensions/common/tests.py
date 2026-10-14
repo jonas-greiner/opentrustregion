@@ -7,7 +7,7 @@
 import functools
 import gc
 import unittest
-from ctypes import POINTER, addressof, c_void_p
+from ctypes import POINTER, Array, addressof, byref, c_bool, c_void_p
 from unittest.mock import patch
 
 import numpy as np
@@ -109,6 +109,44 @@ getattr(lib, "test_" + fortran_tests["common_tests"][0])
 n_ao = c_int.in_dll(lib, "test_n_ao").value
 
 
+class ExtensionCallbackMocks:
+    """
+    this class collects the mock callback functions the Python interface tests of the
+    extensions share
+    """
+
+    def mock_hess_x(self, x, hess_x):
+        """
+        this function is a mock function for the Hessian linear transformation
+        function
+        """
+        hess_x[:] = 4 * x
+
+    def mock_update_orbs(self, kappa, grad, h_diag):
+        """
+        this function is a mock function for the orbital update function
+        """
+        func = np.sum(kappa)
+        grad[:] = 2 * kappa
+        h_diag[:] = 3 * kappa
+
+        return func, self.mock_hess_x
+
+    def mock_obj_func(self, kappa):
+        """
+        this function is a mock function for the objective function
+        """
+        return np.sum(kappa)
+
+    def mock_logger(self, message):
+        """
+        this function is a mock function for the logging function
+        """
+        if message != "test":
+            self.test_logger = False
+        return
+
+
 def release_mock_extension(extension):
     """
     this function frees an extension a mock factory returned through the mock release
@@ -119,6 +157,39 @@ def release_mock_extension(extension):
     lib.mock_release_extension.restype = None
     lib.mock_release_extension.argtypes = [c_void_p]
     lib.mock_release_extension(extension)
+
+
+def extension_reference(lookup, name, field_type):
+    """
+    this function returns the reference value of a field of the settings of an
+    extension by its name from the lookup function of the Fortran test reference module
+    of the extension
+    """
+    value = c_real()
+    keyword = dict(SolverSettings.c_struct._fields_)["subsystem_solver"]()
+    lookup(name.encode(), byref(value), keyword)
+    if issubclass(field_type, Array):
+        return keyword.value.decode()
+    if field_type == c_bool:
+        return bool(value.value)
+    if field_type == c_int:
+        return int(value.value)
+    return value.value
+
+
+def assign_reference_settings(settings, lookup):
+    """
+    this function assigns the reference values, which the lookup function of the
+    Fortran test reference module of the extension returns by name, to every field of
+    the settings of an extension but the logging function, the host context and the
+    initialization flag
+    """
+    for field_name, field_type in settings.c_struct._fields_:
+        if field_type == c_void_p or field_name == "initialized":
+            continue
+        setattr(
+            settings, field_name, extension_reference(lookup, field_name, field_type)
+        )
 
 
 def setup_wired_solver_settings():
@@ -228,6 +299,34 @@ def check_wired_solver_settings(
             )
             test_passed = False
 
+    return test_passed
+
+
+def settings_hold_reference(test_name, settings, lookup):
+    """
+    this function checks that the logging function of the settings of an extension is
+    unset and that every other field but the host context holds the reference value the
+    lookup function of the Fortran test reference module of the extension returns by
+    name
+    """
+    test_passed = True
+    for field_name, field_type in settings.c_struct._fields_:
+        if field_name == "context":
+            continue
+        if field_type == c_void_p:
+            if getattr(settings, field_name) is not None:
+                print(f" {test_name} failed: Function {field_name} not unset.")
+                test_passed = False
+            continue
+        value = getattr(settings, field_name)
+        ref_value = extension_reference(lookup, field_name, field_type)
+        if field_type == c_real:
+            match = np.isclose(value, ref_value)
+        else:
+            match = value == ref_value
+        if not match:
+            print(f" {test_name} failed: Field {field_name} not initialized correctly.")
+            test_passed = False
     return test_passed
 
 

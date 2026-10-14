@@ -8,6 +8,7 @@ module otr_common_test_reference
 
     use opentrustregion, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
+    use otr_common, only: orbital_settings_type
     use test_reference, only: same_callbacks
     use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_f_procpointer, &
                                            c_associated, c_null_funptr
@@ -20,15 +21,11 @@ module otr_common_test_reference
                               n_occ(n_particle) = [2_ip, 1_ip]
     integer(c_ip), protected, bind(C, name="test_n_ao") :: n_ao_c = int(n_ao, kind=c_ip)
 
-    ! derived type for the settings shared by the extensions parameterizing the
-    ! orbitals in an orbital basis
-    type :: ref_orbital_settings_type
-        integer(ip) :: verbose
-    end type
-
-    ! general reference parameters
-    type(ref_orbital_settings_type), parameter :: ref_orbital_settings = &
-        ref_orbital_settings_type(verbose=3)
+    ! reference values of the settings shared by the extensions parameterizing the
+    ! orbitals in an orbital basis, every field but the logical, the logging function
+    ! and the host context differing from its default
+    type(orbital_settings_type), parameter :: ref_orbital_settings = &
+        orbital_settings_type(logger=null(), initialized=.true., verbose=3)
 
     ! names of the closed-shell and the open-shell case, indexed by the number of
     ! particle channels, for the failure messages of tests covering both
@@ -46,7 +43,6 @@ module otr_common_test_reference
         [character(len=17) :: "Fock matrix", "response function"]
 
     interface operator(==)
-        module procedure equal_orbital_to_ref
         module procedure equal_orbital
     end interface
 
@@ -547,31 +543,15 @@ contains
 
     end function capitalized
 
-    logical function equal_orbital_to_ref(lhs, rhs)
-        !
-        ! this function overloads the comparison operator to compare the settings
-        ! shared by the extensions parameterizing the orbitals in an orbital basis to
-        ! reference values
-        !
-        use otr_common, only: orbital_settings_type
-
-        type(orbital_settings_type), intent(in) :: lhs
-        type(ref_orbital_settings_type), intent(in) :: rhs
-
-        equal_orbital_to_ref = lhs%verbose == rhs%verbose
-
-    end function equal_orbital_to_ref
-
     logical function equal_orbital(lhs, rhs)
         !
         ! this function overloads the comparison operator to compare the settings
         ! shared by the extensions parameterizing the orbitals in an orbital basis
         !
-        use otr_common, only: orbital_settings_type
-
         type(orbital_settings_type), intent(in) :: lhs, rhs
 
-        equal_orbital = lhs%verbose == rhs%verbose
+        equal_orbital = (lhs%initialized .eqv. rhs%initialized) .and. &
+                        lhs%verbose == rhs%verbose
 
     end function equal_orbital
 

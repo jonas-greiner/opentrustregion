@@ -8,43 +8,27 @@ module otr_qn_test_reference
 
     use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
+    use otr_qn, only: qn_settings_type
     use test_reference, only: n_param, tol, tol_c
-    use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_funptr, c_f_procpointer, &
-                                           c_associated
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
+                                           c_f_procpointer, c_associated, c_intptr_t, &
+                                           c_null_char, c_null_funptr, c_null_ptr
 
     implicit none
 
-    ! derived types for quasi-Newton settings
-    type ref_qn_settings_type
-        integer(ip) :: verbose, max_points
-        character(len=kw_len, kind=c_char) :: hess_update_scheme
-    end type
-
-    type, bind(C) :: ref_qn_settings_type_c
-        integer(c_ip) :: verbose, max_points
-        character(kind=c_char) :: hess_update_scheme(kw_len + 1)
-    end type
-
-    ! general reference parameters
-    type(ref_qn_settings_type), parameter :: ref_qn_settings = &
-        ref_qn_settings_type(verbose=3, max_points=100, hess_update_scheme="bfgs")
-
-    interface assignment(=)
-        module procedure assign_ref_to_qn
-        module procedure assign_ref_to_qn_c
-        module procedure assign_ref_to_ref_c
-    end interface
+    ! reference quasi-Newton settings, every field but the logical, the logging
+    ! function and the host context differing from its default and every integer from
+    ! the other
+    type(qn_settings_type), parameter :: ref_qn_settings = &
+        qn_settings_type(logger=null(), initialized=.true., verbose=3, max_points=100, &
+                         hess_update_scheme="bfgs")
 
     interface operator(==)
-        module procedure equal_qn_to_ref
-        module procedure equal_qn_c_to_ref
         module procedure equal_qn
         module procedure equal_qn_c
     end interface
 
     interface operator(/=)
-        module procedure not_equal_qn_to_ref
-        module procedure not_equal_qn_c_to_ref
         module procedure not_equal_qn
         module procedure not_equal_qn_c
     end interface
@@ -277,158 +261,94 @@ contains
 
     end function check_init_hess_c_funptr
 
-    subroutine get_reference_qn_values(ref_settings_out) bind(C)
+    subroutine get_reference_qn_values(values_out) bind(C)
         !
-        ! this subroutine exports the quasi-Newton reference values for tests
+        ! this subroutine exports the reference quasi-Newton settings as C settings
+        ! whose fields are set one by one without the conversion routines under test,
+        ! the logging function and the host context are set to distinct addresses
         !
-        type(ref_qn_settings_type_c), intent(out) :: ref_settings_out
+        use otr_qn_c_interface, only: qn_settings_type_c
+        use test_reference, only: ref_character_to_c
 
-        ref_settings_out = ref_qn_settings
+        type(qn_settings_type_c), intent(out) :: values_out
+
+        ! set logging function and host context to distinct addresses
+        values_out%logger = transfer(1_c_intptr_t, c_null_funptr)
+        values_out%context = transfer(2_c_intptr_t, c_null_ptr)
+
+        ! set logical, integers and keyword
+        values_out%initialized = ref_qn_settings%initialized
+        values_out%verbose = int(ref_qn_settings%verbose, kind=c_ip)
+        values_out%max_points = int(ref_qn_settings%max_points, kind=c_ip)
+        values_out%hess_update_scheme = &
+            ref_character_to_c(ref_qn_settings%hess_update_scheme)
 
     end subroutine get_reference_qn_values
 
-    subroutine get_default_qn_values(default_values_out) bind(C)
+    subroutine reference_qn_field(name_c, field_value, keyword_c) bind(C)
         !
-        ! this subroutine exports the default values for tests
-        !
-        use otr_qn, only: default_qn_settings
-        use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
-
-        type(qn_settings_type_c), intent(out) :: default_values_out
-
-        default_values_out = default_qn_settings
-
-    end subroutine get_default_qn_values
-
-    subroutine assign_ref_to_qn(lhs, rhs)
-        !
-        ! this subroutine overloads the assignment operator to set quasi-Newton
-        ! settings to reference values
-        !
-        use otr_qn, only: qn_settings_type
-
-        type(qn_settings_type), intent(out) :: lhs
-        type(ref_qn_settings_type), intent(in) :: rhs
-
-        ! unassociate function pointers
-        lhs%logger => null()
-
-        ! set reference values
-        lhs%verbose = rhs%verbose
-        lhs%max_points = rhs%max_points
-        lhs%hess_update_scheme = rhs%hess_update_scheme
-
-        ! set initialization logical
-        lhs%initialized = .true.
-
-    end subroutine assign_ref_to_qn
-
-    subroutine assign_ref_to_qn_c(lhs_c, rhs)
-        !
-        ! this subroutine overloads the assignment operator to set C quasi-Newton
-        ! settings to reference values
-        !
-        use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
-        use otr_qn, only: qn_settings_type
-
-        type(qn_settings_type_c), intent(out) :: lhs_c
-        type(ref_qn_settings_type), intent(in) :: rhs
-
-        type(qn_settings_type) :: lhs
-
-        lhs = rhs
-        lhs_c = lhs
-
-    end subroutine assign_ref_to_qn_c
-
-    subroutine assign_ref_to_ref_c(lhs, rhs)
-        !
-        ! this subroutine overloads the assignment operator to convert reference values
-        ! to their C counterpart
-        !
-        use test_reference, only: ref_character_to_c
-
-        type(ref_qn_settings_type_c), intent(out) :: lhs
-        type(ref_qn_settings_type), intent(in) :: rhs
-
-        lhs%verbose = int(rhs%verbose, kind=c_ip)
-        lhs%max_points = int(rhs%max_points, kind=c_ip)
-        lhs%hess_update_scheme = ref_character_to_c(rhs%hess_update_scheme)
-
-    end subroutine assign_ref_to_ref_c
-
-    logical function equal_qn_to_ref(lhs, rhs)
-        !
-        ! this function overloads the comparison operator to compare quasi-Newton
-        ! settings to reference values
-        !
-        use otr_qn, only: qn_settings_type
-
-        type(qn_settings_type), intent(in) :: lhs
-        type(ref_qn_settings_type), intent(in) :: rhs
-
-        equal_qn_to_ref = lhs%verbose == rhs%verbose .and. &
-                          lhs%max_points == rhs%max_points .and. &
-                          lhs%hess_update_scheme == rhs%hess_update_scheme
-
-    end function equal_qn_to_ref
-
-    logical function not_equal_qn_to_ref(lhs, rhs)
-        !
-        ! this function overloads the negated comparison operator to compare
-        ! quasi-Newton settings to reference values
-        !
-        use otr_qn, only: qn_settings_type
-
-        type(qn_settings_type), intent(in) :: lhs
-        type(ref_qn_settings_type), intent(in) :: rhs
-
-        not_equal_qn_to_ref = .not. (lhs == rhs)
-
-    end function not_equal_qn_to_ref
-
-    logical function equal_qn_c_to_ref(lhs_c, rhs)
-        !
-        ! this function overloads the comparison operator to compare quasi-Newton
-        ! settings to reference values
-        !
-        use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
-        use otr_qn, only: qn_settings_type
-
-        type(qn_settings_type_c), intent(in) :: lhs_c
-        type(ref_qn_settings_type), intent(in) :: rhs
-
-        type(qn_settings_type) :: lhs
-
-        lhs = lhs_c
-        equal_qn_c_to_ref = lhs == rhs
-
-    end function equal_qn_c_to_ref
-
-    logical function not_equal_qn_c_to_ref(lhs, rhs)
-        !
-        ! this function overloads the negated comparison operator to compare
-        ! quasi-Newton settings to reference values
+        ! this subroutine returns the value of a field of the C quasi-Newton settings
+        ! exported by get_reference_qn_values by its name, a numeric, logical (as 1 or
+        ! 0) or pointer (as its address) field in field_value and a keyword field as a
+        ! null-terminated character array in keyword_c, so that the Python tests need no
+        ! values of their own
         !
         use otr_qn_c_interface, only: qn_settings_type_c
+        use test_reference, only: ref_character_from_c
 
-        type(qn_settings_type_c), intent(in) :: lhs
-        type(ref_qn_settings_type), intent(in) :: rhs
+        character(kind=c_char), intent(in) :: name_c(*)
+        real(c_rp), intent(out) :: field_value
+        character(kind=c_char), intent(out) :: keyword_c(kw_len + 1)
 
-        not_equal_qn_c_to_ref = .not. (lhs == rhs)
+        type(qn_settings_type_c) :: values
 
-    end function not_equal_qn_c_to_ref
+        ! export reference values and select field by name
+        field_value = 0.0_c_rp
+        keyword_c = c_null_char
+        call get_reference_qn_values(values)
+        select case (ref_character_from_c(name_c))
+        case ("logger")
+            field_value = real(transfer(values%logger, 0_c_intptr_t), kind=c_rp)
+        case ("context")
+            field_value = real(transfer(values%context, 0_c_intptr_t), kind=c_rp)
+        case ("initialized")
+            field_value = merge(1.0_c_rp, 0.0_c_rp, values%initialized)
+        case ("verbose")
+            field_value = values%verbose
+        case ("max_points")
+            field_value = values%max_points
+        case ("hess_update_scheme")
+            keyword_c = values%hess_update_scheme
+        end select
+
+    end subroutine reference_qn_field
+
+    logical(c_bool) function is_default_qn_settings(settings_c) bind(C)
+        !
+        ! this function checks whether C quasi-Newton settings hold the default values
+        ! without logging function and host context, so that a C test can compare
+        ! against them without values of its own
+        !
+        use otr_qn, only: default_qn_settings
+        use otr_qn_c_interface, only: qn_settings_type_c
+
+        type(qn_settings_type_c), intent(in) :: settings_c
+
+        is_default_qn_settings = settings_c == default_qn_settings .and. &
+                                 .not. c_associated(settings_c%logger) .and. &
+                                 .not. c_associated(settings_c%context)
+
+    end function is_default_qn_settings
 
     logical function equal_qn(lhs, rhs)
         !
         ! this function overloads the comparison operator to compare quasi-Newton
         ! settings to different quasi-Newton settings
         !
-        use otr_qn, only: qn_settings_type
-
         type(qn_settings_type), intent(in) :: lhs, rhs
 
-        equal_qn = lhs%verbose == rhs%verbose .and. &
+        equal_qn = (lhs%initialized .eqv. rhs%initialized) .and. &
+                   lhs%verbose == rhs%verbose .and. &
                    lhs%max_points == rhs%max_points .and. &
                    lhs%hess_update_scheme == rhs%hess_update_scheme
 
@@ -439,8 +359,6 @@ contains
         ! this function overloads the negated comparison operator to compare
         ! quasi-Newton settings to different quasi-Newton settings
         !
-        use otr_qn, only: qn_settings_type
-
         type(qn_settings_type), intent(in) :: lhs, rhs
 
         not_equal_qn = .not. (lhs == rhs)
@@ -449,29 +367,31 @@ contains
 
     logical function equal_qn_c(lhs_c, rhs)
         !
-        ! this function overloads the comparison operator to compare quasi-Newton
-        ! settings to different quasi-Newton settings
+        ! this function overloads the comparison operator to compare C quasi-Newton
+        ! settings to Fortran quasi-Newton settings field by field, independently of
+        ! the conversion routines under test
         !
-        use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
-        use otr_qn, only: qn_settings_type
+        use otr_qn_c_interface, only: qn_settings_type_c
+        use test_reference, only: ref_character_from_c
 
         type(qn_settings_type_c), intent(in) :: lhs_c
         type(qn_settings_type), intent(in) :: rhs
 
-        type(qn_settings_type) :: lhs
-
-        lhs = lhs_c
-        equal_qn_c = lhs == rhs
+        equal_qn_c = &
+            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
+            lhs_c%verbose == rhs%verbose .and. &
+            lhs_c%max_points == rhs%max_points .and. &
+            ref_character_from_c(lhs_c%hess_update_scheme) == &
+            trim(rhs%hess_update_scheme)
 
     end function equal_qn_c
 
     logical function not_equal_qn_c(lhs_c, rhs)
         !
-        ! this function overloads the negated comparison operator to compare
-        ! quasi-Newton settings to different quasi-Newton settings
+        ! this function overloads the negated comparison operator to compare C
+        ! quasi-Newton settings to Fortran quasi-Newton settings
         !
         use otr_qn_c_interface, only: qn_settings_type_c
-        use otr_qn, only: qn_settings_type
 
         type(qn_settings_type_c), intent(in) :: lhs_c
         type(qn_settings_type), intent(in) :: rhs

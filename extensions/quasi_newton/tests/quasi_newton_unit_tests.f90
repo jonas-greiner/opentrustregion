@@ -100,7 +100,7 @@ contains
         use otr_qn, only: qn_factory, qn_settings_type, updating_type, &
                           sr1_updating_type, bfgs_updating_type, default_qn_settings, &
                           qn_settings_uninitialized_warning_msg
-        use otr_qn_test_reference, only: ref_qn_settings, assignment(=), operator(/=)
+        use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
                                                 update_orbs_qn_funptr
@@ -404,7 +404,7 @@ contains
         ! this function tests the subroutine which initializes a quasi-Newton object
         !
         use otr_qn, only: qn_settings_type, sr1_updating_type
-        use otr_qn_test_reference, only: ref_qn_settings, assignment(=), operator(/=)
+        use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
 
         type(sr1_updating_type) :: object
         type(qn_settings_type) :: settings

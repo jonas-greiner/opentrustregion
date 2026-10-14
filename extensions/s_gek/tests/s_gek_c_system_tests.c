@@ -37,41 +37,15 @@ _Static_assert(offsetof(s_gek_settings_type, initialized) == 1 * sizeof(void *),
 // ---------------------------------------------------------------------------
 
 bool test_s_gek_settings_init(void) {
-  // get defaults
-  void get_default_s_gek_values(s_gek_settings_type * settings);
-  s_gek_settings_type defaults = {0};
-  get_default_s_gek_values(&defaults);
-
-  // call function
-  s_gek_settings_type s = s_gek_settings_init();
-
-  // compare values
+  bool is_default_s_gek_settings(const s_gek_settings_type *settings);
   bool ok = true;
-  if (!s.initialized) {
-    fprintf(stderr, "test_s_gek_settings_init failed: Settings not initialized.\n");
-    ok = false;
-  }
-  if (s.use_subspace != defaults.use_subspace) {
-    fprintf(stderr,
-            "test_s_gek_settings_init failed: Subspace usage parameter wrong.\n");
-    ok = false;
-  }
-  if (s.verbose != defaults.verbose) {
-    fprintf(stderr, "test_s_gek_settings_init failed: Verbosity parameter wrong.\n");
-    ok = false;
-  }
-  if (s.max_points != defaults.max_points) {
-    fprintf(stderr, "test_s_gek_settings_init failed: Maximum number of "
-                    "points parameter wrong.\n");
-    ok = false;
-  }
-  if (s.logger) {
-    fprintf(stderr, "test_s_gek_settings_init failed: Callback pointers should be "
-                    "NULL.\n");
-    ok = false;
-  }
-  if (s.context) {
-    fprintf(stderr, "test_s_gek_settings_init failed: Host context should be NULL.\n");
+
+  // call function and compare with the default settings without logging function and
+  // host context
+  s_gek_settings_type s = s_gek_settings_init();
+  if (!is_default_s_gek_settings(&s)) {
+    fprintf(stderr, "test_s_gek_settings_init failed: Settings not initialized to the "
+                    "default values without logging function and host context.\n");
     ok = false;
   }
 

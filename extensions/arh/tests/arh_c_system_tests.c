@@ -37,35 +37,15 @@ _Static_assert(offsetof(arh_settings_type, initialized) == 1 * sizeof(void *),
 // ---------------------------------------------------------------------------
 
 bool test_arh_settings_init(void) {
-  // get defaults
-  void get_default_arh_values(arh_settings_type * settings);
-  arh_settings_type defaults = {0};
-  get_default_arh_values(&defaults);
-
-  // call function
-  arh_settings_type s = arh_settings_init();
-
-  // compare values
+  bool is_default_arh_settings(const arh_settings_type *settings);
   bool ok = true;
-  if (!s.initialized) {
-    fprintf(stderr, "test_arh_settings_init failed: Settings not initialized.\n");
-    ok = false;
-  }
-  if (s.verbose != defaults.verbose) {
-    fprintf(stderr, "test_arh_settings_init failed: Verbosity parameter wrong.\n");
-    ok = false;
-  }
-  if (strcmp(s.arh_type, defaults.arh_type) != 0) {
-    fprintf(stderr, "test_arh_settings_init failed: ARH type parameter wrong.\n");
-    ok = false;
-  }
-  if (s.logger) {
-    fprintf(stderr, "test_arh_settings_init failed: Callback pointers should be "
-                    "NULL.\n");
-    ok = false;
-  }
-  if (s.context) {
-    fprintf(stderr, "test_arh_settings_init failed: Host context should be NULL.\n");
+
+  // call function and compare with the default settings without logging function and
+  // host context
+  arh_settings_type s = arh_settings_init();
+  if (!is_default_arh_settings(&s)) {
+    fprintf(stderr, "test_arh_settings_init failed: Settings not initialized to the "
+                    "default values without logging function and host context.\n");
     ok = false;
   }
 

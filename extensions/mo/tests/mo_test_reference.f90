@@ -6,10 +6,12 @@
 
 module otr_mo_test_reference
 
-    use opentrustregion, only: ip
+    use opentrustregion, only: ip, kw_len
     use c_interface, only: c_ip, c_rp
-    use otr_common_test_reference, only: n_particle, n_occ, ref_orbital_settings_type, &
-                                         ref_orbital_settings
+    use otr_mo, only: mo_settings_type
+    use otr_common_test_reference, only: n_particle, n_occ, ref_orbital_settings
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_intptr_t, c_null_char, &
+                                           c_null_funptr, c_null_ptr, c_associated
 
     implicit none
 
@@ -52,34 +54,16 @@ module otr_mo_test_reference
     integer(c_ip), protected, bind(C, name="test_orbsym") :: &
         orbsym_c(n_mo, n_particle) = int(case_irreps(:, :, n_cases), kind=c_ip)
 
-    ! derived types for MO settings
-    type, extends(ref_orbital_settings_type) :: ref_mo_settings_type
-    end type
-
-    type, bind(C) :: ref_mo_settings_type_c
-        integer(c_ip) :: verbose
-    end type
-
-    ! general reference parameters
-    type(ref_mo_settings_type), parameter :: ref_mo_settings = &
-        ref_mo_settings_type(ref_orbital_settings_type=ref_orbital_settings)
-
-    interface assignment(=)
-        module procedure assign_ref_to_ref_c
-        module procedure assign_ref_to_mo
-        module procedure assign_ref_to_mo_c
-    end interface
+    ! reference MO settings, those shared by the orbital bases
+    type(mo_settings_type), parameter :: ref_mo_settings = &
+        mo_settings_type(orbital_settings_type=ref_orbital_settings)
 
     interface operator(==)
-        module procedure equal_mo_to_ref
-        module procedure equal_mo_c_to_ref
         module procedure equal_mo
         module procedure equal_mo_c
     end interface
 
     interface operator(/=)
-        module procedure not_equal_mo_to_ref
-        module procedure not_equal_mo_c_to_ref
         module procedure not_equal_mo
         module procedure not_equal_mo_c
     end interface
@@ -108,147 +92,82 @@ contains
 
     end function mo_coeff_pattern
 
-    subroutine get_reference_mo_values(ref_settings_out) bind(C)
+    subroutine get_reference_mo_values(values_out) bind(C)
         !
-        ! this subroutine exports the MO reference values for tests
-        !
-        type(ref_mo_settings_type_c), intent(out) :: ref_settings_out
-
-        ref_settings_out = ref_mo_settings
-
-    end subroutine get_reference_mo_values
-
-    subroutine get_default_mo_values(default_values_out) bind(C)
-        !
-        ! this subroutine exports the default values for tests
-        !
-        use otr_mo, only: default_mo_settings
-        use otr_mo_c_interface, only: mo_settings_type_c, assignment(=)
-
-        type(mo_settings_type_c), intent(out) :: default_values_out
-
-        default_values_out = default_mo_settings
-
-    end subroutine get_default_mo_values
-
-    subroutine assign_ref_to_mo(lhs, rhs)
-        !
-        ! this subroutine overloads the assignment operator to set MO settings to
-        ! reference values
-        !
-        use otr_mo, only: mo_settings_type
-
-        type(mo_settings_type), intent(out) :: lhs
-        type(ref_mo_settings_type), intent(in) :: rhs
-
-        ! unassociate function pointers
-        lhs%logger => null()
-
-        ! set reference values
-        lhs%verbose = rhs%verbose
-
-        ! set initialization logical
-        lhs%initialized = .true.
-
-    end subroutine assign_ref_to_mo
-
-    subroutine assign_ref_to_mo_c(lhs_c, rhs)
-        !
-        ! this subroutine overloads the assignment operator to set C MO settings to
-        ! reference values
-        !
-        use otr_mo_c_interface, only: mo_settings_type_c, assignment(=)
-        use otr_mo, only: mo_settings_type
-
-        type(mo_settings_type_c), intent(out) :: lhs_c
-        type(ref_mo_settings_type), intent(in) :: rhs
-
-        type(mo_settings_type) :: lhs
-
-        lhs = rhs
-        lhs_c = lhs
-
-    end subroutine assign_ref_to_mo_c
-
-    subroutine assign_ref_to_ref_c(lhs, rhs)
-        !
-        ! this subroutine overloads the assignment operator to convert reference values
-        ! to their C counterpart
-        !
-        type(ref_mo_settings_type_c), intent(out) :: lhs
-        type(ref_mo_settings_type), intent(in) :: rhs
-
-        lhs%verbose = int(rhs%verbose, kind=c_ip)
-
-    end subroutine assign_ref_to_ref_c
-
-    logical function equal_mo_to_ref(lhs, rhs)
-        !
-        ! this function overloads the comparison operator to compare MO settings to
-        ! reference values
-        !
-        use otr_mo, only: mo_settings_type
-        use otr_common_test_reference, only: operator(==)
-
-        type(mo_settings_type), intent(in) :: lhs
-        type(ref_mo_settings_type), intent(in) :: rhs
-
-        equal_mo_to_ref = lhs%orbital_settings_type == rhs%ref_orbital_settings_type
-
-    end function equal_mo_to_ref
-
-    logical function not_equal_mo_to_ref(lhs, rhs)
-        !
-        ! this function overloads the negated comparison operator to compare MO
-        ! settings to reference values
-        !
-        use otr_mo, only: mo_settings_type
-
-        type(mo_settings_type), intent(in) :: lhs
-        type(ref_mo_settings_type), intent(in) :: rhs
-
-        not_equal_mo_to_ref = .not. (lhs == rhs)
-
-    end function not_equal_mo_to_ref
-
-    logical function equal_mo_c_to_ref(lhs_c, rhs)
-        !
-        ! this function overloads the comparison operator to compare MO settings to
-        ! reference values
-        !
-        use otr_mo_c_interface, only: mo_settings_type_c, assignment(=)
-        use otr_mo, only: mo_settings_type
-
-        type(mo_settings_type_c), intent(in) :: lhs_c
-        type(ref_mo_settings_type), intent(in) :: rhs
-
-        type(mo_settings_type) :: lhs
-
-        lhs = lhs_c
-        equal_mo_c_to_ref = lhs == rhs
-
-    end function equal_mo_c_to_ref
-
-    logical function not_equal_mo_c_to_ref(lhs, rhs)
-        !
-        ! this function overloads the negated comparison operator to compare MO
-        ! settings to reference values
+        ! this subroutine exports the reference MO settings as C settings whose fields
+        ! are set one by one without the conversion routines under test, the logging
+        ! function and the host context are set to distinct addresses
         !
         use otr_mo_c_interface, only: mo_settings_type_c
 
-        type(mo_settings_type_c), intent(in) :: lhs
-        type(ref_mo_settings_type), intent(in) :: rhs
+        type(mo_settings_type_c), intent(out) :: values_out
 
-        not_equal_mo_c_to_ref = .not. (lhs == rhs)
+        ! set logging function and host context to distinct addresses
+        values_out%logger = transfer(1_c_intptr_t, c_null_funptr)
+        values_out%context = transfer(2_c_intptr_t, c_null_ptr)
 
-    end function not_equal_mo_c_to_ref
+        ! set logical and integer
+        values_out%initialized = ref_mo_settings%initialized
+        values_out%verbose = int(ref_mo_settings%verbose, kind=c_ip)
+
+    end subroutine get_reference_mo_values
+
+    subroutine reference_mo_field(name_c, field_value, keyword_c) bind(C)
+        !
+        ! this subroutine returns the value of a field of the C MO settings exported by
+        ! get_reference_mo_values by its name, a numeric, logical (as 1 or 0) or
+        ! pointer (as its address) field in field_value and a keyword field as a
+        ! null-terminated character array in keyword_c, so that the Python tests need no
+        ! values of their own
+        !
+        use otr_mo_c_interface, only: mo_settings_type_c
+        use test_reference, only: ref_character_from_c
+
+        character(kind=c_char), intent(in) :: name_c(*)
+        real(c_rp), intent(out) :: field_value
+        character(kind=c_char), intent(out) :: keyword_c(kw_len + 1)
+
+        type(mo_settings_type_c) :: values
+
+        ! export reference values and select field by name
+        field_value = 0.0_c_rp
+        keyword_c = c_null_char
+        call get_reference_mo_values(values)
+        select case (ref_character_from_c(name_c))
+        case ("logger")
+            field_value = real(transfer(values%logger, 0_c_intptr_t), kind=c_rp)
+        case ("context")
+            field_value = real(transfer(values%context, 0_c_intptr_t), kind=c_rp)
+        case ("initialized")
+            field_value = merge(1.0_c_rp, 0.0_c_rp, values%initialized)
+        case ("verbose")
+            field_value = values%verbose
+        end select
+
+    end subroutine reference_mo_field
+
+    logical(c_bool) function is_default_mo_settings(settings_c) bind(C)
+        !
+        ! this function checks whether C MO settings hold the default values without
+        ! logging function and host context, so that a C test can compare against them
+        ! without values of its own
+        !
+        use otr_mo, only: default_mo_settings
+        use otr_mo_c_interface, only: mo_settings_type_c
+
+        type(mo_settings_type_c), intent(in) :: settings_c
+
+        is_default_mo_settings = settings_c == default_mo_settings .and. &
+                                 .not. c_associated(settings_c%logger) .and. &
+                                 .not. c_associated(settings_c%context)
+
+    end function is_default_mo_settings
 
     logical function equal_mo(lhs, rhs)
         !
         ! this function overloads the comparison operator to compare MO settings to
         ! different MO settings
         !
-        use otr_mo, only: mo_settings_type
         use otr_common_test_reference, only: operator(==)
 
         type(mo_settings_type), intent(in) :: lhs, rhs
@@ -262,8 +181,6 @@ contains
         ! this function overloads the negated comparison operator to compare MO
         ! settings to different MO settings
         !
-        use otr_mo, only: mo_settings_type
-
         type(mo_settings_type), intent(in) :: lhs, rhs
 
         not_equal_mo = .not. (lhs == rhs)
@@ -272,29 +189,27 @@ contains
 
     logical function equal_mo_c(lhs_c, rhs)
         !
-        ! this function overloads the comparison operator to compare MO settings to
-        ! different MO settings
+        ! this function overloads the comparison operator to compare C MO settings to
+        ! Fortran MO settings field by field, independently of the conversion routines
+        ! under test
         !
-        use otr_mo_c_interface, only: mo_settings_type_c, assignment(=)
-        use otr_mo, only: mo_settings_type
+        use otr_mo_c_interface, only: mo_settings_type_c
 
         type(mo_settings_type_c), intent(in) :: lhs_c
         type(mo_settings_type), intent(in) :: rhs
 
-        type(mo_settings_type) :: lhs
-
-        lhs = lhs_c
-        equal_mo_c = lhs == rhs
+        equal_mo_c = &
+            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
+            lhs_c%verbose == rhs%verbose
 
     end function equal_mo_c
 
     logical function not_equal_mo_c(lhs_c, rhs)
         !
-        ! this function overloads the negated comparison operator to compare MO
-        ! settings to different MO settings
+        ! this function overloads the negated comparison operator to compare C MO
+        ! settings to Fortran MO settings
         !
         use otr_mo_c_interface, only: mo_settings_type_c
-        use otr_mo, only: mo_settings_type
 
         type(mo_settings_type_c), intent(in) :: lhs_c
         type(mo_settings_type), intent(in) :: rhs

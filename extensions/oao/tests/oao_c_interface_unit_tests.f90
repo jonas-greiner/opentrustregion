@@ -34,7 +34,7 @@ contains
         use otr_oao_mock, only: mock_oao_factory_cs, mock_oao_factory_os, &
                                 mock_oao_factory_error, mock_oao_factory_defaults, &
                                 mock_oao_factory_no_evaluate_dm, test_passed
-        use otr_oao_test_reference, only: assignment(=), ref_oao_settings
+        use otr_oao_test_reference, only: get_reference_oao_values
         use otr_common_test_reference, only: n_ao, n_particle, n_ao_c, shell_names
         use otr_common_c_interface_unit_tests, only: &
             mock_evaluate_dm_cs, mock_evaluate_dm_os, check_c_factory_wiring
@@ -66,8 +66,8 @@ contains
         allocate(ao_overlap_c(n_ao, n_ao))
         ao_overlap_c = 2.0_c_rp
 
-        ! associate optional settings with values
-        settings_c = ref_oao_settings
+        ! associate optional settings with the reference values
+        call get_reference_oao_values(settings_c)
         settings_c%logger = c_funloc(mock_logger)
 
         ! both spin cases pass through the same C wrapper
@@ -357,7 +357,8 @@ contains
         !
         use otr_oao_c_interface, only: oao_settings_type_c, assignment(=)
         use otr_oao, only: oao_settings_type
-        use otr_oao_test_reference, only: assignment(=), ref_oao_settings, operator(/=)
+        use otr_oao_test_reference, only: get_reference_oao_values, ref_oao_settings, &
+                                          operator(/=)
         use c_interface, only: c_callbacks_type
         use c_interface_unit_tests, only: mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
@@ -369,8 +370,8 @@ contains
         ! assume test passes
         test_assign_oao_f_c = .true.
 
-        ! initialize the C settings with custom values
-        settings_c = ref_oao_settings
+        ! initialize the C settings with the reference values
+        call get_reference_oao_values(settings_c)
         settings_c%logger = c_funloc(mock_logger)
 
         ! convert to Fortran settings and hand them the C logging function in a bundle
@@ -430,7 +431,7 @@ contains
         !
         use otr_oao, only: oao_settings_type
         use otr_oao_c_interface, only: oao_settings_type_c, assignment(=)
-        use otr_oao_test_reference, only: ref_oao_settings, assignment(=), operator(/=)
+        use otr_oao_test_reference, only: ref_oao_settings, operator(/=)
 
         type(oao_settings_type) :: settings
         type(oao_settings_type_c) :: settings_c

@@ -71,7 +71,7 @@ contains
         use otr_qn_mock, only: mock_qn_factory, mock_qn_factory_error, &
                                mock_qn_factory_defaults, &
                                test_passed_mock_qn_factory => test_passed
-        use otr_qn_test_reference, only: assignment(=), ref_qn_settings
+        use otr_qn_test_reference, only: get_reference_qn_values
         use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
         use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func, mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
@@ -94,8 +94,8 @@ contains
         ! inject mock function
         qn_factory => mock_qn_factory
 
-        ! associate optional settings with values
-        settings = ref_qn_settings
+        ! associate optional settings with the reference values
+        call get_reference_qn_values(settings)
         settings%logger = c_funloc(mock_logger)
 
         ! arm the host context of the settings, which the logging, transport and
@@ -432,7 +432,8 @@ contains
         !
         use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
         use otr_qn, only: qn_settings_type
-        use otr_qn_test_reference, only: assignment(=), ref_qn_settings, operator(/=)
+        use otr_qn_test_reference, only: get_reference_qn_values, ref_qn_settings, &
+                                         operator(/=)
         use c_interface, only: c_callbacks_type
         use c_interface_unit_tests, only: mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
@@ -444,8 +445,8 @@ contains
         ! assume test passes
         test_assign_qn_f_c = .true.
 
-        ! initialize the C settings with custom values
-        settings_c = ref_qn_settings
+        ! initialize the C settings with the reference values
+        call get_reference_qn_values(settings_c)
         settings_c%logger = c_funloc(mock_logger)
 
         ! convert to Fortran settings and hand them the C logging function in a bundle
@@ -505,7 +506,7 @@ contains
         !
         use otr_qn, only: qn_settings_type
         use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
-        use otr_qn_test_reference, only: ref_qn_settings, assignment(=), operator(/=)
+        use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
 
         type(qn_settings_type) :: settings
         type(qn_settings_type_c) :: settings_c

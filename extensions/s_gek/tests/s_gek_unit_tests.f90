@@ -58,8 +58,7 @@ contains
         use otr_s_gek, only: s_gek_factory, s_gek_settings_type, s_gek_type, &
                              default_s_gek_settings, &
                              s_gek_settings_uninitialized_warning_msg
-        use otr_s_gek_test_reference, only: ref_s_gek_settings, assignment(=), &
-                                            operator(/=)
+        use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
                                                 update_orbs_s_gek_funptr
@@ -336,8 +335,7 @@ contains
         ! this function tests the subroutine which initializes an S-GEK object
         !
         use otr_s_gek, only: s_gek_settings_type, s_gek_type
-        use otr_s_gek_test_reference, only: ref_s_gek_settings, assignment(=), &
-                                            operator(/=)
+        use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
 
         type(s_gek_type) :: object
         type(s_gek_settings_type) :: settings

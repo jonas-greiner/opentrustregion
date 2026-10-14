@@ -8,26 +8,18 @@ module otr_arh_test_reference
 
     use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
-    use otr_common_test_reference, only: ref_orbital_settings_type, ref_orbital_settings
-    use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_funptr, c_f_procpointer, &
-                                           c_associated
+    use otr_arh, only: arh_settings_type
+    use otr_common_test_reference, only: ref_orbital_settings
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
+                                           c_f_procpointer, c_associated, c_intptr_t, &
+                                           c_null_char, c_null_funptr, c_null_ptr
 
     implicit none
 
-    ! derived types for ARH settings
-    type, extends(ref_orbital_settings_type) :: ref_arh_settings_type
-        character(len=kw_len, kind=c_char) :: arh_type
-    end type
-
-    type, bind(C) :: ref_arh_settings_type_c
-        integer(c_ip) :: verbose
-        character(kind=c_char) :: arh_type(kw_len + 1)
-    end type
-
-    ! general reference parameters
-    type(ref_arh_settings_type), parameter :: ref_arh_settings = &
-        ref_arh_settings_type(ref_orbital_settings_type=ref_orbital_settings, &
-                              arh_type="symm_arh")
+    ! reference ARH settings, those shared by the orbital bases and an ARH type other
+    ! than the default
+    type(arh_settings_type), parameter :: ref_arh_settings = arh_settings_type( &
+        orbital_settings_type=ref_orbital_settings, arh_type="symm_arh")
 
     ! multiples of the density matrix the mock density matrix evaluating functions of
     ! both shells return for each optional output, in the order of
@@ -41,22 +33,12 @@ module otr_arh_test_reference
         [character(len=24) :: "Fock matrix", "Coulomb potential", &
          "exact-exchange potential", "non-linear potential"]
 
-    interface assignment(=)
-        module procedure assign_ref_to_arh
-        module procedure assign_ref_to_arh_c
-        module procedure assign_ref_to_ref_c
-    end interface
-
     interface operator(==)
-        module procedure equal_arh_to_ref
-        module procedure equal_arh_c_to_ref
         module procedure equal_arh
         module procedure equal_arh_c
     end interface
 
     interface operator(/=)
-        module procedure not_equal_arh_to_ref
-        module procedure not_equal_arh_c_to_ref
         module procedure not_equal_arh
         module procedure not_equal_arh_c
     end interface
@@ -330,153 +312,86 @@ contains
 
     end function check_arh_evaluate_dm_c_funptr
 
-    subroutine get_reference_arh_values(ref_settings_out) bind(C)
+    subroutine get_reference_arh_values(values_out) bind(C)
         !
-        ! this subroutine exports the ARH reference values for tests
+        ! this subroutine exports the reference ARH settings as C settings whose fields
+        ! are set one by one without the conversion routines under test, the logging
+        ! function and the host context are set to distinct addresses
         !
-        type(ref_arh_settings_type_c), intent(out) :: ref_settings_out
+        use otr_arh_c_interface, only: arh_settings_type_c
+        use test_reference, only: ref_character_to_c
 
-        ref_settings_out = ref_arh_settings
+        type(arh_settings_type_c), intent(out) :: values_out
+
+        ! set logging function and host context to distinct addresses
+        values_out%logger = transfer(1_c_intptr_t, c_null_funptr)
+        values_out%context = transfer(2_c_intptr_t, c_null_ptr)
+
+        ! set logical, integer and keyword
+        values_out%initialized = ref_arh_settings%initialized
+        values_out%verbose = int(ref_arh_settings%verbose, kind=c_ip)
+        values_out%arh_type = ref_character_to_c(ref_arh_settings%arh_type)
 
     end subroutine get_reference_arh_values
 
-    subroutine get_default_arh_values(default_values_out) bind(C)
+    subroutine reference_arh_field(name_c, field_value, keyword_c) bind(C)
         !
-        ! this subroutine exports the default values for tests
-        !
-        use otr_arh, only: default_arh_settings
-        use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
-
-        type(arh_settings_type_c), intent(out) :: default_values_out
-
-        default_values_out = default_arh_settings
-
-    end subroutine get_default_arh_values
-
-    subroutine assign_ref_to_arh(lhs, rhs)
-        !
-        ! this subroutine overloads the assignment operator to set ARH settings to
-        ! reference values
-        !
-        use otr_arh, only: arh_settings_type
-
-        type(arh_settings_type), intent(out) :: lhs
-        type(ref_arh_settings_type), intent(in) :: rhs
-
-        ! unassociate function pointers
-        lhs%logger => null()
-
-        ! set reference values
-        lhs%verbose = rhs%verbose
-        lhs%arh_type = rhs%arh_type
-
-        ! set initialization logical
-        lhs%initialized = .true.
-
-    end subroutine assign_ref_to_arh
-
-    subroutine assign_ref_to_arh_c(lhs_c, rhs)
-        !
-        ! this subroutine overloads the assignment operator to set C ARH settings to
-        ! reference values
-        !
-        use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
-        use otr_arh, only: arh_settings_type
-
-        type(arh_settings_type_c), intent(out) :: lhs_c
-        type(ref_arh_settings_type), intent(in) :: rhs
-
-        type(arh_settings_type) :: lhs
-
-        lhs = rhs
-        lhs_c = lhs
-
-    end subroutine assign_ref_to_arh_c
-
-    subroutine assign_ref_to_ref_c(lhs, rhs)
-        !
-        ! this subroutine overloads the assignment operator to convert reference values
-        ! to their C counterpart
-        !
-        use test_reference, only: ref_character_to_c
-
-        type(ref_arh_settings_type_c), intent(out) :: lhs
-        type(ref_arh_settings_type), intent(in) :: rhs
-
-        lhs%verbose = int(rhs%verbose, kind=c_ip)
-        lhs%arh_type = ref_character_to_c(rhs%arh_type)
-
-    end subroutine assign_ref_to_ref_c
-
-    logical function equal_arh_to_ref(lhs, rhs)
-        !
-        ! this function overloads the comparison operator to compare ARH settings to
-        ! reference values
-        !
-        use otr_arh, only: arh_settings_type
-        use otr_common_test_reference, only: operator(==)
-
-        type(arh_settings_type), intent(in) :: lhs
-        type(ref_arh_settings_type), intent(in) :: rhs
-
-        equal_arh_to_ref = &
-            lhs%orbital_settings_type == rhs%ref_orbital_settings_type .and. &
-            lhs%arh_type == rhs%arh_type
-
-    end function equal_arh_to_ref
-
-    logical function not_equal_arh_to_ref(lhs, rhs)
-        !
-        ! this function overloads the negated comparison operator to compare ARH
-        ! settings to reference values
-        !
-        use otr_arh, only: arh_settings_type
-
-        type(arh_settings_type), intent(in) :: lhs
-        type(ref_arh_settings_type), intent(in) :: rhs
-
-        not_equal_arh_to_ref = .not. (lhs == rhs)
-
-    end function not_equal_arh_to_ref
-
-    logical function equal_arh_c_to_ref(lhs_c, rhs)
-        !
-        ! this function overloads the comparison operator to compare ARH settings to
-        ! reference values
-        !
-        use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
-        use otr_arh, only: arh_settings_type
-
-        type(arh_settings_type_c), intent(in) :: lhs_c
-        type(ref_arh_settings_type), intent(in) :: rhs
-
-        type(arh_settings_type) :: lhs
-
-        lhs = lhs_c
-        equal_arh_c_to_ref = lhs == rhs
-
-    end function equal_arh_c_to_ref
-
-    logical function not_equal_arh_c_to_ref(lhs, rhs)
-        !
-        ! this function overloads the negated comparison operator to compare ARH
-        ! settings to reference values
+        ! this subroutine returns the value of a field of the C ARH settings exported by
+        ! get_reference_arh_values by its name, a numeric, logical (as 1 or 0) or
+        ! pointer (as its address) field in field_value and a keyword field as a
+        ! null-terminated character array in keyword_c, so that the Python tests need no
+        ! values of their own
         !
         use otr_arh_c_interface, only: arh_settings_type_c
+        use test_reference, only: ref_character_from_c
 
-        type(arh_settings_type_c), intent(in) :: lhs
-        type(ref_arh_settings_type), intent(in) :: rhs
+        character(kind=c_char), intent(in) :: name_c(*)
+        real(c_rp), intent(out) :: field_value
+        character(kind=c_char), intent(out) :: keyword_c(kw_len + 1)
 
-        not_equal_arh_c_to_ref = .not. (lhs == rhs)
+        type(arh_settings_type_c) :: values
 
-    end function not_equal_arh_c_to_ref
+        ! export reference values and select field by name
+        field_value = 0.0_c_rp
+        keyword_c = c_null_char
+        call get_reference_arh_values(values)
+        select case (ref_character_from_c(name_c))
+        case ("logger")
+            field_value = real(transfer(values%logger, 0_c_intptr_t), kind=c_rp)
+        case ("context")
+            field_value = real(transfer(values%context, 0_c_intptr_t), kind=c_rp)
+        case ("initialized")
+            field_value = merge(1.0_c_rp, 0.0_c_rp, values%initialized)
+        case ("verbose")
+            field_value = values%verbose
+        case ("arh_type")
+            keyword_c = values%arh_type
+        end select
+
+    end subroutine reference_arh_field
+
+    logical(c_bool) function is_default_arh_settings(settings_c) bind(C)
+        !
+        ! this function checks whether C ARH settings hold the default values without
+        ! logging function and host context, so that a C test can compare against them
+        ! without values of its own
+        !
+        use otr_arh, only: default_arh_settings
+        use otr_arh_c_interface, only: arh_settings_type_c
+
+        type(arh_settings_type_c), intent(in) :: settings_c
+
+        is_default_arh_settings = settings_c == default_arh_settings .and. &
+                                  .not. c_associated(settings_c%logger) .and. &
+                                  .not. c_associated(settings_c%context)
+
+    end function is_default_arh_settings
 
     logical function equal_arh(lhs, rhs)
         !
         ! this function overloads the comparison operator to compare ARH settings to
         ! different ARH settings
         !
-        use otr_arh, only: arh_settings_type
         use otr_common_test_reference, only: operator(==)
 
         type(arh_settings_type), intent(in) :: lhs, rhs
@@ -491,8 +406,6 @@ contains
         ! this function overloads the negated comparison operator to compare ARH
         ! settings to different ARH settings
         !
-        use otr_arh, only: arh_settings_type
-
         type(arh_settings_type), intent(in) :: lhs, rhs
 
         not_equal_arh = .not. (lhs == rhs)
@@ -501,29 +414,29 @@ contains
 
     logical function equal_arh_c(lhs_c, rhs)
         !
-        ! this function overloads the comparison operator to compare ARH settings to
-        ! different ARH settings
+        ! this function overloads the comparison operator to compare C ARH settings to
+        ! Fortran ARH settings field by field, independently of the conversion routines
+        ! under test
         !
-        use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
-        use otr_arh, only: arh_settings_type
+        use otr_arh_c_interface, only: arh_settings_type_c
+        use test_reference, only: ref_character_from_c
 
         type(arh_settings_type_c), intent(in) :: lhs_c
         type(arh_settings_type), intent(in) :: rhs
 
-        type(arh_settings_type) :: lhs
-
-        lhs = lhs_c
-        equal_arh_c = lhs == rhs
+        equal_arh_c = &
+            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
+            lhs_c%verbose == rhs%verbose .and. &
+            ref_character_from_c(lhs_c%arh_type) == trim(rhs%arh_type)
 
     end function equal_arh_c
 
     logical function not_equal_arh_c(lhs_c, rhs)
         !
-        ! this function overloads the negated comparison operator to compare ARH
-        ! settings to different ARH settings
+        ! this function overloads the negated comparison operator to compare C ARH
+        ! settings to Fortran ARH settings
         !
         use otr_arh_c_interface, only: arh_settings_type_c
-        use otr_arh, only: arh_settings_type
 
         type(arh_settings_type_c), intent(in) :: lhs_c
         type(arh_settings_type), intent(in) :: rhs

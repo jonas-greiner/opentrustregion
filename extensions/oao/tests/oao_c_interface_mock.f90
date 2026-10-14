@@ -12,7 +12,8 @@ module otr_oao_c_interface_mock
     use otr_oao_test_reference, only: ref_oao_settings
     use otr_common_test_reference, only: n_particle, n_ao
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
-                                           c_funloc, c_null_char
+                                           c_funloc, c_null_char, c_null_funptr, &
+                                           c_null_ptr
 
     implicit none
 
@@ -136,12 +137,14 @@ contains
         ! subroutine
         !
         use otr_oao_c_interface, only: oao_settings_type_c
-        use otr_oao_test_reference, only: assignment(=)
+        use otr_oao_test_reference, only: get_reference_oao_values
 
         type(oao_settings_type_c), intent(inout) :: settings
 
-        ! set reference values
-        settings = ref_oao_settings
+        ! set reference values without logging function and host context
+        call get_reference_oao_values(settings)
+        settings%logger = c_null_funptr
+        settings%context = c_null_ptr
 
     end subroutine mock_init_oao_settings_c
 

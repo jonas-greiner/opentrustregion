@@ -5,14 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import (
-    c_bool,
-    c_char,
-    Array,
-    byref,
-    Structure,
-    POINTER,
-)
+from ctypes import c_bool
 from unittest.mock import patch
 
 import numpy as np
@@ -22,11 +15,9 @@ from pyopentrustregion.tests import (
     n_param,
     add_tests,
     print_separator,
-    LegacyPyInterfaceHelpers,
 )
 from pyopentrustregion.python_interface import (
     c_real,
-    c_int,
     SolverSettings,
     SolverState,
     logger_interface_type,
@@ -38,6 +29,9 @@ from pyopentrustregion.extensions.common.tests import (
     check_wired_solver_settings,
     check_extension_owner,
     release_mock_extension,
+    assign_reference_settings,
+    settings_hold_reference,
+    ExtensionCallbackMocks,
 )
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory
 
@@ -120,48 +114,9 @@ class OAOPyInterfaceTests(unittest.TestCase):
     def setUpClass(cls):
         print_separator("Running unit tests for OAO Python interface...")
 
-        # get fields
-        fields = OAOSettings.c_struct._fields_
-
-        # get fields by order
-        ref_fields = []
-        # loop by type order
-        for curr_type in (c_bool, c_real, c_int):
-            # fields of this type
-            for name, t in fields:
-                if t == curr_type and name != "initialized":
-                    ref_fields.append((name + "_ref", t))
-
-        # handle fixed-size c_char arrays (strings)
-        for name, t in fields:
-            if issubclass(t, Array) and getattr(t, "_type_", None) is c_char:
-                ref_fields.append((name + "_ref", t))
-
-        # create class to read reference values
-        class RefSettingsC(Structure):
-            _fields_ = ref_fields
-
-        # create instance
-        ref_settings = RefSettingsC()
-
-        # call Fortran to fill values
-        lib.get_reference_oao_values.argtypes = [POINTER(RefSettingsC)]
-        lib.get_reference_oao_values.restype = None
-        lib.get_reference_oao_values(byref(ref_settings))
-
-        # extract Python values
-        for name, _ in ref_fields:
-            ref_value = getattr(ref_settings, name)
-            if isinstance(ref_value, bytes):
-                ref_value = ref_value.decode("utf-8")
-            setattr(cls, name, ref_value)
-
         return super().setUpClass()
 
-    assign_ref_to_settings = LegacyPyInterfaceHelpers.assign_ref_to_settings
-    equal_settings_to_ref = LegacyPyInterfaceHelpers.equal_settings_to_ref
-
-    mock_logger = LegacyPyInterfaceHelpers.mock_logger
+    mock_logger = ExtensionCallbackMocks.mock_logger
 
     def mock_evaluate_dm(self, dm_ao, fock, get_response):
         """
@@ -199,7 +154,8 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
         # initialize settings object
         settings = OAOSettings()
-        self.assign_ref_to_settings(settings)
+        assign_reference_settings(settings, lib.reference_oao_field)
+        settings.logger = self.mock_logger
 
         # initialize logging boolean
         self.test_logger = True
@@ -508,8 +464,9 @@ class OAOPyInterfaceTests(unittest.TestCase):
         """
         test_passed = True
         settings = OAOSettings()
-        if not self.equal_settings_to_ref(settings):
-            print(" test_oao_settings failed: Settings not initialized correctly.")
+        if not settings_hold_reference(
+            "test_oao_settings", settings, lib.reference_oao_field
+        ):
             test_passed = False
 
         # assigning a logging function writes the C callback function the settings

@@ -11,7 +11,8 @@ module otr_mo_c_interface_mock
     use otr_mo_c_interface, only: mo_factory_c_wrapper, init_mo_settings_c
     use otr_mo_test_reference, only: ref_mo_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
-                                           c_funloc, c_null_char, c_f_pointer, c_loc
+                                           c_funloc, c_null_char, c_f_pointer, c_loc, &
+                                           c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -205,12 +206,14 @@ contains
         ! subroutine
         !
         use otr_mo_c_interface, only: mo_settings_type_c
-        use otr_mo_test_reference, only: assignment(=)
+        use otr_mo_test_reference, only: get_reference_mo_values
 
         type(mo_settings_type_c), intent(inout) :: settings
 
-        ! set reference values
-        settings = ref_mo_settings
+        ! set reference values without logging function and host context
+        call get_reference_mo_values(settings)
+        settings%logger = c_null_funptr
+        settings%context = c_null_ptr
 
     end subroutine mock_init_mo_settings_c
 
