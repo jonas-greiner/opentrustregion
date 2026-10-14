@@ -27,13 +27,17 @@ from pyopentrustregion.python_interface import (
     Settings,
     SolverSettings,
     SolverSettingsC,
+    SolverState,
+    SolverStateC,
     auto_bind_fields,
     bind_callback_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
+    ExtensionOwner,
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
     check_callback_arguments,
+    check_wrapped_functions,
 )
 
 if TYPE_CHECKING:
@@ -132,7 +136,8 @@ def s_gek_factory(
     obj_func: Callable[[np.ndarray], float],
     change_reference: ChangeReferenceType,
     solver_settings: SolverSettings,
-    settings: SGEKSettings,
+    solver_state: SolverState,
+    settings: Optional[SGEKSettings] = None,
 ) -> Tuple[
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -144,6 +149,10 @@ def s_gek_factory(
     # update_orbs or obj_func when these are themselves factory-produced so a whole
     # chain of factories shares one, and handed to solver through the returned objects
     exception = adopt_collector(update_orbs, obj_func)
+
+    # the C interface cannot check whether the orbital updating function and the
+    # objective function belong to the solver settings
+    check_wrapped_functions(update_orbs, obj_func, solver_settings)
 
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
@@ -163,7 +172,8 @@ def s_gek_factory(
     )
 
     # hand the logging function of the settings the exception collector of the call
-    settings.prepare_call(None, exception)
+    if settings is not None:
+        settings.prepare_call(None, exception)
 
     if not hasattr(lib, "s_gek_factory"):
         raise RuntimeError(
@@ -180,13 +190,16 @@ def s_gek_factory(
         change_reference_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
+        POINTER(c_void_p),
         POINTER(SolverSettingsC),
+        POINTER(SolverStateC),
         POINTER(SGEKSettingsC),
     ]
 
     # call Fortran function
     update_orbs_s_gek_funptr = update_orbs_interface_type()
     obj_func_s_gek_funptr = obj_func_interface_type()
+    extension = c_void_p()
     error = lib.s_gek_factory(
         n_param,
         update_orbs_interface,
@@ -194,8 +207,10 @@ def s_gek_factory(
         change_reference_interface,
         byref(update_orbs_s_gek_funptr),
         byref(obj_func_s_gek_funptr),
+        byref(extension),
         byref(solver_settings.settings_c),
-        byref(settings.settings_c),
+        byref(solver_state.state_c),
+        None if settings is None else byref(settings.settings_c),
     )
 
     if error:
@@ -208,16 +223,22 @@ def s_gek_factory(
                 f"OpenTrustRegion S-GEK factory produced error (code {error})."
             )
 
-    # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the S-GEK object, and keep the
-    # settings alive, whose callback functions the object calls
-    saved_objects = {
-        "solver_settings": solver_settings,
-        "settings": settings,
-        "update_orbs_interface": update_orbs_interface,
-        "obj_func_interface": obj_func_interface,
-        "change_reference_interface": change_reference_interface,
-    }
+    # the owner of the S-GEK object, which the solver settings keep alive, keeps alive
+    # what the object calls, and the returned functions are called with the context
+    # the factory has written into the solver settings, through which they reach the
+    # object, and keep the solver settings alive
+    ExtensionOwner(
+        extension.value,
+        solver_settings,
+        {
+            "settings": settings,
+            "solver_state": solver_state,
+            "update_orbs_interface": update_orbs_interface,
+            "obj_func_interface": obj_func_interface,
+            "change_reference_interface": change_reference_interface,
+        },
+    )
+    saved_objects = {"solver_settings": solver_settings}
     return (
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_s_gek_funptr,
@@ -232,20 +253,3 @@ def s_gek_factory(
             context=solver_settings.settings_c.context,
         ),
     )
-
-
-def update_orbs_s_gek_deconstructor():
-    if not hasattr(lib, "update_orbs_s_gek_deconstructor"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install ."
-        )
-
-    # define result and argument types
-    lib.update_orbs_s_gek_deconstructor.restype = None
-    lib.update_orbs_s_gek_deconstructor.argtypes = []
-
-    # call Fortran function
-    lib.update_orbs_s_gek_deconstructor()
-
-    return

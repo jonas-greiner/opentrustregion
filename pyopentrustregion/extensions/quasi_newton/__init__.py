@@ -7,5 +7,4 @@
 from .python_interface import (
     QNSettings,
     qn_factory,
-    update_orbs_qn_deconstructor,
 )

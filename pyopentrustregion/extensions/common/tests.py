@@ -4,8 +4,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import gc
 import unittest
-from ctypes import POINTER, c_void_p
+from ctypes import POINTER, addressof, c_void_p
+from unittest.mock import patch
 
 from pyopentrustregion.tests import (
     lib,
@@ -19,12 +21,17 @@ from pyopentrustregion.python_interface import (
     c_int,
     hess_x_interface_type,
     SolverSettings,
+    SolverState,
 )
 
 if NUMPY_AVAILABLE:
     import numpy as np
     from pyopentrustregion.extensions.common.python_interface import (
         EvaluateDMInterface,
+        ExtensionOwner,
+        ObjFuncPyInterface,
+        UpdateOrbsPyInterface,
+        check_wrapped_functions,
     )
 
 
@@ -43,6 +50,7 @@ fortran_tests = {
         "get_extra_trial_vectors_extension",
         "hess_x_callback",
         "hess_x_extension",
+        "init_extension_solver_settings",
         "init_orbital_settings",
         "level_shifted_divisors",
         "logger_callback",
@@ -62,12 +70,17 @@ fortran_tests = {
         "stability_hess_x_callback",
         "update_orbs_callback",
         "update_orbs_extension",
+        "wire_extension_solver_settings",
         "wire_solver_settings_extension",
     ],
     "common_c_interface_tests": [
         "approx_hess_x_c_wrapper",
+        "assign_solver_state_f_c",
+        "assign_stability_state_f_c",
+        "bundle_settings_c",
         "conv_check_c_wrapper",
         "conv_check_stability_c_wrapper",
+        "finish_extension_holder",
         "get_extra_trial_vectors_c_wrapper",
         "hess_x_c_wrapper",
         "holder_level",
@@ -76,6 +89,7 @@ fortran_tests = {
         "precond_c_wrapper",
         "precond_pd_c_wrapper",
         "project_c_wrapper",
+        "release_extension",
         "setup_extension_holder",
         "stability_hess_x_c_wrapper",
         "update_orbs_c_wrapper",
@@ -178,17 +192,56 @@ def check_wired_solver_settings(
         test_passed = False
     solver_settings.stability_hess_x = None
 
-    # the returned functions keep the settings alive
+    # the returned functions keep the solver settings alive and the extension's
+    # settings directly or through the owner of the extension, which the solver
+    # settings keep alive
+    owner = getattr(solver_settings, "_extension_owner", None)
     for function in returned:
+        kept_settings = function.saved_objects.get("settings")
+        if kept_settings is None and owner is not None:
+            kept_settings = owner.saved_objects.get("settings")
         if (
             function.saved_objects.get("solver_settings") is not solver_settings
-            or function.saved_objects.get("settings") is not extension_settings
+            or kept_settings is not extension_settings
         ):
             print(
                 f" test_{test_name} failed: Returned function does not keep the "
                 "settings alive."
             )
             test_passed = False
+
+    return test_passed
+
+
+def check_extension_owner(call_factory, test_name):
+    """
+    this function checks that a mock factory, which call_factory calls with solver
+    settings and a solver state, received the record of the state and handed the
+    extension it returned to an owner, which the solver settings keep alive and which
+    keeps the state alive
+    """
+    test_passed = True
+    received_solver_state = c_void_p.in_dll(lib, "received_solver_state")
+    returned_extension = c_void_p.in_dll(lib, "returned_extension")
+
+    # call the factory
+    solver_settings = setup_wired_solver_settings()[0]
+    solver_state = SolverState()
+    call_factory(solver_settings, solver_state)
+
+    # the factory received the record of the state, and the solver settings keep the
+    # owner of the extension it returned, which keeps the state alive
+    if received_solver_state.value != addressof(solver_state.state_c):
+        print(f" test_{test_name} failed: Record of the solver state not passed.")
+        test_passed = False
+    owner = getattr(solver_settings, "_extension_owner", None)
+    if (
+        owner is None
+        or owner.extension != returned_extension.value
+        or owner.saved_objects.get("solver_state") is not solver_state
+    ):
+        print(f" test_{test_name} failed: Returned extension not owned.")
+        test_passed = False
 
     return test_passed
 
@@ -232,6 +285,122 @@ class CommonPyInterfaceTests(unittest.TestCase):
         print_separator("Running unit tests for shared extension Python interface...")
         return super().setUpClass()
 
+    def test_check_wrapped_functions(self):
+        """
+        this function tests the function which checks that a factory wraps the orbital
+        updating function and the objective function the factory that wired the solver
+        settings last returned, or the host's own for settings no factory wired
+        """
+        # initialize test flag
+        test_passed = True
+
+        # host's functions and functions returned by factories for the levels at two
+        # addresses
+        def host_update_orbs(kappa, grad, h_diag):
+            return 0.0, None
+
+        def host_obj_func(kappa):
+            return 0.0
+
+        level, other_level = 0x1000, 0x2000
+        returned_update_orbs = {
+            address: UpdateOrbsPyInterface(
+                update_orbs_funptr=None, saved_objects={}, context=address
+            )
+            for address in (level, other_level)
+        }
+        returned_obj_func = {
+            address: ObjFuncPyInterface(
+                obj_func_funptr=None, saved_objects={}, context=address
+            )
+            for address in (level, other_level)
+        }
+
+        # cases of the context of the settings, None for settings no factory wired,
+        # the functions passed and whether they have to be accepted
+        cases = (
+            (
+                "host's functions for settings no factory wired",
+                None,
+                host_update_orbs,
+                host_obj_func,
+                True,
+            ),
+            (
+                "returned functions for settings no factory wired",
+                None,
+                returned_update_orbs[level],
+                returned_obj_func[level],
+                False,
+            ),
+            (
+                "a returned orbital updating function for settings no factory wired",
+                None,
+                returned_update_orbs[level],
+                host_obj_func,
+                False,
+            ),
+            (
+                "a returned objective function for settings no factory wired",
+                None,
+                host_update_orbs,
+                returned_obj_func[level],
+                False,
+            ),
+            (
+                "functions returned for the wired settings",
+                level,
+                returned_update_orbs[level],
+                returned_obj_func[level],
+                True,
+            ),
+            (
+                "host's functions for wired settings",
+                level,
+                host_update_orbs,
+                host_obj_func,
+                False,
+            ),
+            (
+                "the host's orbital updating function for wired settings",
+                level,
+                host_update_orbs,
+                returned_obj_func[level],
+                False,
+            ),
+            (
+                "the host's objective function for wired settings",
+                level,
+                returned_update_orbs[level],
+                host_obj_func,
+                False,
+            ),
+            (
+                "functions returned for settings wired before",
+                level,
+                returned_update_orbs[other_level],
+                returned_obj_func[other_level],
+                False,
+            ),
+        )
+        for case, context, update_orbs, obj_func, accepted in cases:
+            solver_settings = SolverSettings()
+            solver_settings.settings_c.context = context
+            try:
+                check_wrapped_functions(update_orbs, obj_func, solver_settings)
+                raised = False
+            except ValueError:
+                raised = True
+            if raised == accepted:
+                print(
+                    f" test_check_wrapped_functions failed: {case} "
+                    f"{'refused' if accepted else 'accepted'}."
+                )
+                test_passed = False
+
+        self.assertTrue(test_passed, "test_check_wrapped_functions failed")
+        print(" test_check_wrapped_functions PASSED")
+
     def test_evaluate_dm_py_interface(self):
         """
         this function tests the Python interface to the density matrix evaluating
@@ -269,3 +438,62 @@ class CommonPyInterfaceTests(unittest.TestCase):
 
         self.assertTrue(test_passed, "test_evaluate_dm_py_interface failed")
         print(" test_evaluate_dm_py_interface PASSED")
+
+    @patch(
+        "pyopentrustregion.python_interface.lib.release_extension",
+        lib.mock_release_extension,
+    )
+    def test_extension_owner(self):
+        """
+        this function tests the owner of the extension object a factory returned for
+        the solver settings it wired
+        """
+        # initialize test flag
+        test_passed = True
+        released_extension = c_void_p.in_dll(lib, "released_extension")
+        n_released_extensions = c_int.in_dll(lib, "n_released_extensions")
+        lib.mock_extension.restype = c_void_p
+        lib.mock_extension.argtypes = [c_void_p]
+
+        # let two extensions be owned one after the other for the same solver settings
+        solver_settings = SolverSettings()
+        kept = object()
+        extensions = (lib.mock_extension(None), lib.mock_extension(None))
+        first = ExtensionOwner(extensions[0], solver_settings, {"kept": kept})
+        second = ExtensionOwner(extensions[1], solver_settings, {})
+
+        # the settings keep the latest owner alive, which keeps the earlier one alive,
+        # which keeps what it was given alive
+        if (
+            getattr(solver_settings, "_extension_owner", None) is not second
+            or second.saved_objects.get("wired_before") is not first
+            or first.saved_objects.get("wired_before") is not None
+            or first.saved_objects.get("kept") is not kept
+            or first.extension != extensions[0]
+        ):
+            print(" test_extension_owner failed: Owners not kept alive.")
+            test_passed = False
+
+        # dropping the earlier owner releases nothing, since the latest keeps it alive
+        n_released_extensions.value = 0
+        del first
+        gc.collect()
+        if n_released_extensions.value != 0:
+            print(" test_extension_owner failed: Owner wired over released too early.")
+            test_passed = False
+
+        # dropping the settings and the latest owner releases both, the latest first
+        del second, solver_settings
+        gc.collect()
+        if (
+            n_released_extensions.value != 2
+            or released_extension.value != extensions[0]
+        ):
+            print(
+                " test_extension_owner failed: Extensions not released in reverse order "
+                "of wiring."
+            )
+            test_passed = False
+
+        self.assertTrue(test_passed, "test_extension_owner failed")
+        print(" test_extension_owner PASSED")

@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 import numpy as np
-from ctypes import POINTER, byref
+import weakref
+from ctypes import POINTER, byref, c_void_p
 from dataclasses import dataclass
 from inspect import signature
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
+    lib,
     c_int,
     c_real,
     callback_type,
@@ -22,6 +24,7 @@ from pyopentrustregion.python_interface import (
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Any, Dict, Sequence
+    from pyopentrustregion.python_interface import SolverSettings
 
     GetResponseType = Callable[[np.ndarray, np.ndarray], None]
     EvaluateDMType = Callable[
@@ -169,6 +172,42 @@ class ObjFuncPyInterface:
         return func.value
 
 
+def release_extension(extension: Optional[int]) -> None:
+    """
+    this function frees the extension object a C factory returned, looking up the
+    release of the library when it runs, so that tests can replace it
+    """
+    lib.release_extension.restype = None
+    lib.release_extension.argtypes = [c_void_p]
+    lib.release_extension(extension)
+
+
+class ExtensionOwner:
+    """
+    this class owns the extension object a factory created for a Python host and the
+    solver settings it wired, which keep their latest owner alive in place of the owner
+    of the object they were wired with before, which the new owner keeps alive, so that
+    the functions the factory returned only have to keep the solver settings alive; it
+    releases the object once nothing keeps it alive any longer and keeps alive what the
+    object calls: the callback interfaces of the factory call, the settings of the
+    extension and the record of the solver state
+    """
+
+    def __init__(
+        self,
+        extension: Optional[int],
+        solver_settings: SolverSettings,
+        saved_objects: Dict[str, Any],
+    ):
+        self.extension = extension
+        self.saved_objects = {
+            **saved_objects,
+            "wired_before": getattr(solver_settings, "_extension_owner", None),
+        }
+        self.release = weakref.finalize(self, release_extension, extension)
+        solver_settings._extension_owner = self
+
+
 def check_callback_arguments(
     callback: Any, name: str, arguments: Sequence[str]
 ) -> None:
@@ -185,6 +224,32 @@ def check_callback_arguments(
         sig.bind(*arguments)
     except TypeError:
         raise TypeError(f"{name} has to take ({', '.join(arguments)}).") from None
+
+
+def check_wrapped_functions(
+    update_orbs: Any, obj_func: Any, solver_settings: SolverSettings
+) -> None:
+    """
+    this function raises if the orbital updating function or the objective function a
+    factory wraps is not the one the factory that wired the solver settings last
+    returned, which reaches its object through the context of the settings, or, for
+    settings no factory wired, the host's own, which the C interface cannot check, since
+    it cannot tell the level of an extension object from a host's context
+    """
+    context = solver_settings.settings_c.context
+    for function, returned_type in (
+        (update_orbs, UpdateOrbsPyInterface),
+        (obj_func, ObjFuncPyInterface),
+    ):
+        returned = isinstance(function, returned_type)
+        if (returned and function.context != context) or (
+            context is not None and not returned
+        ):
+            raise ValueError(
+                "update_orbs and obj_func have to be the functions the factory that "
+                "wired the solver settings last returned, or the host's own for "
+                "settings no factory wired."
+            )
 
 
 @dataclass

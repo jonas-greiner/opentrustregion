@@ -58,6 +58,18 @@ module otr_common_unit_tests
         procedure :: get_extra_trial_vectors => get_extra_trial_vectors_mock_extension
     end type
 
+    ! identifiers of the owned mock extension objects freed so far, which their
+    ! finalizer records, so that tests can check which objects were freed
+    integer(ip), allocatable :: freed_extension_ids(:)
+
+    ! mock extension object for testing the ownership of extension objects by solver
+    ! settings, whose finalizer records its identifier when it is freed
+    type, extends(extension_type) :: owned_mock_extension_type
+        integer(ip) :: id = 0
+    contains
+        final :: finalize_owned_mock_extension
+    end type
+
     ! mock orbital basis for testing the operations every orbital basis shares, such as
     ! the preconditioners: it rotates vectors into and out of the eigenbasis of the
     ! static part of the Hessian with a fixed orthogonal matrix and returns cached
@@ -413,6 +425,18 @@ contains
         error = self%mock_error
 
     end subroutine get_extra_trial_vectors_mock_extension
+
+    subroutine finalize_owned_mock_extension(self)
+        !
+        ! this subroutine records the identifier of an owned mock extension object when
+        ! it is freed
+        !
+        type(owned_mock_extension_type), intent(inout) :: self
+
+        if (.not. allocated(freed_extension_ids)) allocate(freed_extension_ids(0))
+        freed_extension_ids = [freed_extension_ids, self%id]
+
+    end subroutine finalize_owned_mock_extension
 
     function mock_factor(factors) result(factor)
         !
@@ -877,6 +901,25 @@ contains
 
     end function level_context
 
+    subroutine setup_owned_mock_extension(object, id)
+        !
+        ! this subroutine sets up an owned mock extension object with the given
+        ! identifier, whose level of the solver points back at it, as a factory sets up
+        ! an object, and clears the record of freed objects
+        !
+        class(extension_type), allocatable, intent(out), target :: object
+        integer(ip), intent(in) :: id
+
+        allocate(owned_mock_extension_type :: object)
+        select type (object)
+        type is (owned_mock_extension_type)
+            object%id = id
+        end select
+        object%solver_level%extension => object
+        freed_extension_ids = [integer(ip) :: ]
+
+    end subroutine setup_owned_mock_extension
+
     subroutine setup_mock_orbital_basis(basis, n_param)
         !
         ! this subroutine sets up a mock orbital basis with a random orthogonal
@@ -1086,12 +1129,13 @@ contains
             orbital_settings_type, host_record_type, provided_roles_type, &
             precond_callback, precond_pd_callback, project_callback, &
             get_extra_trial_vectors_callback, stability_hess_x_callback, &
-            approx_hess_x_callback, conv_check_stability_callback, logger_callback
+            approx_hess_x_callback, conv_check_stability_callback, logger_callback, &
+            update_orbs_callback, obj_func_callback
         use otr_common_test_reference, only: same_callbacks
         use otr_common_mock, only: mock_update_orbs, mock_obj_func, mock_precond, &
                                    mock_precond_pd, mock_get_extra_trial_vectors
 
-        type(mock_extension_type), target :: extension
+        type(mock_extension_type), target :: extension, wired_extension
         type(solver_settings_type) :: solver_settings, expected_settings
         type(stability_settings_type) :: expected_stability_settings
         type(host_record_type) :: expected_host, expected_stability_host
@@ -1104,6 +1148,11 @@ contains
         character(len=40), parameter :: case_names(2) = &
             [character(len=40) :: "with nested settings of their own", &
              "with nested settings without their own"]
+        character(len=55), parameter :: function_cases(4) = &
+            [character(len=55) :: "settings another extension wired and the host's "// &
+             "update", "settings another extension wired and the host's energy", &
+             "settings no extension wired and a returned update", &
+             "settings no extension wired and a returned energy"]
         character(len=41), parameter :: nested_fields(7) = &
             [character(len=41) :: "context", "preconditioner", "projection", &
              "logging function", "extra trial vector function", &
@@ -1355,6 +1404,52 @@ contains
             test_wire_solver_settings_extension = .false.
         end if
 
+        ! wire solver settings another extension wired with the host's orbital update
+        ! or objective function, or settings no extension wired with one a factory
+        ! returned, which has to be refused with an error message, leaving the settings
+        ! unwired
+        do i_case = 1, size(function_cases)
+            call setup_host_solver_settings()
+            if (i_case <= 2) solver_settings%context => wired_extension%solver_level
+            update_orbs_funptr => mock_update_orbs
+            obj_func_funptr => mock_obj_func
+            if (i_case == 2 .or. i_case == 3) then
+                update_orbs_funptr => update_orbs_callback
+            else
+                obj_func_funptr => obj_func_callback
+            end if
+            log_context%log_message = ""
+            call extension%wire_solver_settings(solver_settings, settings, error, &
+                                                update_orbs_funptr, obj_func_funptr)
+            if (error == 0 .or. log_context%log_message == "" .or. &
+                .not. associated(solver_settings%precond, mock_precond)) then
+                write(stderr, *) "test_wire_solver_settings_extension failed: "// &
+                    "Functions not refused for "//trim(function_cases(i_case))//"."
+                test_wire_solver_settings_extension = .false.
+            end if
+        end do
+
+        ! wire solver settings another extension wired with the orbital update and
+        ! objective function it returned, which the host record of the solver has to
+        ! hold with the level of the other extension as host context
+        call setup_host_solver_settings()
+        solver_settings%context => wired_extension%solver_level
+        update_orbs_funptr => update_orbs_callback
+        obj_func_funptr => obj_func_callback
+        call extension%wire_solver_settings(solver_settings, settings, error, &
+                                            update_orbs_funptr, obj_func_funptr)
+        if (error /= 0 .or. .not. associated(extension%solver_level%host%update_orbs, &
+                                             update_orbs_callback) .or. &
+            .not. associated(extension%solver_level%host%obj_func, &
+                             obj_func_callback) .or. &
+            .not. associated(extension%solver_level%host%context, &
+                             wired_extension%solver_level)) then
+            write(stderr, *) "test_wire_solver_settings_extension failed: Solver "// &
+                "settings another extension wired not wired with the functions it "// &
+                "returned."
+            test_wire_solver_settings_extension = .false.
+        end if
+
     contains
 
         subroutine setup_host_solver_settings()
@@ -1376,6 +1471,220 @@ contains
         end subroutine setup_host_solver_settings
 
     end function test_wire_solver_settings_extension
+
+    logical(c_bool) function test_init_extension_solver_settings() bind(C)
+        !
+        ! this function tests the subroutine which initializes the solver settings
+        ! owning extension objects, which also frees the objects
+        !
+        use opentrustregion, only: default_solver_settings
+        use otr_common, only: extension_solver_settings_type
+        use otr_common_mock, only: mock_precond
+        use test_reference, only: operator(/=), same_callbacks
+
+        type, extends(extension_solver_settings_type) :: extended_settings_type
+        end type
+
+        type(extension_solver_settings_type), target :: settings
+        type(extended_settings_type) :: extended_settings
+        class(extension_type), allocatable, target :: object
+        integer, target :: host_data
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_init_extension_solver_settings = .true.
+
+        ! let the settings own an object and set a callback function, a host context and
+        ! a non-default value, which the initialization has to discard
+        call setup_owned_mock_extension(object, 1_ip)
+        allocate(settings%extensions(1))
+        call move_alloc(object, settings%extensions(1)%object)
+        settings%precond => mock_precond
+        settings%context => host_data
+        settings%conv_tol = 1.0_rp
+
+        ! initialize settings
+        call settings%init(error)
+
+        ! check for error
+        if (error /= 0) then
+            write(stderr, *) "test_init_extension_solver_settings failed: Produced "// &
+                "error."
+            test_init_extension_solver_settings = .false.
+        end if
+
+        ! check that the settings were set to the default values and the object freed
+        if (settings%solver_settings_type /= default_solver_settings .or. &
+            .not. same_callbacks(settings%solver_settings_type, &
+                                 default_solver_settings) .or. &
+            associated(settings%context)) then
+            write(stderr, *) "test_init_extension_solver_settings failed: Settings "// &
+                "not initialized correctly."
+            test_init_extension_solver_settings = .false.
+        end if
+        if (size(freed_extension_ids) /= 1) then
+            write(stderr, *) "test_init_extension_solver_settings failed: Owned "// &
+                "object not freed."
+            test_init_extension_solver_settings = .false.
+        end if
+
+        ! initialize settings of a type extending these settings, which cannot be set to
+        ! the default values, and check that an error is returned
+        call extended_settings%init(error)
+        if (error /= 1) then
+            write(stderr, *) "test_init_extension_solver_settings failed: No error "// &
+                "returned for extended settings type."
+            test_init_extension_solver_settings = .false.
+        end if
+
+    end function test_init_extension_solver_settings
+
+    logical(c_bool) function test_wire_extension_solver_settings() bind(C)
+        !
+        ! this function tests the subroutine which points a new extension object at the
+        ! record of the solver state, wires the solver settings with it and lets them
+        ! take it over
+        !
+        use opentrustregion, only: solver_settings_type, solver_state_type, &
+                                   update_orbs_type, default_solver_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use otr_common, only: extension_solver_settings_type, extension_level_type, &
+                              extension_level, orbital_settings_type
+        use otr_common_mock, only: mock_update_orbs
+
+        type(extension_solver_settings_type), allocatable, target :: solver_settings
+        type(solver_state_type), target :: state
+        type(orbital_settings_type) :: settings
+        type(test_context_type), target :: log_context
+        class(extension_type), allocatable, target :: object
+        type(extension_level_type), pointer :: level, earlier_level
+        procedure(update_orbs_type), pointer :: update_orbs_funptr
+        integer(ip) :: i_object, error
+        character(len=1) :: object_name
+
+        ! assume tests pass
+        test_wire_extension_solver_settings = .true.
+
+        ! set up the settings of the objects and initialized solver settings
+        call setup_settings(settings)
+        allocate(solver_settings)
+        solver_settings%solver_settings_type = default_solver_settings
+
+        ! wire the settings with two objects one after the other, each of which has to
+        ! be taken over
+        do i_object = 1, 2
+            call setup_owned_mock_extension(object, i_object)
+            call solver_settings%wire(object, state, settings, error)
+            if (error /= 0 .or. allocated(object)) then
+                write(object_name, '(I1)') i_object
+                write(stderr, *) "test_wire_extension_solver_settings failed: "// &
+                    "Object "//object_name//" not wired and taken over."
+                test_wire_extension_solver_settings = .false.
+            end if
+        end do
+
+        ! the context of the settings reaches the latest object through its level, and
+        ! the host context its wiring saved reaches the earlier one, since the objects
+        ! are moved rather than copied, both have to read the record of the state, and
+        ! no object may have been freed
+        level => extension_level(solver_settings%context)
+        if (.not. associated(level)) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Settings "// &
+                "not wired with the latest object."
+            test_wire_extension_solver_settings = .false.
+            return
+        end if
+        earlier_level => extension_level(level%host%context)
+        if (.not. associated(earlier_level)) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Latest "// &
+                "object not wired over the earlier one."
+            test_wire_extension_solver_settings = .false.
+            return
+        end if
+        if (owned_id(level) /= 2 .or. owned_id(earlier_level) /= 1) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Objects "// &
+                "copied instead of moved."
+            test_wire_extension_solver_settings = .false.
+        end if
+        if (.not. associated(level%extension%state, state) .or. &
+            .not. associated(earlier_level%extension%state, state)) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Objects "// &
+                "do not read the record of the state."
+            test_wire_extension_solver_settings = .false.
+        end if
+        if (size(freed_extension_ids) /= 0) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Object "// &
+                "freed while taken over."
+            test_wire_extension_solver_settings = .false.
+        end if
+
+        ! wire the settings with a third object and the host's orbital update, which the
+        ! wiring refuses for settings an extension wired, so that the object has to stay
+        ! with the caller and the settings with the latest object
+        call setup_error_logging(settings, log_context)
+        call setup_owned_mock_extension(object, 3_ip)
+        update_orbs_funptr => mock_update_orbs
+        call solver_settings%wire(object, state, settings, error, update_orbs_funptr)
+        if (error == 0 .or. .not. allocated(object) .or. &
+            .not. associated(solver_settings%context, level)) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Error of "// &
+                "the wiring not passed on or refused object taken over."
+            test_wire_extension_solver_settings = .false.
+        end if
+        if (allocated(object)) deallocate(object)
+        freed_extension_ids = [integer(ip) :: ]
+
+        ! a copy of the settings through a dummy of the type of the solver settings, as
+        ! the solver makes, neither copies nor frees the objects
+        call copy_as_solver(solver_settings)
+        if (size(freed_extension_ids) /= 0) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Objects "// &
+                "copied or freed by a copy of the solver settings."
+            test_wire_extension_solver_settings = .false.
+        end if
+
+        ! freeing the settings frees both objects
+        deallocate(solver_settings)
+        if (size(freed_extension_ids) /= 2 .or. minval(freed_extension_ids) /= 1 .or. &
+            maxval(freed_extension_ids) /= 2) then
+            write(stderr, *) "test_wire_extension_solver_settings failed: Objects "// &
+                "not freed with the settings."
+            test_wire_extension_solver_settings = .false.
+        end if
+
+    contains
+
+        function owned_id(owned_level) result(id)
+            !
+            ! this function returns the identifier of the owned mock extension object
+            ! the given level belongs to, or zero for another object
+            !
+            type(extension_level_type), intent(in) :: owned_level
+            integer(ip) :: id
+
+            id = 0
+            select type (extension => owned_level%extension)
+            type is (owned_mock_extension_type)
+                id = extension%id
+            end select
+
+        end function owned_id
+
+        subroutine copy_as_solver(copied_settings)
+            !
+            ! this subroutine copies solver settings through a dummy of the type of the
+            ! solver settings, as the solver does
+            !
+            class(solver_settings_type), intent(in) :: copied_settings
+
+            type(solver_settings_type) :: local_settings
+
+            local_settings = copied_settings
+
+        end subroutine copy_as_solver
+
+    end function test_wire_extension_solver_settings
 
     logical(c_bool) function test_update_orbs_extension() bind(C)
         !

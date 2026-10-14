@@ -6,16 +6,16 @@
 
 module otr_common_c_interface
 
-    use opentrustregion, only: ip, rp, hess_x_type
-    use c_interface, only: c_ip, c_rp, c_callbacks_type, update_orbs_c_type, &
-                           obj_func_c_type, hess_x_c_type, precond_c_type, &
-                           precond_pd_c_type, project_c_type, &
+    use opentrustregion, only: ip, rp, hess_x_type, solver_state_type
+    use c_interface, only: c_ip, c_rp, c_callbacks_type, solver_state_type_c, &
+                           update_orbs_c_type, obj_func_c_type, hess_x_c_type, &
+                           precond_c_type, precond_pd_c_type, project_c_type, &
                            get_extra_trial_vectors_c_type, conv_check_c_type, &
                            conv_check_stability_c_type, logger_c_type
-    use otr_common, only: extension_type, extension_level_type, update_orbs_callback, &
-                          obj_func_callback, hess_x_callback, precond_callback, &
-                          precond_pd_callback, project_callback, &
-                          get_extra_trial_vectors_callback
+    use otr_common, only: extension_level_type, extension_solver_settings_type, &
+                          extension_level, update_orbs_callback, obj_func_callback, &
+                          hess_x_callback, precond_callback, precond_pd_callback, &
+                          project_callback, get_extra_trial_vectors_callback
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, c_funloc, &
                                            c_loc, c_f_pointer, c_f_procpointer, &
                                            c_associated, c_null_funptr
@@ -60,18 +60,35 @@ module otr_common_c_interface
 
     ! one level of the holder of an extension object for C hosts, whose address is the
     ! context of the C wrappers wired into the C settings of the level, holding the
-    ! level of the object and the bundle of the host's C callback functions and context
-    ! of the level
+    ! level of the object, the bundle of the host's C callback functions and context of
+    ! the level and, for an object reading the state of the solver, the host's record
+    ! of the state, from which the state the object reads is refreshed
     type :: holder_level_type
         type(extension_level_type), pointer :: level => null()
         type(c_callbacks_type) :: callbacks
+        type(solver_state_type_c), pointer :: state_c => null()
     end type
 
     ! holder of an extension object for C hosts, with the levels of the solver and of
-    ! its stability check
+    ! its stability check, the Fortran solver settings the factory wires, which own the
+    ! object of a holder a factory returns to the host, and, for such a holder, the
+    ! bundle of the host's callback functions of the extension, which the context of
+    ! the extension's settings points to, and the state the object reads; a holder
+    ! holding an object must never be copied, since the copy would hold a copy of the
+    ! object whose levels the levels of the copy do not hold
     type :: extension_holder_type
         type(holder_level_type) :: solver_level, stability_level
+        type(extension_solver_settings_type) :: solver_settings
+        class(c_callbacks_type), allocatable :: extension_callbacks
+        type(solver_state_type) :: state
     end type
+
+    ! interfaces for converting states from C to Fortran, with which the state an
+    ! extension object reads is refreshed from the host's record
+    interface assignment(=)
+        module procedure assign_solver_state_f_c
+        module procedure assign_stability_state_f_c
+    end interface
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_c_type), pointer :: update_orbs_c_wrapper_ptr => &
@@ -109,27 +126,50 @@ contains
 
     end function holder_level
 
-    subroutine setup_extension_holder(holder, solver_settings_c, solver_settings, &
-                                      settings, error, update_orbs_c_funptr, &
-                                      obj_func_c_funptr)
+    subroutine bundle_settings_c(callbacks, initialized, logger_c_funptr, context_c)
+        !
+        ! this subroutine hands the logging function and the host context of the C
+        ! settings of an extension to the bundle in which the wrappers of the host's
+        ! callback functions of the extension find them, only for initialized settings,
+        ! since settings that were not initialized carry neither, as in the core
+        !
+        class(c_callbacks_type), intent(inout) :: callbacks
+        logical(c_bool), intent(in) :: initialized
+        type(c_funptr), intent(in) :: logger_c_funptr
+        type(c_ptr), intent(in) :: context_c
+
+        if (.not. initialized) return
+        if (c_associated(logger_c_funptr)) &
+            call c_f_procpointer(cptr=logger_c_funptr, fptr=callbacks%logger)
+        callbacks%host_context = context_c
+
+    end subroutine bundle_settings_c
+
+    subroutine setup_extension_holder(holder, solver_settings_c, settings, error, &
+                                      update_orbs_c_funptr, obj_func_c_funptr, &
+                                      solver_state_c)
         !
         ! this subroutine sets up the holder of an extension object for a C factory by
         ! bundling the callback functions and host contexts of the host's C solver
-        ! settings, which it converts to the Fortran solver settings the Fortran
-        ! factory wires, and, for an object wrapping the host's, the host's orbital
-        ! update and objective function, after checking that the holder was not already
-        ! wired into the settings
+        ! settings, which it converts to the Fortran solver settings of the holder the
+        ! Fortran factory wires, and, for an object wrapping the host's, the host's
+        ! orbital update and objective function, and, for an object reading the state
+        ! of the solver, by holding the host's record of the state, which starts from
+        ! the default state as the solver's does and from which the state the object
+        ! reads is refreshed, after checking that the holder was not already wired into
+        ! the settings
         !
-        use opentrustregion, only: solver_settings_type, settings_type, verbosity_error
-        use c_interface, only: solver_settings_type_c, convert_solver_settings_c
+        use opentrustregion, only: settings_type, verbosity_error
+        use c_interface, only: solver_settings_type_c, convert_solver_settings_c, &
+                               assignment(=)
         use otr_common, only: settings_wired_twice_error_msg
 
         type(extension_holder_type), intent(inout), target :: holder
         type(solver_settings_type_c), intent(in) :: solver_settings_c
-        type(solver_settings_type), intent(out) :: solver_settings
         class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         type(c_funptr), intent(in), optional :: update_orbs_c_funptr, obj_func_c_funptr
+        type(c_ptr), intent(in), optional :: solver_state_c
 
         logical :: nested_own
 
@@ -147,16 +187,28 @@ contains
             return
         end if
 
+        ! the object reads the state of the solver from the host's record, which is
+        ! therefore required
+        if (present(solver_state_c)) then
+            if (.not. c_associated(solver_state_c)) then
+                call settings%log("A record of the solver state is required.", &
+                                  verbosity_error, .true.)
+                error = 1
+                return
+            end if
+        end if
+
         ! bundle the host's callback functions and convert the solver settings, whose
         ! optional callback functions and host contexts join the bundles of the holder
-        holder = extension_holder_type()
+        holder%solver_level = holder_level_type()
+        holder%stability_level = holder_level_type()
         if (present(update_orbs_c_funptr)) call c_f_procpointer( &
             cptr=update_orbs_c_funptr, fptr=holder%solver_level%callbacks%update_orbs)
         if (present(obj_func_c_funptr)) call c_f_procpointer( &
             cptr=obj_func_c_funptr, fptr=holder%solver_level%callbacks%obj_func)
-        call convert_solver_settings_c(solver_settings_c, solver_settings, &
-                                       holder%solver_level%callbacks, &
-                                       holder%stability_level%callbacks)
+        call convert_solver_settings_c( &
+            solver_settings_c, holder%solver_settings%solver_settings_type, &
+            holder%solver_level%callbacks, holder%stability_level%callbacks)
 
         ! the conversion hands the nested bundle to the nested settings even if these
         ! provide nothing of their own, so their context is removed again for the
@@ -172,78 +224,207 @@ contains
                           c_associated(nested_c%approx_hess_x) .or. &
                           c_associated(nested_c%conv_check))
         end associate
-        if (.not. nested_own) solver_settings%stability_settings%context => null()
+        if (.not. nested_own) &
+            holder%solver_settings%stability_settings%context => null()
+
+        ! hold the host's record of the state at both levels and the state the object
+        ! reads, both starting from the default state, since a C host's record need not
+        ! be defined before the solver writes it
+        if (present(solver_state_c)) then
+            call c_f_pointer(solver_state_c, holder%solver_level%state_c)
+            holder%state = solver_state_type()
+            holder%solver_level%state_c = holder%state
+            holder%stability_level%state_c => holder%solver_level%state_c
+        end if
 
     end subroutine setup_extension_holder
 
-    subroutine wire_solver_settings_c(holder, extension, solver_settings, &
-                                      solver_settings_c)
+    subroutine refresh_state(held)
         !
-        ! this subroutine writes the solver settings the Fortran factory of an
-        ! extension object wired back into the host's C solver settings, with the C
-        ! wrappers of the role callback functions in their place and the addresses of
-        ! the levels of the holder as the contexts of the levels the factory wired,
-        ! which also initializes C settings that were not initialized, as the
-        ! conversion and the factory did
+        ! this subroutine refreshes the state the object of a level of a holder reads
+        ! from the host's record the level holds, which the core copies the current
+        ! state into before every callback function into C, before a C wrapper calls a
+        ! role of the object
         !
-        use opentrustregion, only: solver_settings_type
+        type(holder_level_type), intent(in) :: held
+
+        if (.not. associated(held%state_c)) return
+        if (associated(held%level%extension%state)) &
+            held%level%extension%state = held%state_c
+
+    end subroutine refresh_state
+
+    subroutine assign_solver_state_f_c(state, state_c)
+        !
+        ! this subroutine converts a solver state from C to Fortran
+        !
+        type(solver_state_type), intent(out) :: state
+        type(solver_state_type_c), intent(in) :: state_c
+
+        ! convert logicals
+        state%max_precision_reached = logical(state_c%max_precision_reached)
+
+        ! convert reals
+        state%func = real(state_c%func, kind=rp)
+        state%grad_rms = real(state_c%grad_rms, kind=rp)
+        state%trust_radius = real(state_c%trust_radius, kind=rp)
+        state%relative_residual = real(state_c%relative_residual, kind=rp)
+        state%level_shift = real(state_c%level_shift, kind=rp)
+        state%step_size = real(state_c%step_size, kind=rp)
+
+        ! convert integers
+        state%macro_iteration = int(state_c%macro_iteration, kind=ip)
+        state%micro_iteration = int(state_c%micro_iteration, kind=ip)
+        state%jacobi_davidson_iteration = &
+            int(state_c%jacobi_davidson_iteration, kind=ip)
+        state%n_update_orbs = int(state_c%n_update_orbs, kind=ip)
+        state%n_obj_func = int(state_c%n_obj_func, kind=ip)
+        state%n_hess_x = int(state_c%n_hess_x, kind=ip)
+
+        ! convert objects
+        state%stability_state = state_c%stability_state
+
+    end subroutine assign_solver_state_f_c
+
+    subroutine assign_stability_state_f_c(state, state_c)
+        !
+        ! this subroutine converts a stability check state from C to Fortran
+        !
+        use opentrustregion, only: stability_state_type
+        use c_interface, only: stability_state_type_c
+
+        type(stability_state_type), intent(out) :: state
+        type(stability_state_type_c), intent(in) :: state_c
+
+        ! convert reals
+        state%min_eigval = real(state_c%min_eigval, kind=rp)
+        state%residual_rms = real(state_c%residual_rms, kind=rp)
+
+        ! convert integers
+        state%iteration = int(state_c%iteration, kind=ip)
+        state%n_hess_x = int(state_c%n_hess_x, kind=ip)
+
+    end subroutine assign_stability_state_f_c
+
+    subroutine release_extension(extension_c) bind(C, name="release_extension")
+        !
+        ! this subroutine frees the holder of an extension object a C factory returned,
+        ! together with the object
+        !
+        type(c_ptr), intent(in), value :: extension_c
+
+        type(extension_holder_type), pointer :: holder
+
+        if (.not. c_associated(extension_c)) return
+        call c_f_pointer(extension_c, holder)
+        deallocate(holder)
+
+    end subroutine release_extension
+
+    subroutine wire_solver_settings_c(holder, solver_settings_c)
+        !
+        ! this subroutine writes the Fortran solver settings of the holder, which the
+        ! Fortran factory of an extension object wired, back into the host's C solver
+        ! settings, with the C wrappers of the role callback functions in their place
+        ! and the addresses of the levels of the holder as the contexts of the levels
+        ! the factory wired, which also initializes C settings that were not
+        ! initialized, as the conversion and the factory did, and holds the levels of
+        ! the object, whose level of the solver the factory made the context of the
+        ! settings
+        !
         use c_interface, only: solver_settings_type_c, assignment(=)
 
         type(extension_holder_type), intent(inout), target :: holder
-        class(extension_type), intent(in), target :: extension
-        type(solver_settings_type), intent(in) :: solver_settings
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
+
+        type(extension_level_type), pointer :: level
 
         ! hold the levels of the object, which the C wrappers find at the addresses of
         ! the levels of the holder
-        holder%solver_level%level => extension%solver_level
-        holder%stability_level%level => extension%stability_level
+        level => extension_level(holder%solver_settings%context)
+        holder%solver_level%level => level
+        holder%stability_level%level => level%extension%stability_level
 
-        ! convert the settings, which leaves the callback functions and contexts unset
-        solver_settings_c = solver_settings
+        associate (solver_settings => holder%solver_settings%solver_settings_type)
+            ! convert the settings, which leaves the callback functions and contexts
+            ! unset
+            solver_settings_c = solver_settings
 
-        ! the factory points the context of the solver settings at the level of the
-        ! solver and wires the role callback function of every role that was set or
-        ! that it provides
-        solver_settings_c%context = c_loc(holder%solver_level)
-        if (associated(solver_settings%precond)) &
-            solver_settings_c%precond = c_funloc(precond_c_wrapper)
-        if (associated(solver_settings%precond_pd)) &
-            solver_settings_c%precond_pd = c_funloc(precond_pd_c_wrapper)
-        if (associated(solver_settings%project)) &
-            solver_settings_c%project = c_funloc(project_c_wrapper)
-        if (associated(solver_settings%get_extra_trial_vectors)) &
-            solver_settings_c%get_extra_trial_vectors = &
-            c_funloc(get_extra_trial_vectors_c_wrapper)
-        if (associated(solver_settings%conv_check)) &
-            solver_settings_c%conv_check = c_funloc(conv_check_c_wrapper)
-        if (associated(solver_settings%stability_hess_x)) &
-            solver_settings_c%stability_hess_x = c_funloc(stability_hess_x_c_wrapper)
-        if (associated(solver_settings%logger)) &
-            solver_settings_c%logger = c_funloc(logger_c_wrapper)
-
-        ! the factory points the context of the nested settings at the level of the
-        ! stability check only if it wired them, otherwise they provide nothing and
-        ! inherit the solver's
-        if (.not. associated(solver_settings%stability_settings%context)) return
-        associate (nested => solver_settings%stability_settings, &
-                   nested_c => solver_settings_c%stability_settings)
-            nested_c%context = c_loc(holder%stability_level)
-            if (associated(nested%precond)) &
-                nested_c%precond = c_funloc(precond_c_wrapper)
-            if (associated(nested%project)) &
-                nested_c%project = c_funloc(project_c_wrapper)
-            if (associated(nested%get_extra_trial_vectors)) &
-                nested_c%get_extra_trial_vectors = &
+            ! the factory points the context of the solver settings at the level of the
+            ! solver and wires the role callback function of every role that was set or
+            ! that it provides
+            solver_settings_c%context = c_loc(holder%solver_level)
+            if (associated(solver_settings%precond)) &
+                solver_settings_c%precond = c_funloc(precond_c_wrapper)
+            if (associated(solver_settings%precond_pd)) &
+                solver_settings_c%precond_pd = c_funloc(precond_pd_c_wrapper)
+            if (associated(solver_settings%project)) &
+                solver_settings_c%project = c_funloc(project_c_wrapper)
+            if (associated(solver_settings%get_extra_trial_vectors)) &
+                solver_settings_c%get_extra_trial_vectors = &
                 c_funloc(get_extra_trial_vectors_c_wrapper)
-            if (associated(nested%approx_hess_x)) &
-                nested_c%approx_hess_x = c_funloc(approx_hess_x_c_wrapper)
-            if (associated(nested%conv_check)) &
-                nested_c%conv_check = c_funloc(conv_check_stability_c_wrapper)
-            if (associated(nested%logger)) nested_c%logger = c_funloc(logger_c_wrapper)
+            if (associated(solver_settings%conv_check)) &
+                solver_settings_c%conv_check = c_funloc(conv_check_c_wrapper)
+            if (associated(solver_settings%stability_hess_x)) &
+                solver_settings_c%stability_hess_x = &
+                c_funloc(stability_hess_x_c_wrapper)
+            if (associated(solver_settings%logger)) &
+                solver_settings_c%logger = c_funloc(logger_c_wrapper)
+
+            ! the factory points the context of the nested settings at the level of the
+            ! stability check only if it wired them, otherwise they provide nothing and
+            ! inherit the solver's
+            if (.not. associated(solver_settings%stability_settings%context)) return
+            associate (nested => solver_settings%stability_settings, &
+                       nested_c => solver_settings_c%stability_settings)
+                nested_c%context = c_loc(holder%stability_level)
+                if (associated(nested%precond)) &
+                    nested_c%precond = c_funloc(precond_c_wrapper)
+                if (associated(nested%project)) &
+                    nested_c%project = c_funloc(project_c_wrapper)
+                if (associated(nested%get_extra_trial_vectors)) &
+                    nested_c%get_extra_trial_vectors = &
+                    c_funloc(get_extra_trial_vectors_c_wrapper)
+                if (associated(nested%approx_hess_x)) &
+                    nested_c%approx_hess_x = c_funloc(approx_hess_x_c_wrapper)
+                if (associated(nested%conv_check)) &
+                    nested_c%conv_check = c_funloc(conv_check_stability_c_wrapper)
+                if (associated(nested%logger)) &
+                    nested_c%logger = c_funloc(logger_c_wrapper)
+            end associate
         end associate
 
     end subroutine wire_solver_settings_c
+
+    subroutine finish_extension_holder(holder, error, solver_settings_c, &
+                                       update_orbs_c_funptr, obj_func_c_funptr, &
+                                       extension_c)
+        !
+        ! this subroutine finishes the factory call of a C host which created a holder
+        ! for the new extension object, by writing the solver settings of the holder
+        ! the Fortran factory wired back into the host's C solver settings and returning
+        ! the C wrappers of the orbital update and the objective function and the
+        ! holder as the extension, or by freeing the holder if the factory failed, which
+        ! leaves the returned functions and the extension to the caller
+        !
+        use c_interface, only: solver_settings_type_c
+
+        type(extension_holder_type), intent(inout), pointer :: holder
+        integer(ip), intent(in) :: error
+        type(solver_settings_type_c), intent(inout) :: solver_settings_c
+        type(c_funptr), intent(inout) :: update_orbs_c_funptr, obj_func_c_funptr
+        type(c_ptr), intent(inout) :: extension_c
+
+        if (error == 0) then
+            call wire_solver_settings_c(holder, solver_settings_c)
+            update_orbs_c_funptr = c_funloc(update_orbs_c_wrapper)
+            obj_func_c_funptr = c_funloc(obj_func_c_wrapper)
+            extension_c = c_loc(holder)
+        else
+            deallocate(holder)
+        end if
+
+    end subroutine finish_extension_holder
 
     recursive function update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
                                              hess_x_c_funptr, context_c) &
@@ -302,6 +483,9 @@ contains
                 hess_x_c_funptr = c_funloc(hess_x_c_wrapper)
             return
         end if
+
+        ! hand the object the current state of the host's record
+        call refresh_state(held)
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -369,6 +553,9 @@ contains
             return
         end if
 
+        ! hand the object the current state of the host's record
+        call refresh_state(held)
+
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
             kappa => kappa_c(:n_param)
@@ -421,6 +608,9 @@ contains
             error_c = host_hess_x(x_c, hess_x_c, held%callbacks%host_context)
             return
         end if
+
+        ! hand the object the current state of the host's record
+        call refresh_state(held)
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -481,6 +671,9 @@ contains
             return
         end if
 
+        ! hand the object the current state of the host's record
+        call refresh_state(held)
+
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
             residual => residual_c(:n_param)
@@ -540,6 +733,9 @@ contains
             return
         end if
 
+        ! hand the object the current state of the host's record
+        call refresh_state(held)
+
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
             residual => residual_c(:n_param)
@@ -594,6 +790,9 @@ contains
             error_c = host_project(vector_c, held%callbacks%host_context)
             return
         end if
+
+        ! hand the object the current state of the host's record
+        call refresh_state(held)
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then
@@ -653,6 +852,9 @@ contains
             return
         end if
         n_extra_trial_vectors = int(n_extra_trial_vectors_c, kind=ip)
+
+        ! hand the object the current state of the host's record
+        call refresh_state(held)
 
         ! convert arguments to Fortran kind
         if (rp == c_rp) then

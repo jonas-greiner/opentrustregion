@@ -6,11 +6,11 @@
 
 module otr_common
 
-    use opentrustregion, only: rp, ip, settings_type, stability_settings_type, &
-                               update_orbs_type, obj_func_type, hess_x_type, &
-                               precond_type, precond_pd_type, project_type, &
-                               get_extra_trial_vectors_type, conv_check_type, &
-                               conv_check_stability_type, logger_type
+    use opentrustregion, only: &
+        rp, ip, settings_type, solver_settings_type, stability_settings_type, &
+        solver_state_type, update_orbs_type, obj_func_type, hess_x_type, precond_type, &
+        precond_pd_type, project_type, get_extra_trial_vectors_type, conv_check_type, &
+        conv_check_stability_type, logger_type
 
     implicit none
 
@@ -67,13 +67,15 @@ module otr_common
     end type
 
     ! object of an extension, holding the number of parameters, the levels of the
-    ! solver and of its stability check and the roles it performs itself, whose
-    ! type-bound procedures perform its roles, by default forwarding to the host record
-    ! of the level they receive as context
+    ! solver and of its stability check, the roles it performs itself and the state of
+    ! the solver, which the host keeps current, whose type-bound procedures perform its
+    ! roles, by default forwarding to the host record of the level they receive as
+    ! context
     type, abstract :: extension_type
         integer(ip) :: n_param
         type(extension_level_type) :: solver_level, stability_level
         type(provided_roles_type) :: provides
+        type(solver_state_type), pointer :: state => null()
     contains
         procedure :: update_orbs => update_orbs_extension
         procedure :: obj_func => obj_func_extension
@@ -84,6 +86,22 @@ module otr_common
         procedure :: get_extra_trial_vectors => get_extra_trial_vectors_extension
         procedure :: check_unwired => check_unwired_extension
         procedure :: wire_solver_settings => wire_solver_settings_extension
+    end type
+
+    ! extension object owned by solver settings
+    type :: owned_extension_type
+        class(extension_type), allocatable :: object
+    end type
+
+    ! solver settings which own the extension objects wired into them, in the order of
+    ! their wiring, so that the objects are freed with the settings, while the solver's
+    ! copy of the settings takes only the parent part and therefore never copies them;
+    ! only their wiring changes the list of objects, which hosts never modify
+    type, extends(solver_settings_type) :: extension_solver_settings_type
+        type(owned_extension_type), allocatable :: extensions(:)
+    contains
+        procedure :: init => init_extension_solver_settings
+        procedure :: wire => wire_extension_solver_settings
     end type
 
     ! error message for solver settings an extension object has already been wired
@@ -278,7 +296,7 @@ contains
         ! wired, whose callback functions wired with it would forward to themselves,
         ! which the factories check before they change any state
         !
-        use opentrustregion, only: solver_settings_type, verbosity_error
+        use opentrustregion, only: verbosity_error
 
         class(extension_type), intent(in), target :: self
         type(solver_settings_type), intent(in) :: solver_settings
@@ -307,10 +325,12 @@ contains
         ! role the host provided or the object performs into the settings, with the
         ! level as their context, after initializing settings that were not initialized
         ! with the warning the solver would print, which it can no longer detect once
-        ! the callback functions are wired into them
+        ! the callback functions are wired into them, and after refusing an orbital
+        ! update or objective function of the host for settings a factory wired, or one
+        ! a factory returned for settings no factory wired
         !
-        use opentrustregion, only: solver_settings_type, init_uninitialized_settings, &
-                                   inherit_solver_callbacks
+        use opentrustregion, only: init_uninitialized_settings, &
+                                   inherit_solver_callbacks, verbosity_error
 
         class(extension_type), intent(inout), target :: self
         type(solver_settings_type), intent(inout), target :: solver_settings
@@ -321,11 +341,32 @@ contains
 
         type(stability_settings_type), pointer :: nested
         type(solver_settings_type) :: inherited
-        logical :: wire_nested
+        logical :: wired, wire_nested
 
         ! refuse settings the object already wired
         call self%check_unwired(solver_settings, settings, error)
         if (error /= 0) return
+
+        ! the orbital update and objective function the object wraps have to be those
+        ! the factory that wired the settings last returned, which reach its object
+        ! through the context of the settings, or the host's own for settings no
+        ! factory wired, since the host's own would otherwise receive the level of that
+        ! object as context and the returned ones the host's context
+        wired = associated(extension_level(solver_settings%context))
+        if (present(update_orbs)) then
+            if (associated(update_orbs, update_orbs_callback) .neqv. wired) error = 1
+        end if
+        if (present(obj_func)) then
+            if (associated(obj_func, obj_func_callback) .neqv. wired) error = 1
+        end if
+        if (error /= 0) then
+            call settings%log("The orbital updating function and the objective "// &
+                              "function have to be those the factory that wired "// &
+                              "the solver settings last returned, or the host's "// &
+                              "own for settings no factory wired.", verbosity_error, &
+                              .true.)
+            return
+        end if
 
         ! initialize the settings or their stability check settings if they were not
         ! initialized, as the solver would, which can no longer detect these once the
@@ -437,6 +478,76 @@ contains
         end associate
 
     end subroutine wire_solver_settings_extension
+
+    subroutine init_extension_solver_settings(self, error)
+        !
+        ! this subroutine sets the solver settings owning extension objects to the
+        ! default values, which frees the objects together with the callback functions
+        ! and context wired with them
+        !
+        use opentrustregion, only: default_solver_settings, verbosity_error
+
+        class(extension_solver_settings_type), intent(out) :: self
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! ensure that class is actually extension_solver_settings_type and not a
+        ! subclass
+        select type (settings => self)
+        type is (extension_solver_settings_type)
+            settings%solver_settings_type = default_solver_settings
+        class default
+            call settings%log("Solver settings could not be initialized because "// &
+                              "initialization routine received the wrong type. The "// &
+                              "type extension_solver_settings_type was likely "// &
+                              "subclassed without providing an initialization "// &
+                              "routine.", verbosity_error, .true.)
+            error = 1
+        end select
+
+    end subroutine init_extension_solver_settings
+
+    subroutine wire_extension_solver_settings(self, object, solver_state, settings, &
+                                              error, update_orbs, obj_func)
+        !
+        ! this subroutine points a new extension object at the record of the solver
+        ! state, wires the solver settings with it and lets them take it over, after
+        ! the objects they owned before, so that the objects whose role callback
+        ! functions the latest one forwards to live as long as it does and no wired
+        ! settings point into an object they do not own; the objects are moved, not
+        ! copied, so that pointers into them stay valid, and an object whose wiring
+        ! failed stays with the caller
+        !
+        class(extension_solver_settings_type), intent(inout), target :: self
+        class(extension_type), allocatable, intent(inout), target :: object
+        type(solver_state_type), intent(inout), target :: solver_state
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+        procedure(update_orbs_type), intent(in), pointer, optional :: update_orbs
+        procedure(obj_func_type), intent(in), pointer, optional :: obj_func
+
+        type(owned_extension_type), allocatable, target :: extensions(:)
+        integer(ip) :: n_owned, i
+
+        ! point the object at the record of the state and wire the settings with it
+        object%state => solver_state
+        call object%wire_solver_settings(self%solver_settings_type, settings, error, &
+                                         update_orbs, obj_func)
+        if (error /= 0) return
+
+        ! move the objects the settings own and the new one into a longer list
+        n_owned = 0
+        if (allocated(self%extensions)) n_owned = size(self%extensions)
+        allocate(extensions(n_owned + 1))
+        do i = 1, n_owned
+            call move_alloc(self%extensions(i)%object, extensions(i)%object)
+        end do
+        call move_alloc(object, extensions(n_owned + 1)%object)
+        call move_alloc(extensions, self%extensions)
+
+    end subroutine wire_extension_solver_settings
 
     recursive subroutine update_orbs_extension(self, kappa, func, grad, h_diag, &
                                                hess_x_funptr, error, context)

@@ -19,6 +19,15 @@ module otr_common_c_interface_mock
     ! call the functions they return or wire
     logical, target :: mock_solver_level, mock_stability_level
 
+    ! record of the solver state the latest mock factory received, extension it
+    ! returned, extension the latest mock release received and number of mock releases,
+    ! which the Python tests compare with the record they passed and the extensions the
+    ! factories returned
+    type(c_ptr), bind(C) :: received_solver_state = c_null_ptr, &
+                            returned_extension = c_null_ptr, &
+                            released_extension = c_null_ptr
+    integer(c_ip), bind(C) :: n_released_extensions = 0
+
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_c_type), pointer :: mock_level_update_orbs_ptr => &
         mock_level_update_orbs
@@ -169,5 +178,43 @@ contains
             c_funloc(mock_level_stability_precond)
 
     end function mock_wire_solver_settings_c
+
+    function mock_extension(solver_state_c) result(extension_c) &
+        bind(C, name="mock_extension")
+        !
+        ! this function records the record of the solver state a mock factory received
+        ! and returns and records an empty holder as the extension it returns, which
+        ! the real release frees, so that the Python owner of the extension can release
+        ! it at any time
+        !
+        use otr_common_c_interface, only: extension_holder_type
+
+        type(c_ptr), intent(in), value :: solver_state_c
+        type(c_ptr) :: extension_c
+
+        type(extension_holder_type), pointer :: holder
+
+        received_solver_state = solver_state_c
+        allocate(holder)
+        extension_c = c_loc(holder)
+        returned_extension = extension_c
+
+    end function mock_extension
+
+    subroutine mock_release_extension(extension_c) &
+        bind(C, name="mock_release_extension")
+        !
+        ! this subroutine is a mock routine for the release of an extension, which
+        ! records the extension it received and frees it with the real release
+        !
+        use otr_common_c_interface, only: release_extension
+
+        type(c_ptr), intent(in), value :: extension_c
+
+        released_extension = extension_c
+        n_released_extensions = n_released_extensions + 1
+        call release_extension(extension_c)
+
+    end subroutine mock_release_extension
 
 end module otr_common_c_interface_mock

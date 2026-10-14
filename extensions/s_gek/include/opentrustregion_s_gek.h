@@ -8,6 +8,7 @@
 #define OPENTRUSTREGION_S_GEK_H
 
 #include "opentrustregion.h"
+#include "opentrustregion_common.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,10 +55,16 @@ void init_s_gek_settings(s_gek_settings_type *settings);
  *                                                pointer
  * @param obj_func_s_gek_c_funptr                 Output: wrapped objective function
  *                                                pointer
+ * @param extension_c                             Output: S-GEK extension, released
+ *                                                with release_extension
  * @param solver_settings_c                       Input/output: solver settings, whose
  *                                                context the returned functions have
  *                                                to be called with
- * @param settings_c                              S-GEK settings
+ * @param solver_state_c                          Solver state the host also passes to
+ *                                                the solver, which has to outlive the
+ *                                                extension
+ * @param settings_c                              S-GEK settings, may be NULL
+ *                                                to use the default settings
  *
  * @return                                        Integer error code from Fortran
  */
@@ -65,14 +72,10 @@ c_int s_gek_factory(c_int n_param_c, update_orbs_fp update_orbs_c_funptr,
                     obj_func_fp obj_func_c_funptr,
                     change_reference_fp change_reference_c_funptr,
                     update_orbs_fp *update_orbs_s_gek_c_funptr,
-                    obj_func_fp *obj_func_s_gek_c_funptr,
+                    obj_func_fp *obj_func_s_gek_c_funptr, void **extension_c,
                     solver_settings_type *solver_settings_c,
+                    solver_state_type *solver_state_c,
                     const s_gek_settings_type *settings_c);
-
-/**
- * Fortran-callable S-GEK deconstructor.
- */
-void update_orbs_s_gek_deconstructor(void);
 
 #ifdef __cplusplus
 }

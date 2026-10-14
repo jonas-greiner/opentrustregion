@@ -363,7 +363,7 @@ contains
         procedure(obj_func_type), intent(in), pointer :: obj_func
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
-        type(solver_settings_type), intent(in), optional :: settings
+        class(solver_settings_type), intent(in), optional :: settings
         type(solver_state_type), intent(out), target, optional :: state
 
         real(rp) :: func, grad_norm, grad_rms, mu, n_kappa, kappa_norm, lambda

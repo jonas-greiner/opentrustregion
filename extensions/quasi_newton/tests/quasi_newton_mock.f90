@@ -7,7 +7,7 @@
 module otr_qn_mock
 
     use opentrustregion, only: ip, stderr
-    use otr_qn, only: qn_factory, update_orbs_qn_deconstructor
+    use otr_qn, only: qn_factory
     use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
 
     implicit none
@@ -17,27 +17,32 @@ module otr_qn_mock
     ! error the mock factory returns
     integer(ip) :: mock_qn_factory_error = 0
 
+    ! whether the mock factory expects the default settings without a logging function,
+    ! which the C wrapper hands it for C settings that were not initialized and without
+    ! any, instead of the reference settings
+    logical :: mock_qn_factory_defaults = .false.
+
     ! create function pointers to ensure that routines comply with interface
     procedure(qn_factory), pointer :: mock_qn_factory_ptr => mock_qn_factory
-    procedure(update_orbs_qn_deconstructor), pointer :: &
-        mock_update_orbs_qn_deconstructor_ptr => mock_update_orbs_qn_deconstructor
 
 contains
 
     subroutine mock_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                                transport_funptr, init_hess_funptr, &
                                update_orbs_qn_funptr, obj_func_qn_funptr, &
-                               solver_settings, error, settings)
+                               solver_settings, solver_state, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function and objective function and wires the solver
-        ! settings, which returns the error it is set to and otherwise sets up the
-        ! quasi-Newton object and points the context of the solver settings at its
-        ! level of the solver, as the factory does
+        ! settings, which returns the error it is set to and otherwise creates a
+        ! quasi-Newton object reading the given state, points the context of the solver
+        ! settings at its level of the solver and lets the settings own it, as the
+        ! factory does
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, solver_settings_type
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
+        use otr_common, only: extension_type, extension_solver_settings_type
         use otr_qn, only: transport_type, init_hess_type, qn_settings_type, &
-                          update_object, sr1_object
+                          sr1_updating_type, default_qn_settings
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
                                   n_param_ref => n_param
         use otr_qn_test_reference, only: test_transport_funptr, test_init_hess_funptr
@@ -50,9 +55,12 @@ contains
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_qn_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(qn_settings_type), intent(in) :: settings
+        type(qn_settings_type), intent(in), optional :: settings
+
+        class(extension_type), allocatable, target :: object
 
         ! initialize logical
         test_passed = .true.
@@ -85,8 +93,25 @@ contains
                                         " by given initial Hessian function", &
                                         settings%context)) test_passed = .false.
 
+        ! the C wrapper always passes settings, since their context points at the
+        ! bundle of the host's callback functions, which the checks below read
+        if (.not. present(settings)) then
+            test_passed = .false.
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Settings not passed."
+            error = 1
+            update_orbs_qn_funptr => null()
+            obj_func_qn_funptr => null()
+            return
+        end if
+
         ! check if optional logging function is correctly passed
-        if (.not. associated(settings%logger)) then
+        if (mock_qn_factory_defaults) then
+            if (associated(settings%logger)) then
+                test_passed = .false.
+                write(stderr, *) "test_qn_factory_c_wrapper failed: Logging "// &
+                    "function passed for settings that were not initialized."
+            end if
+        else if (.not. associated(settings%logger)) then
             test_passed = .false.
             write(stderr, *) "test_qn_factory_c_wrapper failed: Passed logging "// &
                 "function not associated with value."
@@ -95,7 +120,13 @@ contains
         end if
 
         ! check if optional settings are correctly passed
-        if (settings /= ref_qn_settings) then
+        if (mock_qn_factory_defaults) then
+            if (settings /= default_qn_settings) then
+                test_passed = .false.
+                write(stderr, *) "test_qn_factory_c_wrapper failed: Settings that "// &
+                    "were not initialized not initialized to the default values."
+            end if
+        else if (settings /= ref_qn_settings) then
             test_passed = .false.
             write(stderr, *) "test_qn_factory_c_wrapper failed: Passed optional "// &
                 "settings associated with wrong values."
@@ -106,19 +137,15 @@ contains
         update_orbs_qn_funptr => null()
         obj_func_qn_funptr => null()
         if (error /= 0) return
-        update_object => sr1_object
-        solver_settings%context => update_object%solver_level
+        allocate(sr1_updating_type :: object)
+        object%state => solver_state
+        object%solver_level%extension => object
+        solver_settings%context => object%solver_level
+        allocate(solver_settings%extensions(1))
+        call move_alloc(object, solver_settings%extensions(1)%object)
         update_orbs_qn_funptr => mock_update_orbs
         obj_func_qn_funptr => mock_obj_func
 
     end subroutine mock_qn_factory
-
-    subroutine mock_update_orbs_qn_deconstructor()
-        !
-        ! this subroutine is a test subroutine for the quasi-Newton deconstructor
-        !
-        test_passed = .true.
-
-    end subroutine mock_update_orbs_qn_deconstructor
 
 end module otr_qn_mock

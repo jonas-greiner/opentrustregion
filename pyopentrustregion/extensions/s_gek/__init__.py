@@ -7,5 +7,4 @@
 from .python_interface import (
     SGEKSettings,
     s_gek_factory,
-    update_orbs_s_gek_deconstructor,
 )

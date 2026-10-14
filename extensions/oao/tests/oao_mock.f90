@@ -111,6 +111,7 @@ contains
         obj_func_oao_funptr => null()
         if (error /= 0) return
         if (.not. allocated(oao_object)) allocate(oao_object)
+        oao_object%solver_level%extension => oao_object
         solver_settings%context => oao_object%solver_level
         update_orbs_oao_funptr => mock_update_orbs
         obj_func_oao_funptr => mock_obj_func
@@ -202,6 +203,7 @@ contains
         obj_func_oao_funptr => null()
         if (error /= 0) return
         if (.not. allocated(oao_object)) allocate(oao_object)
+        oao_object%solver_level%extension => oao_object
         solver_settings%context => oao_object%solver_level
         update_orbs_oao_funptr => mock_update_orbs
         obj_func_oao_funptr => mock_obj_func

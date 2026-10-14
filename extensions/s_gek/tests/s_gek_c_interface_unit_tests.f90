@@ -6,11 +6,11 @@
 
 module otr_s_gek_c_interface_unit_tests
 
-    use opentrustregion, only: stderr
+    use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
-                                           c_associated, c_loc
+                                           c_associated, c_loc, c_f_pointer, c_null_ptr
 
     implicit none
 
@@ -69,25 +69,33 @@ contains
         ! this function tests the C wrapper for the S-GEK orbital update factory
         !
         use opentrustregion, only: default_solver_settings
-        use c_interface, only: solver_settings_type_c, assignment(=)
-        use otr_s_gek, only: s_gek_object
-        use otr_s_gek_c_interface, only: s_gek_settings_type_c, s_gek_factory, &
-                                         s_gek_factory_c_wrapper, s_gek_callbacks, &
-                                         s_gek_holder
+        use c_interface, only: solver_settings_type_c, solver_state_type_c, &
+                               assignment(=)
+        use otr_common, only: extension_level_type, extension_level
+        use otr_common_c_interface, only: extension_holder_type, release_extension
+        use otr_s_gek_c_interface, only: s_gek_settings_type_c, &
+                                         s_gek_c_callbacks_type, s_gek_factory, &
+                                         s_gek_factory_c_wrapper
         use otr_s_gek_mock, only: mock_s_gek_factory, mock_s_gek_factory_error, &
+                                  mock_s_gek_factory_defaults, &
                                   test_passed_mock_s_gek_factory => test_passed
         use otr_s_gek_test_reference, only: assignment(=), ref_s_gek_settings
         use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
         use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func
         use otr_common_mock, only: mock_logger_c
-        use test_reference, only: host_context_type, arm_host_context_c, host_context, &
-                                  host_context_reached
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(c_funptr) :: update_orbs_s_gek_c_funptr, obj_func_s_gek_c_funptr
         type(solver_settings_type_c) :: solver_settings_c
+        type(solver_state_type_c), target :: state_c
         type(s_gek_settings_type_c) :: settings
+        type(c_ptr) :: extension_c, stacked_extension_c
+        type(extension_holder_type), pointer :: holder
+        type(extension_level_type), pointer :: level
         integer(c_ip) :: error_c
-        type(host_context_type), target :: other_host_context
+        integer(ip) :: i_case
+        character(len=34), parameter :: default_cases(2) = &
+            [character(len=34) :: "settings that were not initialized", "no settings"]
 
         ! assume tests pass
         test_s_gek_factory_c_wrapper = .true.
@@ -116,7 +124,8 @@ contains
         error_c = s_gek_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
             c_funloc(mock_change_reference), update_orbs_s_gek_c_funptr, &
-            obj_func_s_gek_c_funptr, solver_settings_c, settings)
+            obj_func_s_gek_c_funptr, extension_c, solver_settings_c, c_loc(state_c), &
+            settings)
 
         ! check if the mock factory received the correct input and called the logging
         ! function, and if the given change of reference function received the correct
@@ -148,41 +157,141 @@ contains
                 "code wrong."
         end if
 
-        ! check if the callback slot points to the given function
-        if (.not. associated(s_gek_callbacks%change_reference, mock_change_reference)) &
-            then
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Callback slot "// &
-                "not set."
+        ! the returned extension is the holder, whose inspection would crash without
+        ! one
+        if (.not. c_associated(extension_c)) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: No extension "// &
+                "returned."
+            test_s_gek_factory_c_wrapper = .false.
+            return
+        end if
+        call c_f_pointer(extension_c, holder)
+
+        ! check that the settings of the holder, which own the object, were wired with
+        ! it, that it reads the state of the holder and that the holder holds the
+        ! bundle of the change of reference function and the host's record of the state
+        level => extension_level(holder%solver_settings%context)
+        if (.not. associated(level)) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Settings of the "// &
+                "holder not wired with an object."
+            test_s_gek_factory_c_wrapper = .false.
+            return
+        end if
+        if (.not. associated(level%extension%state, holder%state)) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Object does not "// &
+                "read the state of the holder."
+            test_s_gek_factory_c_wrapper = .false.
+        end if
+        select type (callbacks => holder%extension_callbacks)
+        type is (s_gek_c_callbacks_type)
+            if (.not. associated(callbacks%change_reference, mock_change_reference)) &
+                then
+                write(stderr, *) "test_s_gek_factory_c_wrapper failed: Callback "// &
+                    "slot not set."
+                test_s_gek_factory_c_wrapper = .false.
+            end if
+        class default
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Bundle of the "// &
+                "callback functions not held."
+            test_s_gek_factory_c_wrapper = .false.
+        end select
+        if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
+                   associated(holder%stability_level%state_c, state_c))) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Host's record "// &
+                "of the state not held."
             test_s_gek_factory_c_wrapper = .false.
         end if
 
         ! check that the factory returned the C wrappers of the object and wired the
         ! solver settings with its holder
-        if (.not. check_c_factory_wiring("s_gek_factory_c_wrapper", s_gek_holder, &
-                                         s_gek_object, update_orbs_s_gek_c_funptr, &
+        if (.not. check_c_factory_wiring("s_gek_factory_c_wrapper", holder, &
+                                         level%extension, update_orbs_s_gek_c_funptr, &
                                          obj_func_s_gek_c_funptr, solver_settings_c)) &
             test_s_gek_factory_c_wrapper = .false.
 
-        ! call the factory with the solver settings it wired and another host context,
-        ! which has to produce an error without calling the factory, returning
-        ! functions or replacing the bundle holding the callback functions of the
-        ! object
-        settings%context = c_loc(other_host_context)
+        ! call the factory again with the solver settings it wired, which has to stack
+        ! a new holder on the first
         error_c = s_gek_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
             c_funloc(mock_change_reference), update_orbs_s_gek_c_funptr, &
-            obj_func_s_gek_c_funptr, solver_settings_c, settings)
-        if (error_c == 0 .or. c_associated(update_orbs_s_gek_c_funptr) .or. &
-            c_associated(obj_func_s_gek_c_funptr) .or. &
-            .not. c_associated(s_gek_callbacks%host_context, c_loc(host_context))) then
+            obj_func_s_gek_c_funptr, stacked_extension_c, solver_settings_c, &
+            c_loc(state_c), settings)
+        if (error_c /= 0 .or. .not. c_associated(stacked_extension_c) .or. &
+            c_associated(stacked_extension_c, extension_c)) then
             write(stderr, *) "test_s_gek_factory_c_wrapper failed: Solver settings "// &
-                "the holder was wired into not refused before the object was changed."
+                "already wired not stacked with a new holder."
+            test_s_gek_factory_c_wrapper = .false.
+        else
+            call release_extension(stacked_extension_c)
+        end if
+        call release_extension(extension_c)
+
+        ! call the factory with settings that were not initialized and without any, for
+        ! which the factory is handed the default settings with the context through
+        ! which the change of reference function is found, which the mock checks, and
+        ! the bundle keeps no logging function or host context
+        do i_case = 1, size(default_cases)
+            solver_settings_c = default_solver_settings
+            mock_s_gek_factory_defaults = .true.
+            test_passed_mock_s_gek_factory = .false.
+            test_passed_mock_change_reference = .false.
+            if (i_case == 1) then
+                settings%initialized = .false.
+                error_c = s_gek_factory_c_wrapper( &
+                    n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
+                    c_funloc(mock_change_reference), update_orbs_s_gek_c_funptr, &
+                    obj_func_s_gek_c_funptr, extension_c, solver_settings_c, &
+                    c_loc(state_c), settings)
+                settings%initialized = .true.
+            else
+                error_c = s_gek_factory_c_wrapper( &
+                    n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
+                    c_funloc(mock_change_reference), update_orbs_s_gek_c_funptr, &
+                    obj_func_s_gek_c_funptr, extension_c, solver_settings_c, &
+                    c_loc(state_c))
+            end if
+            mock_s_gek_factory_defaults = .false.
+            if (error_c /= 0 .or. .not. test_passed_mock_s_gek_factory .or. &
+                .not. test_passed_mock_change_reference) then
+                write(stderr, *) "test_s_gek_factory_c_wrapper failed: Default "// &
+                    "settings not handed to the factory for "// &
+                    trim(default_cases(i_case))//"."
+                test_s_gek_factory_c_wrapper = .false.
+            else
+                call c_f_pointer(extension_c, holder)
+                select type (callbacks => holder%extension_callbacks)
+                type is (s_gek_c_callbacks_type)
+                    if (associated(callbacks%logger) .or. &
+                        c_associated(callbacks%host_context)) then
+                        write(stderr, *) "test_s_gek_factory_c_wrapper failed: "// &
+                            "Logging function or host context kept for "// &
+                            trim(default_cases(i_case))//"."
+                        test_s_gek_factory_c_wrapper = .false.
+                    end if
+                end select
+            end if
+            call release_extension(extension_c)
+        end do
+
+        ! call the factory without a record of the state, which has to produce an error
+        ! without calling the factory or returning functions or an extension
+        solver_settings_c = default_solver_settings
+        test_passed_mock_s_gek_factory = .false.
+        error_c = s_gek_factory_c_wrapper( &
+            n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
+            c_funloc(mock_change_reference), update_orbs_s_gek_c_funptr, &
+            obj_func_s_gek_c_funptr, extension_c, solver_settings_c, c_null_ptr, &
+            settings)
+        if (error_c == 0 .or. test_passed_mock_s_gek_factory .or. &
+            c_associated(update_orbs_s_gek_c_funptr) .or. &
+            c_associated(obj_func_s_gek_c_funptr) .or. c_associated(extension_c)) then
+            write(stderr, *) "test_s_gek_factory_c_wrapper failed: No error "// &
+                "produced without a record of the state."
             test_s_gek_factory_c_wrapper = .false.
         end if
 
         ! call the factory with a mock factory which produces an error, which has to be
-        ! returned without functions or writing back the solver settings or changing
-        ! the holder or the bundle of the object
+        ! returned without functions, an extension or writing back the solver settings
         solver_settings_c = default_solver_settings
         update_orbs_s_gek_c_funptr = c_funloc(mock_logger_c)
         obj_func_s_gek_c_funptr = c_funloc(mock_logger_c)
@@ -190,21 +299,14 @@ contains
         error_c = s_gek_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
             c_funloc(mock_change_reference), update_orbs_s_gek_c_funptr, &
-            obj_func_s_gek_c_funptr, solver_settings_c, settings)
+            obj_func_s_gek_c_funptr, extension_c, solver_settings_c, c_loc(state_c), &
+            settings)
         mock_s_gek_factory_error = 0
         if (error_c /= 1 .or. c_associated(update_orbs_s_gek_c_funptr) .or. &
-            c_associated(obj_func_s_gek_c_funptr) .or. &
+            c_associated(obj_func_s_gek_c_funptr) .or. c_associated(extension_c) .or. &
             c_associated(solver_settings_c%context)) then
             write(stderr, *) "test_s_gek_factory_c_wrapper failed: Error of the "// &
                 "factory not passed on."
-            test_s_gek_factory_c_wrapper = .false.
-        end if
-        if (.not. associated(s_gek_holder%solver_level%level, &
-                             s_gek_object%solver_level) .or. &
-            .not. c_associated(s_gek_callbacks%host_context, c_loc(host_context))) then
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Holder or "// &
-                "callback functions of the object not restored after an error of "// &
-                "the factory."
             test_s_gek_factory_c_wrapper = .false.
         end if
 
@@ -212,15 +314,20 @@ contains
 
     logical(c_bool) function test_change_reference_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the reference change
+        ! this function tests the Fortran wrapper for the reference change, which finds
+        ! the C function in the bundle it receives as context
         !
         use otr_s_gek, only: change_reference_type
-        use otr_s_gek_c_interface, only: s_gek_callbacks, change_reference_f_wrapper
+        use otr_s_gek_c_interface, only: s_gek_c_callbacks_type, &
+                                         change_reference_f_wrapper
         use otr_s_gek_test_reference, only: test_change_reference_funptr
         use test_reference, only: arm_host_context_c, host_context_reached
 
+        type(s_gek_c_callbacks_type), target :: callbacks
         procedure(change_reference_type), pointer :: change_reference_funptr
         class(*), pointer :: context
+        real(rp) :: vector(n_param), list(n_param, 1)
+        integer(ip) :: error
 
         ! assume tests pass
         test_change_reference_f_wrapper = .true.
@@ -228,10 +335,10 @@ contains
         ! set test name
         test_name = "test_change_reference_f_wrapper"
 
-        ! inject mock C function and hand the bundle to the wrapper as its context
-        s_gek_callbacks%change_reference => mock_change_reference
-        call arm_host_context_c(s_gek_callbacks%host_context)
-        context => s_gek_callbacks
+        ! inject mock C function into a bundle, which the wrapper receives as context
+        callbacks%change_reference => mock_change_reference
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
 
         ! get pointer to subroutine
         change_reference_funptr => change_reference_f_wrapper
@@ -249,6 +356,17 @@ contains
         ! check that the wrapper handed the host context to the C function
         if (.not. host_context_reached("change_reference_f_wrapper")) &
             test_change_reference_f_wrapper = .false.
+
+        ! a context that is no bundle has to produce an error
+        vector = 1.0_rp
+        list = 1.0_rp
+        context => null()
+        call change_reference_f_wrapper(vector, 1_ip, list, list, list, error, context)
+        if (error == 0) then
+            write(stderr, *) "test_change_reference_f_wrapper failed: No error "// &
+                "produced without a bundle."
+            test_change_reference_f_wrapper = .false.
+        end if
 
     end function test_change_reference_f_wrapper
 
@@ -284,34 +402,6 @@ contains
         end if
 
     end function test_init_s_gek_settings_c
-
-    logical(c_bool) function test_update_orbs_s_gek_deconstructor_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the S-GEK deconstructor
-        !
-        use otr_s_gek_c_interface, only: update_orbs_s_gek_deconstructor, &
-                                         update_orbs_s_gek_deconstructor_c_wrapper
-        use otr_s_gek_mock, only: mock_update_orbs_s_gek_deconstructor, test_passed
-
-        ! assume tests pass
-        test_update_orbs_s_gek_deconstructor_c_wrapper = .true.
-
-        ! inject mock function
-        update_orbs_s_gek_deconstructor => mock_update_orbs_s_gek_deconstructor
-
-        ! initialize test logical
-        test_passed = .false.
-
-        ! call S-GEK orbital updating deconstructor C wrapper
-        call update_orbs_s_gek_deconstructor_c_wrapper()
-
-        if (.not. test_passed) then
-            test_update_orbs_s_gek_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_update_orbs_s_gek_deconstructor_c_wrapper "// &
-                "failed: Deconstructor called wrong."
-        end if
-
-    end function test_update_orbs_s_gek_deconstructor_c_wrapper
 
     logical(c_bool) function test_assign_s_gek_f_c() bind(C)
         !
@@ -375,7 +465,7 @@ contains
         end if
 
         ! convert C settings that were not initialized and check that they are left
-        ! uninitialized without a logging function, so that the factory initializes
+        ! uninitialized without a logging function, so that the C factory initializes
         ! them after its warning
         settings_c%initialized = .false.
         settings = settings_c

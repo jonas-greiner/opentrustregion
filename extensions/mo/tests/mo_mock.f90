@@ -161,6 +161,7 @@ contains
         obj_func_mo_funptr => null()
         if (error /= 0) return
         if (.not. allocated(mo_object)) allocate(mo_object)
+        mo_object%solver_level%extension => mo_object
         solver_settings%context => mo_object%solver_level
         update_orbs_mo_funptr => mock_update_orbs
         obj_func_mo_funptr => mock_obj_func
@@ -297,6 +298,7 @@ contains
         obj_func_mo_funptr => null()
         if (error /= 0) return
         if (.not. allocated(mo_object)) allocate(mo_object)
+        mo_object%solver_level%extension => mo_object
         solver_settings%context => mo_object%solver_level
         update_orbs_mo_funptr => mock_update_orbs
         obj_func_mo_funptr => mock_obj_func

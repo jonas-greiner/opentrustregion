@@ -28,13 +28,17 @@ from pyopentrustregion.python_interface import (
     Settings,
     SolverSettings,
     SolverSettingsC,
+    SolverState,
+    SolverStateC,
     auto_bind_fields,
     bind_callback_fields,
 )
 from pyopentrustregion.extensions.common.python_interface import (
+    ExtensionOwner,
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
     check_callback_arguments,
+    check_wrapped_functions,
 )
 
 if TYPE_CHECKING:
@@ -150,7 +154,8 @@ def qn_factory(
     transport: TransportType,
     init_hess: InitHessType,
     solver_settings: SolverSettings,
-    settings: QNSettings,
+    solver_state: SolverState,
+    settings: Optional[QNSettings] = None,
 ) -> Tuple[
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -162,6 +167,10 @@ def qn_factory(
     # update_orbs or obj_func when these are themselves factory-produced so a whole
     # chain of factories shares one, and handed to solver through the returned objects
     exception = adopt_collector(update_orbs, obj_func)
+
+    # the C interface cannot check whether the orbital updating function and the
+    # objective function belong to the solver settings
+    check_wrapped_functions(update_orbs, obj_func, solver_settings)
 
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
@@ -181,7 +190,8 @@ def qn_factory(
     )
 
     # hand the logging function of the settings the exception collector of the call
-    settings.prepare_call(None, exception)
+    if settings is not None:
+        settings.prepare_call(None, exception)
 
     if not hasattr(lib, "qn_factory"):
         raise RuntimeError(
@@ -199,13 +209,16 @@ def qn_factory(
         init_hess_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
+        POINTER(c_void_p),
         POINTER(SolverSettingsC),
+        POINTER(SolverStateC),
         POINTER(QNSettingsC),
     ]
 
     # call Fortran function
     update_orbs_qn_funptr = update_orbs_interface_type()
     obj_func_qn_funptr = obj_func_interface_type()
+    extension = c_void_p()
     error = lib.qn_factory(
         n_param,
         update_orbs_interface,
@@ -214,8 +227,10 @@ def qn_factory(
         init_hess_interface,
         byref(update_orbs_qn_funptr),
         byref(obj_func_qn_funptr),
+        byref(extension),
         byref(solver_settings.settings_c),
-        byref(settings.settings_c),
+        byref(solver_state.state_c),
+        None if settings is None else byref(settings.settings_c),
     )
 
     if error:
@@ -228,17 +243,23 @@ def qn_factory(
                 f"OpenTrustRegion quasi-Newton factory produced error (code {error})."
             )
 
-    # the returned functions are called with the context the factory has written into
-    # the solver settings, through which they reach the quasi-Newton object, and keep
-    # the settings alive, whose callback functions the object calls
-    saved_objects = {
-        "solver_settings": solver_settings,
-        "settings": settings,
-        "update_orbs_interface": update_orbs_interface,
-        "obj_func_interface": obj_func_interface,
-        "transport_interface": transport_interface,
-        "init_hess_interface": init_hess_interface,
-    }
+    # the owner of the quasi-Newton object, which the solver settings keep alive, keeps
+    # alive what the object calls, and the returned functions are called with the
+    # context the factory has written into the solver settings, through which they
+    # reach the object, and keep the solver settings alive
+    ExtensionOwner(
+        extension.value,
+        solver_settings,
+        {
+            "settings": settings,
+            "solver_state": solver_state,
+            "update_orbs_interface": update_orbs_interface,
+            "obj_func_interface": obj_func_interface,
+            "transport_interface": transport_interface,
+            "init_hess_interface": init_hess_interface,
+        },
+    )
+    saved_objects = {"solver_settings": solver_settings}
     return (
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_qn_funptr,
@@ -253,20 +274,3 @@ def qn_factory(
             context=solver_settings.settings_c.context,
         ),
     )
-
-
-def update_orbs_qn_deconstructor():
-    if not hasattr(lib, "update_orbs_qn_deconstructor"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install ."
-        )
-
-    # define result and argument types
-    lib.update_orbs_qn_deconstructor.restype = None
-    lib.update_orbs_qn_deconstructor.argtypes = []
-
-    # call Fortran function
-    lib.update_orbs_qn_deconstructor()
-
-    return

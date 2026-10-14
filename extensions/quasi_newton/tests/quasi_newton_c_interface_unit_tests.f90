@@ -6,11 +6,11 @@
 
 module otr_qn_c_interface_unit_tests
 
-    use opentrustregion, only: stderr
+    use opentrustregion, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
-                                           c_associated, c_loc
+                                           c_associated, c_loc, c_f_pointer, c_null_ptr
 
     implicit none
 
@@ -61,24 +61,32 @@ contains
         ! this function tests the C wrapper for the quasi-Newton orbital update factory
         !
         use opentrustregion, only: default_solver_settings
-        use c_interface, only: solver_settings_type_c, assignment(=)
-        use otr_qn, only: update_object
-        use otr_qn_c_interface, only: qn_settings_type_c, qn_factory, &
-                                      qn_factory_c_wrapper, qn_callbacks, qn_holder
+        use c_interface, only: solver_settings_type_c, solver_state_type_c, &
+                               assignment(=)
+        use otr_common, only: extension_level_type, extension_level
+        use otr_common_c_interface, only: extension_holder_type, release_extension
+        use otr_qn_c_interface, only: qn_settings_type_c, qn_c_callbacks_type, &
+                                      qn_factory, qn_factory_c_wrapper
         use otr_qn_mock, only: mock_qn_factory, mock_qn_factory_error, &
+                               mock_qn_factory_defaults, &
                                test_passed_mock_qn_factory => test_passed
         use otr_qn_test_reference, only: assignment(=), ref_qn_settings
         use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
         use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func
         use otr_common_mock, only: mock_logger_c
-        use test_reference, only: host_context_type, arm_host_context_c, host_context, &
-                                  host_context_reached
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(c_funptr) :: update_orbs_qn_c_funptr, obj_func_qn_c_funptr
         type(solver_settings_type_c) :: solver_settings_c
+        type(solver_state_type_c), target :: state_c
         type(qn_settings_type_c) :: settings
+        type(c_ptr) :: extension_c, stacked_extension_c
+        type(extension_holder_type), pointer :: holder
+        type(extension_level_type), pointer :: level
         integer(c_ip) :: error_c
-        type(host_context_type), target :: other_host_context
+        integer(ip) :: i_case
+        character(len=34), parameter :: default_cases(2) = &
+            [character(len=34) :: "settings that were not initialized", "no settings"]
 
         ! assume tests pass
         test_qn_factory_c_wrapper = .true.
@@ -103,7 +111,8 @@ contains
         error_c = qn_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
             c_funloc(mock_transport), c_funloc(mock_init_hess), &
-            update_orbs_qn_c_funptr, obj_func_qn_c_funptr, solver_settings_c, settings)
+            update_orbs_qn_c_funptr, obj_func_qn_c_funptr, extension_c, &
+            solver_settings_c, c_loc(state_c), settings)
 
         ! check if the mock factory received the correct input and called the logging
         ! function
@@ -129,40 +138,139 @@ contains
                 "code wrong."
         end if
 
-        ! check if the callback slots point to the given functions
-        if (.not. (associated(qn_callbacks%transport, mock_transport) .and. &
-                   associated(qn_callbacks%init_hess, mock_init_hess))) then
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Callback slots not set."
+        ! the returned extension is the holder, whose inspection would crash without
+        ! one
+        if (.not. c_associated(extension_c)) then
+            write(stderr, *) "test_qn_factory_c_wrapper failed: No extension returned."
+            test_qn_factory_c_wrapper = .false.
+            return
+        end if
+        call c_f_pointer(extension_c, holder)
+
+        ! check that the settings of the holder, which own the object, were wired with
+        ! it, that it reads the state of the holder and that the holder holds the
+        ! bundle of the transport and initial Hessian functions and the host's record
+        ! of the state
+        level => extension_level(holder%solver_settings%context)
+        if (.not. associated(level)) then
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Settings of the "// &
+                "holder not wired with an object."
+            test_qn_factory_c_wrapper = .false.
+            return
+        end if
+        if (.not. associated(level%extension%state, holder%state)) then
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Object does not "// &
+                "read the state of the holder."
+            test_qn_factory_c_wrapper = .false.
+        end if
+        select type (callbacks => holder%extension_callbacks)
+        type is (qn_c_callbacks_type)
+            if (.not. (associated(callbacks%transport, mock_transport) .and. &
+                       associated(callbacks%init_hess, mock_init_hess))) then
+                write(stderr, *) "test_qn_factory_c_wrapper failed: Callback slots "// &
+                    "not set."
+                test_qn_factory_c_wrapper = .false.
+            end if
+        class default
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Bundle of the "// &
+                "callback functions not held."
+            test_qn_factory_c_wrapper = .false.
+        end select
+        if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
+                   associated(holder%stability_level%state_c, state_c))) then
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Host's record of "// &
+                "the state not held."
             test_qn_factory_c_wrapper = .false.
         end if
 
         ! check that the factory returned the C wrappers of the object and wired the
         ! solver settings with its holder
-        if (.not. check_c_factory_wiring("qn_factory_c_wrapper", qn_holder, &
-                                         update_object, update_orbs_qn_c_funptr, &
+        if (.not. check_c_factory_wiring("qn_factory_c_wrapper", holder, &
+                                         level%extension, update_orbs_qn_c_funptr, &
                                          obj_func_qn_c_funptr, solver_settings_c)) &
             test_qn_factory_c_wrapper = .false.
 
-        ! call the factory with the solver settings it wired and another host context,
-        ! which has to produce an error without calling the factory, returning
-        ! functions or replacing the bundle holding the callback functions of the
-        ! object
-        settings%context = c_loc(other_host_context)
+        ! call the factory again with the solver settings it wired, which has to stack
+        ! a new holder on the first
         error_c = qn_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
             c_funloc(mock_transport), c_funloc(mock_init_hess), &
-            update_orbs_qn_c_funptr, obj_func_qn_c_funptr, solver_settings_c, settings)
-        if (error_c == 0 .or. c_associated(update_orbs_qn_c_funptr) .or. &
-            c_associated(obj_func_qn_c_funptr) .or. &
-            .not. c_associated(qn_callbacks%host_context, c_loc(host_context))) then
+            update_orbs_qn_c_funptr, obj_func_qn_c_funptr, stacked_extension_c, &
+            solver_settings_c, c_loc(state_c), settings)
+        if (error_c /= 0 .or. .not. c_associated(stacked_extension_c) .or. &
+            c_associated(stacked_extension_c, extension_c)) then
             write(stderr, *) "test_qn_factory_c_wrapper failed: Solver settings "// &
-                "the holder was wired into not refused before the object was changed."
+                "already wired not stacked with a new holder."
+            test_qn_factory_c_wrapper = .false.
+        else
+            call release_extension(stacked_extension_c)
+        end if
+        call release_extension(extension_c)
+
+        ! call the factory with settings that were not initialized and without any, for
+        ! which the factory is handed the default settings with the context through
+        ! which the transport and initial Hessian functions are found, which the mock
+        ! checks, and the bundle keeps no logging function or host context
+        do i_case = 1, size(default_cases)
+            solver_settings_c = default_solver_settings
+            mock_qn_factory_defaults = .true.
+            test_passed_mock_qn_factory = .false.
+            if (i_case == 1) then
+                settings%initialized = .false.
+                error_c = qn_factory_c_wrapper( &
+                    n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
+                    c_funloc(mock_transport), c_funloc(mock_init_hess), &
+                    update_orbs_qn_c_funptr, obj_func_qn_c_funptr, extension_c, &
+                    solver_settings_c, c_loc(state_c), settings)
+                settings%initialized = .true.
+            else
+                error_c = qn_factory_c_wrapper( &
+                    n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
+                    c_funloc(mock_transport), c_funloc(mock_init_hess), &
+                    update_orbs_qn_c_funptr, obj_func_qn_c_funptr, extension_c, &
+                    solver_settings_c, c_loc(state_c))
+            end if
+            mock_qn_factory_defaults = .false.
+            if (error_c /= 0 .or. .not. test_passed_mock_qn_factory) then
+                write(stderr, *) "test_qn_factory_c_wrapper failed: Default "// &
+                    "settings not handed to the factory for "// &
+                    trim(default_cases(i_case))//"."
+                test_qn_factory_c_wrapper = .false.
+            else
+                call c_f_pointer(extension_c, holder)
+                select type (callbacks => holder%extension_callbacks)
+                type is (qn_c_callbacks_type)
+                    if (associated(callbacks%logger) .or. &
+                        c_associated(callbacks%host_context)) then
+                        write(stderr, *) "test_qn_factory_c_wrapper failed: "// &
+                            "Logging function or host context kept for "// &
+                            trim(default_cases(i_case))//"."
+                        test_qn_factory_c_wrapper = .false.
+                    end if
+                end select
+            end if
+            call release_extension(extension_c)
+        end do
+
+        ! call the factory without a record of the state, which has to produce an error
+        ! without calling the factory or returning functions or an extension
+        solver_settings_c = default_solver_settings
+        test_passed_mock_qn_factory = .false.
+        error_c = qn_factory_c_wrapper( &
+            n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
+            c_funloc(mock_transport), c_funloc(mock_init_hess), &
+            update_orbs_qn_c_funptr, obj_func_qn_c_funptr, extension_c, &
+            solver_settings_c, c_null_ptr, settings)
+        if (error_c == 0 .or. test_passed_mock_qn_factory .or. &
+            c_associated(update_orbs_qn_c_funptr) .or. &
+            c_associated(obj_func_qn_c_funptr) .or. c_associated(extension_c)) then
+            write(stderr, *) "test_qn_factory_c_wrapper failed: No error produced "// &
+                "without a record of the state."
             test_qn_factory_c_wrapper = .false.
         end if
 
         ! call the factory with a mock factory which produces an error, which has to be
-        ! returned without functions or writing back the solver settings or changing
-        ! the holder or the bundle of the object
+        ! returned without functions, an extension or writing back the solver settings
         solver_settings_c = default_solver_settings
         update_orbs_qn_c_funptr = c_funloc(mock_logger_c)
         obj_func_qn_c_funptr = c_funloc(mock_logger_c)
@@ -170,20 +278,14 @@ contains
         error_c = qn_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
             c_funloc(mock_transport), c_funloc(mock_init_hess), &
-            update_orbs_qn_c_funptr, obj_func_qn_c_funptr, solver_settings_c, settings)
+            update_orbs_qn_c_funptr, obj_func_qn_c_funptr, extension_c, &
+            solver_settings_c, c_loc(state_c), settings)
         mock_qn_factory_error = 0
         if (error_c /= 1 .or. c_associated(update_orbs_qn_c_funptr) .or. &
-            c_associated(obj_func_qn_c_funptr) .or. &
+            c_associated(obj_func_qn_c_funptr) .or. c_associated(extension_c) .or. &
             c_associated(solver_settings_c%context)) then
             write(stderr, *) "test_qn_factory_c_wrapper failed: Error of the "// &
                 "factory not passed on."
-            test_qn_factory_c_wrapper = .false.
-        end if
-        if (.not. associated(qn_holder%solver_level%level, &
-                             update_object%solver_level) .or. &
-            .not. c_associated(qn_callbacks%host_context, c_loc(host_context))) then
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Holder or callback "// &
-                "functions of the object not restored after an error of the factory."
             test_qn_factory_c_wrapper = .false.
         end if
 
@@ -191,23 +293,27 @@ contains
 
     logical(c_bool) function test_transport_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the transport
+        ! this function tests the Fortran wrapper for the transport, which finds the C
+        ! function in the bundle it receives as context
         !
         use otr_qn, only: transport_type
-        use otr_qn_c_interface, only: qn_callbacks, transport_f_wrapper
+        use otr_qn_c_interface, only: qn_c_callbacks_type, transport_f_wrapper
         use otr_qn_test_reference, only: test_transport_funptr
         use test_reference, only: arm_host_context_c, host_context_reached
 
+        type(qn_c_callbacks_type), target :: callbacks
         procedure(transport_type), pointer :: transport_funptr
         class(*), pointer :: context
+        real(rp) :: vector(n_param)
+        integer(ip) :: error
 
         ! assume tests pass
         test_transport_f_wrapper = .true.
 
-        ! inject mock C function and hand the bundle to the wrapper as its context
-        qn_callbacks%transport => mock_transport
-        call arm_host_context_c(qn_callbacks%host_context)
-        context => qn_callbacks
+        ! inject mock C function into a bundle, which the wrapper receives as context
+        callbacks%transport => mock_transport
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
 
         ! get pointer to subroutine
         transport_funptr => transport_f_wrapper
@@ -220,27 +326,41 @@ contains
         if (.not. host_context_reached("transport_f_wrapper")) &
             test_transport_f_wrapper = .false.
 
+        ! a context that is no bundle has to produce an error
+        vector = 1.0_rp
+        context => null()
+        call transport_f_wrapper(vector, vector, error, context)
+        if (error == 0) then
+            write(stderr, *) "test_transport_f_wrapper failed: No error produced "// &
+                "without a bundle."
+            test_transport_f_wrapper = .false.
+        end if
+
     end function test_transport_f_wrapper
 
     logical(c_bool) function test_init_hess_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrapper for the initial Hessian
+        ! this function tests the Fortran wrapper for the initial Hessian, which finds
+        ! the C function in the bundle it receives as context
         !
         use otr_qn, only: init_hess_type
-        use otr_qn_c_interface, only: qn_callbacks, init_hess_f_wrapper
+        use otr_qn_c_interface, only: qn_c_callbacks_type, init_hess_f_wrapper
         use otr_qn_test_reference, only: test_init_hess_funptr
         use test_reference, only: arm_host_context_c, host_context_reached
 
+        type(qn_c_callbacks_type), target :: callbacks
         procedure(init_hess_type), pointer :: init_hess_funptr
         class(*), pointer :: context
+        real(rp) :: vector(n_param)
+        integer(ip) :: error
 
         ! assume tests pass
         test_init_hess_f_wrapper = .true.
 
-        ! inject mock C function and hand the bundle to the wrapper as its context
-        qn_callbacks%init_hess => mock_init_hess
-        call arm_host_context_c(qn_callbacks%host_context)
-        context => qn_callbacks
+        ! inject mock C function into a bundle, which the wrapper receives as context
+        callbacks%init_hess => mock_init_hess
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
 
         ! get pointer to subroutine
         init_hess_funptr => init_hess_f_wrapper
@@ -252,6 +372,16 @@ contains
         ! check that the wrapper handed the host context to the C function
         if (.not. host_context_reached("init_hess_f_wrapper")) &
             test_init_hess_f_wrapper = .false.
+
+        ! a context that is no bundle has to produce an error
+        vector = 1.0_rp
+        context => null()
+        call init_hess_f_wrapper(vector, error, context)
+        if (error == 0) then
+            write(stderr, *) "test_init_hess_f_wrapper failed: No error produced "// &
+                "without a bundle."
+            test_init_hess_f_wrapper = .false.
+        end if
 
     end function test_init_hess_f_wrapper
 
@@ -287,35 +417,6 @@ contains
         end if
 
     end function test_init_qn_settings_c
-
-    logical(c_bool) function test_update_orbs_qn_deconstructor_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper for the quasi-Newton deconstructor
-        !
-        use otr_qn_c_interface, only: update_orbs_qn_deconstructor, &
-                                      update_orbs_qn_deconstructor_c_wrapper
-        use otr_qn_mock, only: mock_update_orbs_qn_deconstructor, test_passed
-
-        ! assume tests pass
-        test_update_orbs_qn_deconstructor_c_wrapper = .true.
-
-        ! inject mock function
-        update_orbs_qn_deconstructor => mock_update_orbs_qn_deconstructor
-
-        ! initialize test logical
-        test_passed = .false.
-
-        ! call quasi-Newton orbital updating deconstructor C wrapper
-        call update_orbs_qn_deconstructor_c_wrapper()
-
-        ! check if test has passed
-        if (.not. test_passed) then
-            test_update_orbs_qn_deconstructor_c_wrapper = .false.
-            write(stderr, *) "test_update_orbs_qn_deconstructor_c_wrapper failed: "// &
-                "Deconstructor called wrong."
-        end if
-
-    end function test_update_orbs_qn_deconstructor_c_wrapper
 
     logical(c_bool) function test_assign_qn_f_c() bind(C)
         !
@@ -378,7 +479,7 @@ contains
         end if
 
         ! convert C settings that were not initialized and check that they are left
-        ! uninitialized without a logging function, so that the factory initializes
+        ! uninitialized without a logging function, so that the C factory initializes
         ! them after its warning
         settings_c%initialized = .false.
         settings = settings_c

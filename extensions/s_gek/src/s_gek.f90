@@ -41,6 +41,8 @@ module otr_s_gek
         "S-GEK settings were not initialized. All S-GEK settings are set to "// &
         "default values"
 
+    ! S-GEK object, holding the sample points, the surrogate model, the settings and
+    ! the host's change of reference function
     type, extends(extension_type) :: s_gek_type
         real(rp), allocatable :: kappa_list(:, :), disp_list(:, :), obj_func_list(:), &
                                  grad_list(:, :), local_grad_list(:, :), y_list(:, :), &
@@ -51,6 +53,7 @@ module otr_s_gek
         integer(ip) :: n_points, n_covariance, n_space
         real(rp) :: loosen_factor
         type(s_gek_settings_type) :: settings
+        procedure(change_reference_type), pointer, nopass :: change_reference => null()
     contains
         procedure :: update_orbs => update_orbs_s_gek
         procedure :: hess_x => hess_x_s_gek
@@ -60,11 +63,8 @@ module otr_s_gek
         procedure :: setup_kriging
         procedure :: kriging_model
         procedure :: predict_hess
+        procedure :: bfgs_inv_hess_x
     end type
-
-    ! global variables
-    type(s_gek_type), target :: s_gek_object
-    procedure(change_reference_type), pointer :: change_reference_funptr => null()
 
     ! bias
     real(rp), parameter :: bias = 10.0_rp
@@ -80,62 +80,70 @@ module otr_s_gek
 contains
 
     subroutine s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                             change_reference_funptr_in, update_orbs_s_gek_funptr, &
-                             obj_func_s_gek_funptr, solver_settings, error, settings)
+                             change_reference_funptr, update_orbs_s_gek_funptr, &
+                             obj_func_s_gek_funptr, solver_settings, solver_state, &
+                             error, settings)
         !
         ! this subroutine returns the S-GEK orbital updating function, which wraps the
-        ! host's, and the objective function, and wires the solver settings with the
-        ! S-GEK object, through which the host's callback functions keep receiving the
-        ! host context
+        ! host's, and the objective function, and wires the solver settings with a new
+        ! S-GEK object, which they own and through which the host's callback functions
+        ! keep receiving the host context, and which reads the state of the solver from
+        ! the record the host also passes to the solver
         !
-        use opentrustregion, only: solver_settings_type, obj_func_type, &
+        use opentrustregion, only: obj_func_type, solver_state_type, &
                                    warn_uninitialized_settings
-        use otr_common, only: update_orbs_callback, obj_func_callback
+        use otr_common, only: extension_solver_settings_type, update_orbs_callback, &
+                              obj_func_callback
 
         integer(ip), intent(in) :: n_param
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
-        procedure(change_reference_type), intent(in), pointer :: &
-            change_reference_funptr_in
+        procedure(change_reference_type), intent(in), pointer :: change_reference_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_s_gek_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(s_gek_settings_type), intent(in) :: settings
+        type(s_gek_settings_type), intent(in), optional :: settings
 
         type(s_gek_settings_type) :: local_settings
+        class(extension_type), allocatable, target :: object
 
         ! initialize error flag and the returned functions
         error = 0
         update_orbs_s_gek_funptr => null()
         obj_func_s_gek_funptr => null()
 
-        ! work on a copy of the settings, which is initialized if they were not, after
-        ! printing a warning regardless of the verbosity, since the default settings
-        ! would silence it
-        local_settings = settings
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             s_gek_settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            if (error /= 0) return
+        ! work on a copy of the given settings, which is initialized if they were not,
+        ! after printing a warning regardless of the verbosity, since the default
+        ! settings would silence it, or, without any, of the default settings
+        if (present(settings)) then
+            local_settings = settings
+            if (.not. local_settings%initialized) then
+                call warn_uninitialized_settings( &
+                    local_settings, s_gek_settings_uninitialized_warning_msg)
+                call local_settings%init(error)
+                if (error /= 0) return
+            end if
+        else
+            local_settings = default_s_gek_settings
         end if
 
-        ! refuse solver settings the object already wired before changing any state
-        call s_gek_object%check_unwired(solver_settings, local_settings, error)
+        ! create the object and initialize it with the host's change of reference
+        ! function
+        allocate(s_gek_type :: object)
+        select type (object)
+        type is (s_gek_type)
+            call object%init(n_param, local_settings)
+            object%change_reference => change_reference_funptr
+        end select
+
+        ! wire the solver settings with the object, which reads the record of the state
+        ! and saves the host's orbital update, objective function, callback functions
+        ! and host contexts, and let the settings own it
+        call solver_settings%wire(object, solver_state, local_settings, error, &
+                                  update_orbs_funptr, obj_func_funptr)
         if (error /= 0) return
-
-        ! initialize the object
-        call s_gek_object%init(n_param, local_settings)
-
-        ! wire the solver settings with the object, which saves the host's orbital
-        ! update, objective function, callback functions and host contexts
-        call s_gek_object%wire_solver_settings(solver_settings, local_settings, error, &
-                                               update_orbs_funptr, obj_func_funptr)
-        if (error /= 0) return
-
-        ! set pointer to change of reference function
-        change_reference_funptr => change_reference_funptr_in
 
         ! get the orbital updating function and the objective function of the object
         update_orbs_s_gek_funptr => update_orbs_callback
@@ -143,8 +151,8 @@ contains
 
     end subroutine s_gek_factory
 
-    subroutine update_orbs_s_gek(self, kappa, func, grad, h_diag, hess_x_funptr, &
-                                 error, context)
+    recursive subroutine update_orbs_s_gek(self, kappa, func, grad, h_diag, &
+                                           hess_x_funptr, error, context)
         !
         ! this subroutine is the S-GEK orbital updating function, which updates the
         ! orbitals with the host's orbital update and host context, replaces the
@@ -183,25 +191,6 @@ contains
 
     end subroutine update_orbs_s_gek
 
-    subroutine hess_x_s_gek(self, x, hess_x, error, context)
-        !
-        ! this subroutine is the S-GEK Hessian linear transformation of the object
-        !
-        class(s_gek_type), intent(inout) :: self
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        class(*), pointer :: no_context
-
-        ! the S-GEK Hessian linear transformation reads the S-GEK object and needs no
-        ! context
-        no_context => null()
-        call s_gek_hess_x_fun(x, hess_x, error, no_context)
-
-    end subroutine hess_x_s_gek
-
     subroutine init_s_gek_settings(self, error)
         !
         ! this subroutine initializes the S-GEK settings
@@ -227,14 +216,6 @@ contains
         end select
 
     end subroutine init_s_gek_settings
-
-    subroutine update_orbs_s_gek_deconstructor()
-        !
-        ! this subroutine deallocates the S-GEK objects
-        !
-        call s_gek_object%clear()
-
-    end subroutine update_orbs_s_gek_deconstructor
 
     subroutine init_s_gek(self, n_param, settings)
         !
@@ -334,9 +315,9 @@ contains
         end if
 
         ! move displacement and gradient to current reference
-        call change_reference_funptr(kappa, self%n_points, self%kappa_list, &
-                                     self%local_grad_list, self%grad_list, error, &
-                                     self%settings%context)
+        call self%change_reference(kappa, self%n_points, self%kappa_list, &
+                                   self%local_grad_list, self%grad_list, error, &
+                                   self%settings%context)
         if (error /= 0) return
 
         ! set Hessian diagonal
@@ -350,8 +331,8 @@ contains
         ! get BFGS guess by reducing the update depth until the step is reasonable
         allocate(bfgs_disp(self%n_param))
         do i = 1, self%n_points
-            call bfgs_inv_hess_x_fun(self%grad_list(:, self%n_points), bfgs_disp, i, &
-                                     error)
+            call self%bfgs_inv_hess_x(self%grad_list(:, self%n_points), bfgs_disp, i, &
+                                      error)
             if (error /= 0) return
             if (dnrm2(self%n_param, bfgs_disp, 1_ip) <= pi) exit
         end do
@@ -565,10 +546,11 @@ contains
 
     end subroutine clear_s_gek
 
-    subroutine s_gek_hess_x_fun(x, hess_x, error, context)
+    subroutine hess_x_s_gek(self, x, hess_x, error, context)
         !
-        ! this subroutine is a modified S-GEK Hessian linear transformation function
+        ! this subroutine is the S-GEK Hessian linear transformation of the object
         !
+        class(s_gek_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -583,26 +565,24 @@ contains
         error = 0
 
         ! compute the trial vector in the subspace
-        allocate(actual_x(s_gek_object%n_space), actual_hess_x(s_gek_object%n_space))
-        if (s_gek_object%settings%use_subspace) then
-            do i = 1, s_gek_object%n_space
-                actual_x(i) = ddot(size(x, kind=ip), x, 1_ip, &
-                                   s_gek_object%subspace(:, i), 1_ip)
+        allocate(actual_x(self%n_space), actual_hess_x(self%n_space))
+        if (self%settings%use_subspace) then
+            do i = 1, self%n_space
+                actual_x(i) = ddot(size(x, kind=ip), x, 1_ip, self%subspace(:, i), 1_ip)
             end do
         else
             actual_x = x
         end if
 
         ! compute the Hessian vector product in the subspace
-        call dgemv("N", s_gek_object%n_space, s_gek_object%n_space, 1.0_rp, &
-                   s_gek_object%hess, s_gek_object%n_space, actual_x, 1_ip, 0.0_rp, &
-                   actual_hess_x, 1_ip)
+        call dgemv("N", self%n_space, self%n_space, 1.0_rp, self%hess, self%n_space, &
+                   actual_x, 1_ip, 0.0_rp, actual_hess_x, 1_ip)
 
         ! compute the Hessian linear transformation in the full space
-        if (s_gek_object%settings%use_subspace) then
+        if (self%settings%use_subspace) then
             hess_x = 0.0_rp
-            do i = 1, s_gek_object%n_space
-                hess_x = hess_x + actual_hess_x(i) * s_gek_object%subspace(:, i)
+            do i = 1, self%n_space
+                hess_x = hess_x + actual_hess_x(i) * self%subspace(:, i)
             end do
         else
             hess_x = actual_hess_x
@@ -610,7 +590,7 @@ contains
 
         deallocate(actual_x, actual_hess_x)
 
-    end subroutine s_gek_hess_x_fun
+    end subroutine hess_x_s_gek
 
     subroutine setup_kriging(self, kappa_list, grad_list, obj_func_list, &
                              approx_hessian, error)
@@ -1125,14 +1105,15 @@ contains
 
     end subroutine get_matern_deriv
 
-    subroutine bfgs_inv_hess_x_fun(x, inv_hess_x, start_iter, error)
+    subroutine bfgs_inv_hess_x(self, x, inv_hess_x, start_iter, error)
         !
         ! this implements the two-loop recursion for the BFGS update of the inverse
-        ! Hessian applied to a vector x according to T. H. Fischer and J. Almloef,
-        ! JPC 96, 9768 (1992), doi:10.1021/j100203a036
+        ! Hessian of the object applied to a vector x according to T. H. Fischer and J.
+        ! Almloef, JPC 96, 9768 (1992), doi:10.1021/j100203a036
         !
         use opentrustregion, only: numerical_zero
 
+        class(s_gek_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: inv_hess_x(:)
         integer(ip), intent(in) :: start_iter
@@ -1164,47 +1145,43 @@ contains
 
         ! initialize with Hessian diagonal
         do i = 1, n_param
-            if (abs(s_gek_object%h_diag(i)) < vanish_denom_thr) then
+            if (abs(self%h_diag(i)) < vanish_denom_thr) then
                 inv_hess_x(i) = 1e2_rp * x(i)
             else
-                inv_hess_x(i) = x(i) / s_gek_object%h_diag(i)
+                inv_hess_x(i) = x(i) / self%h_diag(i)
             end if
         end do
 
         ! only current point is available
-        if (s_gek_object%n_points == start_iter) return
+        if (self%n_points == start_iter) return
 
         ! get current displacement and gradient difference
-        curr_kappa_diff = s_gek_object%kappa_list(:, s_gek_object%n_points) - &
-                          s_gek_object%kappa_list(:, s_gek_object%n_points - 1)
-        curr_grad_diff = s_gek_object%grad_list(:, s_gek_object%n_points) - &
-                         s_gek_object%grad_list(:, s_gek_object%n_points - 1)
+        curr_kappa_diff = self%kappa_list(:, self%n_points) - &
+                          self%kappa_list(:, self%n_points - 1)
+        curr_grad_diff = self%grad_list(:, self%n_points) - &
+                         self%grad_list(:, self%n_points - 1)
 
         ! initialize initial Hessian approximation multiplied with gradient
         update_y = .false.
-        if (size(s_gek_object%y_list, 2) < s_gek_object%n_points - 1) then
+        if (size(self%y_list, 2) < self%n_points - 1) then
             update_y = .true.
-            allocate(list(size(x), s_gek_object%n_points - 1))
-            if (s_gek_object%n_points > 2) &
-                list(:, :s_gek_object%n_points - 2) = s_gek_object%y_list
+            allocate(list(size(x), self%n_points - 1))
+            if (self%n_points > 2) list(:, :self%n_points - 2) = self%y_list
             do i = 1, n_param
-                if (abs(s_gek_object%h_diag(i)) < vanish_denom_thr) then
-                    list(i, s_gek_object%n_points - 1) = 1e2_rp * curr_grad_diff(i)
+                if (abs(self%h_diag(i)) < vanish_denom_thr) then
+                    list(i, self%n_points - 1) = 1e2_rp * curr_grad_diff(i)
                 else
-                    list(i, s_gek_object%n_points - 1) = curr_grad_diff(i) / &
-                                                         s_gek_object%h_diag(i)
+                    list(i, self%n_points - 1) = curr_grad_diff(i) / self%h_diag(i)
                 end if
             end do
-            call move_alloc(list, s_gek_object%y_list)
+            call move_alloc(list, self%y_list)
         end if
 
         ! loop until (n-2)th iteraion
-        do it = start_iter, s_gek_object%n_points - 2
+        do it = start_iter, self%n_points - 2
             ! get displacement and gradient difference for iteration
-            kappa_diff = s_gek_object%kappa_list(:, it + 1) - &
-                         s_gek_object%kappa_list(:, it)
-            grad_diff = s_gek_object%grad_list(:, it + 1) - &
-                        s_gek_object%grad_list(:, it)
+            kappa_diff = self%kappa_list(:, it + 1) - self%kappa_list(:, it)
+            grad_diff = self%grad_list(:, it + 1) - self%grad_list(:, it)
 
             ! calculate dot products (s_mat(2) is the inverse of the paper)
             s_mat(1) = ddot(n_param, kappa_diff, 1_ip, grad_diff, 1_ip)
@@ -1213,21 +1190,20 @@ contains
             else
                 s_mat(1) = 1.0_rp / s_mat(1)
             end if
-            s_mat(2) = ddot(n_param, grad_diff, 1_ip, s_gek_object%y_list(:, it), 1_ip)
+            s_mat(2) = ddot(n_param, grad_diff, 1_ip, self%y_list(:, it), 1_ip)
             if (abs(s_mat(2)) < vanish_denom_thr) then
                 s_mat(2) = 1.0_rp
             else
                 s_mat(2) = 1.0_rp + s_mat(1) * s_mat(2)
             end if
             s_mat(3) = ddot(n_param, kappa_diff, 1_ip, x, 1_ip)
-            s_mat(4) = ddot(n_param, s_gek_object%y_list(:, it), 1_ip, x, 1_ip)
+            s_mat(4) = ddot(n_param, self%y_list(:, it), 1_ip, x, 1_ip)
 
             ! get dot products for current Hessian approximation multiplied with
             ! gradient
             if (update_y) then
                 s_mat(5) = ddot(n_param, kappa_diff, 1_ip, curr_grad_diff, 1_ip)
-                s_mat(6) = ddot(n_param, s_gek_object%y_list(:, it), 1_ip, &
-                                curr_grad_diff, 1_ip)
+                s_mat(6) = ddot(n_param, self%y_list(:, it), 1_ip, curr_grad_diff, 1_ip)
             end if
 
             ! calculate more dot products
@@ -1240,13 +1216,13 @@ contains
 
             ! calculate current Hessian approximation multiplied with trial vector
             inv_hess_x = inv_hess_x + t_mat(1) * kappa_diff - &
-                         t_mat(2) * s_gek_object%y_list(:, it)
+                         t_mat(2) * self%y_list(:, it)
 
             ! get current Hessian approximation multiplied with gradient
             if (update_y) then
-                s_gek_object%y_list(:, s_gek_object%n_points - 1) = &
-                    s_gek_object%y_list(:, s_gek_object%n_points - 1) + &
-                    t_mat(3) * kappa_diff(:) - t_mat(4) * s_gek_object%y_list(:, it)
+                self%y_list(:, self%n_points - 1) = &
+                    self%y_list(:, self%n_points - 1) + t_mat(3) * kappa_diff(:) - &
+                    t_mat(4) * self%y_list(:, it)
             end if
         end do
 
@@ -1262,25 +1238,24 @@ contains
             s_mat(1) = 1.0_rp / s_mat(1)
         end if
         s_mat(2) = ddot(n_param, curr_grad_diff, 1_ip, &
-                        s_gek_object%y_list(:, s_gek_object%n_points - 1), 1_ip)
+                        self%y_list(:, self%n_points - 1), 1_ip)
         if (abs(s_mat(2)) < vanish_denom_thr) then
             s_mat(2) = 1.0_rp
         else
             s_mat(2) = 1.0_rp + s_mat(1) * s_mat(2)
         end if
         s_mat(3) = ddot(n_param, curr_kappa_diff, 1_ip, x, 1_ip)
-        s_mat(4) = ddot(n_param, s_gek_object%y_list(:, s_gek_object%n_points - 1), &
-                        1_ip, x, 1_ip)
+        s_mat(4) = ddot(n_param, self%y_list(:, self%n_points - 1), 1_ip, x, 1_ip)
         t_mat(2) = s_mat(1) * s_mat(3)
         t_mat(1) = s_mat(2) * t_mat(2) - s_mat(1) * s_mat(4)
 
         ! calculate final Hessian approximation multiplied with trial vector
         inv_hess_x = inv_hess_x + t_mat(1) * curr_kappa_diff - &
-                     t_mat(2) * s_gek_object%y_list(:, s_gek_object%n_points - 1)
+                     t_mat(2) * self%y_list(:, self%n_points - 1)
 
         ! deallocate arrays
         deallocate(curr_kappa_diff, curr_grad_diff)
 
-    end subroutine bfgs_inv_hess_x_fun
+    end subroutine bfgs_inv_hess_x
 
 end module otr_s_gek

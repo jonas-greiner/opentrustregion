@@ -54,6 +54,7 @@ contains
                 allocate(arh_oao_type :: arh_object)
             end if
         end if
+        arh_object%solver_level%extension => arh_object
         solver_settings%context => arh_object%solver_level
         solver_settings%refresh_hess = .true.
         solver_settings%hess_symm = .false.

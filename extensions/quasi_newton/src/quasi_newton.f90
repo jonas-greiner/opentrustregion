@@ -53,13 +53,17 @@ module otr_qn
         "Quasi-Newton settings were not initialized. All quasi-Newton settings are "// &
         "set to default values"
 
+    ! quasi-Newton object, holding the history of steps and gradient differences, the
+    ! settings and the host's transport and initial Hessian functions, whose updating
+    ! schemes extend it with their Hessian linear transformation
     type, abstract, extends(extension_type) :: updating_type
         real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:)
         integer(ip) :: n_points = 0
         type(qn_settings_type) :: settings
+        procedure(transport_type), pointer, nopass :: transport => null()
+        procedure(init_hess_type), pointer, nopass :: init_hess => null()
     contains
         procedure :: update_orbs => update_orbs_qn
-        procedure :: hess_x => hess_x_qn
         procedure :: init
         procedure :: add
         procedure(skip_add_interface), deferred :: skip_add
@@ -68,11 +72,13 @@ module otr_qn
 
     type, extends(updating_type) :: sr1_updating_type
     contains
+        procedure :: hess_x => hess_x_sr1
         procedure :: skip_add => sr1_skip_add
     end type
 
     type, extends(updating_type) :: bfgs_updating_type
     contains
+        procedure :: hess_x => hess_x_bfgs
         procedure :: skip_add => bfgs_skip_add
     end type
 
@@ -87,70 +93,64 @@ module otr_qn
         end function skip_add_interface
     end interface
 
-    ! global variables
-    class(updating_type), pointer :: update_object => null()
-    type(sr1_updating_type), target :: sr1_object
-    type(bfgs_updating_type), target :: bfgs_object
-    procedure(hess_x_type), pointer :: hess_x_qn_funptr => null()
-    procedure(transport_type), pointer :: transport_funptr => null()
-    procedure(init_hess_type), pointer :: init_hess_funptr => null()
-
 contains
 
     subroutine qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                          transport_funptr_in, init_hess_funptr_in, &
-                          update_orbs_qn_funptr, obj_func_qn_funptr, solver_settings, &
-                          error, settings)
+                          transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
+                          obj_func_qn_funptr, solver_settings, solver_state, error, &
+                          settings)
         !
         ! this subroutine returns the quasi-Newton orbital updating function, which
         ! wraps the host's, and the objective function, and wires the solver settings
-        ! with the quasi-Newton object, through which the host's callback functions
-        ! keep receiving the host context
+        ! with a new quasi-Newton object, which they own and through which the host's
+        ! callback functions keep receiving the host context, and which reads the state
+        ! of the solver from the record the host also passes to the solver
         !
-        use opentrustregion, only: solver_settings_type, obj_func_type, &
-                                   verbosity_error, warn_uninitialized_settings
-        use otr_common, only: update_orbs_callback, obj_func_callback
+        use opentrustregion, only: obj_func_type, solver_state_type, verbosity_error, &
+                                   warn_uninitialized_settings
+        use otr_common, only: extension_solver_settings_type, update_orbs_callback, &
+                              obj_func_callback
 
         integer(ip), intent(in) :: n_param
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
-        procedure(transport_type), intent(in), pointer :: transport_funptr_in
-        procedure(init_hess_type), intent(in), pointer :: init_hess_funptr_in
+        procedure(transport_type), intent(in), pointer :: transport_funptr
+        procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_qn_funptr
-        type(solver_settings_type), intent(inout), target :: solver_settings
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(qn_settings_type), intent(in) :: settings
+        type(qn_settings_type), intent(in), optional :: settings
 
         type(qn_settings_type) :: local_settings
-        class(updating_type), pointer :: object
-        procedure(hess_x_type), pointer :: hess_x_funptr
+        class(extension_type), allocatable, target :: object
 
         ! initialize error flag and the returned functions
         error = 0
         update_orbs_qn_funptr => null()
         obj_func_qn_funptr => null()
 
-        ! work on a copy of the settings, which is initialized if they were not, after
-        ! printing a warning regardless of the verbosity, since the default settings
-        ! would silence it
-        local_settings = settings
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             qn_settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            if (error /= 0) return
+        ! work on a copy of the given settings, which is initialized if they were not,
+        ! after printing a warning regardless of the verbosity, since the default
+        ! settings would silence it, or, without any, of the default settings
+        if (present(settings)) then
+            local_settings = settings
+            if (.not. local_settings%initialized) then
+                call warn_uninitialized_settings(local_settings, &
+                                                 qn_settings_uninitialized_warning_msg)
+                call local_settings%init(error)
+                if (error /= 0) return
+            end if
+        else
+            local_settings = default_qn_settings
         end if
 
-        ! get object for quasi-Newton and corresponding Hessian linear transformation
-        ! function, which the module points to only once the object wired the solver
-        ! settings, so that refused settings leave the object in use unchanged
+        ! create the object of the updating scheme
         if (local_settings%hess_update_scheme == "sr1") then
-            object => sr1_object
-            hess_x_funptr => sr1_hess_x_fun
+            allocate(sr1_updating_type :: object)
         else if (local_settings%hess_update_scheme == "bfgs") then
-            object => bfgs_object
-            hess_x_funptr => bfgs_hess_x_fun
+            allocate(bfgs_updating_type :: object)
         else
             call local_settings%log("Quasi-Newton updating scheme not implemented.", &
                                     verbosity_error, .true.)
@@ -158,26 +158,20 @@ contains
             return
         end if
 
-        ! refuse solver settings the object already wired before changing any state
-        call object%check_unwired(solver_settings, local_settings, error)
+        ! initialize the object with the host's transport and initial Hessian functions
+        select type (object)
+        class is (updating_type)
+            call object%init(n_param, local_settings)
+            object%transport => transport_funptr
+            object%init_hess => init_hess_funptr
+        end select
+
+        ! wire the solver settings with the object, which reads the record of the state
+        ! and saves the host's orbital update, objective function, callback functions
+        ! and host contexts, and let the settings own it
+        call solver_settings%wire(object, solver_state, local_settings, error, &
+                                  update_orbs_funptr, obj_func_funptr)
         if (error /= 0) return
-
-        ! initialize the object
-        call object%init(n_param, local_settings)
-
-        ! wire the solver settings with the object, which saves the host's orbital
-        ! update, objective function, callback functions and host contexts
-        call object%wire_solver_settings(solver_settings, local_settings, error, &
-                                         update_orbs_funptr, obj_func_funptr)
-        if (error /= 0) return
-        update_object => object
-        hess_x_qn_funptr => hess_x_funptr
-
-        ! set pointer to transport function
-        transport_funptr => transport_funptr_in
-
-        ! set pointer to Hessian initialization function
-        init_hess_funptr => init_hess_funptr_in
 
         ! get the orbital updating function and the objective function of the object
         update_orbs_qn_funptr => update_orbs_callback
@@ -185,8 +179,8 @@ contains
 
     end subroutine qn_factory
 
-    subroutine update_orbs_qn(self, kappa, func, grad, h_diag, hess_x_funptr, error, &
-                              context)
+    recursive subroutine update_orbs_qn(self, kappa, func, grad, h_diag, &
+                                        hess_x_funptr, error, context)
         !
         ! this subroutine is the quasi-Newton orbital updating function, which updates
         ! the orbitals with the host's orbital update and host context, replaces the
@@ -223,26 +217,6 @@ contains
 
     end subroutine update_orbs_qn
 
-    subroutine hess_x_qn(self, x, hess_x, error, context)
-        !
-        ! this subroutine is the quasi-Newton Hessian linear transformation of the
-        ! updating scheme of the object
-        !
-        class(updating_type), intent(inout) :: self
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        class(*), pointer :: no_context
-
-        ! the Hessian linear transformation of the updating scheme reads the history of
-        ! the scheme's object and needs no context
-        no_context => null()
-        call hess_x_qn_funptr(x, hess_x, error, no_context)
-
-    end subroutine hess_x_qn
-
     subroutine init_qn_settings(self, error)
         !
         ! this subroutine initializes the quasi-Newton settings
@@ -269,17 +243,6 @@ contains
 
     end subroutine init_qn_settings
 
-    subroutine update_orbs_qn_deconstructor()
-        !
-        ! this subroutine deallocates the quasi-Newton objects
-        !
-        if (associated(update_object)) then
-            call update_object%clear()
-            nullify(update_object)
-        end if
-
-    end subroutine update_orbs_qn_deconstructor
-
     subroutine add(self, kappa, grad, error)
         !
         ! this subroutine adds a new rotation and gradient to the corresponding lists
@@ -300,18 +263,18 @@ contains
 
         ! transport history
         do i = 1, self%n_points
-            call transport_funptr(kappa, self%kappa_list(:, i), error, &
-                                  self%settings%context)
+            call self%transport(kappa, self%kappa_list(:, i), error, &
+                                self%settings%context)
             if (error /= 0) return
-            call transport_funptr(kappa, self%grad_diff_list(:, i), error, &
-                                  self%settings%context)
+            call self%transport(kappa, self%grad_diff_list(:, i), error, &
+                                self%settings%context)
             if (error /= 0) return
         end do
 
         ! check if last gradient is available to calculate gradient difference
         if (allocated(self%last_grad)) then
             ! calculate gradient difference
-            call transport_funptr(kappa, self%last_grad, error, self%settings%context)
+            call self%transport(kappa, self%last_grad, error, self%settings%context)
             if (error /= 0) return
             grad_diff = grad - self%last_grad
 
@@ -398,7 +361,7 @@ contains
         n_param = size(kappa)
         kappa_norm = sqrt(ddot(n_param, kappa, 1_ip, kappa, 1_ip))
         residual = -kappa
-        call init_hess_funptr(residual, error, self%settings%context)
+        call self%init_hess(residual, error, self%settings%context)
         if (error /= 0) return
         residual = residual + grad_diff
         residual_norm = sqrt(ddot(n_param, residual, 1_ip, residual, 1_ip))
@@ -408,14 +371,16 @@ contains
 
     end function sr1_skip_add
 
-    subroutine sr1_hess_x_fun(x, hess_x, error, context)
+    subroutine hess_x_sr1(self, x, hess_x, error, context)
         !
-        ! this implements the L-SR1 version according to Byrd, R.H., Nocedal, J. &
-        ! Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
+        ! this subroutine is the Hessian linear transformation of the SR1 updating
+        ! scheme, which implements the L-SR1 version according to Byrd, R.H., Nocedal,
+        ! J. & Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
         ! https://doi.org/10.1007/BF01582063
         !
         use opentrustregion, only: numerical_zero, verbosity_error
 
+        class(sr1_updating_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -442,45 +407,43 @@ contains
 
         ! initialize with Hessian diagonal
         hess_x = x
-        call init_hess_funptr(hess_x, error, update_object%settings%context)
+        call self%init_hess(hess_x, error, self%settings%context)
         if (error /= 0) return
 
         ! only current point is available
-        if (sr1_object%n_points == 0) return
+        if (self%n_points == 0) return
 
         ! build psi = grad_diff - h_start * kappa
-        allocate(psi(n_param, sr1_object%n_points))
-        do i = 1, sr1_object%n_points
-            psi(:, i) = -sr1_object%kappa_list(:, i)
-            call init_hess_funptr(psi(:, i), error, update_object%settings%context)
+        allocate(psi(n_param, self%n_points))
+        do i = 1, self%n_points
+            psi(:, i) = -self%kappa_list(:, i)
+            call self%init_hess(psi(:, i), error, self%settings%context)
             if (error /= 0) return
-            psi(:, i) = psi(:, i) + sr1_object%grad_diff_list(:, i)
+            psi(:, i) = psi(:, i) + self%grad_diff_list(:, i)
         end do
 
         ! build U = psi^T * kappa
-        allocate(U(sr1_object%n_points, sr1_object%n_points))
-        call dgemm("T", "N", sr1_object%n_points, sr1_object%n_points, n_param, &
-                   1.0_rp, psi, n_param, sr1_object%kappa_list, n_param, 0.0_rp, U, &
-                   sr1_object%n_points)
+        allocate(U(self%n_points, self%n_points))
+        call dgemm("T", "N", self%n_points, self%n_points, n_param, 1.0_rp, psi, &
+                   n_param, self%kappa_list, n_param, 0.0_rp, U, self%n_points)
 
         ! symmetrize U
         U = 0.5_rp * (U + transpose(U))
 
         ! q = psi^T * x
-        allocate(q(sr1_object%n_points))
-        call dgemv("T", n_param, sr1_object%n_points, 1.0_rp, psi, n_param, x, 1_ip, &
-                   0.0_rp, q, 1_ip)
+        allocate(q(self%n_points))
+        call dgemv("T", n_param, self%n_points, 1.0_rp, psi, n_param, x, 1_ip, 0.0_rp, &
+                   q, 1_ip)
 
         ! LU factorize U
-        allocate(ipiv(sr1_object%n_points))
-        call dgetrf(sr1_object%n_points, sr1_object%n_points, U, sr1_object%n_points, &
-                    ipiv, info)
+        allocate(ipiv(self%n_points))
+        call dgetrf(self%n_points, self%n_points, U, self%n_points, ipiv, info)
 
         ! check for successful execution
         if (info /= 0) then
             write(msg, '(A, I0)') "Matrix inversion failed: Error in DGETRF, info = ", &
                 info
-            call sr1_object%settings%log(msg, verbosity_error, .true.)
+            call self%settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
@@ -488,26 +451,26 @@ contains
         ! solve U * z = q
         z = q
         deallocate(q)
-        call dgetrs("N", sr1_object%n_points, 1_ip, U, sr1_object%n_points, ipiv, z, &
-                    sr1_object%n_points, info)
+        call dgetrs("N", self%n_points, 1_ip, U, self%n_points, ipiv, z, &
+                    self%n_points, info)
 
         ! check for successful execution
         if (info /= 0) then
             write(msg, '(A, I0)') "Matrix solve failed: Error in DGETRS, info = ", info
-            call sr1_object%settings%log(msg, verbosity_error, .true.)
+            call self%settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
         deallocate(U, ipiv)
 
         ! w += psi * z
-        call dgemv("N", n_param, sr1_object%n_points, 1.0_rp, psi, n_param, z, 1_ip, &
-                   1.0_rp, hess_x, 1_ip)
+        call dgemv("N", n_param, self%n_points, 1.0_rp, psi, n_param, z, 1_ip, 1.0_rp, &
+                   hess_x, 1_ip)
 
         ! deallocate arrays
         deallocate(psi, z)
 
-    end subroutine sr1_hess_x_fun
+    end subroutine hess_x_sr1
 
     function bfgs_skip_add(self, kappa, grad_diff, error) result(skip)
         !
@@ -540,14 +503,16 @@ contains
 
     end function bfgs_skip_add
 
-    subroutine bfgs_hess_x_fun(x, hess_x, error, context)
+    subroutine hess_x_bfgs(self, x, hess_x, error, context)
         !
-        ! this implements the L-BFGS version according to Byrd, R.H., Nocedal, J. &
-        ! Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
+        ! this subroutine is the Hessian linear transformation of the BFGS updating
+        ! scheme, which implements the L-BFGS version according to Byrd, R.H., Nocedal,
+        ! J. & Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
         ! https://doi.org/10.1007/BF01582063
         !
         use opentrustregion, only: numerical_zero, verbosity_error
 
+        class(bfgs_updating_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -575,35 +540,35 @@ contains
 
         ! initialize with Hessian diagonal
         hess_x = x
-        call init_hess_funptr(hess_x, error, update_object%settings%context)
+        call self%init_hess(hess_x, error, self%settings%context)
         if (error /= 0) return
 
         ! only current point is available
-        if (bfgs_object%n_points == 0) return
+        if (self%n_points == 0) return
 
         ! build compact scaling matrix
         ! [ kappa^T * h_start * kappa    L ]
         ! [             L^T            -D ]
-        allocate(compact_scal_mat(2 * bfgs_object%n_points, 2 * bfgs_object%n_points))
+        allocate(compact_scal_mat(2 * self%n_points, 2 * self%n_points))
         compact_scal_mat = 0.0_rp
-        do j = 1, bfgs_object%n_points
-            init_hess_x = bfgs_object%kappa_list(:, j)
-            call init_hess_funptr(init_hess_x, error, update_object%settings%context)
+        do j = 1, self%n_points
+            init_hess_x = self%kappa_list(:, j)
+            call self%init_hess(init_hess_x, error, self%settings%context)
             if (error /= 0) return
-            do i = 1, bfgs_object%n_points
+            do i = 1, self%n_points
                 ! Weighted Top-Left: kappa_i^T * h_start * kappa_j
-                compact_scal_mat(i, j) = ddot(n_param, bfgs_object%kappa_list(:, i), &
-                                              1_ip, init_hess_x, 1_ip)
+                compact_scal_mat(i, j) = ddot(n_param, self%kappa_list(:, i), 1_ip, &
+                                              init_hess_x, 1_ip)
 
                 ! L and D parts (do not depend on initial Hessian)
-                kappa_grad_dot = ddot(n_param, bfgs_object%kappa_list(:, i), 1_ip, &
-                                      bfgs_object%grad_diff_list(:, j), 1_ip)
+                kappa_grad_dot = ddot(n_param, self%kappa_list(:, i), 1_ip, &
+                                      self%grad_diff_list(:, j), 1_ip)
                 if (i > j) then
-                    compact_scal_mat(i, j + bfgs_object%n_points) = kappa_grad_dot
-                    compact_scal_mat(j + bfgs_object%n_points, i) = kappa_grad_dot
+                    compact_scal_mat(i, j + self%n_points) = kappa_grad_dot
+                    compact_scal_mat(j + self%n_points, i) = kappa_grad_dot
                 else if (i == j) then
-                    compact_scal_mat(i + bfgs_object%n_points, &
-                                     j + bfgs_object%n_points) = -kappa_grad_dot
+                    compact_scal_mat(i + self%n_points, j + self%n_points) = &
+                        -kappa_grad_dot
                 end if
             end do
         end do
@@ -611,60 +576,57 @@ contains
         ! build right-hand side
         ! [ kappa^T * h_start * x ]
         ! [   grad_diff^T * x    ]
-        allocate(solution(2 * bfgs_object%n_points))
-        do i = 1, bfgs_object%n_points
+        allocate(solution(2 * self%n_points))
+        do i = 1, self%n_points
             ! weighted dot product for the top half of RHS
-            solution(i) = ddot(n_param, bfgs_object%kappa_list(:, i), 1_ip, hess_x, &
-                               1_ip)
-            solution(i + bfgs_object%n_points) = &
-                ddot(n_param, bfgs_object%grad_diff_list(:, i), 1_ip, x, 1_ip)
+            solution(i) = ddot(n_param, self%kappa_list(:, i), 1_ip, hess_x, 1_ip)
+            solution(i + self%n_points) = ddot(n_param, self%grad_diff_list(:, i), &
+                                               1_ip, x, 1_ip)
         end do
 
         ! LU factorize compact scaling matrix
-        allocate(ipiv(2 * bfgs_object%n_points))
-        call dgetrf(2 * bfgs_object%n_points, 2 * bfgs_object%n_points, &
-                    compact_scal_mat, 2 * bfgs_object%n_points, ipiv, info)
+        allocate(ipiv(2 * self%n_points))
+        call dgetrf(2 * self%n_points, 2 * self%n_points, compact_scal_mat, &
+                    2 * self%n_points, ipiv, info)
 
         ! check for successful execution
         if (info /= 0) then
             write(msg, '(A, I0)') "Matrix inversion failed: Error in DGETRF, info = ", &
                 info
-            call bfgs_object%settings%log(msg, verbosity_error, .true.)
+            call self%settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
 
         ! solve compact_scal_mat * solution = rhs
-        call dgetrs("N", 2 * bfgs_object%n_points, 1_ip, compact_scal_mat, &
-                    2 * bfgs_object%n_points, ipiv, solution, &
-                    2 * bfgs_object%n_points, info)
+        call dgetrs("N", 2 * self%n_points, 1_ip, compact_scal_mat, 2 * self%n_points, &
+                    ipiv, solution, 2 * self%n_points, info)
         deallocate(compact_scal_mat, ipiv)
 
         ! check for successful execution
         if (info /= 0) then
             write(msg, '(A, I0)') "Matrix inversion failed: Error in DGETRS, info = ", &
                 info
-            call bfgs_object%settings%log(msg, verbosity_error, .true.)
+            call self%settings%log(msg, verbosity_error, .true.)
             error = 1
             return
         end if
 
         ! construct Hessian linear transformation
         ! hess_x = hess_diag * x - ([hess_diag * kappa, grad_diff] * solution)
-        do i = 1, bfgs_object%n_points
+        do i = 1, self%n_points
             ! subtract rotation difference contributions
-            init_hess_x = bfgs_object%kappa_list(:, i)
-            call init_hess_funptr(init_hess_x, error, update_object%settings%context)
+            init_hess_x = self%kappa_list(:, i)
+            call self%init_hess(init_hess_x, error, self%settings%context)
             if (error /= 0) return
             hess_x = hess_x - (solution(i) * init_hess_x)
             ! subtract gradient difference contributions
-            hess_x = hess_x - solution(i + bfgs_object%n_points) * &
-                     bfgs_object%grad_diff_list(:, i)
+            hess_x = hess_x - solution(i + self%n_points) * self%grad_diff_list(:, i)
         end do
 
         ! deallocate arrays
         deallocate(solution)
 
-    end subroutine bfgs_hess_x_fun
+    end subroutine hess_x_bfgs
 
 end module otr_qn

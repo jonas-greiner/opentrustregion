@@ -260,7 +260,7 @@ The optimization process can be fine-tuned using the following settings:
 - **`verbose`** (integer): Controls the verbosity of output during optimization. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors and the random gradient perturbation.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The optional extensions keep their orbital objects and callbacks in module-level state, so solves using their factories can neither run at the same time nor be nested.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The MO, OAO and ARH extensions keep their objects and callbacks in module-level state, so solves using their factories can neither run at the same time nor be nested, while the quasi-Newton and S-GEK factories create a new object for every call.
 - **`stability_settings`** (stability_settings_type): Settings object controlling the internal stability check that is automatically performed upon convergence when `stability` is `True` and in any case at a starting point that is already converged and at a point with an exactly vanishing gradient (see the Stability Check section below). If `stability_settings%precond`, `stability_settings%project`, `stability_settings%logger`, or `stability_settings%context` are left unset, they default to the corresponding `precond`, `project`, `logger`, and `context` supplied to `solver`. The internal stability check hands its own context to every callback function it calls, so when `stability_settings%context` is set, the Hessian linear transformation returned by `update_orbs` and any inherited `precond`, `project` or `logger` receive it instead of the solver's `context` and must accept it. Leaving it unset keeps the solver's `context` everywhere. `stability_settings%verbose` is raised to at least the solver's own `verbose` level. Unless `stability_settings%conv_check` is set, the internal stability check stops as soon as an instability is certain (see `stop_on_instability`), and by default it uses a single random trial vector.
 
 ### Output
@@ -909,7 +909,7 @@ CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install .
 
 #### Usage
 
-This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `qn_factory` constructs and returns quasi-Newton versions of the orbital updating subroutine and the objective function and wires the solver settings with the quasi-Newton object. This routine takes the following arguments:
+This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `qn_factory` constructs and returns quasi-Newton versions of the orbital updating subroutine and the objective function and wires the solver settings with a new quasi-Newton object. This routine takes the following arguments:
 
 #### Required Arguments
 
@@ -920,21 +920,24 @@ This allows the solver to automatically update the Hessian using a quasi-Newton 
 - **`init_hess`** (subroutine): Applies the initial Hessian approximation in place to a vector and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the quasi-Newton settings as its last argument.
 - **`update_orbs_qn`** (subroutine): Returned quasi-Newton orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_qn`** (function): Returned objective function as defined for the `solver` subroutine.
-- **`settings`** (solver_settings_type): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. Start from fresh settings for every new calculation: calling `qn_factory` again with settings it wired is refused with an error, and if another factory wired them in between, the repeated call is not detected and the callback functions neither object provides then call each other without end.
+- **`extension`** (C only, `void **`): Returns the handle of the new quasi-Newton object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, while settings no factory wired take your own. Fortran and Python refuse other functions with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
-- **`qn_settings`** (qn_settings_type): Settings object which controls optional arguments as described below.
+- **`qn_settings`** (qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
 
 ---
 
 The following Fortran snippet demonstrates how to use the quasi-Newton interface:
 
 ```fortran
-use opentrustregion, only: ip, solver_settings_type, update_orbs_type, obj_func_type, &
+use opentrustregion, only: ip, solver_state_type, update_orbs_type, obj_func_type, &
                            solver
-use otr_qn, only: qn_factory, qn_settings_type, transport_type, init_hess_type, &
-                  update_orbs_qn_deconstructor
+use otr_common, only: extension_solver_settings_type
+use otr_qn, only: qn_factory, qn_settings_type, transport_type, init_hess_type
 
-type(solver_settings_type) :: settings
+type(extension_solver_settings_type), target :: settings
+type(solver_state_type), target :: state
 type(qn_settings_type) :: qn_settings
 procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_qn_funptr
 procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_qn_funptr
@@ -958,16 +961,13 @@ qn_settings%hess_update_scheme = "sr1"
 ! initialize settings
 call settings%init(error)
 
-! get quasi-Newton routines and wire the settings with the quasi-Newton object
+! get quasi-Newton routines and wire the settings with a new quasi-Newton object
 call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
                 init_hess_funptr, update_orbs_qn_funptr, obj_func_qn_funptr, settings, &
-                error, qn_settings)
+                state, error, qn_settings)
 
 ! call solver
-call solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, error, settings)
-
-! clean up quasi-Newton objects
-call update_orbs_qn_deconstructor()
+call solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, error, settings, state)
 ```
 
 ---
@@ -997,9 +997,11 @@ strcpy(qn_settings.hess_update_scheme, "sr1");
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
-// get quasi-Newton functions and wire the settings with the quasi-Newton object
+// get quasi-Newton functions and wire the settings with a new quasi-Newton object
 update_orbs_fp update_orbs_qn_funptr;
 obj_func_fp obj_func_qn_funptr;
+void *extension;
+solver_state_type state;
 c_int error = qn_factory(n_param,
                          update_orbs_funptr,
                          obj_func_funptr,
@@ -1007,14 +1009,16 @@ c_int error = qn_factory(n_param,
                          init_hess_funptr,
                          &update_orbs_qn_funptr,
                          &obj_func_qn_funptr,
+                         &extension,
                          &settings,
+                         &state,
                          &qn_settings);
 
 // call solver
-error = solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, &settings, NULL);
+error = solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, &settings, &state);
 
-// clean up quasi-Newton objects
-update_orbs_qn_deconstructor();
+// release the quasi-Newton object
+release_extension(extension);
 ```
 
 ---
@@ -1022,10 +1026,8 @@ update_orbs_qn_deconstructor();
 The following Python snippet demonstrates the equivalent usage through the Python interface:
 
 ```python
-from pyopentrustregion import SolverSettings, solver
-from pyopentrustregion.extensions.quasi_newton import (
-    QNSettings, qn_factory, update_orbs_qn_deconstructor
-)
+from pyopentrustregion import SolverSettings, SolverState, solver
+from pyopentrustregion.extensions.quasi_newton import QNSettings, qn_factory
 
 # initialize quasi-Newton settings
 qn_settings = QNSettings()
@@ -1034,19 +1036,17 @@ qn_settings = QNSettings()
 qn_settings.verbose = 1
 qn_settings.hess_update_scheme = "sr1"
 
-# initialize settings
+# initialize settings and state
 settings = SolverSettings()
+state = SolverState()
 
-# get quasi-Newton functions and wire the settings with the quasi-Newton object
+# get quasi-Newton functions and wire the settings with a new quasi-Newton object
 update_orbs_qn, obj_func_qn = qn_factory(
-    n_param, update_orbs, obj_func, transport, init_hess, settings, qn_settings
+    n_param, update_orbs, obj_func, transport, init_hess, settings, state, qn_settings
 )
 
 # call solver
-solver(update_orbs_qn, obj_func_qn, n_param, settings)
-
-# clean up quasi-Newton objects
-update_orbs_qn_deconstructor()
+solver(update_orbs_qn, obj_func_qn, n_param, settings, state)
 ```
 
 ---
@@ -1054,9 +1054,9 @@ update_orbs_qn_deconstructor()
 - Callback functions (`update_orbs`, `obj_func`, `transport`, `init_hess`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
 - Quasi-Newton settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `hess_update_scheme`) can then be overridden.
-- Quasi-Newton versions of the orbital updating function and the objective function are obtained by calling `qn_factory`, which also wires the solver settings with the quasi-Newton object.
-- The `solver` is then called with the returned functions and the wired settings.
-- Clean up quasi-Newton resources by calling `update_orbs_qn_deconstructor`.
+- Quasi-Newton versions of the orbital updating function and the objective function are obtained by calling `qn_factory`, which also wires the solver settings with a new quasi-Newton object.
+- The `solver` is then called with the returned functions, the wired settings and the state record passed to the factory.
+- The quasi-Newton object is freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases it with `release_extension`.
 
 #### Optional Settings
 The quasi-Newton factory function can be fine-tuned using the following settings:
@@ -1423,7 +1423,7 @@ CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install .
 
 #### Usage
 
-This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `s_gek_factory` constructs and returns S-GEK versions of the orbital updating subroutine and the objective function and wires the solver settings with the S-GEK object. This routine takes the following arguments:
+This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `s_gek_factory` constructs and returns S-GEK versions of the orbital updating subroutine and the objective function and wires the solver settings with a new S-GEK object. This routine takes the following arguments:
 
 #### Required Arguments
 
@@ -1433,21 +1433,24 @@ This allows the solver to automatically update the Hessian by building and evalu
 - **`change_reference`** (subroutine): Expresses the parameters, local gradients and gradients of the `n_points` stored points in place relative to a new reference point and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the S-GEK settings as its last argument.
 - **`update_orbs_s_gek`** (subroutine): Returned S-GEK orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_s_gek`** (function): Returned objective function as defined for the `solver` subroutine.
-- **`settings`** (solver_settings_type): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. Start from fresh settings for every new calculation: calling `s_gek_factory` again with settings it wired is refused with an error, and if another factory wired them in between, the repeated call is not detected and the callback functions neither object provides then call each other without end.
+- **`extension`** (C only, `void **`): Returns the handle of the new S-GEK object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `s_gek_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, while settings no factory wired take your own. Fortran and Python refuse other functions with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
-- **`s_gek_settings`** (s_gek_settings_type): Settings object which controls optional arguments as described below.
+- **`s_gek_settings`** (s_gek_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
 
 ---
 
 The following Fortran snippet demonstrates how to use the S-GEK interface:
 
 ```fortran
-use opentrustregion, only: ip, solver_settings_type, update_orbs_type, obj_func_type, &
+use opentrustregion, only: ip, solver_state_type, update_orbs_type, obj_func_type, &
                            solver
-use otr_s_gek, only: s_gek_factory, s_gek_settings_type, change_reference_type, &
-                     update_orbs_s_gek_deconstructor
+use otr_common, only: extension_solver_settings_type
+use otr_s_gek, only: s_gek_factory, s_gek_settings_type, change_reference_type
 
-type(solver_settings_type) :: settings
+type(extension_solver_settings_type), target :: settings
+type(solver_state_type), target :: state
 type(s_gek_settings_type) :: s_gek_settings
 procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_s_gek_funptr
 procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_s_gek_funptr
@@ -1469,16 +1472,14 @@ s_gek_settings%max_points = 30
 ! initialize settings
 call settings%init(error)
 
-! get S-GEK routines and wire the settings with the S-GEK object
+! get S-GEK routines and wire the settings with a new S-GEK object
 call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                    change_reference_funptr, update_orbs_s_gek_funptr, &
-                   obj_func_s_gek_funptr, settings, error, s_gek_settings)
+                   obj_func_s_gek_funptr, settings, state, error, s_gek_settings)
 
 ! call solver
-call solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, error, settings)
-
-! clean up S-GEK objects
-call update_orbs_s_gek_deconstructor()
+call solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, error, &
+            settings, state)
 ```
 
 ---
@@ -1506,24 +1507,28 @@ s_gek_settings.max_points = 30;
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
-// get S-GEK functions and wire the settings with the S-GEK object
+// get S-GEK functions and wire the settings with a new S-GEK object
 update_orbs_fp update_orbs_s_gek_funptr;
 obj_func_fp obj_func_s_gek_funptr;
+void *extension;
+solver_state_type state;
 c_int error = s_gek_factory(n_param,
                             update_orbs_funptr,
                             obj_func_funptr,
                             change_reference_funptr,
                             &update_orbs_s_gek_funptr,
                             &obj_func_s_gek_funptr,
+                            &extension,
                             &settings,
+                            &state,
                             &s_gek_settings);
 
 // call solver
 error =
-    solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, &settings, NULL);
+    solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, &settings, &state);
 
-// clean up S-GEK objects
-update_orbs_s_gek_deconstructor();
+// release the S-GEK object
+release_extension(extension);
 ```
 
 ---
@@ -1531,10 +1536,8 @@ update_orbs_s_gek_deconstructor();
 The following Python snippet demonstrates the equivalent usage through the Python interface:
 
 ```python
-from pyopentrustregion import SolverSettings, solver
-from pyopentrustregion.extensions.s_gek import (
-    SGEKSettings, s_gek_factory, update_orbs_s_gek_deconstructor
-)
+from pyopentrustregion import SolverSettings, SolverState, solver
+from pyopentrustregion.extensions.s_gek import SGEKSettings, s_gek_factory
 
 # initialize S-GEK settings
 s_gek_settings = SGEKSettings()
@@ -1543,19 +1546,17 @@ s_gek_settings = SGEKSettings()
 s_gek_settings.verbose = 1
 s_gek_settings.max_points = 30
 
-# initialize settings
+# initialize settings and state
 settings = SolverSettings()
+state = SolverState()
 
-# get S-GEK functions and wire the settings with the S-GEK object
+# get S-GEK functions and wire the settings with a new S-GEK object
 update_orbs_s_gek, obj_func_s_gek = s_gek_factory(
-    n_param, update_orbs, obj_func, change_reference, settings, s_gek_settings
+    n_param, update_orbs, obj_func, change_reference, settings, state, s_gek_settings
 )
 
 # call solver
-solver(update_orbs_s_gek, obj_func_s_gek, n_param, settings)
-
-# clean up S-GEK objects
-update_orbs_s_gek_deconstructor()
+solver(update_orbs_s_gek, obj_func_s_gek, n_param, settings, state)
 ```
 
 ---
@@ -1563,9 +1564,9 @@ update_orbs_s_gek_deconstructor()
 - Callback functions (`update_orbs`, `obj_func`, `change_reference`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
 - S-GEK settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `max_points`) can then be overridden.
-- S-GEK versions of the orbital updating function and the objective function are obtained by calling `s_gek_factory`, which also wires the solver settings with the S-GEK object.
-- The `solver` is then called with the returned functions and the wired settings.
-- Clean up S-GEK resources by calling `update_orbs_s_gek_deconstructor`.
+- S-GEK versions of the orbital updating function and the objective function are obtained by calling `s_gek_factory`, which also wires the solver settings with a new S-GEK object.
+- The `solver` is then called with the returned functions, the wired settings and the state record passed to the factory.
+- The S-GEK object is freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases it with `release_extension`.
 
 #### Optional Settings
 The S-GEK factory function can be fine-tuned using the following settings:

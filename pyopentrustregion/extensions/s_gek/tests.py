@@ -27,16 +27,17 @@ from pyopentrustregion.python_interface import (
     c_real,
     c_int,
     SolverSettings,
+    SolverState,
     logger_interface_type,
 )
 from pyopentrustregion.extensions.s_gek import (
     SGEKSettings,
     s_gek_factory,
-    update_orbs_s_gek_deconstructor,
 )
 from pyopentrustregion.extensions.common.tests import (
     setup_wired_solver_settings,
     check_wired_solver_settings,
+    check_extension_owner,
 )
 
 if NUMPY_AVAILABLE:
@@ -52,7 +53,6 @@ fortran_tests = {
         "change_reference_f_wrapper",
         "init_s_gek_settings_c",
         "s_gek_factory_c_wrapper",
-        "update_orbs_s_gek_deconstructor_c_wrapper",
     ],
 }
 
@@ -169,6 +169,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
             self.mock_obj_func,
             self.mock_change_reference,
             solver_settings,
+            SolverState(),
             settings,
         )
 
@@ -178,6 +179,11 @@ class SGEKPyInterfaceTests(unittest.TestCase):
                 " test_s_gek_factory_py_interface failed: Called logging "
                 "function wrong."
             )
+            test_passed = False
+
+        # check that the settings were passed
+        if not c_bool.in_dll(lib, "s_gek_settings_passed").value:
+            print(" test_s_gek_factory_py_interface failed: Settings not passed.")
             test_passed = False
 
         # call returned S-GEK orbital updating function
@@ -270,6 +276,69 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         ):
             test_passed = False
 
+        # call s_gek_factory python interface with the host's functions for the solver
+        # settings the factory wired, which has to raise an error before the Fortran
+        # factory is called
+        try:
+            s_gek_factory(
+                n_param,
+                self.mock_update_orbs,
+                self.mock_obj_func,
+                self.mock_change_reference,
+                solver_settings,
+                SolverState(),
+                settings,
+            )
+            print(
+                " test_s_gek_factory_py_interface failed: Host's functions for wired "
+                "solver settings did not raise an error."
+            )
+            test_passed = False
+        except ValueError:
+            pass
+
+        # call s_gek_factory python interface without settings, which have to be passed as
+        # none so that the library uses its default settings
+        settings_flag = c_bool.in_dll(lib, "s_gek_settings_passed")
+        settings_flag.value = True
+        try:
+            s_gek_factory(
+                n_param,
+                self.mock_update_orbs,
+                self.mock_obj_func,
+                self.mock_change_reference,
+                setup_wired_solver_settings()[0],
+                SolverState(),
+            )
+        except RuntimeError:
+            print(
+                " test_s_gek_factory_py_interface failed: Call without settings raises "
+                "error."
+            )
+            test_passed = False
+        if settings_flag.value:
+            print(
+                " test_s_gek_factory_py_interface failed: Settings passed although none were "
+                "given."
+            )
+            test_passed = False
+
+        # the factory hands the extension it receives to an owner, which the solver
+        # settings keep alive and which keeps the state alive
+        if not check_extension_owner(
+            lambda solver_settings, solver_state: s_gek_factory(
+                n_param,
+                self.mock_update_orbs,
+                self.mock_obj_func,
+                self.mock_change_reference,
+                solver_settings,
+                solver_state,
+                settings,
+            ),
+            "s_gek_factory_py_interface",
+        ):
+            test_passed = False
+
         # call s_gek_factory python interface for a host callback which cannot be
         # called with the arguments the C interface passes, which has to raise an error
         # before the Fortran factory is called
@@ -280,6 +349,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
                 self.mock_obj_func,
                 lambda new_ref, kappa_list, local_grad_list: None,
                 SolverSettings(),
+                SolverState(),
                 settings,
             )
             print(
@@ -296,37 +366,6 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         )
         print(" test_s_gek_factory_py_interface PASSED")
 
-    # replace original library with mock library
-    @patch(
-        "pyopentrustregion.python_interface.lib.update_orbs_s_gek_deconstructor",
-        lib.mock_update_orbs_s_gek_deconstructor,
-    )
-    def test_update_orbs_s_gek_deconstructor_py_interface(self):
-        """
-        this function tests the S-GEK orbital updating deconstructor python
-        interface
-        """
-        # initialize test flag
-        test_passed = True
-
-        # call S-GEK orbital updating deconstructor python interface
-        update_orbs_s_gek_deconstructor()
-
-        # check if deconstructor was called correctly
-        if not c_bool.in_dll(
-            lib, "test_update_orbs_s_gek_deconstructor_interface"
-        ).value:
-            print(
-                " test_update_orbs_s_gek_deconstructor_py_interface failed: "
-                "Deconstructor called wrong."
-            )
-            test_passed = False
-
-        self.assertTrue(
-            test_passed, "test_update_orbs_s_gek_deconstructor_py_interface failed"
-        )
-        print(" test_update_orbs_s_gek_deconstructor_py_interface PASSED")
-
     @patch.object(SGEKSettings, "init_c_struct", lib.mock_init_s_gek_settings)
     def test_s_gek_settings(self):
         """
@@ -337,6 +376,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         settings = SGEKSettings()
         if not self.equal_settings_to_ref(settings):
             print(" test_s_gek_settings failed: Settings not initialized correctly.")
+            test_passed = False
 
         # assigning a logging function writes the C callback function the settings
         # built for it into the C settings, which calls it whatever context it

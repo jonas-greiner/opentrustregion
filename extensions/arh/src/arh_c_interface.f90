@@ -97,10 +97,9 @@ contains
         ! object, and writes the solver settings the factory wired back into the C
         ! solver settings
         !
-        use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
-        use otr_arh, only: arh_settings_type, arh_object
-        use otr_common_c_interface, only: setup_extension_holder, &
+        use otr_arh, only: arh_settings_type
+        use otr_common_c_interface, only: bundle_settings_c, setup_extension_holder, &
                                           wire_solver_settings_c, obj_func_c_wrapper
         use otr_mo_c_interface, only: mo_coeff_3d_c, update_orbs_mo_c_wrapper
 
@@ -122,7 +121,6 @@ contains
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
-        type(solver_settings_type) :: solver_settings
         type(arh_settings_type) :: settings
         type(arh_c_callbacks_type), target :: callbacks
         type(extension_holder_type) :: previous_holder
@@ -185,11 +183,8 @@ contains
         ! wrappers in a bundle, which the settings point to
         settings = settings_c
         call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=callbacks%evaluate_dm)
-        if (settings_c%initialized) then
-            if (c_associated(settings_c%logger)) &
-                call c_f_procpointer(cptr=settings_c%logger, fptr=callbacks%logger)
-            callbacks%host_context = settings_c%context
-        end if
+        call bundle_settings_c(callbacks, settings_c%initialized, settings_c%logger, &
+                               settings_c%context)
         settings%context => callbacks
 
         ! keep the holder and the bundle held by the module, which are restored if the
@@ -200,8 +195,7 @@ contains
 
         ! set up the holder and convert the solver settings, unless the holder was
         ! already wired into these
-        call setup_extension_holder(arh_holder, solver_settings_c, solver_settings, &
-                                    settings, error)
+        call setup_extension_holder(arh_holder, solver_settings_c, settings, error)
         if (error /= 0) then
             error_c = int(error, kind=c_ip)
             return
@@ -219,12 +213,14 @@ contains
             call arh_factory_mo_cs(mo_coeff_2d, ao_overlap, n_occ(1), n_particle, &
                                    n_ao, n_mo, evaluate_dm_cs_funptr, &
                                    update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                   solver_settings, error, settings, orbsym_1d)
+                                   arh_holder%solver_settings%solver_settings_type, &
+                                   error, settings, orbsym_1d)
         else
             call arh_factory_mo_os(mo_coeff_3d, ao_overlap, n_occ, n_particle, n_ao, &
                                    n_mo, evaluate_dm_os_funptr, &
                                    update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                   solver_settings, error, settings, orbsym)
+                                   arh_holder%solver_settings%solver_settings_type, &
+                                   error, settings, orbsym)
         end if
 
         ! write the wired solver settings back and return the C wrappers of the orbital
@@ -233,8 +229,7 @@ contains
         ! the object, or restore the holder and the bundle held by the module if the
         ! factory failed
         if (error == 0) then
-            call wire_solver_settings_c(arh_holder, arh_object, solver_settings, &
-                                        solver_settings_c)
+            call wire_solver_settings_c(arh_holder, solver_settings_c)
             update_orbs_arh_c_funptr = c_funloc(update_orbs_mo_c_wrapper)
             obj_func_arh_c_funptr = c_funloc(obj_func_c_wrapper)
             if (rp /= c_rp) call c_f_pointer(c_loc(mo_coeff_c(1)), mo_coeff_3d_c, &
@@ -259,10 +254,9 @@ contains
         ! object, and writes the solver settings the factory wired back into the C
         ! solver settings
         !
-        use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
-        use otr_arh, only: arh_settings_type, arh_object
-        use otr_common_c_interface, only: setup_extension_holder, &
+        use otr_arh, only: arh_settings_type
+        use otr_common_c_interface, only: bundle_settings_c, setup_extension_holder, &
                                           wire_solver_settings_c, obj_func_c_wrapper
         use otr_oao_c_interface, only: dm_ao_3d_c, update_orbs_oao_c_wrapper
 
@@ -282,7 +276,6 @@ contains
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
-        type(solver_settings_type) :: solver_settings
         type(arh_settings_type) :: settings
         type(arh_c_callbacks_type), target :: callbacks
         type(extension_holder_type) :: previous_holder
@@ -330,11 +323,8 @@ contains
         ! wrappers in a bundle, which the settings point to
         settings = settings_c
         call c_f_procpointer(cptr=evaluate_dm_c_funptr, fptr=callbacks%evaluate_dm)
-        if (settings_c%initialized) then
-            if (c_associated(settings_c%logger)) &
-                call c_f_procpointer(cptr=settings_c%logger, fptr=callbacks%logger)
-            callbacks%host_context = settings_c%context
-        end if
+        call bundle_settings_c(callbacks, settings_c%initialized, settings_c%logger, &
+                               settings_c%context)
         settings%context => callbacks
 
         ! keep the holder and the bundle held by the module, which are restored if the
@@ -345,8 +335,7 @@ contains
 
         ! set up the holder and convert the solver settings, unless the holder was
         ! already wired into these
-        call setup_extension_holder(arh_holder, solver_settings_c, solver_settings, &
-                                    settings, error)
+        call setup_extension_holder(arh_holder, solver_settings_c, settings, error)
         if (error /= 0) then
             error_c = int(error, kind=c_ip)
             return
@@ -361,15 +350,15 @@ contains
 
         ! call factory function
         if (n_particle == 1) then
-            call arh_factory_oao_cs(dm_ao_2d, ao_overlap, n_particle, n_ao, &
-                                    evaluate_dm_cs_funptr, update_orbs_arh_funptr, &
-                                    obj_func_arh_funptr, solver_settings, error, &
-                                    settings)
+            call arh_factory_oao_cs( &
+                dm_ao_2d, ao_overlap, n_particle, n_ao, evaluate_dm_cs_funptr, &
+                update_orbs_arh_funptr, obj_func_arh_funptr, &
+                arh_holder%solver_settings%solver_settings_type, error, settings)
         else
-            call arh_factory_oao_os(dm_ao_3d, ao_overlap, n_particle, n_ao, &
-                                    evaluate_dm_os_funptr, update_orbs_arh_funptr, &
-                                    obj_func_arh_funptr, solver_settings, error, &
-                                    settings)
+            call arh_factory_oao_os( &
+                dm_ao_3d, ao_overlap, n_particle, n_ao, evaluate_dm_os_funptr, &
+                update_orbs_arh_funptr, obj_func_arh_funptr, &
+                arh_holder%solver_settings%solver_settings_type, error, settings)
         end if
 
         ! write the wired solver settings back and return the C wrappers of the orbital
@@ -378,8 +367,7 @@ contains
         ! the object, or restore the holder and the bundle held by the module if the
         ! factory failed
         if (error == 0) then
-            call wire_solver_settings_c(arh_holder, arh_object, solver_settings, &
-                                        solver_settings_c)
+            call wire_solver_settings_c(arh_holder, solver_settings_c)
             update_orbs_arh_c_funptr = c_funloc(update_orbs_oao_c_wrapper)
             obj_func_arh_c_funptr = c_funloc(obj_func_c_wrapper)
             if (rp /= c_rp) call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d_c, &

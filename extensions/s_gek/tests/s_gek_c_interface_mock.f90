@@ -8,53 +8,54 @@ module otr_s_gek_c_interface_mock
 
     use opentrustregion, only: stderr
     use c_interface, only: c_ip
-    use otr_s_gek_c_interface, only: s_gek_factory_c_wrapper, init_s_gek_settings_c, &
-                                     update_orbs_s_gek_deconstructor_c_wrapper
+    use otr_s_gek_c_interface, only: s_gek_factory_c_wrapper, init_s_gek_settings_c
     use otr_s_gek_test_reference, only: ref_s_gek_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char
 
     implicit none
 
-    logical(c_bool), bind(C) :: &
-        test_s_gek_factory_interface = .true._c_bool, &
-        test_update_orbs_s_gek_deconstructor_interface = .false._c_bool
+    logical(c_bool), bind(C) :: test_s_gek_factory_interface = .true._c_bool
+
+    ! whether the mock factory received settings, which the Python test reads
+    logical(c_bool), bind(C) :: s_gek_settings_passed = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
     procedure(s_gek_factory_c_wrapper), pointer :: mock_s_gek_factory_c_wrapper_ptr => &
         mock_s_gek_factory_c_wrapper
     procedure(init_s_gek_settings_c), pointer :: mock_init_s_gek_settings_c_ptr => &
         mock_init_s_gek_settings_c
-    procedure(update_orbs_s_gek_deconstructor_c_wrapper), pointer :: &
-        mock_update_orbs_s_gek_deconstructor_c_wrapper_ptr => &
-        mock_update_orbs_s_gek_deconstructor_c_wrapper
 
 contains
 
     function mock_s_gek_factory_c_wrapper( &
         n_param_c, update_orbs_c_funptr, obj_func_c_funptr, change_reference_c_funptr, &
-        update_orbs_s_gek_c_funptr, obj_func_s_gek_c_funptr, solver_settings_c, &
-        settings_c) result(error_c) bind(C, name="mock_s_gek_factory")
+        update_orbs_s_gek_c_funptr, obj_func_s_gek_c_funptr, extension_c, &
+        solver_settings_c, solver_state_c, settings_c) result(error_c) &
+        bind(C, name="mock_s_gek_factory")
         !
         ! this subroutine is a mock routine for the S-GEK orbital updating factory C
         ! wrapper subroutine
         !
-        use, intrinsic :: iso_c_binding, only: c_null_ptr
+        use, intrinsic :: iso_c_binding, only: c_ptr, c_null_ptr
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
                                   n_param
         use otr_s_gek_test_reference, only: test_change_reference_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
-            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c
+            mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
+            mock_extension
 
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
                                              change_reference_c_funptr
         type(c_funptr), intent(out) :: update_orbs_s_gek_c_funptr, &
                                        obj_func_s_gek_c_funptr
+        type(c_ptr), intent(out) :: extension_c
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
-        type(s_gek_settings_type_c), intent(in) :: settings_c
+        type(c_ptr), intent(in), value :: solver_state_c
+        type(s_gek_settings_type_c), intent(in), optional :: settings_c
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr
@@ -83,16 +84,21 @@ contains
             " by given change reference function", c_null_ptr)) &
             test_s_gek_factory_interface = .false.
 
-        ! get Fortran pointer to passed logging function and call it
-        message = "test"//c_null_char
-        call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
-        call logger_funptr(message, c_null_ptr)
+        ! record whether settings were passed and, if so, call their logging function
+        ! and check them against the reference values
+        s_gek_settings_passed = present(settings_c)
+        if (present(settings_c)) then
+            ! get Fortran pointer to passed logging function and call it
+            message = "test"//c_null_char
+            call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
+            call logger_funptr(message, c_null_ptr)
 
-        ! check optional settings against reference values
-        if (settings_c /= ref_s_gek_settings) then
-            write(stderr, *) "test_s_gek_factory_py_interface failed: Passed "// &
-                "settings associated with wrong values."
-            test_s_gek_factory_interface = .false.
+            ! check optional settings against reference values
+            if (settings_c /= ref_s_gek_settings) then
+                write(stderr, *) "test_s_gek_factory_py_interface failed: Passed "// &
+                    "settings associated with wrong values."
+                test_s_gek_factory_interface = .false.
+            end if
         end if
 
         ! check the passed solver settings and wire them
@@ -100,9 +106,11 @@ contains
                                               "s_gek_factory_py_interface")) &
             test_s_gek_factory_interface = .false.
 
-        ! set function pointers to the mock functions of the level of the solver
+        ! set function pointers to the mock functions of the level of the solver and
+        ! return an extension, recording the record of the state
         update_orbs_s_gek_c_funptr = c_funloc(mock_level_update_orbs)
         obj_func_s_gek_c_funptr = c_funloc(mock_level_obj_func)
+        extension_c = mock_extension(solver_state_c)
 
         ! set return arguments
         error_c = 0
@@ -124,14 +132,5 @@ contains
         settings = ref_s_gek_settings
 
     end subroutine mock_init_s_gek_settings_c
-
-    subroutine mock_update_orbs_s_gek_deconstructor_c_wrapper() &
-        bind(C, name="mock_update_orbs_s_gek_deconstructor")
-        !
-        ! this subroutine is a mock routine for the C S-GEK deconstructor subroutine
-        !
-        test_update_orbs_s_gek_deconstructor_interface = .true._c_bool
-
-    end subroutine mock_update_orbs_s_gek_deconstructor_c_wrapper
 
 end module otr_s_gek_c_interface_mock

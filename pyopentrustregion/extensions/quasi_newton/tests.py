@@ -4,9 +4,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-import gc
 import unittest
-import weakref
 from ctypes import (
     c_bool,
     c_char,
@@ -29,16 +27,17 @@ from pyopentrustregion.python_interface import (
     c_real,
     c_int,
     SolverSettings,
+    SolverState,
     logger_interface_type,
 )
 from pyopentrustregion.extensions.quasi_newton import (
     QNSettings,
     qn_factory,
-    update_orbs_qn_deconstructor,
 )
 from pyopentrustregion.extensions.common.tests import (
     setup_wired_solver_settings,
     check_wired_solver_settings,
+    check_extension_owner,
 )
 
 if NUMPY_AVAILABLE:
@@ -55,7 +54,6 @@ fortran_tests = {
         "init_qn_settings_c",
         "qn_factory_c_wrapper",
         "transport_f_wrapper",
-        "update_orbs_qn_deconstructor_c_wrapper",
     ],
 }
 
@@ -175,6 +173,7 @@ class QNPyInterfaceTests(unittest.TestCase):
             self.mock_transport,
             self.mock_init_hess,
             solver_settings,
+            SolverState(),
             settings,
         )
 
@@ -184,6 +183,11 @@ class QNPyInterfaceTests(unittest.TestCase):
                 " test_qn_factory_py_interface failed: Called logging "
                 "function wrong."
             )
+            test_passed = False
+
+        # check that the settings were passed
+        if not c_bool.in_dll(lib, "qn_settings_passed").value:
+            print(" test_qn_factory_py_interface failed: Settings not passed.")
             test_passed = False
 
         # call returned quasi-Newton orbital updating function
@@ -280,30 +284,71 @@ class QNPyInterfaceTests(unittest.TestCase):
         ):
             test_passed = False
 
-        # the returned functions keep the solver settings and the quasi-Newton settings
-        # alive after the host dropped them
-        extension_settings = QNSettings()
-        self.assign_ref_to_settings(extension_settings)
-        wired_settings = setup_wired_solver_settings()[0]
-        settings_refs = (weakref.ref(extension_settings), weakref.ref(wired_settings))
-        returned = qn_factory(
-            n_param,
-            self.mock_update_orbs,
-            self.mock_obj_func,
-            self.mock_transport,
-            self.mock_init_hess,
-            wired_settings,
-            extension_settings,
-        )
-        del extension_settings, wired_settings
-        gc.collect()
-        if any(ref() is None for ref in settings_refs):
+        # call qn_factory python interface with the host's functions for the solver
+        # settings the factory wired, which has to raise an error before the Fortran
+        # factory is called
+        try:
+            qn_factory(
+                n_param,
+                self.mock_update_orbs,
+                self.mock_obj_func,
+                self.mock_transport,
+                self.mock_init_hess,
+                solver_settings,
+                SolverState(),
+                settings,
+            )
             print(
-                " test_qn_factory_py_interface failed: Settings dropped by the host "
-                "not kept alive by the returned functions."
+                " test_qn_factory_py_interface failed: Host's functions for wired "
+                "solver settings did not raise an error."
             )
             test_passed = False
-        del returned
+        except ValueError:
+            pass
+
+        # call qn_factory python interface without settings, which have to be passed as
+        # none so that the library uses its default settings
+        settings_flag = c_bool.in_dll(lib, "qn_settings_passed")
+        settings_flag.value = True
+        try:
+            qn_factory(
+                n_param,
+                self.mock_update_orbs,
+                self.mock_obj_func,
+                self.mock_transport,
+                self.mock_init_hess,
+                setup_wired_solver_settings()[0],
+                SolverState(),
+            )
+        except RuntimeError:
+            print(
+                " test_qn_factory_py_interface failed: Call without settings raises "
+                "error."
+            )
+            test_passed = False
+        if settings_flag.value:
+            print(
+                " test_qn_factory_py_interface failed: Settings passed although none were "
+                "given."
+            )
+            test_passed = False
+
+        # the factory hands the extension it receives to an owner, which the solver
+        # settings keep alive and which keeps the state alive
+        if not check_extension_owner(
+            lambda solver_settings, solver_state: qn_factory(
+                n_param,
+                self.mock_update_orbs,
+                self.mock_obj_func,
+                self.mock_transport,
+                self.mock_init_hess,
+                solver_settings,
+                solver_state,
+                settings,
+            ),
+            "qn_factory_py_interface",
+        ):
+            test_passed = False
 
         # call qn_factory python interface for host callbacks which cannot be called
         # with the arguments the C interface passes, which have to raise an error
@@ -326,6 +371,7 @@ class QNPyInterfaceTests(unittest.TestCase):
                     self.mock_obj_func,
                     *callbacks,
                     SolverSettings(),
+                    SolverState(),
                     settings,
                 )
                 print(
@@ -341,35 +387,6 @@ class QNPyInterfaceTests(unittest.TestCase):
             "test_qn_factory_py_interface failed",
         )
         print(" test_qn_factory_py_interface PASSED")
-
-    # replace original library with mock library
-    @patch(
-        "pyopentrustregion.python_interface.lib.update_orbs_qn_deconstructor",
-        lib.mock_update_orbs_qn_deconstructor,
-    )
-    def test_update_orbs_qn_deconstructor_py_interface(self):
-        """
-        this function tests the quasi-Newton orbital updating deconstructor python
-        interface
-        """
-        # initialize test flag
-        test_passed = True
-
-        # call quasi-Newton orbital updating deconstructor python interface
-        update_orbs_qn_deconstructor()
-
-        # check if deconstructor was called correctly
-        if not c_bool.in_dll(lib, "test_update_orbs_qn_deconstructor_interface").value:
-            print(
-                " test_update_orbs_qn_deconstructor_py_interface failed: Deconstructor "
-                "called wrong."
-            )
-            test_passed = False
-
-        self.assertTrue(
-            test_passed, "test_update_orbs_qn_deconstructor_py_interface failed"
-        )
-        print(" test_update_orbs_qn_deconstructor_py_interface PASSED")
 
     @patch.object(QNSettings, "init_c_struct", lib.mock_init_qn_settings)
     def test_qn_settings(self):
