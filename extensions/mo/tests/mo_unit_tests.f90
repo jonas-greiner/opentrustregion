@@ -16,6 +16,11 @@ module otr_mo_unit_tests
     ! the closed-shell and the open-shell case, which is also its response
     real(rp), parameter :: model_response_scale(2) = [1.0_rp, 0.5_rp]
 
+    ! multiple of the density matrix displacements of the other particle channels in
+    ! the response of every channel of the open-shell response function which couples
+    ! the channels
+    real(rp), parameter :: mock_response_coupling = 0.5_rp
+
 contains
 
     subroutine model_response_cs(dm, response, error, context)
@@ -47,6 +52,34 @@ contains
         response = model_response_scale(2) * dm
 
     end subroutine model_response_os
+
+    subroutine mock_get_coupled_response_os(dm, response, error, context)
+        !
+        ! this subroutine is a mock response function for the open-shell case which
+        ! couples the particle channels, as the Coulomb response does: the response of
+        ! every channel is the multiple of the mock response function of its own
+        ! density matrix displacement plus a multiple of those of the other channels
+        !
+        use test_reference, only: check_host_context
+        use otr_common_unit_tests, only: mock_response_factor
+
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out), target :: response(:, :, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        integer(ip) :: k
+
+        ! check host context
+        call check_host_context(context)
+
+        error = 0
+        do k = 1, size(dm, 3, kind=ip)
+            response(:, :, k) = mock_response_factor * dm(:, :, k) + &
+                                mock_response_coupling * (sum(dm, dim=3) - dm(:, :, k))
+        end do
+
+    end subroutine mock_get_coupled_response_os
 
     function diagonal_matrix(values) result(matrix)
         !
@@ -299,34 +332,6 @@ contains
 
     end subroutine setup_minimal_mo_object
 
-    subroutine setup_identity_mo_eigenbasis(mo, occ_eigval, virt_eigval)
-        !
-        ! this subroutine sets up an up-to-date eigendecomposition of the static part
-        ! of the Hessian in the MO basis itself for the particle channels of the MO
-        ! object, with the given eigenvalues of the occupied-occupied and the
-        ! virtual-virtual blocks of the Fock matrix, so that all eigenvalue pairs are
-        ! the same and routines using the eigendecomposition reduce to a scaling
-        !
-        use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: identity_matrix
-
-        type(mo_type), intent(inout) :: mo
-        real(rp), intent(in) :: occ_eigval, virt_eigval
-
-        integer(ip) :: k
-
-        do k = 1, mo%n_particle
-            associate (channel => mo%mo_channels(k))
-                channel%occ_eigvecs = identity_matrix(channel%n_occ)
-                channel%occ_eigvals = spread(occ_eigval, 1, channel%n_occ)
-                channel%virt_eigvecs = identity_matrix(channel%n_virt)
-                channel%virt_eigvals = spread(virt_eigval, 1, channel%n_virt)
-            end associate
-        end do
-        mo%hess_eigen_stale = .false.
-
-    end subroutine setup_identity_mo_eigenbasis
-
     function ref_mo_transform(coeff, matrix) result(transformed)
         !
         ! this function independently reproduces the transformation C^T M C of a matrix
@@ -448,23 +453,27 @@ contains
 
     end function ref_hess_x_static_mo
 
-    function ref_hess_x_mo(x, channels, mo_coeff, response_factor) result(hess_x)
+    function ref_hess_x_mo(x, channels, mo_coeff, response_factor, response_coupling) &
+        result(hess_x)
         !
         ! this function independently reproduces the Hessian linear transformation in
         ! the MO basis for a response function returning a multiple of the density
-        ! matrix displacement, by displacing the density matrix of every particle
-        ! channel in the MO basis by the symmetrized occupied-virtual block of the
-        ! trial vector, transforming the displacement to the AO basis as C dD C^T and
-        ! the resulting response back to the MO basis, whose occupied-virtual block,
-        ! scaled like the static part, is added to the static part
+        ! matrix displacement of every particle channel plus a multiple of those of the
+        ! other channels, by displacing the density matrix of every particle channel in
+        ! the MO basis by the symmetrized occupied-virtual block of the trial vector,
+        ! transforming the displacements to the AO basis as C dD C^T and the resulting
+        ! response back to the MO basis, whose occupied-virtual block, scaled like the
+        ! static part, is added to the static part
         !
         use otr_mo, only: mo_channel_type
 
-        real(rp), intent(in) :: x(:), mo_coeff(:, :, :), response_factor
+        real(rp), intent(in) :: x(:), mo_coeff(:, :, :), response_factor, &
+                                response_coupling
         type(mo_channel_type), intent(in) :: channels(:)
         real(rp) :: hess_x(size(x))
 
         real(rp) :: x_full(size(mo_coeff, 2), size(mo_coeff, 2), size(channels)), &
+                    dm_response(size(mo_coeff, 1), size(mo_coeff, 1), size(channels)), &
                     response_mo(size(mo_coeff, 2), size(mo_coeff, 2), size(channels)), &
                     shell_scale
         integer(ip) :: k
@@ -472,10 +481,14 @@ contains
         shell_scale = merge(4.0_rp, 2.0_rp, size(channels) == 1)
         x_full = ref_unpack_ov(x, channels)
         do k = 1, size(channels, kind=ip)
+            dm_response(:, :, k) = matmul(mo_coeff(:, :, k), matmul( &
+                x_full(:, :, k) + transpose(x_full(:, :, k)), &
+                transpose(mo_coeff(:, :, k))))
+        end do
+        do k = 1, size(channels, kind=ip)
             response_mo(:, :, k) = ref_mo_transform( &
-                mo_coeff(:, :, k), response_factor * matmul(mo_coeff(:, :, k), matmul( &
-                    x_full(:, :, k) + transpose(x_full(:, :, k)), &
-                    transpose(mo_coeff(:, :, k)))))
+                mo_coeff(:, :, k), response_factor * dm_response(:, :, k) + &
+                response_coupling * (sum(dm_response, dim=3) - dm_response(:, :, k)))
         end do
         hess_x = ref_hess_x_static_mo(x, channels) + &
                  shell_scale * ref_pack_ov(response_mo, channels)
@@ -663,7 +676,7 @@ contains
                               obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
-        use otr_common_test_reference, only: n_ao, n_occ
+        use otr_common_test_reference, only: n_ao, n_occ, operator(==)
         use otr_common_unit_tests, only: mock_evaluate_dm_cs, wired_level
 
         type(test_context_type), target :: context
@@ -707,7 +720,6 @@ contains
         if (error /= 0) then
             write(stderr, *) "test_mo_factory_cs failed: Produced error."
             test_mo_factory_cs = .false.
-            return
         end if
         if (.not. associated(update_orbs_mo_funptr, update_orbs_callback) .or. &
             .not. associated(obj_func_mo_funptr, obj_func_callback)) then
@@ -720,54 +732,74 @@ contains
             write(stderr, *) "test_mo_factory_cs failed: Solver settings not wired "// &
                 "with an object."
             test_mo_factory_cs = .false.
-            return
+        else
+            ! determine if the MO object points to the MO coefficients of the caller as
+            ! its only particle channel, whose occupation and irreps are those given,
+            ! reads the record of the state and holds the given settings and only the
+            ! closed-shell density matrix evaluating function
+            select type (mo => level%extension)
+            type is (mo_type)
+                if (.not. associated(mo%mo_coeff)) then
+                    write(stderr, *) "test_mo_factory_cs failed: MO coefficients "// &
+                        "not associated."
+                    test_mo_factory_cs = .false.
+                else if (any(shape(mo%mo_coeff) /= [n_ao, n_mo, n_particle])) then
+                    write(stderr, *) "test_mo_factory_cs failed: MO coefficients "// &
+                        "not associated as a single particle channel."
+                    test_mo_factory_cs = .false.
+                else
+                    mo_coeff(1, 1) = mo_coeff(1, 1) + 1.0_rp
+                    if (norm2(mo%mo_coeff(:, :, 1) - mo_coeff) > tol) then
+                        write(stderr, *) "test_mo_factory_cs failed: MO "// &
+                            "coefficients of the caller not taken over."
+                        test_mo_factory_cs = .false.
+                    end if
+                end if
+                if (size(mo%mo_channels) /= n_particle) then
+                    write(stderr, *) "test_mo_factory_cs failed: Not a single "// &
+                        "particle channel."
+                    test_mo_factory_cs = .false.
+                else
+                    if (mo%mo_channels(1)%n_occ /= n_occ(1)) then
+                        write(stderr, *) "test_mo_factory_cs failed: Occupation "// &
+                            "not passed on."
+                        test_mo_factory_cs = .false.
+                    end if
+                    if (any(mo%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym))) then
+                        write(stderr, *) "test_mo_factory_cs failed: Irreps not "// &
+                            "passed on."
+                        test_mo_factory_cs = .false.
+                    end if
+                end if
+                if (.not. associated(mo%state, state)) then
+                    write(stderr, *) "test_mo_factory_cs failed: Record of the "// &
+                        "state not passed on."
+                    test_mo_factory_cs = .false.
+                end if
+                if (.not. (mo%settings == settings%orbital_settings_type)) then
+                    write(stderr, *) "test_mo_factory_cs failed: Settings not "// &
+                        "passed on."
+                    test_mo_factory_cs = .false.
+                end if
+                if (.not. associated(mo%evaluate_dm_cs, mock_evaluate_dm_cs) .or. &
+                    associated(mo%evaluate_dm_os)) then
+                    write(stderr, *) "test_mo_factory_cs failed: Closed-shell "// &
+                        "density matrix evaluating function not handed over."
+                    test_mo_factory_cs = .false.
+                end if
+            class default
+                write(stderr, *) "test_mo_factory_cs failed: Solver settings not "// &
+                    "wired with an MO object."
+                test_mo_factory_cs = .false.
+            end select
         end if
-
-        ! determine if the MO object points to the MO coefficients of the caller as its
-        ! only particle channel, whose irreps are those given, and holds only the
-        ! closed-shell density matrix evaluating function
-        select type (mo => level%extension)
-        type is (mo_type)
-            if (.not. associated(mo%mo_coeff)) then
-                write(stderr, *) "test_mo_factory_cs failed: MO coefficients not "// &
-                    "associated."
-                test_mo_factory_cs = .false.
-                return
-            end if
-            if (any(shape(mo%mo_coeff) /= [n_ao, n_mo, n_particle])) then
-                write(stderr, *) "test_mo_factory_cs failed: MO coefficients not "// &
-                    "associated as a single particle channel."
-                test_mo_factory_cs = .false.
-                return
-            end if
-            mo_coeff(1, 1) = mo_coeff(1, 1) + 1.0_rp
-            if (norm2(mo%mo_coeff(:, :, 1) - mo_coeff) > tol) then
-                write(stderr, *) "test_mo_factory_cs failed: MO coefficients of "// &
-                    "the caller not taken over."
-                test_mo_factory_cs = .false.
-            end if
-            if (any(mo%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym))) then
-                write(stderr, *) "test_mo_factory_cs failed: Irreps not passed on."
-                test_mo_factory_cs = .false.
-            end if
-            if (.not. associated(mo%evaluate_dm_cs, mock_evaluate_dm_cs) .or. &
-                associated(mo%evaluate_dm_os)) then
-                write(stderr, *) "test_mo_factory_cs failed: Closed-shell density "// &
-                    "matrix evaluating function not handed over."
-                test_mo_factory_cs = .false.
-            end if
-        class default
-            write(stderr, *) "test_mo_factory_cs failed: Solver settings not wired "// &
-                "with an MO object."
-            test_mo_factory_cs = .false.
-        end select
 
         ! call routine for dimensions which do not match the MO coefficients and
         ! determine if the error of the common setup is passed on
         call mo_factory_cs(mo_coeff, ao_overlap, n_occ(1), n_particle, n_ao, n_mo + 1, &
                            evaluate_dm_funptr, update_orbs_mo_funptr, &
                            obj_func_mo_funptr, solver_settings, state, error, settings)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_mo_factory_cs failed: Error of the common setup "// &
                 "not passed on."
             test_mo_factory_cs = .false.
@@ -790,7 +822,7 @@ contains
                               obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ
+        use otr_common_test_reference, only: n_ao, n_particle, n_occ, operator(==)
         use otr_common_unit_tests, only: mock_evaluate_dm_os, wired_level
 
         type(test_context_type), target :: context
@@ -831,7 +863,6 @@ contains
         if (error /= 0) then
             write(stderr, *) "test_mo_factory_os failed: Produced error."
             test_mo_factory_os = .false.
-            return
         end if
         if (.not. associated(update_orbs_mo_funptr, update_orbs_callback) .or. &
             .not. associated(obj_func_mo_funptr, obj_func_callback)) then
@@ -844,42 +875,64 @@ contains
             write(stderr, *) "test_mo_factory_os failed: Solver settings not wired "// &
                 "with an object."
             test_mo_factory_os = .false.
-            return
+        else
+            ! determine if the MO object points to the MO coefficients of the caller,
+            ! whose occupations and irreps are those given, reads the record of the
+            ! state and holds the given settings and only the open-shell density matrix
+            ! evaluating function
+            select type (mo => level%extension)
+            type is (mo_type)
+                if (.not. associated(mo%mo_coeff, mo_coeff)) then
+                    write(stderr, *) "test_mo_factory_os failed: MO coefficients "// &
+                        "of the caller not taken over."
+                    test_mo_factory_os = .false.
+                end if
+                if (size(mo%mo_channels) /= n_particle) then
+                    write(stderr, *) "test_mo_factory_os failed: Wrong number of "// &
+                        "particle channels."
+                    test_mo_factory_os = .false.
+                else
+                    if (any(mo%mo_channels%n_occ /= n_occ)) then
+                        write(stderr, *) "test_mo_factory_os failed: Occupations "// &
+                            "not passed on."
+                        test_mo_factory_os = .false.
+                    end if
+                    if (any(mo%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym)) .or. &
+                        any(mo%mo_channels(2)%irreps /= case_irreps(:, 2, i_sym))) then
+                        write(stderr, *) "test_mo_factory_os failed: Irreps not "// &
+                            "passed on."
+                        test_mo_factory_os = .false.
+                    end if
+                end if
+                if (.not. associated(mo%state, state)) then
+                    write(stderr, *) "test_mo_factory_os failed: Record of the "// &
+                        "state not passed on."
+                    test_mo_factory_os = .false.
+                end if
+                if (.not. (mo%settings == settings%orbital_settings_type)) then
+                    write(stderr, *) "test_mo_factory_os failed: Settings not "// &
+                        "passed on."
+                    test_mo_factory_os = .false.
+                end if
+                if (.not. associated(mo%evaluate_dm_os, mock_evaluate_dm_os) .or. &
+                    associated(mo%evaluate_dm_cs)) then
+                    write(stderr, *) "test_mo_factory_os failed: Open-shell "// &
+                        "density matrix evaluating function not handed over."
+                    test_mo_factory_os = .false.
+                end if
+            class default
+                write(stderr, *) "test_mo_factory_os failed: Solver settings not "// &
+                    "wired with an MO object."
+                test_mo_factory_os = .false.
+            end select
         end if
-
-        ! determine if the MO object points to the MO coefficients of the caller, whose
-        ! irreps are those given, and holds only the open-shell density matrix
-        ! evaluating function
-        select type (mo => level%extension)
-        type is (mo_type)
-            if (.not. associated(mo%mo_coeff, mo_coeff)) then
-                write(stderr, *) "test_mo_factory_os failed: MO coefficients of "// &
-                    "the caller not taken over."
-                test_mo_factory_os = .false.
-            end if
-            if (any(mo%mo_channels(1)%irreps /= case_irreps(:, 1, i_sym)) .or. &
-                any(mo%mo_channels(2)%irreps /= case_irreps(:, 2, i_sym))) then
-                write(stderr, *) "test_mo_factory_os failed: Irreps not passed on."
-                test_mo_factory_os = .false.
-            end if
-            if (.not. associated(mo%evaluate_dm_os, mock_evaluate_dm_os) .or. &
-                associated(mo%evaluate_dm_cs)) then
-                write(stderr, *) "test_mo_factory_os failed: Open-shell density "// &
-                    "matrix evaluating function not handed over."
-                test_mo_factory_os = .false.
-            end if
-        class default
-            write(stderr, *) "test_mo_factory_os failed: Solver settings not wired "// &
-                "with an MO object."
-            test_mo_factory_os = .false.
-        end select
 
         ! call routine for dimensions which do not match the MO coefficients and
         ! determine if the error of the common setup is passed on
         call mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo + 1, &
                            evaluate_dm_funptr, update_orbs_mo_funptr, &
                            obj_func_mo_funptr, solver_settings, state, error, settings)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_mo_factory_os failed: Error of the common setup "// &
                 "not passed on."
             test_mo_factory_os = .false.
@@ -897,7 +950,7 @@ contains
         ! function
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type, &
-                                   default_solver_settings
+                                   default_solver_settings, verbosity_warning
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
@@ -923,13 +976,17 @@ contains
         type(mo_settings_type) :: settings, expected_settings
         type(test_context_type), target :: context
         type(extension_level_type), pointer :: level, other_level
-        integer(ip) :: n_particle, i_sym, i_case, error
+        integer(ip) :: n_particle, n_param, i_sym, i_case, k, error
         integer(ip) :: irreps(n_mo, n_particle_ref)
         logical :: owned, stored
+        logical, allocatable :: same_irrep(:, :)
         character(len=45), parameter :: case_names_factory(5) = &
             [character(len=45) :: "for the closed-shell case", "for the open-shell "// &
              "case with symmetry", "without settings", "for settings that were not "// &
              "initialized", "without a density matrix evaluating function"]
+        character(len=59), parameter :: case_names_rejected(2) = &
+            [character(len=59) :: "mismatching dimensions", &
+             "irreps without occupied-virtual pairs of the same irrep"]
 
         ! assume tests pass
         test_mo_factory_common = .true.
@@ -942,16 +999,18 @@ contains
         ! the irreps of the symmetric open-shell occupation case, for no settings, for
         ! settings that were not initialized, which are initialized after a warning
         ! through their logging function, and without a density matrix evaluating
-        ! function, which prints a warning, each of which has to be an MO object set up
-        ! for the MO coefficients of the caller and the irreps of their MOs with the
-        ! settings and the density matrix evaluating function and to wire the solver
-        ! settings, which own it, with the record of the state
+        ! function, which prints a warning at the verbosity of warnings, each of which
+        ! has to be an MO object set up for the MO coefficients of the caller and the
+        ! irreps of their MOs with the settings and the density matrix evaluating
+        ! function and to wire the solver settings, which own it, with the record of
+        ! the state
         i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
         do i_case = 1, size(case_names_factory)
             allocate(solver_settings)
             solver_settings%solver_settings_type = default_solver_settings
             n_particle = merge(2_ip, 1_ip, i_case == 2)
             call setup_settings(settings, context)
+            if (i_case == 5) settings%verbose = verbosity_warning
             expected_settings = settings
             if (i_case == 3) then
                 expected_settings = default_mo_settings
@@ -1021,9 +1080,102 @@ contains
             end if
             select type (mo => level%extension)
             type is (mo_type)
-                if (.not. check_mo_object( &
-                    mo, mo_coeff(:, :, :n_particle), trim(case_names_factory(i_case)), &
-                    irreps(:, :n_particle))) test_mo_factory_common = .false.
+                ! determine if the object has the dimensions of the case, which the
+                ! remaining checks compare arrays of, the number of parameters counting
+                ! the occupied-virtual pairs of the same irrep
+                n_param = ref_count_mo_params(n_occ(:n_particle), &
+                                              irreps(:, :n_particle))
+                if (any([mo%n_ao, mo%n_mo, mo%n_particle, mo%n_param, &
+                         size(mo%mo_channels, kind=ip)] /= &
+                        [n_ao, n_mo, n_particle, n_param, n_particle])) then
+                    write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
+                        "dimensions "//trim(case_names_factory(i_case))//"."
+                    test_mo_factory_common = .false.
+                else
+                    ! determine if the occupations, the irreps and parameters, the AO
+                    ! overlap matrix, the MO coefficients of the caller, the density
+                    ! matrix, the gradient and Hessian diagonal, the roles, the
+                    ! unevaluated state and the settings are set up
+                    if (any(mo%mo_channels%n_occ /= n_occ(:n_particle)) .or. &
+                        any(mo%mo_channels%n_virt /= n_mo - n_occ(:n_particle))) then
+                        write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
+                            "occupations "//trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                    do k = 1, n_particle
+                        same_irrep = &
+                            spread(irreps(:n_occ(k), k), 2, n_mo - n_occ(k)) == &
+                            spread(irreps(n_occ(k) + 1:, k), 1, n_occ(k))
+                        if (any(mo%mo_channels(k)%irreps /= irreps(:, k))) then
+                            write(stderr, *) "test_mo_factory_common failed: "// &
+                                "Incorrect irreps "// &
+                                trim(case_names_factory(i_case))//"."
+                            test_mo_factory_common = .false.
+                        else if (any(mo%mo_channels(k)%param_mask .neqv. same_irrep)) &
+                            then
+                            write(stderr, *) "test_mo_factory_common failed: "// &
+                                "Incorrect parameters "// &
+                                trim(case_names_factory(i_case))//"."
+                            test_mo_factory_common = .false.
+                        end if
+                    end do
+                    if (norm2(mo%ao_overlap - ao_overlap) > tol) then
+                        write(stderr, *) "test_mo_factory_common failed: AO "// &
+                            "overlap matrix not stored "// &
+                            trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                    if (.not. associated(mo%mo_coeff, mo_coeff(:, :, :n_particle))) then
+                        write(stderr, *) "test_mo_factory_common failed: MO "// &
+                            "coefficients of the caller not taken over "// &
+                            trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                    do k = 1, n_particle
+                        if (norm2(mo%dm_ao(:, :, k) - matmul( &
+                            mo_coeff(:, :n_occ(k), k), &
+                            transpose(mo_coeff(:, :n_occ(k), k)))) > tol) then
+                            write(stderr, *) "test_mo_factory_common failed: "// &
+                                "Density matrix not constructed from the occupied "// &
+                                "orbitals "//trim(case_names_factory(i_case))//"."
+                            test_mo_factory_common = .false.
+                        end if
+                    end do
+                    if (.not. (allocated(mo%grad) .and. allocated(mo%h_diag))) then
+                        write(stderr, *) "test_mo_factory_common failed: Gradient "// &
+                            "or Hessian diagonal not allocated "// &
+                            trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    else if (any([size(mo%grad), size(mo%h_diag)] /= n_param)) then
+                        write(stderr, *) "test_mo_factory_common failed: Gradient "// &
+                            "or Hessian diagonal not allocated with the number of "// &
+                            "parameters "//trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                    if (.not. all([mo%provides%update_orbs, mo%provides%obj_func, &
+                                   mo%provides%hess_x, mo%provides%precond, &
+                                   mo%provides%precond_pd, &
+                                   mo%provides%get_extra_trial_vectors]) .or. &
+                        mo%provides%project) then
+                        write(stderr, *) "test_mo_factory_common failed: Roles the "// &
+                            "object performs itself wrong "// &
+                            trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                    if (.not. (mo%evaluation_stale .and. mo%response_stale .and. &
+                               mo%hess_eigen_stale)) then
+                        write(stderr, *) "test_mo_factory_common failed: Object "// &
+                            "not marked unevaluated "// &
+                            trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                    if (.not. ( &
+                        mo%settings == expected_settings%orbital_settings_type)) then
+                        write(stderr, *) "test_mo_factory_common failed: Settings "// &
+                            "not stored "//trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                end if
                 if (i_case == 2) then
                     stored = associated(mo%evaluate_dm_os, mock_evaluate_dm_os) .and. &
                              .not. associated(mo%evaluate_dm_cs)
@@ -1063,25 +1215,52 @@ contains
             deallocate(solver_settings)
         end do
 
-        ! create an object for dimensions which do not match the MO coefficients, which
-        ! the sanity check rejects, which has to return its error and leave the solver
-        ! settings untouched
-        allocate(solver_settings)
-        solver_settings%solver_settings_type = default_solver_settings
-        call setup_settings(settings, context)
+        ! create objects for dimensions which do not match the MO coefficients and for
+        ! irreps without an occupied-virtual pair of the same irrep, which the sanity
+        ! check rejects, each of which has to return its error, return no functions in
+        ! place of those returned before and leave the solver settings untouched
         evaluate_dm_cs_funptr => mock_evaluate_dm_cs
         evaluate_dm_os_funptr => null()
-        call mo_factory_common(mo_coeff(:, :, :1), ao_overlap, n_occ(:1), 1_ip, n_ao, &
-                               n_mo + 1, evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
-                               update_orbs_mo_funptr, obj_func_mo_funptr, &
-                               solver_settings, state, error, settings)
-        if (error == 0 .or. associated(solver_settings%context) .or. &
-            allocated(solver_settings%extensions)) then
-            write(stderr, *) "test_mo_factory_common failed: Error not returned or "// &
-                "solver settings changed for mismatching dimensions."
-            test_mo_factory_common = .false.
-        end if
-        deallocate(solver_settings)
+        irreps = 0
+        irreps(n_occ(1) + 1:, 1) = 1
+        do i_case = 1, size(case_names_rejected)
+            allocate(solver_settings)
+            solver_settings%solver_settings_type = default_solver_settings
+            call setup_settings(settings, context)
+            update_orbs_mo_funptr => update_orbs_callback
+            obj_func_mo_funptr => obj_func_callback
+            if (i_case == 1) then
+                call mo_factory_common(mo_coeff(:, :, :1), ao_overlap, n_occ(:1), &
+                                       1_ip, n_ao, n_mo + 1, evaluate_dm_cs_funptr, &
+                                       evaluate_dm_os_funptr, update_orbs_mo_funptr, &
+                                       obj_func_mo_funptr, solver_settings, state, &
+                                       error, settings)
+            else
+                call mo_factory_common(mo_coeff(:, :, :1), ao_overlap, n_occ(:1), &
+                                       1_ip, n_ao, n_mo, evaluate_dm_cs_funptr, &
+                                       evaluate_dm_os_funptr, update_orbs_mo_funptr, &
+                                       obj_func_mo_funptr, solver_settings, state, &
+                                       error, settings, irreps(:, :1))
+            end if
+            if (error /= 1) then
+                write(stderr, *) "test_mo_factory_common failed: Error not "// &
+                    "returned for "//trim(case_names_rejected(i_case))//"."
+                test_mo_factory_common = .false.
+            end if
+            if (associated(update_orbs_mo_funptr) .or. associated(obj_func_mo_funptr)) &
+                then
+                write(stderr, *) "test_mo_factory_common failed: Functions "// &
+                    "returned for "//trim(case_names_rejected(i_case))//"."
+                test_mo_factory_common = .false.
+            end if
+            if (associated(solver_settings%context) .or. &
+                allocated(solver_settings%extensions)) then
+                write(stderr, *) "test_mo_factory_common failed: Solver settings "// &
+                    "changed for "//trim(case_names_rejected(i_case))//"."
+                test_mo_factory_common = .false.
+            end if
+            deallocate(solver_settings)
+        end do
 
         ! create objects for two separate solver settings, which have to be distinct
         ! objects reading their own record of the state, so that calculations with
@@ -1112,118 +1291,6 @@ contains
         end if
         deallocate(solver_settings, other_settings)
 
-    contains
-
-        function check_mo_object(mo, caller_mo_coeff, case_name, case_irreps_in) &
-            result(passed)
-            !
-            ! this function checks if an MO object is set up for the given MO
-            ! coefficients of the caller, the irreps of their MOs and the AO overlap
-            ! matrix and occupations of the case, with the occupied-virtual pairs of
-            ! the same irrep as parameters, the density matrix constructed from the
-            ! occupied orbitals, the roles it performs itself, nothing evaluated yet
-            ! and the expected settings stored
-            !
-            type(mo_type), intent(in) :: mo
-            real(rp), intent(in), target :: caller_mo_coeff(:, :, :)
-            character(len=*), intent(in) :: case_name
-            integer(ip), intent(in) :: case_irreps_in(:, :)
-            logical :: passed
-
-            integer(ip) :: n_param, k
-            logical, allocatable :: same_irrep(:, :)
-
-            ! assume test passes
-            passed = .true.
-
-            ! the checks below compare arrays of these dimensions, the number of
-            ! parameters counting the occupied-virtual pairs of the same irrep
-            n_param = ref_count_mo_params(n_occ(:n_particle), case_irreps_in)
-            if (any([mo%n_ao, mo%n_mo, mo%n_particle, mo%n_param, &
-                     size(mo%mo_channels, kind=ip)] /= &
-                    [n_ao, n_mo, n_particle, n_param, n_particle])) then
-                write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
-                    "dimensions "//case_name//"."
-                passed = .false.
-                return
-            end if
-
-            ! determine if the occupations, the irreps and parameters, the AO overlap
-            ! matrix, the MO coefficients of the caller, the density matrix, the
-            ! gradient and Hessian diagonal, the roles, the unevaluated state and the
-            ! settings are set up
-            if (any(mo%mo_channels%n_occ /= n_occ(:n_particle)) .or. &
-                any(mo%mo_channels%n_virt /= n_mo - n_occ(:n_particle))) then
-                write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
-                    "occupations "//case_name//"."
-                passed = .false.
-            end if
-            do k = 1, n_particle
-                same_irrep = &
-                    spread(case_irreps_in(:n_occ(k), k), 2, n_mo - n_occ(k)) == &
-                    spread(case_irreps_in(n_occ(k) + 1:, k), 1, n_occ(k))
-                if (any(mo%mo_channels(k)%irreps /= case_irreps_in(:, k))) then
-                    write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
-                        "irreps "//case_name//"."
-                    passed = .false.
-                else if (any(mo%mo_channels(k)%param_mask .neqv. same_irrep)) then
-                    write(stderr, *) "test_mo_factory_common failed: Incorrect "// &
-                        "parameters "//case_name//"."
-                    passed = .false.
-                end if
-            end do
-            if (norm2(mo%ao_overlap - ao_overlap) > tol) then
-                write(stderr, *) "test_mo_factory_common failed: AO overlap matrix "// &
-                    "not stored "//case_name//"."
-                passed = .false.
-            end if
-            if (.not. associated(mo%mo_coeff, caller_mo_coeff)) then
-                write(stderr, *) "test_mo_factory_common failed: MO coefficients "// &
-                    "of the caller not taken over "//case_name//"."
-                passed = .false.
-            end if
-            do k = 1, n_particle
-                if (norm2(mo%dm_ao(:, :, k) - matmul( &
-                    caller_mo_coeff(:, :n_occ(k), k), &
-                    transpose(caller_mo_coeff(:, :n_occ(k), k)))) > tol) then
-                    write(stderr, *) "test_mo_factory_common failed: Density "// &
-                        "matrix not constructed from the occupied orbitals "// &
-                        case_name//"."
-                    passed = .false.
-                end if
-            end do
-            if (.not. (allocated(mo%grad) .and. allocated(mo%h_diag))) then
-                write(stderr, *) "test_mo_factory_common failed: Gradient or "// &
-                    "Hessian diagonal not allocated "//case_name//"."
-                passed = .false.
-            else if (any([size(mo%grad), size(mo%h_diag)] /= n_param)) then
-                write(stderr, *) "test_mo_factory_common failed: Gradient or "// &
-                    "Hessian diagonal not allocated with the number of parameters "// &
-                    case_name//"."
-                passed = .false.
-            end if
-            if (.not. all([ &
-                mo%provides%update_orbs, mo%provides%obj_func, mo%provides%hess_x, &
-                mo%provides%precond, mo%provides%precond_pd, &
-                mo%provides%get_extra_trial_vectors]) .or. mo%provides%project) then
-                write(stderr, *) "test_mo_factory_common failed: Roles the object "// &
-                    "performs itself wrong "//case_name//"."
-                passed = .false.
-            end if
-            if (.not. (mo%evaluation_stale .and. mo%response_stale .and. &
-                       mo%hess_eigen_stale)) then
-                write(stderr, *) "test_mo_factory_common failed: Object not marked "// &
-                    "unevaluated "//case_name//"."
-                passed = .false.
-            end if
-            if (.not. (mo%settings == expected_settings%orbital_settings_type)) then
-                write(stderr, *) "test_mo_factory_common failed: Settings not "// &
-                    "stored "//case_name//"."
-                passed = .false.
-            end if
-
-        end function check_mo_object
-
     end function test_mo_factory_common
 
     logical(c_bool) function test_mo_sanity_check() bind(C)
@@ -1234,74 +1301,72 @@ contains
         !
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_sanity_check
-        use opentrustregion_unit_tests, only: setup_settings, test_context_type
+        use opentrustregion_unit_tests, only: setup_error_logging, test_context_type
 
         type :: mo_sanity_case_type
-            integer(ip) :: mo_coeff_shape(3), ao_overlap_shape(2), n_occ(2), &
+            integer(ip) :: mo_coeff_shape(3), ao_overlap_shape(2), n_occ(3), &
                            n_occ_passed, n_particle, n_ao, n_mo
             logical :: valid
             character(len=54) :: name
-            character(len=80) :: message
         end type
 
+        ! every invalid case fails a single check, except where a failed check implies
+        ! another: no MO fits into a vanishing number of AOs, and vanishing numbers of
+        ! MOs or particle channels leave no occupied-virtual rotation
         type(mo_sanity_case_type), parameter :: cases(*) = [ &
             ! mo_coeff_shape, ao_overlap_shape, n_occ, n_occ_passed, n_particle, n_ao,
-            ! n_mo, valid, then name and message
+            ! n_mo, valid, then name
             mo_sanity_case_type( &
-                [4, 3, 1], [4, 4], [1, 0], 1, 1, 4, 3, .true., &
-                "valid closed-shell dimensions with fewer MOs than AOs", ""), &
+                [4, 3, 1], [4, 4], [1, 0, 0], 1, 1, 4, 3, .true., &
+                "valid closed-shell dimensions with fewer MOs than AOs"), &
             mo_sanity_case_type( &
-                [3, 3, 2], [3, 3], [2, 0], 2, 2, 3, 3, .true., &
-                "valid open-shell dimensions with as many MOs as AOs", ""), &
+                [3, 3, 2], [3, 3], [2, 0, 0], 2, 2, 3, 3, .true., &
+                "valid open-shell dimensions with as many MOs as AOs"), &
             mo_sanity_case_type( &
-                [4, 3, 2], [4, 4], [3, 1], 2, 2, 4, 3, .true., &
-                "valid open-shell dimensions with fewer MOs than AOs", ""), &
+                [4, 3, 2], [4, 4], [3, 1, 0], 2, 2, 4, 3, .true., &
+                "valid open-shell dimensions with fewer MOs than AOs"), &
             mo_sanity_case_type( &
-                [0, 1, 1], [0, 0], [1, 0], 1, 1, 0, 1, .false., &
-                "vanishing number of AOs", "Number of AOs should be larger than 0."), &
+                [0, 1, 1], [0, 0], [1, 0, 0], 1, 1, 0, 1, .false., &
+                "vanishing number of AOs"), &
             mo_sanity_case_type( &
-                [3, 0, 1], [3, 3], [0, 0], 1, 1, 3, 0, .false., &
-                "vanishing number of MOs", &
-                "Number of MOs should be larger than 0 and not larger than the "// &
-                "number of AOs."), &
+                [3, 0, 1], [3, 3], [0, 0, 0], 1, 1, 3, 0, .false., &
+                "vanishing number of MOs"), &
             mo_sanity_case_type( &
-                [3, 4, 1], [3, 3], [1, 0], 1, 1, 3, 4, .false., &
-                "more MOs than AOs", ""), &
+                [3, 4, 1], [3, 3], [1, 0, 0], 1, 1, 3, 4, .false., &
+                "more MOs than AOs"), &
             mo_sanity_case_type( &
-                [3, 3, 0], [3, 3], [1, 0], 0, 0, 3, 3, .false., &
-                "vanishing number of particle channels", &
-                "Number of particles should be 1 or 2."), &
+                [3, 3, 0], [3, 3], [1, 0, 0], 0, 0, 3, 3, .false., &
+                "vanishing number of particle channels"), &
             mo_sanity_case_type( &
-                [3, 3, 3], [3, 3], [1, 1], 2, 3, 3, 3, .false., &
-                "three particle channels", "Number of particles should be 1 or 2."), &
+                [3, 3, 3], [3, 3], [1, 1, 1], 3, 3, 3, 3, .false., &
+                "three particle channels"), &
             mo_sanity_case_type( &
-                [3, 3, 2], [3, 3], [1, 0], 1, 2, 3, 3, .false., &
-                "single occupation for two particle channels", ""), &
+                [3, 3, 2], [3, 3], [1, 0, 0], 1, 2, 3, 3, .false., &
+                "single occupation for two particle channels"), &
             mo_sanity_case_type( &
-                [3, 3, 1], [3, 3], [1, 1], 2, 1, 3, 3, .false., &
-                "two occupations for a single particle channel", ""), &
+                [3, 3, 1], [3, 3], [1, 1, 0], 2, 1, 3, 3, .false., &
+                "two occupations for a single particle channel"), &
             mo_sanity_case_type( &
-                [2, 3, 1], [3, 3], [1, 0], 1, 1, 3, 3, .false., &
-                "MO coefficients with wrong number of AOs", ""), &
+                [2, 3, 1], [3, 3], [1, 0, 0], 1, 1, 3, 3, .false., &
+                "MO coefficients with wrong number of AOs"), &
             mo_sanity_case_type( &
-                [3, 2, 1], [3, 3], [1, 0], 1, 1, 3, 3, .false., &
-                "MO coefficients with wrong number of MOs", ""), &
+                [3, 2, 1], [3, 3], [1, 0, 0], 1, 1, 3, 3, .false., &
+                "MO coefficients with wrong number of MOs"), &
             mo_sanity_case_type( &
-                [3, 3, 2], [3, 3], [1, 0], 1, 1, 3, 3, .false., &
-                "MO coefficients with wrong number of particle channels", ""), &
+                [3, 3, 2], [3, 3], [1, 0, 0], 1, 1, 3, 3, .false., &
+                "MO coefficients with wrong number of particle channels"), &
             mo_sanity_case_type( &
-                [3, 3, 1], [3, 2], [1, 0], 1, 1, 3, 3, .false., &
-                "wrongly shaped AO overlap matrix", ""), &
+                [3, 3, 1], [3, 2], [1, 0, 0], 1, 1, 3, 3, .false., &
+                "wrongly shaped AO overlap matrix"), &
             mo_sanity_case_type( &
-                [6, 6, 2], [6, 6], [2, -1], 2, 2, 6, 6, .false., &
-                "negative number of occupied orbitals", ""), &
+                [6, 6, 2], [6, 6], [2, -1, 0], 2, 2, 6, 6, .false., &
+                "negative number of occupied orbitals"), &
             mo_sanity_case_type( &
-                [6, 6, 2], [6, 6], [3, 7], 2, 2, 6, 6, .false., &
-                "more occupied orbitals than MOs", ""), &
+                [6, 6, 2], [6, 6], [3, 7, 0], 2, 2, 6, 6, .false., &
+                "more occupied orbitals than MOs"), &
             mo_sanity_case_type( &
-                [3, 3, 2], [3, 3], [3, 0], 2, 2, 3, 3, .false., &
-                "missing occupied-virtual rotations", &
-                "There should be at least one occupied-virtual rotation.")]
+                [3, 3, 2], [3, 3], [3, 0, 0], 2, 2, 3, 3, .false., &
+                "missing occupied-virtual rotations")]
 
         type(mo_sanity_case_type) :: c
         type(orbital_settings_type) :: settings
@@ -1311,28 +1376,16 @@ contains
         ! assume tests pass
         test_mo_sanity_check = .true.
 
-        ! setup settings object
-        call setup_settings(settings, context)
-
-        ! call routine for every case and determine if valid dimensions are accepted,
-        ! invalid ones rejected and, where the case expects one, the right check fires
+        ! call routine for every case and determine if valid dimensions are accepted
+        ! without a message and invalid ones rejected with an error message
         do i_case = 1, size(cases)
             c = cases(i_case)
-            context%log_message = ""
+            call setup_error_logging(settings, context)
             call mo_sanity_check(settings, c%mo_coeff_shape, c%ao_overlap_shape, &
                                  c%n_occ(:c%n_occ_passed), c%n_particle, c%n_ao, &
                                  c%n_mo, error)
-            if ((error == 0) .neqv. c%valid) then
-                write(stderr, *) "test_mo_sanity_check failed: Incorrect result "// &
-                    "for "//trim(c%name)//"."
+            if (.not. check_result(c%valid, trim(c%name))) &
                 test_mo_sanity_check = .false.
-            end if
-            if (len_trim(c%message) > 0 .and. &
-                adjustl(context%log_message) /= c%message) then
-                write(stderr, *) "test_mo_sanity_check failed: Incorrect log "// &
-                    "message for "//trim(c%name)//"."
-                test_mo_sanity_check = .false.
-            end if
         end do
 
         ! call routine for valid dimensions with irreps of the MOs and determine if
@@ -1340,72 +1393,87 @@ contains
         ! accepted, and wrongly shaped ones, ones without such a pair and ones given
         ! for occupations which do not fit into the MOs rejected
         if (.not. check_irreps_case([1_ip], reshape([0_ip, 1_ip, 0_ip], [3, 1]), &
-                                    .true., "valid closed-shell irreps", "")) &
+                                    .true., "valid closed-shell irreps")) &
             test_mo_sanity_check = .false.
         if (.not. check_irreps_case( &
             [1_ip, 1_ip], reshape([0_ip, 1_ip, 0_ip, &
                                    0_ip, 1_ip, 1_ip], [3, 2]), .true., &
-            "valid open-shell irreps with a pair in only one channel", "")) &
+            "valid open-shell irreps with a pair in only one channel")) &
+            test_mo_sanity_check = .false.
+        if (.not. check_irreps_case([1_ip], reshape([0_ip, 1_ip, 0_ip, 0_ip], [4, 1]), &
+                                    .false., "irreps of four MOs")) &
+            test_mo_sanity_check = .false.
+        if (.not. check_irreps_case([1_ip], reshape([0_ip, 1_ip, 0_ip, &
+                                                     0_ip, 1_ip, 0_ip], [3, 2]), &
+                                    .false., "irreps of two particle channels")) &
             test_mo_sanity_check = .false.
         if (.not. check_irreps_case( &
-            [1_ip], reshape([0_ip, 1_ip, 0_ip, 0_ip], [4, 1]), .false., &
-            "irreps of four MOs", "Shape of the MO irreps should match the number "// &
-            "of MOs and particle channels.")) test_mo_sanity_check = .false.
-        if (.not. check_irreps_case( &
-            [1_ip], reshape([0_ip, 1_ip, 0_ip, &
-                             0_ip, 1_ip, 0_ip], [3, 2]), .false., "irreps of two "// &
-            "particle channels", "Shape of the MO irreps should match the number "// &
-            "of MOs and particle channels.")) test_mo_sanity_check = .false.
-        if (.not. check_irreps_case( &
             [1_ip], reshape([0_ip, 1_ip, 1_ip], [3, 1]), .false., &
-            "closed-shell irreps without occupied-virtual pairs of the same irrep", &
-            "There should be at least one occupied-virtual rotation between "// &
-            "orbitals of the same irrep.")) test_mo_sanity_check = .false.
+            "closed-shell irreps without occupied-virtual pairs of the same irrep")) &
+            test_mo_sanity_check = .false.
         if (.not. check_irreps_case( &
             [1_ip, 1_ip], reshape([0_ip, 1_ip, 1_ip, &
                                    1_ip, 0_ip, 0_ip], [3, 2]), .false., &
-            "open-shell irreps without occupied-virtual pairs of the same irrep", &
-            "There should be at least one occupied-virtual rotation between "// &
-            "orbitals of the same irrep.")) test_mo_sanity_check = .false.
-        if (.not. check_irreps_case( &
-            [4_ip], reshape([0_ip, 1_ip, 0_ip], [3, 1]), .false., &
-            "irreps for more occupied orbitals than MOs", "Number of occupied "// &
-            "orbitals should not be negative and not larger than the number of MOs.")) &
+            "open-shell irreps without occupied-virtual pairs of the same irrep")) &
             test_mo_sanity_check = .false.
+        if (.not. check_irreps_case([4_ip], reshape([0_ip, 1_ip, 0_ip], [3, 1]), &
+                                    .false., "irreps for more occupied orbitals "// &
+                                    "than MOs")) test_mo_sanity_check = .false.
 
     contains
 
-        function check_irreps_case(n_occ, orbsym, valid, name, message) result(passed)
+        function check_irreps_case(n_occ, orbsym, valid, name) result(passed)
             !
             ! this function calls the sanity check for valid dimensions with three MOs
             ! and AOs, the given occupations and the given irreps and determines if
-            ! they are accepted or rejected as expected with the expected message
+            ! they are accepted or rejected as expected
             !
             integer(ip), intent(in) :: n_occ(:), orbsym(:, :)
             logical, intent(in) :: valid
-            character(len=*), intent(in) :: name, message
+            character(len=*), intent(in) :: name
+            logical :: passed
+
+            call setup_error_logging(settings, context)
+            call mo_sanity_check(settings, [3_ip, 3_ip, size(n_occ, kind=ip)], &
+                                 [3_ip, 3_ip], n_occ, size(n_occ, kind=ip), 3_ip, &
+                                 3_ip, error, orbsym)
+            passed = check_result(valid, name)
+
+        end function check_irreps_case
+
+        function check_result(valid, name) result(passed)
+            !
+            ! this function determines if the sanity check accepted a valid case
+            ! without a message or rejected an invalid one with an error message
+            !
+            logical, intent(in) :: valid
+            character(len=*), intent(in) :: name
             logical :: passed
 
             ! assume the case passes
             passed = .true.
 
-            ! call routine and determine if the result and the message are correct
-            context%log_message = ""
-            call mo_sanity_check(settings, [3_ip, 3_ip, size(n_occ, kind=ip)], &
-                                 [3_ip, 3_ip], n_occ, size(n_occ, kind=ip), 3_ip, &
-                                 3_ip, error, orbsym)
-            if ((error == 0) .neqv. valid) then
-                write(stderr, *) "test_mo_sanity_check failed: Incorrect result "// &
-                    "for "//name//"."
-                passed = .false.
-            end if
-            if (len(message) > 0 .and. adjustl(context%log_message) /= message) then
-                write(stderr, *) "test_mo_sanity_check failed: Incorrect log "// &
-                    "message for "//name//"."
-                passed = .false.
+            ! check the error code and the printed message
+            if (valid) then
+                if (error /= 0 .or. context%log_message /= "") then
+                    write(stderr, *) "test_mo_sanity_check failed: Valid input "// &
+                        "rejected for "//name//"."
+                    passed = .false.
+                end if
+            else
+                if (error /= 1) then
+                    write(stderr, *) "test_mo_sanity_check failed: No error "// &
+                        "returned for "//name//"."
+                    passed = .false.
+                end if
+                if (context%log_message == "") then
+                    write(stderr, *) "test_mo_sanity_check failed: No error "// &
+                        "message printed for "//name//"."
+                    passed = .false.
+                end if
             end if
 
-        end function check_irreps_case
+        end function check_result
 
     end function test_mo_sanity_check
 
@@ -1537,7 +1605,7 @@ contains
             mo%evaluate_dm_cs => null()
             mo%evaluate_dm_os => null()
             energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
-            if (error == 0) then
+            if (error /= 1) then
                 write(stderr, *) "test_obj_func_mo failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
                     case_name//" case."
@@ -1712,31 +1780,15 @@ contains
                 test_update_orbs_mo = .false.
             end if
 
-            ! call routine with an orbital rotation whose evaluation fails and
-            ! determine if the error is passed on and the rotated orbitals are marked
-            ! as not evaluated
-            context%mock_error = 1
-            kappa = 0.1_rp
-            call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                level_context(mo, 1_ip))
-            if (error == 0) then
-                write(stderr, *) "test_update_orbs_mo failed: Error of the density "// &
-                    "matrix evaluating function not passed on for the "//case_name// &
-                    " case."
-                test_update_orbs_mo = .false.
-            end if
-            if (.not. mo%evaluation_stale) then
-                write(stderr, *) "test_update_orbs_mo failed: Evaluation not "// &
-                    "marked stale after a failed evaluation for the "//case_name// &
-                    " case."
-                test_update_orbs_mo = .false.
-            end if
-            context%mock_error = 0
-
-            ! call routine with an orbital rotation, keeping the MO coefficients it
+            ! call routine with a random orbital rotation of unequal elements of either
+            ! sign, whose sum is negative, at evaluated orbitals, so that only the
+            ! rotation itself calls for an evaluation, keeping the MO coefficients it
             ! starts from, and determine if the orbitals are rotated, consistently with
             ! the density matrix, and evaluated, and if every evaluation requested the
             ! Fock matrix and the response function
+            call random_number(kappa)
+            kappa = 0.2_rp * (kappa - 0.5_rp)
+            kappa = kappa - sum(kappa) / size(kappa) - 0.01_rp
             mo_coeff_start = mo%mo_coeff
             if (.not. check_update_orbs_mo_stage(4_ip, "an orbital rotation")) &
                 test_update_orbs_mo = .false.
@@ -1763,13 +1815,33 @@ contains
                 test_update_orbs_mo = .false.
             end if
 
+            ! call routine with the orbital rotation again, whose evaluation fails, and
+            ! determine if the error is passed on and the rotated orbitals are marked
+            ! as not evaluated
+            context%mock_error = 1
+            call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                level_context(mo, 1_ip))
+            if (error /= 1) then
+                write(stderr, *) "test_update_orbs_mo failed: Error of the density "// &
+                    "matrix evaluating function not passed on for the "//case_name// &
+                    " case."
+                test_update_orbs_mo = .false.
+            end if
+            if (.not. mo%evaluation_stale) then
+                write(stderr, *) "test_update_orbs_mo failed: Evaluation not "// &
+                    "marked stale after a failed evaluation for the "//case_name// &
+                    " case."
+                test_update_orbs_mo = .false.
+            end if
+            context%mock_error = 0
+
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
             mo%evaluate_dm_cs => null()
             mo%evaluate_dm_os => null()
             call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                 level_context(mo, 1_ip))
-            if (error == 0) then
+            if (error /= 1) then
                 write(stderr, *) "test_update_orbs_mo failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
                     case_name//" case."
@@ -1835,8 +1907,7 @@ contains
                                              n_particle_ref => n_particle, shell_names
         use otr_common_unit_tests, only: &
             level_context, mock_requests, mock_response_factor, mock_get_response_cs, &
-            mock_get_response_os, mock_get_stale_response_os, mock_evaluate_dm_cs, &
-            mock_evaluate_dm_os
+            mock_get_stale_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os
 
         type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
@@ -1867,7 +1938,7 @@ contains
             n_particle = case_n_particle(i_case)
 
             ! set up the MO object with random Fock matrix blocks and the mock response
-            ! function
+            ! function, which couples the particle channels in the open-shell cases
             call setup_mo_object(mo, mo_coeff(:, :, :n_particle), ao_overlap, &
                                  case_n_occ(:n_particle, i_case), &
                                  case_irreps(:, :n_particle, i_case))
@@ -1879,7 +1950,7 @@ contains
                 mo%get_response_cs => mock_get_response_cs
             else
                 mo%evaluate_dm_os => mock_evaluate_dm_os
-                mo%get_response_os => mock_get_response_os
+                mo%get_response_os => mock_get_coupled_response_os
             end if
             mo%response_stale = .false.
 
@@ -1888,7 +1959,8 @@ contains
             allocate(x(mo%n_param), hess_x(mo%n_param))
             call random_number(x)
             expected_hess_x = ref_hess_x_mo( &
-                x, mo%mo_channels, mo_coeff(:, :, :n_particle), mock_response_factor)
+                x, mo%mo_channels, mo_coeff(:, :, :n_particle), mock_response_factor, &
+                mock_response_coupling)
             call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
             if (error /= 0) then
                 write(stderr, *) "test_hess_x_mo failed: Produced error for the "// &
@@ -1915,6 +1987,7 @@ contains
         ! the response, which is then used
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
         call setup_settings(mo%settings, context)
+        call arm_host_context(mo%settings, context)
         call setup_random_mo_channels(mo, n_occ, n_mo)
         mo%evaluate_dm_os => mock_evaluate_dm_os
         mo%get_response_os => mock_get_stale_response_os
@@ -1922,7 +1995,7 @@ contains
         allocate(x(mo%n_param), hess_x(mo%n_param))
         call random_number(x)
         expected_hess_x = &
-            ref_hess_x_mo(x, mo%mo_channels, mo_coeff, mock_response_factor)
+            ref_hess_x_mo(x, mo%mo_channels, mo_coeff, mock_response_factor, 0.0_rp)
         mock_requests = [integer(ip) :: ]
         call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
         if (error /= 0) then
@@ -1959,7 +2032,7 @@ contains
         mo%evaluate_dm_cs => null()
         mo%evaluate_dm_os => null()
         call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_hess_x_mo failed: No error returned without a "// &
                 "density matrix evaluating function."
             test_hess_x_mo = .false.
@@ -2054,7 +2127,11 @@ contains
         use otr_mo, only: mo_settings_type, default_settings => default_mo_settings
         use otr_mo_test_reference, only: operator(==)
 
+        type, extends(mo_settings_type) :: extended_settings_type
+        end type
+
         type(mo_settings_type) :: settings
+        type(extended_settings_type) :: extended_settings
         integer(ip) :: error
 
         ! assume tests pass
@@ -2076,6 +2153,15 @@ contains
             test_init_mo_settings = .false.
         end if
 
+        ! initialize settings of a type extending these settings, which cannot be set
+        ! to the default values, and check that an error is returned
+        call extended_settings%init(error)
+        if (error /= 1) then
+            write(stderr, *) "test_init_mo_settings failed: No error returned for "// &
+                "extended settings type."
+            test_init_mo_settings = .false.
+        end if
+
     end function test_init_mo_settings
 
     logical(c_bool) function test_rotate_orbitals_mo() bind(C)
@@ -2086,14 +2172,14 @@ contains
         use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_mo_test_reference, only: n_mo, n_param_os
+        use otr_mo_test_reference, only: n_mo, n_param
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
 
         type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), expected(n_ao, n_mo, n_particle), &
-                    kappa(n_param_os)
+                    kappa(n_param)
         integer(ip) :: error, k
         type(orbital_settings_type) :: settings
 
@@ -2152,8 +2238,8 @@ contains
         ! basis
         !
         use otr_mo, only: mo_type
-        use otr_mo_test_reference, only: n_mo, n_param_cs, n_cases, case_n_particle, &
-                                         case_n_occ, case_irreps, case_names
+        use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
+                                         case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ_ref => n_occ, &
                                              n_particle_ref => n_particle
         use opentrustregion_unit_tests, only: generate_random_symm_matrix
@@ -2165,9 +2251,8 @@ contains
         real(rp) :: ao_overlap(n_ao, n_ao), fock_ao(n_ao, n_ao, n_particle_ref), &
                     fock_mo(n_mo, n_mo, n_particle_ref), &
                     diag_diff(n_mo, n_mo, n_particle_ref), shell_scale, &
-                    kappa(n_param_cs), rot_mo_coeff(n_ao, n_mo, 1), energy, &
-                    fd_grad(n_param_cs)
-        real(rp), allocatable :: expected_h_diag(:)
+                    rot_mo_coeff(n_ao, n_mo, 1), energy
+        real(rp), allocatable :: expected_h_diag(:), kappa(:), fd_grad(:)
         integer(ip), allocatable :: n_occ(:)
         integer(ip) :: n_particle, n_occ_k, i, j, k, i_case, i_sign
         character(len=:), allocatable :: case_name
@@ -2258,7 +2343,8 @@ contains
         call setup_mo_object(mo, mo_coeff(:, :, :1), ao_overlap, n_occ_ref(:1))
         fock_ao(:, :, 1) = generate_random_symm_matrix(n_ao)
         call mo%calculate_grad_h_diag(fock_ao(:, :, :1))
-        do k = 1, n_param_cs
+        allocate(kappa(mo%n_param), fd_grad(mo%n_param))
+        do k = 1, mo%n_param
             fd_grad(k) = 0.0_rp
             do i_sign = -1, 1, 2
                 kappa = 0.0_rp
@@ -2309,10 +2395,11 @@ contains
         call setup_settings(settings, context)
 
         ! loop over every occupation case, replace both Fock matrix blocks of every
-        ! channel by random ones which also couple orbitals of different irreps, mark
-        ! the cached eigendecomposition stale and determine if the part of the blocks
-        ! between orbitals of the same irrep is diagonalized by orthonormal
-        ! eigenvectors which do not mix irreps, ignoring the coupling between irreps
+        ! channel by random ones which also couple orbitals of different irreps,
+        ! discard the eigendecomposition, which an object the factory set up does not
+        ! have yet, mark it stale and determine if the part of the blocks between
+        ! orbitals of the same irrep is diagonalized by orthonormal eigenvectors which
+        ! do not mix irreps, ignoring the coupling between irreps
         do i_case = 1, n_cases
             n_particle = case_n_particle(i_case)
             case_name = trim(case_names(i_case))
@@ -2322,6 +2409,8 @@ contains
                 associate (channel => mo%mo_channels(k))
                     channel%fock_oo = generate_random_symm_matrix(channel%n_occ)
                     channel%fock_vv = generate_random_symm_matrix(channel%n_virt)
+                    deallocate(channel%occ_eigvecs, channel%occ_eigvals, &
+                               channel%virt_eigvecs, channel%virt_eigvals)
                 end associate
             end do
             mo%hess_eigen_stale = .true.
@@ -2406,6 +2495,23 @@ contains
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                     "Eigendecomposition recomputed although not stale for the "// &
                     case_name//" case."
+                test_refresh_hess_eigen_mo = .false.
+            end if
+
+            ! mark the eigendecomposition stale and determine if the one computed
+            ! before is replaced by that of the doubled block, whose eigenvalues double
+            mo%hess_eigen_stale = .true.
+            call mo%refresh_hess_eigen(settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_refresh_hess_eigen_mo failed: Produced "// &
+                    "error when replacing an eigendecomposition for the "//case_name// &
+                    " case."
+                test_refresh_hess_eigen_mo = .false.
+            end if
+            if (norm2(mo%mo_channels(1)%occ_eigvals - 2.0_rp * eigvals_before) > tol) &
+                then
+                write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
+                    "Eigendecomposition not replaced for the "//case_name//" case."
                 test_refresh_hess_eigen_mo = .false.
             end if
             deallocate(mo)

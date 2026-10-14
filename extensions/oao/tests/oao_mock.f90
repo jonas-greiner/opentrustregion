@@ -7,6 +7,7 @@
 module otr_oao_mock
 
     use opentrustregion, only: rp, ip, stderr, obj_func_type
+    use c_interface, only: c_ip, c_rp
     use otr_oao, only: oao_factory_cs, oao_factory_os
     use test_reference, only: tol
     use otr_oao_test_reference, only: ref_oao_settings, operator(/=)
@@ -44,7 +45,7 @@ contains
         use otr_common, only: extension_type, extension_solver_settings_type
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_oao, only: oao_type, oao_settings_type, default_oao_settings
-        use otr_common_test_reference, only: n_ao_ref => n_ao
+        use otr_common_test_reference, only: n_ao_ref => n_ao, ao_overlap_pattern
 
         real(rp), intent(in) :: ao_overlap(:, :)
         integer(ip), intent(in) :: n_ao
@@ -57,8 +58,13 @@ contains
 
         class(extension_type), allocatable, target :: object
 
-        ! check passed overlap matrix and number of AOs
-        if (any(abs(ao_overlap - 2.0_rp) > tol)) then
+        ! check shape and values of passed overlap matrix and number of AOs
+        if (any(shape(ao_overlap) /= [n_ao_ref, n_ao_ref])) then
+            test_passed = .false.
+            write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO overlap "// &
+                "matrix shaped wrong."
+        else if (any(abs(ao_overlap - real( &
+            ao_overlap_pattern(int(n_ao_ref, kind=c_ip)), kind=rp)) > tol)) then
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO overlap "// &
                 "matrix wrong."
@@ -135,7 +141,8 @@ contains
         use opentrustregion, only: update_orbs_type, solver_state_type
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type
         use otr_oao, only: oao_settings_type
-        use otr_common_test_reference, only: check_evaluate_dm_cs_funptr
+        use otr_common_test_reference, only: check_evaluate_dm_cs_funptr, &
+                                             n_ao_ref => n_ao, density_pattern
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -151,8 +158,14 @@ contains
         ! initialize logical
         test_passed = .true.
 
-        ! check passed density matrix and number of particles
-        if (any(abs(dm_ao - 1.0_rp) > tol)) then
+        ! check shape and values of passed density matrix and number of particles
+        if (any(shape(dm_ao) /= [n_ao_ref, n_ao_ref])) then
+            test_passed = .false.
+            write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
+                "matrix for closed-shell case shaped wrong."
+        else if (any(abs(dm_ao - reshape( &
+            real(density_pattern(int(n_ao_ref, kind=c_ip), 1_c_ip, 0.0_c_rp), &
+                 kind=rp), [n_ao_ref, n_ao_ref])) > tol)) then
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
                 "matrix for closed-shell case wrong."
@@ -198,7 +211,8 @@ contains
         use opentrustregion, only: update_orbs_type, solver_state_type
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type
         use otr_oao, only: oao_settings_type
-        use otr_common_test_reference, only: check_evaluate_dm_os_funptr
+        use otr_common_test_reference, only: check_evaluate_dm_os_funptr, &
+                                             n_ao_ref => n_ao, density_pattern
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -214,8 +228,13 @@ contains
         ! initialize logical
         test_passed = .true.
 
-        ! check passed density matrix and number of particles
-        if (any(abs(dm_ao - 1.0_rp) > tol)) then
+        ! check shape and values of passed density matrix and number of particles
+        if (any(shape(dm_ao) /= [n_ao_ref, n_ao_ref, 2_ip])) then
+            test_passed = .false.
+            write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
+                "matrix for open-shell case shaped wrong."
+        else if (any(abs(dm_ao - real(density_pattern( &
+            int(n_ao_ref, kind=c_ip), 2_c_ip, 0.0_c_rp), kind=rp)) > tol)) then
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
                 "matrix for open-shell case wrong."

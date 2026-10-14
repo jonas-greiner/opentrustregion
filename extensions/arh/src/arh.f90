@@ -1663,8 +1663,6 @@ contains
         ! independent blocks, each contracted against its own inverse rather than
         ! against a single inverse of the summed potential
         case ("ms_sr1")
-            if (.not. allocated(self%linear_potential_dirs) .or. &
-                .not. allocated(self%nonlinear_potential_dirs)) return
             n_linear = size(self%linear_potential_dirs, 2)
             n_nonlinear = size(self%nonlinear_potential_dirs, 2)
             n_total = n_linear + n_nonlinear
@@ -1683,8 +1681,6 @@ contains
         ! subspace-projected multisecant: the response both expands in and contracts
         ! against the density difference history alone
         case ("ms_sp")
-            if (.not. allocated(self%dm_dirs) .or. &
-                .not. allocated(self%dm_dirs_nonlinear)) return
             n_linear = size(self%dm_dirs, 2)
             n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = n_linear + n_nonlinear
@@ -1704,8 +1700,6 @@ contains
         ! both directions, so the coupling matrix is purely off-diagonal; also
         ! introduces an additional factor of 1/2
         case ("symm_arh")
-            if (.not. allocated(self%dm_dirs) .or. &
-                .not. allocated(self%linear_potential_dirs)) return
             n_linear = size(self%dm_dirs, 2)
             n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = 2 * (n_linear + n_nonlinear)
@@ -1736,8 +1730,6 @@ contains
         ! multisecant PSB: the symmetrized ARH coupling with an additional
         ! density-density block subtracting the doubly counted curvature
         case ("ms_psb")
-            if (.not. allocated(self%dm_dirs) .or. &
-                .not. allocated(self%linear_potential_dirs)) return
             n_linear = size(self%dm_dirs, 2)
             n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = 2 * (n_linear + n_nonlinear)
@@ -1775,8 +1767,6 @@ contains
         ! contracting against the density difference history, so unlike every other
         ! type the two sets of directions differ
         case ("arh")
-            if (.not. allocated(self%dm_dirs) .or. &
-                .not. allocated(self%linear_potential_dirs)) return
             n_linear = size(self%dm_dirs, 2)
             n_nonlinear = size(self%dm_dirs_nonlinear, 2)
             n_total = n_linear + n_nonlinear
@@ -1794,15 +1784,11 @@ contains
             do i = 1, n_total
                 self%coupling_matrix(i, i) = 8.0_rp * shell_scale
             end do
-
-        case default
-            return
         end select
 
         ! every type except standard ARH expands in and contracts against the same set
         ! of directions
-        if (allocated(self%expansion_dirs) .and. &
-            .not. allocated(self%projection_dirs)) &
+        if (.not. allocated(self%projection_dirs)) &
             self%projection_dirs = self%expansion_dirs
 
     end subroutine get_low_rank_hess_factors

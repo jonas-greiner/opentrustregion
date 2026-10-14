@@ -147,6 +147,32 @@ class ExtensionCallbackMocks:
         return
 
 
+def ao_overlap_pattern():
+    """
+    this function returns an AO overlap matrix whose values encode the pair of its AO
+    indices regardless of their order, as ao_overlap_pattern of the Fortran test
+    reference does, so that it is symmetric while its values reveal a matrix of the
+    wrong shape
+    """
+    ao_index = np.arange(1, n_ao + 1)
+    return (
+        10 * np.maximum.outer(ao_index, ao_index) + np.minimum.outer(ao_index, ao_index)
+    ).astype(np.float64)
+
+
+def density_pattern(n_particle, offset=0.0):
+    """
+    this function returns density matrices of the given number of particle channels
+    whose values encode their channel and the pair of their AO indices regardless of
+    their order together with an offset, as density_pattern of the Fortran test
+    reference does, so that they are symmetric while their values reveal matrices of
+    the wrong shape or channel
+    """
+    return offset + np.stack(
+        [100 * k + ao_overlap_pattern() for k in range(1, n_particle + 1)]
+    )
+
+
 def release_mock_extension(extension):
     """
     this function frees an extension a mock factory returned through the mock release

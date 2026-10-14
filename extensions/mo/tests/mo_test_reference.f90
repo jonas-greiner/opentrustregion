@@ -16,10 +16,9 @@ module otr_mo_test_reference
     implicit none
 
     ! number of MOs for orbitals parameterized in the MO basis, fewer than the shared
-    ! number of AOs, and the numbers of parameters for the shared occupations
+    ! number of AOs, and the number of parameters for the shared occupations
     integer(ip), parameter :: n_mo = 4_ip
-    integer(ip), parameter :: n_param_cs = n_occ(1) * (n_mo - n_occ(1)), &
-                              n_param_os = sum(n_occ * (n_mo - n_occ))
+    integer(ip), parameter :: n_param = sum(n_occ * (n_mo - n_occ))
 
     ! dimensions of the MO coefficients passed through the Python interface
     integer(c_ip), protected, bind(C, name="test_n_mo") :: n_mo_c = int(n_mo, kind=c_ip)

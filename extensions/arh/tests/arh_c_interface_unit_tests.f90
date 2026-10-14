@@ -159,6 +159,7 @@ contains
         ! object, whose holders hold the copy of the orbitals the orbital update copies
         ! back
         do n_particle = 1, 2
+            if (allocated(orbitals)) deallocate(orbitals)
             if (n_particle == 1) then
                 case_name = "closed-shell MO"
                 allocate(mo_type :: orbitals)
@@ -213,7 +214,7 @@ contains
                 write(stderr, *) "test_arh_factory_c_wrapper failed: Error "// &
                     "returned or no extension returned for the "//case_name//" case."
                 test_arh_factory_c_wrapper = .false.
-                return
+                cycle
             end if
             call c_f_pointer(extension_c, holder)
 
@@ -226,7 +227,8 @@ contains
                 write(stderr, *) "test_arh_factory_c_wrapper failed: Settings of "// &
                     "the holder not wired with an object for the "//case_name//" case."
                 test_arh_factory_c_wrapper = .false.
-                return
+                deallocate(holder)
+                cycle
             end if
             if (.not. associated(level%extension%state, holder%state)) then
                 write(stderr, *) "test_arh_factory_c_wrapper failed: Object does "// &
@@ -293,7 +295,6 @@ contains
                 write(stderr, *) "test_arh_factory_c_wrapper failed: Error of the "// &
                     "factory not passed on for the "//case_name//" case."
             end if
-            if (n_particle == 1) deallocate(orbitals)
         end do
 
         ! call the factory with settings that were not initialized and without any, for
@@ -615,9 +616,10 @@ contains
         ! this function tests that the function that converts ARH settings from Fortran
         ! to C correctly performs this conversion
         !
-        use otr_arh, only: arh_settings_type
+        use otr_arh, only: arh_settings_type, default_arh_settings
         use otr_arh_c_interface, only: arh_settings_type_c, assignment(=)
-        use otr_arh_test_reference, only: operator(/=), ref_arh_settings
+        use otr_arh_test_reference, only: operator(/=), ref_arh_settings, &
+                                          get_reference_arh_values
 
         type(arh_settings_type) :: settings
         type(arh_settings_type_c) :: settings_c
@@ -625,10 +627,10 @@ contains
         ! assume test passes
         test_assign_arh_c_f = .true.
 
-        ! initialize Fortran settings with reference values
+        ! convert Fortran settings with the reference values to C settings which hold a
+        ! logging function and a host context that the conversion has to discard
         settings = ref_arh_settings
-
-        ! convert to C settings
+        call get_reference_arh_values(settings_c)
         settings_c = settings
 
         ! check that no callback function pointers and host contexts are associated
@@ -653,6 +655,20 @@ contains
             test_assign_arh_c_f = .false.
             write(stderr, *) "test_assign_arh_c_f failed: Settings not marked as "// &
                 "initialized."
+        end if
+
+        ! convert the default settings into C settings which hold the reference values
+        ! and are marked as not initialized, so that a field which is not converted,
+        ! including the initialized flag, keeps a value that differs from the expected
+        ! one
+        call get_reference_arh_values(settings_c)
+        settings_c%initialized = .false.
+        settings = default_arh_settings
+        settings_c = settings
+        if (settings_c /= default_arh_settings) then
+            write(stderr, *) "test_assign_arh_c_f failed: Default settings not "// &
+                "converted correctly."
+            test_assign_arh_c_f = .false.
         end if
 
     end function test_assign_arh_c_f

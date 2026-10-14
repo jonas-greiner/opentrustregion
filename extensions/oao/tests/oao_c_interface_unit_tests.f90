@@ -35,7 +35,8 @@ contains
                                 mock_oao_factory_error, mock_oao_factory_defaults, &
                                 mock_oao_factory_no_evaluate_dm, test_passed
         use otr_oao_test_reference, only: get_reference_oao_values
-        use otr_common_test_reference, only: n_ao, n_particle, n_ao_c, shell_names
+        use otr_common_test_reference, only: n_particle, n_ao_c, shell_names, &
+                                             ao_overlap_pattern, density_pattern
         use otr_common_c_interface_unit_tests, only: &
             mock_evaluate_dm_cs, mock_evaluate_dm_os, check_c_factory_wiring
         use c_interface_unit_tests, only: mock_logger, mock_update_orbs, mock_obj_func
@@ -62,9 +63,8 @@ contains
         oao_factory_cs => mock_oao_factory_cs
         oao_factory_os => mock_oao_factory_os
 
-        ! initialize AO overlap matrix
-        allocate(ao_overlap_c(n_ao, n_ao))
-        ao_overlap_c = 2.0_c_rp
+        ! initialize AO overlap matrix with values encoding the pairs of its indices
+        ao_overlap_c = ao_overlap_pattern(n_ao_c)
 
         ! associate optional settings with the reference values
         call get_reference_oao_values(settings_c)
@@ -74,10 +74,10 @@ contains
         do n_particle_c = 1, int(n_particle, kind=c_ip)
             case_name = trim(shell_names(n_particle_c))
 
-            ! initialize density matrix and get C function pointer to the density
-            ! matrix evaluating function of the spin case
-            allocate(dm_ao_c(n_ao, n_ao, n_particle_c))
-            dm_ao_c = 1.0_c_rp
+            ! initialize density matrix with values encoding the particle channel and
+            ! the pairs of its indices and get C function pointer to the density matrix
+            ! evaluating function of the spin case
+            dm_ao_c = density_pattern(n_ao_c, n_particle_c, 0.0_c_rp)
             if (n_particle_c == 1) then
                 evaluate_dm_c_funptr = c_funloc(mock_evaluate_dm_cs)
             else
@@ -135,7 +135,7 @@ contains
                 write(stderr, *) "test_oao_factory_c_wrapper failed: No extension "// &
                     "returned for the "//case_name//" case."
                 test_oao_factory_c_wrapper = .false.
-                return
+                cycle
             end if
             call c_f_pointer(extension_c, holder)
 
@@ -148,7 +148,8 @@ contains
                 write(stderr, *) "test_oao_factory_c_wrapper failed: Settings of "// &
                     "the holder not wired with an object for the "//case_name//" case."
                 test_oao_factory_c_wrapper = .false.
-                return
+                deallocate(holder)
+                cycle
             end if
             if (.not. associated(level%extension%state, holder%state)) then
                 write(stderr, *) "test_oao_factory_c_wrapper failed: Object does "// &
@@ -197,7 +198,7 @@ contains
 
             ! call the factory without a density matrix evaluating function, which the
             ! factory has to be handed as none and the bundle must not hold
-            dm_ao_c = 1.0_c_rp
+            dm_ao_c = density_pattern(n_ao_c, n_particle_c, 0.0_c_rp)
             solver_settings_c = default_solver_settings
             mock_oao_factory_no_evaluate_dm = .true.
             test_passed = .false.
@@ -231,7 +232,7 @@ contains
             ! call the factory for the initial density matrix with a mock factory which
             ! produces an error, which has to be returned without functions, an
             ! extension or writing back the solver settings
-            dm_ao_c = 1.0_c_rp
+            dm_ao_c = density_pattern(n_ao_c, n_particle_c, 0.0_c_rp)
             solver_settings_c = default_solver_settings
             update_orbs_c_funptr = c_funloc(mock_update_orbs)
             obj_func_c_funptr = c_funloc(mock_obj_func)
@@ -248,17 +249,15 @@ contains
                 write(stderr, *) "test_oao_factory_c_wrapper failed: Error of the "// &
                     "factory not passed on for the "//case_name//" case."
             end if
-            deallocate(dm_ao_c)
         end do
 
         ! call the factory with settings that were not initialized and without any, for
         ! which the factory is handed the default settings with the context through
         ! which the density matrix evaluating function is found, which the mock checks,
         ! and the bundle keeps no logging function or host context
-        allocate(dm_ao_c(n_ao, n_ao, 1))
         evaluate_dm_c_funptr = c_funloc(mock_evaluate_dm_cs)
         do i_case = 1, size(default_cases)
-            dm_ao_c = 1.0_c_rp
+            dm_ao_c = density_pattern(n_ao_c, 1_c_ip, 0.0_c_rp)
             solver_settings_c = default_solver_settings
             mock_oao_factory_defaults = .true.
             test_passed = .false.
@@ -429,9 +428,10 @@ contains
         ! this function tests that the function that converts OAO settings from Fortran
         ! to C correctly performs this conversion
         !
-        use otr_oao, only: oao_settings_type
+        use otr_oao, only: oao_settings_type, default_oao_settings
         use otr_oao_c_interface, only: oao_settings_type_c, assignment(=)
-        use otr_oao_test_reference, only: ref_oao_settings, operator(/=)
+        use otr_oao_test_reference, only: ref_oao_settings, get_reference_oao_values, &
+                                          operator(/=)
 
         type(oao_settings_type) :: settings
         type(oao_settings_type_c) :: settings_c
@@ -439,10 +439,10 @@ contains
         ! assume test passes
         test_assign_oao_c_f = .true.
 
-        ! initialize Fortran settings with reference values
+        ! convert Fortran settings with the reference values to C settings which hold a
+        ! logging function and a host context that the conversion has to discard
         settings = ref_oao_settings
-
-        ! convert to C settings
+        call get_reference_oao_values(settings_c)
         settings_c = settings
 
         ! check that no callback function pointers and host contexts are associated
@@ -467,6 +467,20 @@ contains
             test_assign_oao_c_f = .false.
             write(stderr, *) "test_assign_oao_c_f failed: Settings not marked as "// &
                 "initialized."
+        end if
+
+        ! convert the default settings into C settings which hold the reference values
+        ! and are marked as not initialized, so that a field which is not converted,
+        ! including the initialized flag, keeps a value that differs from the expected
+        ! one
+        call get_reference_oao_values(settings_c)
+        settings_c%initialized = .false.
+        settings = default_oao_settings
+        settings_c = settings
+        if (settings_c /= default_oao_settings) then
+            write(stderr, *) "test_assign_oao_c_f failed: Default settings not "// &
+                "converted correctly."
+            test_assign_oao_c_f = .false.
         end if
 
     end function test_assign_oao_c_f

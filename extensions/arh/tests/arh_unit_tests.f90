@@ -8,6 +8,8 @@ module otr_arh_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use test_reference, only: tol
+    use otr_common_unit_tests, only: mock_orbital_basis_type
+    use otr_arh, only: arh_mo_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -29,6 +31,35 @@ module otr_arh_unit_tests
     ! call to the potentials the ARH object keeps, in the order of stacked_potentials
     real(rp), parameter :: mock_potential_factors(3) = &
         [mock_v_coulomb_factor(1), mock_v_exchange_factor(1), mock_v_nonlinear_factor]
+
+    ! orbital basis which records what the roles an ARH object hands on to its orbitals
+    ! receive and returns three times its input with the error code it is set to, for
+    ! the tests of these roles
+    type, extends(mock_orbital_basis_type) :: recording_basis_type
+        real(rp), allocatable :: received(:)
+        class(*), pointer :: received_context => null()
+        integer(ip) :: error = 0
+    contains
+        procedure :: precond_pd => recording_basis_precond_pd
+        procedure :: project => recording_basis_project
+        procedure :: get_extra_trial_vectors => recording_basis_extra_trial_vectors
+    end type
+
+    ! ARH object in the MO basis which records the calls of the inverse of its
+    ! approximate Hessian and of the builders of its model and returns three times the
+    ! vector it receives with the error code it is set to, for the tests of the
+    ! routines which hand on to them
+    type, extends(arh_mo_type) :: recording_arh_type
+        real(rp), allocatable :: received(:)
+        logical :: level_shift_received = .false.
+        real(rp) :: received_level_shift = 0.0_rp
+        character(len=2) :: built_shell = ""
+        integer(ip) :: error = 0
+    contains
+        procedure :: inv_hess_x => recording_inv_hess_x
+        procedure :: build_hess_model_cs => recording_build_hess_model_cs
+        procedure :: build_hess_model_os => recording_build_hess_model_os
+    end type
 
     ! dispatch the mock potential by density matrix rank
     interface mock_potential
@@ -169,6 +200,103 @@ contains
 
     end subroutine mock_evaluate_dm_os
 
+    subroutine recording_basis_precond_pd(self, residual, precond_residual, error, &
+                                          context)
+        !
+        ! this subroutine records the residual and the context the positive-definite
+        ! preconditioner of the recording orbital basis receives
+        !
+        class(recording_basis_type), intent(inout) :: self
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        self%received = residual
+        self%received_context => context
+        precond_residual = 3.0_rp * residual
+        error = self%error
+
+    end subroutine recording_basis_precond_pd
+
+    subroutine recording_basis_project(self, vector, error, context)
+        !
+        ! this subroutine records the vector and the context the projection of the
+        ! recording orbital basis receives
+        !
+        class(recording_basis_type), intent(inout) :: self
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        self%received = vector
+        self%received_context => context
+        vector = 3.0_rp * vector
+        error = self%error
+
+    end subroutine recording_basis_project
+
+    subroutine recording_basis_extra_trial_vectors(self, trial_vectors, error, context)
+        !
+        ! this subroutine records the context the extra trial vector function of the
+        ! recording orbital basis receives and returns trial vectors of threes
+        !
+        class(recording_basis_type), intent(inout) :: self
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        self%received_context => context
+        trial_vectors = 3.0_rp
+        error = self%error
+
+    end subroutine recording_basis_extra_trial_vectors
+
+    subroutine recording_inv_hess_x(self, x, inv_hess_x, error, level_shift)
+        !
+        ! this subroutine records the vector and the level shift the inverse of the
+        ! approximate Hessian of the recording ARH object receives
+        !
+        class(recording_arh_type), intent(inout) :: self
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: inv_hess_x(:)
+        integer(ip), intent(out) :: error
+        real(rp), intent(in), optional :: level_shift
+
+        self%received = x
+        self%level_shift_received = present(level_shift)
+        if (present(level_shift)) self%received_level_shift = level_shift
+        inv_hess_x = 3.0_rp * x
+        error = self%error
+
+    end subroutine recording_inv_hess_x
+
+    subroutine recording_build_hess_model_cs(self, error)
+        !
+        ! this subroutine records that the closed-shell model builder of the recording
+        ! ARH object was called
+        !
+        class(recording_arh_type), intent(inout) :: self
+        integer(ip), intent(out) :: error
+
+        self%built_shell = "cs"
+        error = self%error
+
+    end subroutine recording_build_hess_model_cs
+
+    subroutine recording_build_hess_model_os(self, error)
+        !
+        ! this subroutine records that the open-shell model builder of the recording
+        ! ARH object was called
+        !
+        class(recording_arh_type), intent(inout) :: self
+        integer(ip), intent(out) :: error
+
+        self%built_shell = "os"
+        error = self%error
+
+    end subroutine recording_build_hess_model_os
+
     subroutine generate_random_fock_partition(n_ao, n_occ, dm_oao, fock_oo, fock_vv)
         !
         ! this subroutine generates a random density matrix with the given number of
@@ -300,42 +428,33 @@ contains
 
     end subroutine setup_arh_and_mo_objects
 
-    subroutine setup_arh_and_oao_objects(arh, oao, case_arh_type, dm_oao, fock_oo, &
-                                         fock_vv, n_ao, n_particle, n_param, context)
+    subroutine setup_identity_mo_eigenbasis(mo, occ_eigval, virt_eigval)
         !
-        ! this subroutine sets up the given OAO and ARH objects for the preconditioner
-        ! tests; the allocatable caches the individual preconditioner branches need are
-        ! filled in by the caller
+        ! this subroutine sets up an up-to-date eigendecomposition of the static part
+        ! of the Hessian in the MO basis itself for the particle channels of the MO
+        ! object, with the given eigenvalues of the occupied-occupied and the
+        ! virtual-virtual blocks of the Fock matrix, so that all eigenvalue pairs are
+        ! the same and routines using the eigendecomposition reduce to a scaling
         !
-        use otr_arh, only: arh_type, arh_oao_type
-        use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use otr_mo, only: mo_type
+        use opentrustregion_unit_tests, only: identity_matrix
 
-        class(arh_type), allocatable, intent(out) :: arh
-        type(oao_type), allocatable, intent(out), target :: oao
-        character(len=*), intent(in) :: case_arh_type
-        real(rp), intent(in) :: dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :)
-        integer(ip), intent(in) :: n_ao, n_particle, n_param
-        type(test_context_type), intent(inout), target :: context
+        type(mo_type), intent(inout) :: mo
+        real(rp), intent(in) :: occ_eigval, virt_eigval
 
-        ! set up the OAO object so that the static-Hessian eigendecomposition used by
-        ! the preconditioner can be refreshed
-        allocate(oao)
-        call setup_settings(oao%settings, context)
-        oao%n_ao = n_ao
-        oao%n_particle = n_particle
-        oao%n_param = n_param
-        oao%dm_oao = dm_oao
-        oao%fock_oo = fock_oo
-        oao%fock_vv = fock_vv
-        oao%hess_eigen_stale = .true.
+        integer(ip) :: k
 
-        ! set up the ARH object in the OAO basis
-        allocate(arh, source=arh_oao_type(oao))
-        call setup_settings(arh%settings, context)
-        arh%settings%arh_type = case_arh_type
+        do k = 1, mo%n_particle
+            associate (channel => mo%mo_channels(k))
+                channel%occ_eigvecs = identity_matrix(channel%n_occ)
+                channel%occ_eigvals = spread(occ_eigval, 1, channel%n_occ)
+                channel%virt_eigvecs = identity_matrix(channel%n_virt)
+                channel%virt_eigvals = spread(virt_eigval, 1, channel%n_virt)
+            end associate
+        end do
+        mo%hess_eigen_stale = .false.
 
-    end subroutine setup_arh_and_oao_objects
+    end subroutine setup_identity_mo_eigenbasis
 
     subroutine setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
                                                 context)
@@ -575,414 +694,6 @@ contains
         end do
 
     end function ref_congruence_transform
-
-    function check_obj_func_arh(n_particle, test_name) result(passed)
-        !
-        ! this function checks the energy evaluation for the closed- or open-shell case
-        ! for orbitals parameterized in the OAO basis, which also adds the evaluated
-        ! point together with the potentials the shell keeps to the history
-        !
-        use test_reference, only: arm_host_context, host_context_reached
-        use otr_arh, only: arh_type
-        use otr_oao, only: oao_type
-        use otr_common_test_reference, only: n_ao
-        use otr_common_unit_tests, only: level_context, mock_requests
-        use opentrustregion_unit_tests, only: test_context_type
-
-        type(test_context_type), target :: context
-        type(oao_type), allocatable, target :: oao
-        class(arh_type), allocatable, target :: arh
-        integer(ip), intent(in) :: n_particle
-        character(len=*), intent(in) :: test_name
-        logical :: passed
-
-        real(rp), parameter :: basis_scale = 0.5_rp
-
-        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
-                    kappa(n_particle * n_ao * (n_ao - 1) / 2), energy
-        real(rp), allocatable :: potentials(:, :, :, :)
-        integer(ip) :: k, error
-
-        ! assume test passes
-        passed = .true.
-
-        ! set up the OAO and ARH objects with an empty history, which is removed for
-        ! the first call
-        call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
-                                              context)
-        call setup_empty_history(arh, n_particle)
-        call arm_host_context(arh%settings, context)
-        deallocate(arh%dm_list)
-
-        ! call routine with an orbital rotation before the history exists and determine
-        ! if the potentials the shell keeps are requested and nothing is added to the
-        ! history
-        call random_number(kappa)
-        kappa = 0.1_rp * kappa
-        mock_requests = [integer(ip) :: ]
-        energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) test_name//" failed: Produced error without history."
-            passed = .false.
-        end if
-        if (size(mock_requests) /= 1) then
-            write(stderr, *) test_name//" failed: Density matrix evaluating "// &
-                "function not called exactly once."
-            passed = .false.
-        end if
-        if (any(mock_requests /= 14_ip)) then
-            write(stderr, *) test_name//" failed: Incorrect outputs requested from "// &
-                "density matrix evaluating function."
-            passed = .false.
-        end if
-        if (allocated(arh%dm_list)) then
-            write(stderr, *) test_name//" failed: History created by energy evaluation."
-            passed = .false.
-        end if
-        if (arh%model_stale) then
-            write(stderr, *) test_name// &
-                " failed: Hessian model marked stale without history."
-            passed = .false.
-        end if
-
-        ! call routine again with an empty history and determine if the rotated density
-        ! matrix is added together with the potentials evaluated at it in the history
-        ! basis, while the current density matrix is left untouched
-        allocate(arh%dm_list(n_ao, n_ao, n_particle, 0))
-        mock_requests = [integer(ip) :: ]
-        energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) test_name//" failed: Produced error with history."
-            passed = .false.
-        else if (size(arh%dm_list, 4) /= 1) then
-            write(stderr, *) test_name//" failed: Evaluated point not added to history."
-            passed = .false.
-        else
-            if (abs(energy - basis_scale**2 * sum(arh%dm_list(:, :, :, 1))) > tol) then
-                write(stderr, *) test_name//" failed: Incorrect energy."
-                passed = .false.
-            end if
-            if (norm2(arh%dm_list(:, :, :, 1) - dm_oao) < tol) then
-                write(stderr, *) test_name//" failed: Incorrect density matrix history."
-                passed = .false.
-            end if
-            potentials = stacked_potentials(arh, 1_ip)
-            do k = 1, size(mock_potential_factors)
-                if (norm2(potentials(:, :, :, k) - basis_scale**4 * mock_potential( &
-                    mock_potential_factors(k), arh%dm_list(:, :, :, 1))) > tol) then
-                    write(stderr, *) test_name//" failed: Incorrect potential history."
-                    passed = .false.
-                end if
-            end do
-        end if
-        if (norm2(oao%dm_oao - dm_oao) > tol .or. &
-            norm2(arh%orbitals%dm_ao - basis_scale**2 * dm_oao) > tol) then
-            write(stderr, *) test_name// &
-                " failed: Current density matrix changed by energy evaluation."
-            passed = .false.
-        end if
-        if (.not. arh%model_stale) then
-            write(stderr, *) test_name//" failed: Hessian model not marked stale "// &
-                "after adding the evaluated point to the history."
-            passed = .false.
-        end if
-
-        ! call routine at the same point and determine if it is not added twice and
-        ! leaves the Hessian model untouched
-        arh%model_stale = .false.
-        energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) test_name// &
-                " failed: Produced error for a point the history already holds."
-            passed = .false.
-        end if
-        if (size(arh%dm_list, 4) /= 1) then
-            write(stderr, *) test_name// &
-                " failed: History extended for a point it already holds."
-            passed = .false.
-        end if
-        if (arh%model_stale) then
-            write(stderr, *) test_name//" failed: Hessian model marked stale for a "// &
-                "point the history already holds."
-            passed = .false.
-        end if
-
-        ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("obj_func_arh", context)) passed = .false.
-
-        ! deallocate ARH and OAO objects
-        deallocate(arh, oao)
-
-    end function check_obj_func_arh
-
-    function check_update_orbs_arh(n_particle, test_name) result(passed)
-        !
-        ! this function checks the energy, gradient and Hessian diagonal evaluation for
-        ! the closed- or open-shell case for orbitals parameterized in the OAO basis,
-        ! which passes the Fock matrix in the history basis on to the orbital basis and
-        ! adds the point the orbitals are rotated away from to the history
-        !
-        use test_reference, only: arm_host_context, host_context_reached
-        use opentrustregion, only: hess_x_type
-        use otr_common, only: hess_x_callback
-        use otr_arh, only: arh_type
-        use otr_oao, only: oao_type
-        use otr_common_test_reference, only: n_ao
-        use otr_common_unit_tests, only: level_context, mock_requests, mock_fock_factor
-        use opentrustregion_unit_tests, only: test_context_type, identity_matrix
-
-        type(test_context_type), target :: context
-        type(oao_type), allocatable, target :: oao
-        class(arh_type), allocatable, target :: arh
-        integer(ip), intent(in) :: n_particle
-        character(len=*), intent(in) :: test_name
-        logical :: passed
-
-        real(rp), parameter :: basis_scale = 0.5_rp
-
-        real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
-                    dm_saved(n_ao, n_ao, n_particle, 2), complement(n_ao, n_ao), func
-        real(rp), allocatable :: kappa(:), grad(:), h_diag(:), potentials(:, :, :, :), &
-                                 potentials_saved(:, :, :, :, :)
-        integer(ip) :: n_param, n_list, k, error
-        procedure(hess_x_type), pointer :: hess_x_funptr
-
-        ! assume test passes
-        passed = .true.
-
-        ! set up the OAO and ARH objects
-        call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
-                                              context)
-        arh%settings%arh_type = "ms_psb"
-        call arm_host_context(arh%settings, context)
-        if (n_particle == 1) then
-            arh%evaluate_dm_cs => mock_evaluate_dm_cs
-        else
-            arh%evaluate_dm_os => mock_evaluate_dm_os
-        end if
-        n_param = arh%orbitals%n_param
-        allocate( &
-            kappa(n_param), grad(n_param), h_diag(n_param), &
-            potentials_saved(n_ao, n_ao, n_particle, size(mock_potential_factors), 2))
-
-        ! the checks after a failed call would read quantities it did not set
-        checks: block
-            ! call routine without an orbital rotation for an uninitialized object
-            kappa = 0.0_rp
-            mock_requests = [integer(ip) :: ]
-            call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 level_context(arh, 1_ip))
-            if (error /= 0) then
-                write(stderr, *) test_name//" failed: Produced error."
-                passed = .false.
-                exit checks
-            end if
-
-            ! determine if the energy and the potentials of the density matrix
-            ! evaluating function are stored in the history basis and if the Fock
-            ! matrix in the history basis is passed on to the orbital basis, which
-            ! keeps its occupied-occupied and virtual-virtual parts
-            if (abs(func - sum(dm_ao)) > tol) then
-                write(stderr, *) test_name//" failed: Incorrect energy."
-                passed = .false.
-            end if
-            potentials = stacked_potentials(arh, 0_ip)
-            do k = 1, size(mock_potential_factors)
-                if (norm2(potentials(:, :, :, k) - basis_scale**2 * &
-                          mock_potential(mock_potential_factors(k), dm_ao)) > tol) then
-                    write(stderr, *) test_name//" failed: Incorrect potential."
-                    passed = .false.
-                end if
-            end do
-            fock = basis_scale**2 * mock_potential(mock_fock_factor(1), dm_ao)
-            do k = 1, n_particle
-                complement = identity_matrix(n_ao) - oao%dm_oao(:, :, k)
-                if (norm2(oao%fock_oo(:, :, k) - matmul(oao%dm_oao(:, :, k), matmul( &
-                    fock(:, :, k), oao%dm_oao(:, :, k)))) + norm2( &
-                        oao%fock_vv(:, :, k) - matmul( &
-                            complement, matmul(fock(:, :, k), complement))) > tol) then
-                    write(stderr, *) test_name//" failed: Fock matrix in the "// &
-                        "history basis not passed on to the orbital basis."
-                    passed = .false.
-                end if
-            end do
-
-            ! determine if the gradient, Hessian diagonal and Hessian linear
-            ! transformation are returned
-            if (norm2(grad - arh%orbitals%grad) > tol) then
-                write(stderr, *) test_name//" failed: Gradient not returned."
-                passed = .false.
-            end if
-            if (norm2(h_diag - arh%orbitals%h_diag) > tol) then
-                write(stderr, *) test_name//" failed: Hessian diagonal not returned."
-                passed = .false.
-            end if
-            if (.not. associated(hess_x_funptr, hess_x_callback)) then
-                write(stderr, *) test_name// &
-                    " failed: Returned Hessian linear transformation is wrong."
-                passed = .false.
-            end if
-
-            ! determine if the history is initialized empty and the approximate Hessian
-            ! model is assembled from it
-            if (size(arh%dm_list, 4) /= 0) then
-                write(stderr, *) test_name// &
-                    " failed: Density matrix history not initialized empty."
-                passed = .false.
-            end if
-            if (.not. allocated(arh%dm_dirs)) then
-                write(stderr, *) test_name//" failed: Approximate Hessian model "// &
-                    "not assembled for the initial point."
-                passed = .false.
-            end if
-
-            ! call routine again without an orbital rotation and determine if the
-            ! quantities of the already initialized object are reused, even for a
-            ! vanishing energy, without rebuilding the static part of the Hessian
-            oao%energy = 0.0_rp
-            oao%hess_eigen_stale = .false.
-            call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 level_context(arh, 1_ip))
-            if (error /= 0) then
-                write(stderr, *) test_name// &
-                    " failed: Produced error for an initialized object."
-                passed = .false.
-            end if
-            if (size(mock_requests) /= 1) then
-                write(stderr, *) test_name// &
-                    " failed: Quantities recomputed without an orbital rotation."
-                passed = .false.
-            end if
-            if (size(arh%dm_list, 4) /= 0) then
-                write(stderr, *) test_name// &
-                    " failed: History extended without an orbital rotation."
-                passed = .false.
-            end if
-            if (oao%hess_eigen_stale) then
-                write(stderr, *) test_name//" failed: Static part of the Hessian "// &
-                    "rebuilt without an orbital rotation."
-                passed = .false.
-            end if
-
-            ! rotate twice in a row, the second time for a model marked stale, and save
-            ! the quantities at the points the orbitals are rotated away from, which
-            ! the history has to retain with the latest first
-            kappa = 0.1_rp
-            do k = 2, 1, -1
-                dm_saved(:, :, :, k) = oao%dm_oao
-                potentials_saved(:, :, :, :, k) = stacked_potentials(arh, 0_ip)
-                arh%model_stale = k == 1
-                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     level_context(arh, 1_ip))
-                if (error /= 0) then
-                    write(stderr, *) test_name// &
-                        " failed: Produced error for an orbital rotation."
-                    passed = .false.
-                    exit checks
-                end if
-            end do
-            if (size(arh%dm_list, 4) /= 2) then
-                write(stderr, *) test_name// &
-                    " failed: History not extended to two entries."
-                passed = .false.
-                exit checks
-            end if
-            do k = 1, 2
-                if (norm2(arh%dm_list(:, :, :, k) - dm_saved(:, :, :, k)) > tol) then
-                    write(stderr, *) test_name// &
-                        " failed: Incorrect density matrix history."
-                    passed = .false.
-                end if
-                if (norm2(stacked_potentials(arh, k) - &
-                          potentials_saved(:, :, :, :, k)) > tol) then
-                    write(stderr, *) test_name//" failed: Incorrect potential history."
-                    passed = .false.
-                end if
-            end do
-
-            ! determine if the approximate Hessian model is assembled from the history
-            ! extended by the point the orbitals were rotated away from
-            if (arh%model_stale .or. .not. allocated(arh%dm_dirs)) then
-                write(stderr, *) test_name// &
-                    " failed: Approximate Hessian model not assembled."
-                passed = .false.
-            else if (size(arh%dm_dirs, 2) /= 2 * n_particle) then
-                write(stderr, *) test_name//" failed: Approximate Hessian model "// &
-                    "not assembled from the extended history."
-                passed = .false.
-            end if
-
-            ! determine if a rotation starting from a density matrix which the history
-            ! already holds, as after the energy evaluation of an accepted trial point,
-            ! does not add that density matrix a second time
-            arh%dm_list(:, :, :, 1) = oao%dm_oao
-            call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 level_context(arh, 1_ip))
-            if (error /= 0) then
-                write(stderr, *) test_name//" failed: Produced error for a density "// &
-                    "matrix already held in the history."
-                passed = .false.
-            else if (size(arh%dm_list, 4) /= 2) then
-                write(stderr, *) test_name//" failed: History extended for a "// &
-                    "density matrix it already holds."
-                passed = .false.
-            end if
-
-            ! call routine with an orbital rotation whose evaluation fails and
-            ! determine if the error is passed on and the rotated density is marked as
-            ! not evaluated, so that a following call without an orbital rotation
-            ! evaluates it without adding it to the history
-            context%mock_error = 1
-            call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 level_context(arh, 1_ip))
-            if (error == 0) then
-                write(stderr, *) test_name//" failed: Error of the density matrix "// &
-                    "evaluating function not passed on."
-                passed = .false.
-            end if
-            if (.not. arh%evaluation_stale) then
-                write(stderr, *) test_name// &
-                    " failed: Evaluation not marked stale after a failed evaluation."
-                passed = .false.
-            end if
-            context%mock_error = 0
-            n_list = size(arh%dm_list, 4, kind=ip)
-            kappa = 0.0_rp
-            call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                 level_context(arh, 1_ip))
-            if (error /= 0) then
-                write(stderr, *) test_name// &
-                    " failed: Produced error after a failed evaluation."
-                passed = .false.
-            end if
-            if (arh%evaluation_stale) then
-                write(stderr, *) test_name//" failed: Evaluation still marked "// &
-                    "stale after a failed evaluation was recovered."
-                passed = .false.
-            end if
-            if (size(arh%dm_list, 4) /= n_list) then
-                write(stderr, *) test_name//" failed: History extended by a "// &
-                    "density matrix which has not been evaluated."
-                passed = .false.
-            end if
-
-            ! determine if every recompute asked for all potentials the shell needs
-            if (any(mock_requests /= 15_ip)) then
-                write(stderr, *) test_name//" failed: Incorrect outputs requested "// &
-                    "from density matrix evaluating function."
-                passed = .false.
-            end if
-        end block checks
-
-        ! check that the host context reached the callback functions unchanged
-        if (.not. host_context_reached("update_orbs_arh", context)) passed = .false.
-
-        ! deallocate ARH and OAO objects
-        deallocate(arh, oao)
-
-    end function check_update_orbs_arh
 
     function check_build_hess_model(n_particle, test_name) result(passed)
         !
@@ -1412,6 +1123,7 @@ contains
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use otr_arh_test_reference, only: operator(==)
 
         type(test_context_type), target :: context
         type(extension_solver_settings_type), target :: solver_settings
@@ -1447,7 +1159,6 @@ contains
         if (error /= 0) then
             write(stderr, *) "test_arh_factory_cs failed: Produced error."
             test_arh_factory_cs = .false.
-            return
         end if
         if (.not. associated(update_orbs_arh_funptr, update_orbs_callback) .or. &
             .not. associated(obj_func_arh_funptr, obj_func_callback)) then
@@ -1459,29 +1170,40 @@ contains
             write(stderr, *) "test_arh_factory_cs failed: Solver settings not "// &
                 "wired with an object."
             test_arh_factory_cs = .false.
-            return
-        end if
-        select type (arh => solver_settings%extensions(2)%object)
-        class is (arh_type)
-            select type (mo => solver_settings%extensions(1)%object)
-            type is (mo_type)
-                if (.not. associated(arh%orbitals, mo)) then
-                    write(stderr, *) "test_arh_factory_cs failed: ARH object not "// &
-                        "built on the orbital basis object of the solver settings."
+        else
+            select type (arh => solver_settings%extensions(2)%object)
+            class is (arh_type)
+                select type (mo => solver_settings%extensions(1)%object)
+                type is (mo_type)
+                    if (.not. associated(arh%orbitals, mo)) then
+                        write(stderr, *) "test_arh_factory_cs failed: ARH object "// &
+                            "not built on the orbital basis object of the solver "// &
+                            "settings."
+                        test_arh_factory_cs = .false.
+                    end if
+                end select
+                if (.not. associated(arh%state, state)) then
+                    write(stderr, *) "test_arh_factory_cs failed: Record of the "// &
+                        "state not passed on."
                     test_arh_factory_cs = .false.
                 end if
-            end select
-            if (.not. associated(arh%evaluate_dm_cs, mock_evaluate_dm_cs) .or. &
-                associated(arh%evaluate_dm_os)) then
-                write(stderr, *) "test_arh_factory_cs failed: Closed-shell density "// &
-                    "matrix evaluating function not handed over."
+                if (.not. (arh%settings == settings)) then
+                    write(stderr, *) "test_arh_factory_cs failed: Settings not "// &
+                        "passed on."
+                    test_arh_factory_cs = .false.
+                end if
+                if (.not. associated(arh%evaluate_dm_cs, mock_evaluate_dm_cs) .or. &
+                    associated(arh%evaluate_dm_os)) then
+                    write(stderr, *) "test_arh_factory_cs failed: Closed-shell "// &
+                        "density matrix evaluating function not handed over."
+                    test_arh_factory_cs = .false.
+                end if
+            class default
+                write(stderr, *) "test_arh_factory_cs failed: Solver settings not "// &
+                    "wired with an ARH object."
                 test_arh_factory_cs = .false.
-            end if
-        class default
-            write(stderr, *) "test_arh_factory_cs failed: Solver settings not "// &
-                "wired with an ARH object."
-            test_arh_factory_cs = .false.
-        end select
+            end select
+        end if
 
         ! call routine for solver settings no factory wired and determine if the error
         ! of the common setup is passed on
@@ -1489,7 +1211,7 @@ contains
         call arh_factory_cs(evaluate_dm_funptr, update_orbs_arh_funptr, &
                             obj_func_arh_funptr, solver_settings, state, error, &
                             settings)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_arh_factory_cs failed: Error of the common "// &
                 "setup not passed on."
             test_arh_factory_cs = .false.
@@ -1511,6 +1233,7 @@ contains
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use otr_arh_test_reference, only: operator(==)
 
         type(test_context_type), target :: context
         type(extension_solver_settings_type), target :: solver_settings
@@ -1546,7 +1269,6 @@ contains
         if (error /= 0) then
             write(stderr, *) "test_arh_factory_os failed: Produced error."
             test_arh_factory_os = .false.
-            return
         end if
         if (.not. associated(update_orbs_arh_funptr, update_orbs_callback) .or. &
             .not. associated(obj_func_arh_funptr, obj_func_callback)) then
@@ -1558,29 +1280,40 @@ contains
             write(stderr, *) "test_arh_factory_os failed: Solver settings not "// &
                 "wired with an object."
             test_arh_factory_os = .false.
-            return
-        end if
-        select type (arh => solver_settings%extensions(2)%object)
-        class is (arh_type)
-            select type (oao => solver_settings%extensions(1)%object)
-            type is (oao_type)
-                if (.not. associated(arh%orbitals, oao)) then
-                    write(stderr, *) "test_arh_factory_os failed: ARH object not "// &
-                        "built on the orbital basis object of the solver settings."
+        else
+            select type (arh => solver_settings%extensions(2)%object)
+            class is (arh_type)
+                select type (oao => solver_settings%extensions(1)%object)
+                type is (oao_type)
+                    if (.not. associated(arh%orbitals, oao)) then
+                        write(stderr, *) "test_arh_factory_os failed: ARH object "// &
+                            "not built on the orbital basis object of the solver "// &
+                            "settings."
+                        test_arh_factory_os = .false.
+                    end if
+                end select
+                if (.not. associated(arh%state, state)) then
+                    write(stderr, *) "test_arh_factory_os failed: Record of the "// &
+                        "state not passed on."
                     test_arh_factory_os = .false.
                 end if
-            end select
-            if (.not. associated(arh%evaluate_dm_os, mock_evaluate_dm_os) .or. &
-                associated(arh%evaluate_dm_cs)) then
-                write(stderr, *) "test_arh_factory_os failed: Open-shell density "// &
-                    "matrix evaluating function not handed over."
+                if (.not. (arh%settings == settings)) then
+                    write(stderr, *) "test_arh_factory_os failed: Settings not "// &
+                        "passed on."
+                    test_arh_factory_os = .false.
+                end if
+                if (.not. associated(arh%evaluate_dm_os, mock_evaluate_dm_os) .or. &
+                    associated(arh%evaluate_dm_cs)) then
+                    write(stderr, *) "test_arh_factory_os failed: Open-shell "// &
+                        "density matrix evaluating function not handed over."
+                    test_arh_factory_os = .false.
+                end if
+            class default
+                write(stderr, *) "test_arh_factory_os failed: Solver settings not "// &
+                    "wired with an ARH object."
                 test_arh_factory_os = .false.
-            end if
-        class default
-            write(stderr, *) "test_arh_factory_os failed: Solver settings not "// &
-                "wired with an ARH object."
-            test_arh_factory_os = .false.
-        end select
+            end select
+        end if
 
         ! call routine for solver settings no factory wired and determine if the error
         ! of the common setup is passed on
@@ -1588,7 +1321,7 @@ contains
         call arh_factory_os(evaluate_dm_funptr, update_orbs_arh_funptr, &
                             obj_func_arh_funptr, solver_settings, state, error, &
                             settings)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_arh_factory_os failed: Error of the common "// &
                 "setup not passed on."
             test_arh_factory_os = .false.
@@ -1637,10 +1370,11 @@ contains
             [character(len=41) :: "for the closed-shell case in the MO basis", &
              "for the open-shell case in the OAO basis", "without settings", &
              "for settings that were not initialized"]
-        character(len=60), parameter :: refusal_names(4) = &
-            [character(len=60) :: "an unknown ARH type", "solver settings no "// &
-             "factory wired", "solver settings another extension wired", &
-             "a density matrix evaluating function of the other shell"]
+        character(len=74), parameter :: refusal_names(5) = [ &
+            character(len=74) :: "an unknown ARH type", "solver settings no "// &
+            "factory wired", "solver settings another extension wired", "an "// &
+            "open-shell density matrix evaluating function for closed-shell orbitals", &
+            "a closed-shell density matrix evaluating function for open-shell orbitals"]
 
         ! assume tests pass
         test_arh_factory_common = .true.
@@ -1775,11 +1509,11 @@ contains
 
         ! create objects for an unknown ARH type, for solver settings no factory wired,
         ! for solver settings another extension than an orbital basis wired and with
-        ! the density matrix evaluating function of the other shell, which have to
-        ! return an error, with an error message for the errors the routine detects
-        ! itself, and leave the solver settings untouched
+        ! the density matrix evaluating function of the other shell for either shell of
+        ! the orbitals, which have to return an error with an error message and leave
+        ! the solver settings untouched
         do i_case = 1, size(refusal_names)
-            call setup_basis(.true., 1_ip)
+            call setup_basis(.true., merge(2_ip, 1_ip, i_case == 5))
             call setup_settings(settings, context)
             call setup_error_logging(settings, context)
             level => solver_settings%extensions(1)%object%solver_level
@@ -1802,9 +1536,14 @@ contains
                                     evaluate_dm_os_funptr, update_orbs_arh_funptr, &
                                     obj_func_arh_funptr, solver_settings, state, &
                                     error, settings)
-            if (error == 0 .or. (i_case > 1 .and. context%log_message == "")) then
+            if (error /= 1) then
                 write(stderr, *) "test_arh_factory_common failed: No error "// &
-                    "returned or printed for "//trim(refusal_names(i_case))//"."
+                    "returned for "//trim(refusal_names(i_case))//"."
+                test_arh_factory_common = .false.
+            end if
+            if (context%log_message == "") then
+                write(stderr, *) "test_arh_factory_common failed: No error message "// &
+                    "printed for "//trim(refusal_names(i_case))//"."
                 test_arh_factory_common = .false.
             end if
             if (size(solver_settings%extensions) /= 1 .or. .not. associated( &
@@ -1884,7 +1623,7 @@ contains
         ! input parameters
         !
         use otr_arh, only: arh_settings_type, arh_sanity_check, arh_types
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_error_logging
 
         type(test_context_type), target :: context
         type(arh_settings_type) :: settings
@@ -1893,14 +1632,14 @@ contains
         ! assume tests pass
         test_arh_sanity_check = .true.
 
-        ! setup settings object
-        call setup_settings(settings, context)
+        ! setup settings object which passes only error messages on
+        call setup_error_logging(settings, context)
 
-        ! check if all available ARH types are accepted
+        ! check if all available ARH types are accepted without a message
         do i = 1, size(arh_types)
             settings%arh_type = arh_types(i)
             call arh_sanity_check(settings, error)
-            if (error /= 0) then
+            if (error /= 0 .or. context%log_message /= "") then
                 write(stderr, *) "test_arh_sanity_check failed: Error thrown for "// &
                     trim(arh_types(i))//" ARH type."
                 test_arh_sanity_check = .false.
@@ -1916,12 +1655,18 @@ contains
             test_arh_sanity_check = .false.
         end if
 
-        ! check if unknown ARH type is rejected
+        ! check if unknown ARH type is rejected with an error message
+        call setup_error_logging(settings, context)
         settings%arh_type = "unknown"
         call arh_sanity_check(settings, error)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_arh_sanity_check failed: Error not thrown for "// &
                 "unknown ARH type."
+            test_arh_sanity_check = .false.
+        end if
+        if (context%log_message == "") then
+            write(stderr, *) "test_arh_sanity_check failed: No error message "// &
+                "printed for unknown ARH type."
             test_arh_sanity_check = .false.
         end if
 
@@ -1992,11 +1737,176 @@ contains
         ! also adds the evaluated point to the history, for the closed- and the
         ! open-shell case
         !
-        use otr_common_test_reference, only: n_particle
+        use otr_common_test_reference, only: n_particle_ref => n_particle
 
         test_obj_func_arh = check_obj_func_arh(1_ip, "test_obj_func_arh")
-        if (.not. check_obj_func_arh(n_particle, "test_obj_func_arh")) &
+        if (.not. check_obj_func_arh(n_particle_ref, "test_obj_func_arh")) &
             test_obj_func_arh = .false.
+
+    contains
+
+        function check_obj_func_arh(n_particle, test_name) result(passed)
+            !
+            ! this function checks the energy evaluation for the closed- or open-shell
+            ! case for orbitals parameterized in the OAO basis, which also adds the
+            ! evaluated point together with the potentials the shell keeps to the
+            ! history
+            !
+            use test_reference, only: arm_host_context, host_context_reached
+            use otr_arh, only: arh_type
+            use otr_oao, only: oao_type
+            use otr_common_test_reference, only: n_ao
+            use otr_common_unit_tests, only: level_context, mock_requests
+            use opentrustregion_unit_tests, only: test_context_type
+
+            type(test_context_type), target :: context
+            type(oao_type), allocatable, target :: oao
+            class(arh_type), allocatable, target :: arh
+            integer(ip), intent(in) :: n_particle
+            character(len=*), intent(in) :: test_name
+            logical :: passed
+
+            real(rp), parameter :: basis_scale = 0.5_rp
+
+            real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+            real(rp) :: dm_oao(n_ao, n_ao, n_particle), &
+                        kappa(n_particle * n_ao * (n_ao - 1) / 2), energy
+            real(rp), allocatable :: potentials(:, :, :, :)
+            integer(ip) :: k, error
+
+            ! assume test passes
+            passed = .true.
+
+            ! set up the OAO and ARH objects with an empty history, which is removed
+            ! for the first call
+            call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, &
+                                                  dm_oao, context)
+            call setup_empty_history(arh, n_particle)
+            call arm_host_context(arh%settings, context)
+            deallocate(arh%dm_list)
+
+            ! call routine with an orbital rotation before the history exists and
+            ! determine if the potentials the shell keeps are requested and nothing is
+            ! added to the history
+            call random_number(kappa)
+            kappa = 0.1_rp * kappa
+            mock_requests = [integer(ip) :: ]
+            energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
+            if (error /= 0) then
+                write(stderr, *) test_name//" failed: Produced error without history."
+                passed = .false.
+            end if
+            if (size(mock_requests) /= 1) then
+                write(stderr, *) test_name//" failed: Density matrix evaluating "// &
+                    "function not called exactly once."
+                passed = .false.
+            end if
+            if (any(mock_requests /= 14_ip)) then
+                write(stderr, *) test_name//" failed: Incorrect outputs requested "// &
+                    "from density matrix evaluating function."
+                passed = .false.
+            end if
+            if (allocated(arh%dm_list)) then
+                write(stderr, *) test_name// &
+                    " failed: History created by energy evaluation."
+                passed = .false.
+            end if
+            if (arh%model_stale) then
+                write(stderr, *) test_name// &
+                    " failed: Hessian model marked stale without history."
+                passed = .false.
+            end if
+
+            ! call routine again with an empty history and determine if the rotated
+            ! density matrix is added together with the potentials evaluated at it in
+            ! the history basis, while the current density matrix is left untouched
+            allocate(arh%dm_list(n_ao, n_ao, n_particle, 0))
+            mock_requests = [integer(ip) :: ]
+            energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
+            if (error /= 0) then
+                write(stderr, *) test_name//" failed: Produced error with history."
+                passed = .false.
+            else if (size(arh%dm_list, 4) /= 1) then
+                write(stderr, *) test_name// &
+                    " failed: Evaluated point not added to history."
+                passed = .false.
+            else
+                if (abs(energy - basis_scale**2 * sum(arh%dm_list(:, :, :, 1))) > tol) &
+                    then
+                    write(stderr, *) test_name//" failed: Incorrect energy."
+                    passed = .false.
+                end if
+                if (norm2(arh%dm_list(:, :, :, 1) - dm_oao) < tol) then
+                    write(stderr, *) test_name// &
+                        " failed: Incorrect density matrix history."
+                    passed = .false.
+                end if
+                potentials = stacked_potentials(arh, 1_ip)
+                do k = 1, size(mock_potential_factors)
+                    if (norm2(potentials(:, :, :, k) - basis_scale**4 * &
+                              mock_potential(mock_potential_factors(k), &
+                                             arh%dm_list(:, :, :, 1))) > tol) then
+                        write(stderr, *) test_name// &
+                            " failed: Incorrect potential history."
+                        passed = .false.
+                    end if
+                end do
+            end if
+            if (norm2(oao%dm_oao - dm_oao) > tol .or. &
+                norm2(arh%orbitals%dm_ao - basis_scale**2 * dm_oao) > tol) then
+                write(stderr, *) test_name// &
+                    " failed: Current density matrix changed by energy evaluation."
+                passed = .false.
+            end if
+            if (.not. arh%model_stale) then
+                write(stderr, *) test_name//" failed: Hessian model not marked "// &
+                    "stale after adding the evaluated point to the history."
+                passed = .false.
+            end if
+
+            ! call routine at the same point and determine if it is not added twice and
+            ! leaves the Hessian model untouched
+            arh%model_stale = .false.
+            energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
+            if (error /= 0) then
+                write(stderr, *) test_name// &
+                    " failed: Produced error for a point the history already holds."
+                passed = .false.
+            end if
+            if (size(arh%dm_list, 4) /= 1) then
+                write(stderr, *) test_name// &
+                    " failed: History extended for a point it already holds."
+                passed = .false.
+            end if
+            if (arh%model_stale) then
+                write(stderr, *) test_name//" failed: Hessian model marked stale "// &
+                    "for a point the history already holds."
+                passed = .false.
+            end if
+
+            ! call routine at another point whose evaluation fails and determine if the
+            ! error is passed on without adding the point to the history
+            context%mock_error = 1
+            energy = arh%obj_func(2.0_rp * kappa, error, level_context(arh, 1_ip))
+            if (error /= 1) then
+                write(stderr, *) test_name//" failed: Error of the density matrix "// &
+                    "evaluating function not passed on."
+                passed = .false.
+            end if
+            if (size(arh%dm_list, 4) /= 1 .or. arh%model_stale) then
+                write(stderr, *) test_name// &
+                    " failed: Point of a failed evaluation added to the history."
+                passed = .false.
+            end if
+            context%mock_error = 0
+
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("obj_func_arh", context)) passed = .false.
+
+            ! deallocate ARH and OAO objects
+            deallocate(arh, oao)
+
+        end function check_obj_func_arh
 
     end function test_obj_func_arh
 
@@ -2005,11 +1915,289 @@ contains
         ! this function tests the subroutine which defines the energy, gradient and
         ! Hessian diagonal evaluation for the closed- and the open-shell case
         !
-        use otr_common_test_reference, only: n_particle
+        use otr_common_test_reference, only: n_particle_ref => n_particle
 
         test_update_orbs_arh = check_update_orbs_arh(1_ip, "test_update_orbs_arh")
-        if (.not. check_update_orbs_arh(n_particle, "test_update_orbs_arh")) &
+        if (.not. check_update_orbs_arh(n_particle_ref, "test_update_orbs_arh")) &
             test_update_orbs_arh = .false.
+
+    contains
+
+        function check_update_orbs_arh(n_particle, test_name) result(passed)
+            !
+            ! this function checks the energy, gradient and Hessian diagonal evaluation
+            ! for the closed- or open-shell case for orbitals parameterized in the OAO
+            ! basis, which passes the Fock matrix in the history basis on to the
+            ! orbital basis and adds the point the orbitals are rotated away from to
+            ! the history
+            !
+            use test_reference, only: arm_host_context, host_context_reached
+            use opentrustregion, only: hess_x_type
+            use otr_common, only: hess_x_callback
+            use otr_arh, only: arh_type
+            use otr_oao, only: oao_type
+            use otr_common_test_reference, only: n_ao
+            use otr_common_unit_tests, only: level_context, mock_requests, &
+                                             mock_fock_factor
+            use opentrustregion_unit_tests, only: test_context_type, identity_matrix
+
+            type(test_context_type), target :: context
+            type(oao_type), allocatable, target :: oao
+            class(arh_type), allocatable, target :: arh
+            integer(ip), intent(in) :: n_particle
+            character(len=*), intent(in) :: test_name
+            logical :: passed
+
+            real(rp), parameter :: basis_scale = 0.5_rp
+
+            real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
+            real(rp) :: dm_oao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
+                        dm_saved(n_ao, n_ao, n_particle, 2), complement(n_ao, n_ao), &
+                        func
+            real(rp), allocatable :: kappa(:), grad(:), h_diag(:), &
+                                     potentials(:, :, :, :), &
+                                     potentials_saved(:, :, :, :, :)
+            integer(ip) :: n_param, n_list, k, error
+            procedure(hess_x_type), pointer :: hess_x_funptr
+
+            ! assume test passes
+            passed = .true.
+
+            ! set up the OAO and ARH objects
+            call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, &
+                                                  dm_oao, context)
+            arh%settings%arh_type = "ms_psb"
+            call arm_host_context(arh%settings, context)
+            if (n_particle == 1) then
+                arh%evaluate_dm_cs => mock_evaluate_dm_cs
+            else
+                arh%evaluate_dm_os => mock_evaluate_dm_os
+            end if
+            n_param = arh%orbitals%n_param
+            allocate(kappa(n_param), grad(n_param), h_diag(n_param), potentials_saved( &
+                n_ao, n_ao, n_particle, size(mock_potential_factors), 2))
+
+            ! the checks after a failed call would read quantities it did not set
+            checks: block
+                ! call routine without an orbital rotation for an uninitialized object
+                kappa = 0.0_rp
+                mock_requests = [integer(ip) :: ]
+                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                     level_context(arh, 1_ip))
+                if (error /= 0) then
+                    write(stderr, *) test_name//" failed: Produced error."
+                    passed = .false.
+                    exit checks
+                end if
+
+                ! determine if the energy and the potentials of the density matrix
+                ! evaluating function are stored in the history basis and if the Fock
+                ! matrix in the history basis is passed on to the orbital basis, which
+                ! keeps its occupied-occupied and virtual-virtual parts
+                if (abs(func - sum(dm_ao)) > tol) then
+                    write(stderr, *) test_name//" failed: Incorrect energy."
+                    passed = .false.
+                end if
+                potentials = stacked_potentials(arh, 0_ip)
+                do k = 1, size(mock_potential_factors)
+                    if (norm2(potentials(:, :, :, k) - basis_scale**2 * &
+                              mock_potential(mock_potential_factors(k), dm_ao)) > tol) &
+                        then
+                        write(stderr, *) test_name//" failed: Incorrect potential."
+                        passed = .false.
+                    end if
+                end do
+                fock = basis_scale**2 * mock_potential(mock_fock_factor(1), dm_ao)
+                do k = 1, n_particle
+                    complement = identity_matrix(n_ao) - oao%dm_oao(:, :, k)
+                    if (norm2(oao%fock_oo(:, :, k) - &
+                              matmul(oao%dm_oao(:, :, k), &
+                                     matmul(fock(:, :, k), oao%dm_oao(:, :, k)))) + &
+                        norm2(oao%fock_vv(:, :, k) - matmul( &
+                            complement, matmul(fock(:, :, k), complement))) > tol) then
+                        write(stderr, *) test_name//" failed: Fock matrix in the "// &
+                            "history basis not passed on to the orbital basis."
+                        passed = .false.
+                    end if
+                end do
+
+                ! determine if the gradient, Hessian diagonal and Hessian linear
+                ! transformation are returned
+                if (norm2(grad - arh%orbitals%grad) > tol) then
+                    write(stderr, *) test_name//" failed: Gradient not returned."
+                    passed = .false.
+                end if
+                if (norm2(h_diag - arh%orbitals%h_diag) > tol) then
+                    write(stderr, *) test_name// &
+                        " failed: Hessian diagonal not returned."
+                    passed = .false.
+                end if
+                if (.not. associated(hess_x_funptr, hess_x_callback)) then
+                    write(stderr, *) test_name// &
+                        " failed: Returned Hessian linear transformation is wrong."
+                    passed = .false.
+                end if
+
+                ! determine if the history is initialized empty and the approximate
+                ! Hessian model is assembled from it
+                if (size(arh%dm_list, 4) /= 0) then
+                    write(stderr, *) test_name// &
+                        " failed: Density matrix history not initialized empty."
+                    passed = .false.
+                end if
+                if (.not. allocated(arh%dm_dirs)) then
+                    write(stderr, *) test_name//" failed: Approximate Hessian "// &
+                        "model not assembled for the initial point."
+                    passed = .false.
+                end if
+
+                ! call routine again without an orbital rotation and determine if the
+                ! quantities of the already initialized object are reused, even for a
+                ! vanishing energy, without rebuilding the static part of the Hessian
+                oao%energy = 0.0_rp
+                oao%hess_eigen_stale = .false.
+                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                     level_context(arh, 1_ip))
+                if (error /= 0) then
+                    write(stderr, *) test_name// &
+                        " failed: Produced error for an initialized object."
+                    passed = .false.
+                end if
+                if (size(mock_requests) /= 1) then
+                    write(stderr, *) test_name// &
+                        " failed: Quantities recomputed without an orbital rotation."
+                    passed = .false.
+                end if
+                if (size(arh%dm_list, 4) /= 0) then
+                    write(stderr, *) test_name// &
+                        " failed: History extended without an orbital rotation."
+                    passed = .false.
+                end if
+                if (oao%hess_eigen_stale) then
+                    write(stderr, *) test_name//" failed: Static part of the "// &
+                        "Hessian rebuilt without an orbital rotation."
+                    passed = .false.
+                end if
+
+                ! rotate twice in a row, the second time for a model marked stale, and
+                ! save the quantities at the points the orbitals are rotated away from,
+                ! which the history has to retain with the latest first
+                kappa = 0.1_rp
+                do k = 2, 1, -1
+                    dm_saved(:, :, :, k) = oao%dm_oao
+                    potentials_saved(:, :, :, :, k) = stacked_potentials(arh, 0_ip)
+                    arh%model_stale = k == 1
+                    call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                         error, level_context(arh, 1_ip))
+                    if (error /= 0) then
+                        write(stderr, *) test_name// &
+                            " failed: Produced error for an orbital rotation."
+                        passed = .false.
+                        exit checks
+                    end if
+                end do
+                if (size(arh%dm_list, 4) /= 2) then
+                    write(stderr, *) test_name// &
+                        " failed: History not extended to two entries."
+                    passed = .false.
+                    exit checks
+                end if
+                do k = 1, 2
+                    if (norm2(arh%dm_list(:, :, :, k) - dm_saved(:, :, :, k)) > tol) &
+                        then
+                        write(stderr, *) test_name// &
+                            " failed: Incorrect density matrix history."
+                        passed = .false.
+                    end if
+                    if (norm2(stacked_potentials(arh, k) - &
+                              potentials_saved(:, :, :, :, k)) > tol) then
+                        write(stderr, *) test_name// &
+                            " failed: Incorrect potential history."
+                        passed = .false.
+                    end if
+                end do
+
+                ! determine if the approximate Hessian model is assembled from the
+                ! history extended by the point the orbitals were rotated away from
+                if (arh%model_stale .or. .not. allocated(arh%dm_dirs)) then
+                    write(stderr, *) test_name// &
+                        " failed: Approximate Hessian model not assembled."
+                    passed = .false.
+                else if (size(arh%dm_dirs, 2) /= 2 * n_particle) then
+                    write(stderr, *) test_name//" failed: Approximate Hessian "// &
+                        "model not assembled from the extended history."
+                    passed = .false.
+                end if
+
+                ! determine if a rotation starting from a density matrix which the
+                ! history already holds, as after the energy evaluation of an accepted
+                ! trial point, does not add that density matrix a second time
+                arh%dm_list(:, :, :, 1) = oao%dm_oao
+                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                     level_context(arh, 1_ip))
+                if (error /= 0) then
+                    write(stderr, *) test_name//" failed: Produced error for a "// &
+                        "density matrix already held in the history."
+                    passed = .false.
+                else if (size(arh%dm_list, 4) /= 2) then
+                    write(stderr, *) test_name//" failed: History extended for a "// &
+                        "density matrix it already holds."
+                    passed = .false.
+                end if
+
+                ! call routine with an orbital rotation whose evaluation fails and
+                ! determine if the error is passed on and the rotated density is marked
+                ! as not evaluated, so that a following call without an orbital
+                ! rotation evaluates it without adding it to the history
+                context%mock_error = 1
+                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                     level_context(arh, 1_ip))
+                if (error /= 1) then
+                    write(stderr, *) test_name//" failed: Error of the density "// &
+                        "matrix evaluating function not passed on."
+                    passed = .false.
+                end if
+                if (.not. arh%evaluation_stale) then
+                    write(stderr, *) test_name//" failed: Evaluation not marked "// &
+                        "stale after a failed evaluation."
+                    passed = .false.
+                end if
+                context%mock_error = 0
+                n_list = size(arh%dm_list, 4, kind=ip)
+                kappa = 0.0_rp
+                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                     level_context(arh, 1_ip))
+                if (error /= 0) then
+                    write(stderr, *) test_name// &
+                        " failed: Produced error after a failed evaluation."
+                    passed = .false.
+                end if
+                if (arh%evaluation_stale) then
+                    write(stderr, *) test_name//" failed: Evaluation still marked "// &
+                        "stale after a failed evaluation was recovered."
+                    passed = .false.
+                end if
+                if (size(arh%dm_list, 4) /= n_list) then
+                    write(stderr, *) test_name//" failed: History extended by a "// &
+                        "density matrix which has not been evaluated."
+                    passed = .false.
+                end if
+
+                ! determine if every recompute asked for all potentials the shell needs
+                if (any(mock_requests /= 15_ip)) then
+                    write(stderr, *) test_name//" failed: Incorrect outputs "// &
+                        "requested from density matrix evaluating function."
+                    passed = .false.
+                end if
+            end block checks
+
+            ! check that the host context reached the callback functions unchanged
+            if (.not. host_context_reached("update_orbs_arh", context)) passed = .false.
+
+            ! deallocate ARH and OAO objects
+            deallocate(arh, oao)
+
+        end function check_update_orbs_arh
 
     end function test_update_orbs_arh
 
@@ -2039,79 +2227,44 @@ contains
         !
         ! this function tests the subroutine which rebuilds the approximate Hessian
         ! model if the objective function has added points to the history since it was
-        ! last assembled
+        ! last assembled, which calls the model builder of the shell of the density
+        ! matrix evaluating function and passes its error on
         !
-        use otr_arh, only: arh_type, arh_oao_type
-        use otr_oao, only: oao_type
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_common_unit_tests, only: mock_requests, generate_random_density_matrix
-
-        type(test_context_type), target :: context
-        type(oao_type), allocatable, target :: oao
-        class(arh_type), allocatable, target :: arh
-        integer(ip) :: n_particle_case, n_param_case
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle)
-        integer(ip) :: i, i_case, error
-        logical :: stale
-        character(len=:), allocatable :: case_name
+        type(recording_arh_type) :: arh
+        integer(ip) :: i_case, error
+        character(len=2), parameter :: expected_shells(3) = ["  ", "cs", "os"]
+        character(len=36), parameter :: case_names(3) = &
+            [character(len=36) :: "for a model which is not stale", &
+             "for a stale closed-shell model", "for a stale open-shell model"]
 
         ! assume tests pass
         test_rebuild_stale_hess_model = .true.
 
-        ! a stale model on an empty history has to be rebuilt for the closed- and the
-        ! open-shell case, which discards its low-rank part, while a model that is not
-        ! stale has to be left untouched
-        do i_case = 1, 3
-            if (i_case == 1) then
-                case_name = "for stale closed-shell model"
-                n_particle_case = 1
-            else if (i_case == 2) then
-                case_name = "for stale open-shell model"
-                n_particle_case = 2
+        ! call routine for a model which is not stale and for stale models of either
+        ! shell, whose builders fail, and determine if only the builder of the shell is
+        ! called and its error passed on
+        do i_case = 1, size(case_names)
+            arh%built_shell = ""
+            arh%error = 1
+            arh%model_stale = i_case /= 1
+            arh%evaluate_dm_cs => null()
+            arh%evaluate_dm_os => null()
+            if (i_case == 2) then
+                arh%evaluate_dm_cs => mock_evaluate_dm_cs
             else
-                case_name = "for model which is not stale"
-                n_particle_case = 2
+                arh%evaluate_dm_os => mock_evaluate_dm_os
             end if
-            stale = i_case /= 3
-            n_param_case = n_particle_case * n_ao * (n_ao - 1) / 2
-            do i = 1, n_particle_case
-                dm_oao(:, :, i) = generate_random_density_matrix(n_ao, n_occ(i))
-            end do
-            allocate(oao)
-            oao%n_ao = n_ao
-            oao%n_particle = n_particle_case
-            oao%n_param = n_param_case
-            oao%dm_oao = dm_oao(:, :, :n_particle_case)
-            allocate(arh, source=arh_oao_type(oao))
-            call setup_settings(arh%settings, context)
-            arh%settings%arh_type = "ms_sr1"
-            call setup_empty_history(arh, n_particle_case)
-            allocate(arh%coupling_matrix(1, 1))
-            arh%model_stale = stale
-            mock_requests = [integer(ip) :: ]
             call arh%rebuild_stale_hess_model(error)
-            if (error /= 0) then
-                write(stderr, *) "test_rebuild_stale_hess_model failed: Produced "// &
-                    "error "//case_name//"."
+            if (arh%built_shell /= expected_shells(i_case)) then
+                write(stderr, *) "test_rebuild_stale_hess_model failed: Wrong "// &
+                    "model builder called "//trim(case_names(i_case))//"."
                 test_rebuild_stale_hess_model = .false.
             end if
-            if (arh%model_stale) then
-                write(stderr, *) "test_rebuild_stale_hess_model failed: Hessian "// &
-                    "model still marked stale "//case_name//"."
+            if (error /= merge(0_ip, 1_ip, i_case == 1)) then
+                write(stderr, *) "test_rebuild_stale_hess_model failed: Error of "// &
+                    "the model builder not passed on "//trim(case_names(i_case))//"."
                 test_rebuild_stale_hess_model = .false.
             end if
-            if (stale .eqv. allocated(arh%coupling_matrix)) then
-                write(stderr, *) "test_rebuild_stale_hess_model failed: Hessian "// &
-                    "model rebuilt wrongly "//case_name//"."
-                test_rebuild_stale_hess_model = .false.
-            end if
-            if (size(mock_requests) /= 0) then
-                write(stderr, *) "test_rebuild_stale_hess_model failed: Density "// &
-                    "matrix evaluating function called "//case_name//"."
-                test_rebuild_stale_hess_model = .false.
-            end if
-            deallocate(arh, oao)
         end do
 
     end function test_rebuild_stale_hess_model
@@ -2208,20 +2361,24 @@ contains
         ! approximate Hessian in both the closed- and the open-shell case and for both
         ! orbital bases
         !
-        use otr_common_test_reference, only: n_particle_ref => n_particle
+        use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
+        use otr_mo_test_reference, only: n_mo
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, &
                                      setup_random_mo_channels, ref_hess_x_static_mo
         use otr_arh, only: arh_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type
+        use opentrustregion_unit_tests, only: test_context_type, setup_error_logging
 
         type(test_context_type), target :: context
         class(arh_type), allocatable, target :: arh
         type(mo_type), allocatable, target :: mo
         type(oao_type), allocatable, target :: oao
-        integer(ip) :: i_basis, n_particle
+        real(rp), target :: bracket_mo_coeff(n_ao, n_mo, n_particle_ref)
+        real(rp) :: bracket_overlap(n_ao, n_ao)
+        real(rp), allocatable :: x(:), inv_x(:)
+        integer(ip) :: i_basis, n_particle, inv_error
 
         ! assume tests pass
         test_inv_hess_x_arh = .true.
@@ -2235,6 +2392,38 @@ contains
                     test_inv_hess_x_arh = .false.
             end do
         end do
+
+        ! set up the ARH object in the MO basis with an eigendecomposition whose
+        ! eigenvalue pairs, the open-shell differences 2 (e_v - e_o), are all 2 and a
+        ! low-rank part along the first parameter with a coupling of -2, for which the
+        ! matrix I + C P^T D^-1 E of the Woodbury identity vanishes, and determine if
+        ! the inverse returns an error with an error message
+        bracket_overlap = generate_random_ao_overlap(n_ao)
+        bracket_mo_coeff = &
+            generate_random_mo_coeff(bracket_overlap, n_mo, n_particle_ref)
+        call setup_arh_and_mo_objects(arh, mo, bracket_mo_coeff, bracket_overlap, &
+                                      n_occ, context)
+        call setup_identity_mo_eigenbasis(mo, 0.0_rp, 1.0_rp)
+        call setup_error_logging(arh%settings, context)
+        allocate(arh%expansion_dirs(mo%n_param, 1), arh%coupling_matrix(1, 1))
+        arh%expansion_dirs = 0.0_rp
+        arh%expansion_dirs(1, 1) = 1.0_rp
+        arh%projection_dirs = arh%expansion_dirs
+        arh%coupling_matrix = -2.0_rp
+        allocate(x(mo%n_param), inv_x(mo%n_param))
+        call random_number(x)
+        call arh%inv_hess_x(x, inv_x, inv_error)
+        if (inv_error /= 1) then
+            write(stderr, *) "test_inv_hess_x_arh failed: No error returned for a "// &
+                "singular approximate Hessian."
+            test_inv_hess_x_arh = .false.
+        end if
+        if (context%log_message == "") then
+            write(stderr, *) "test_inv_hess_x_arh failed: No error message printed "// &
+                "for a singular approximate Hessian."
+            test_inv_hess_x_arh = .false.
+        end if
+        deallocate(arh, mo)
 
     contains
 
@@ -2297,8 +2486,9 @@ contains
             !
             use otr_mo_test_reference, only: n_mo
             use otr_common_test_reference, only: n_ao, n_occ, shell_names
-            use opentrustregion_unit_tests, only: identity_matrix
+            use opentrustregion_unit_tests, only: identity_matrix, setup_settings
             use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
+            use otr_arh, only: arh_oao_type
 
             logical, intent(in) :: mo_basis
             logical :: passed
@@ -2350,9 +2540,20 @@ contains
                     fock_vv(:, :, k) = fock_vv(:, :, k) + oao_shift * &
                                        (identity_matrix(n_ao) - dm_oao(:, :, k))
                 end do
-                call setup_arh_and_oao_objects( &
-                    arh, oao, "ms_sr1", dm_oao, fock_oo, fock_vv, n_ao, n_particle, &
-                    n_particle * n_ao * (n_ao - 1) / 2, context)
+
+                ! set up the OAO object, whose eigendecomposition of the static part
+                ! the inverse refreshes, and the ARH object in the OAO basis
+                allocate(oao)
+                call setup_settings(oao%settings, context)
+                oao%n_ao = n_ao
+                oao%n_particle = n_particle
+                oao%n_param = n_particle * n_ao * (n_ao - 1) / 2
+                oao%dm_oao = dm_oao
+                oao%fock_oo = fock_oo
+                oao%fock_vv = fock_vv
+                oao%hess_eigen_stale = .true.
+                allocate(arh, source=arh_oao_type(oao))
+                call setup_settings(arh%settings, context)
 
                 ! cache a wrong eigendecomposition, which has to be refreshed since the
                 ! static part is marked as changed
@@ -2429,227 +2630,223 @@ contains
     logical(c_bool) function test_precond_arh() bind(C)
         !
         ! this function tests the subroutine which defines the level-shifted
-        ! preconditioner of the ARH approximate Hessian, which applies the
-        ! level-shifted inverse of the approximate Hessian
+        ! preconditioner of the ARH approximate Hessian, which hands the residual and
+        ! the level shift to the inverse of the approximate Hessian and passes on what
+        ! it returns
         !
-        use otr_arh, only: arh_type
         use otr_common_unit_tests, only: level_context
-        use otr_mo, only: mo_type
-        use otr_mo_test_reference, only: n_mo
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use otr_mo_unit_tests, only: generate_random_ao_overlap, &
-                                     generate_random_mo_coeff, &
-                                     setup_identity_mo_eigenbasis
-        use opentrustregion_unit_tests, only: test_context_type
 
-        type(test_context_type), target :: context
+        integer(ip), parameter :: n_param = 4
         real(rp), parameter :: mu = 0.3_rp
 
-        type(mo_type), allocatable, target :: mo
-        class(arh_type), allocatable, target :: arh
-        real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
-        real(rp) :: ao_overlap(n_ao, n_ao)
-        real(rp), allocatable :: residual(:), precond_residual(:)
+        type(recording_arh_type), target :: arh
+        real(rp) :: residual(n_param), precond_residual(n_param)
         integer(ip) :: error
 
         ! assume tests pass
         test_precond_arh = .true.
 
-        ! set up the ARH object in the MO basis without a low-rank part and with an
-        ! eigendecomposition whose eigenvalue pairs, the open-shell differences 2 (e_v
-        ! - e_o), shifted by the level shift are all 2, so that the level-shifted
-        ! inverse of the approximate Hessian halves the residual
-        ao_overlap = generate_random_ao_overlap(n_ao)
-        mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
-        call setup_identity_mo_eigenbasis(mo, 0.0_rp, (2.0_rp + mu) / 2.0_rp)
-        allocate(residual(mo%n_param), precond_residual(mo%n_param))
+        ! call routine for an inverse which fails and determine if the residual and the
+        ! level shift are handed to it and its result and error are passed on
         call random_number(residual)
-
-        ! call routine and determine if the residual is halved
+        arh%error = 1
         call arh%precond(residual, mu, precond_residual, error, &
                          level_context(arh, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) "test_precond_arh failed: Produced error."
+        if (.not. allocated(arh%received)) then
+            write(stderr, *) "test_precond_arh failed: Inverse not called."
+            test_precond_arh = .false.
+        else if (any(shape(arh%received) /= [n_param])) then
+            write(stderr, *) "test_precond_arh failed: Residual not handed to the "// &
+                "inverse."
+            test_precond_arh = .false.
+        else if (norm2(arh%received - residual) > tol) then
+            write(stderr, *) "test_precond_arh failed: Residual not handed to the "// &
+                "inverse."
             test_precond_arh = .false.
         end if
-        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
-            write(stderr, *) "test_precond_arh failed: Incorrect preconditioned "// &
-                "residual."
+        if (.not. arh%level_shift_received .or. &
+            abs(arh%received_level_shift - mu) > tol) then
+            write(stderr, *) "test_precond_arh failed: Level shift not handed to "// &
+                "the inverse."
             test_precond_arh = .false.
         end if
-
-        ! deallocate ARH and MO objects
-        deallocate(arh, mo)
+        if (norm2(precond_residual - 3.0_rp * residual) > tol) then
+            write(stderr, *) "test_precond_arh failed: Result of the inverse not "// &
+                "passed on."
+            test_precond_arh = .false.
+        end if
+        if (error /= 1) then
+            write(stderr, *) "test_precond_arh failed: Error of the inverse not "// &
+                "passed on."
+            test_precond_arh = .false.
+        end if
 
     end function test_precond_arh
 
     logical(c_bool) function test_precond_pd_arh() bind(C)
         !
         ! this function tests the subroutine which defines the positive-definite
-        ! preconditioner of the ARH approximate Hessian, which applies the one of the
-        ! orbital basis to the orbital object
+        ! preconditioner of the ARH approximate Hessian, which hands the residual and
+        ! the context to the one of the orbital basis and passes on what it returns
         !
-        use otr_arh, only: arh_type
         use otr_common_unit_tests, only: level_context
-        use otr_mo, only: mo_type
-        use otr_mo_test_reference, only: n_mo
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use otr_mo_unit_tests, only: generate_random_ao_overlap, &
-                                     generate_random_mo_coeff, &
-                                     setup_identity_mo_eigenbasis
-        use opentrustregion_unit_tests, only: test_context_type
 
-        type(test_context_type), target :: context
-        type(mo_type), allocatable, target :: mo
-        class(arh_type), allocatable, target :: arh
-        real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
-        real(rp) :: ao_overlap(n_ao, n_ao)
-        real(rp), allocatable :: residual(:), precond_residual(:)
+        integer(ip), parameter :: n_param = 4
+
+        type(recording_arh_type), target :: arh
+        type(recording_basis_type), target :: basis
+        class(*), pointer :: context
+        real(rp) :: residual(n_param), precond_residual(n_param)
         integer(ip) :: error
 
         ! assume tests pass
         test_precond_pd_arh = .true.
 
-        ! set up the ARH object in the MO basis with an eigendecomposition whose
-        ! eigenvalue pairs, the open-shell differences 2 (e_v - e_o), are all -2, so
-        ! that the positive-definite preconditioner of the orbital basis, which divides
-        ! by their magnitudes, halves the residual, unlike the level-shifted one
-        ao_overlap = generate_random_ao_overlap(n_ao)
-        mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
-        call setup_identity_mo_eigenbasis(mo, 1.0_rp, 0.0_rp)
-        allocate(residual(mo%n_param), precond_residual(mo%n_param))
+        ! point the ARH object at a recording orbital basis whose preconditioner fails
+        arh%orbitals => basis
+        basis%error = 1
+        context => level_context(arh, 1_ip)
         call random_number(residual)
 
-        ! call routine and determine if the residual is halved
-        call arh%precond_pd(residual, precond_residual, error, level_context(arh, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) "test_precond_pd_arh failed: Produced error."
+        ! call routine and determine if the residual and the context are handed to the
+        ! orbital basis and its result and error are passed on
+        call arh%precond_pd(residual, precond_residual, error, context)
+        if (.not. allocated(basis%received)) then
+            write(stderr, *) "test_precond_pd_arh failed: Preconditioner of the "// &
+                "orbital basis not called."
+            test_precond_pd_arh = .false.
+        else if (any(shape(basis%received) /= [n_param])) then
+            write(stderr, *) "test_precond_pd_arh failed: Residual not handed to "// &
+                "the orbital basis."
+            test_precond_pd_arh = .false.
+        else if (norm2(basis%received - residual) > tol) then
+            write(stderr, *) "test_precond_pd_arh failed: Residual not handed to "// &
+                "the orbital basis."
             test_precond_pd_arh = .false.
         end if
-        if (norm2(precond_residual - 0.5_rp * residual) > tol) then
-            write(stderr, *) "test_precond_pd_arh failed: Incorrect preconditioned "// &
-                "residual."
+        if (.not. associated(basis%received_context, context)) then
+            write(stderr, *) "test_precond_pd_arh failed: Context not handed to "// &
+                "the orbital basis."
             test_precond_pd_arh = .false.
         end if
-
-        ! deallocate ARH and MO objects
-        deallocate(arh, mo)
+        if (norm2(precond_residual - 3.0_rp * residual) > tol) then
+            write(stderr, *) "test_precond_pd_arh failed: Result of the orbital "// &
+                "basis not passed on."
+            test_precond_pd_arh = .false.
+        end if
+        if (error /= 1) then
+            write(stderr, *) "test_precond_pd_arh failed: Error of the orbital "// &
+                "basis not passed on."
+            test_precond_pd_arh = .false.
+        end if
 
     end function test_precond_pd_arh
 
     logical(c_bool) function test_get_extra_trial_vectors_arh() bind(C)
         !
         ! this function tests the subroutine which returns the extra trial vectors of
-        ! the orbital basis for the solver's initial trial space
+        ! the orbital basis for the solver's initial trial space, which hands the
+        ! context to the orbital basis and passes on what it returns
         !
-        use otr_arh, only: arh_type
         use otr_common_unit_tests, only: level_context
-        use otr_mo, only: mo_type
-        use otr_mo_test_reference, only: n_mo
-        use otr_common_test_reference, only: n_ao, n_occ, n_particle
-        use otr_mo_unit_tests, only: generate_random_ao_overlap, &
-                                     generate_random_mo_coeff, &
-                                     setup_identity_mo_eigenbasis
-        use opentrustregion_unit_tests, only: test_context_type
 
-        type(test_context_type), target :: context
-        integer(ip), parameter :: n_extra = 2
+        integer(ip), parameter :: n_param = 4, n_extra = 2
 
-        type(mo_type), allocatable, target :: mo
-        class(arh_type), allocatable, target :: arh
-        real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
-        real(rp) :: ao_overlap(n_ao, n_ao)
-        real(rp), allocatable :: trial_vectors(:, :), expected(:, :)
+        type(recording_arh_type), target :: arh
+        type(recording_basis_type), target :: basis
+        class(*), pointer :: context
+        real(rp) :: trial_vectors(n_param, n_extra)
         integer(ip) :: error
 
         ! assume tests pass
         test_get_extra_trial_vectors_arh = .true.
 
-        ! set up the ARH object in the MO basis with an eigendecomposition in the MO
-        ! basis itself whose only negative eigenvalue pair belongs to the first
-        ! occupied and the first virtual orbital of the first particle channel, at
-        ! packed index 1, so that the first extra trial vector is the unit vector along
-        ! it and the second vanishes
-        ao_overlap = generate_random_ao_overlap(n_ao)
-        mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
-        call setup_identity_mo_eigenbasis(mo, 0.0_rp, 1.0_rp)
-        mo%mo_channels(1)%occ_eigvals(1) = 1.5_rp
-        mo%mo_channels(1)%virt_eigvals(2) = 2.0_rp
-        allocate(trial_vectors(mo%n_param, n_extra), expected(mo%n_param, n_extra))
-        expected = 0.0_rp
-        expected(1, 1) = 1.0_rp
+        ! point the ARH object at a recording orbital basis whose extra trial vector
+        ! function fails
+        arh%orbitals => basis
+        basis%error = 1
+        context => level_context(arh, 1_ip)
 
-        ! call routine and determine if the extra trial vectors of the orbital basis
-        ! are returned
-        call arh%get_extra_trial_vectors(trial_vectors, error, level_context(arh, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Produced error."
+        ! call routine and determine if the context is handed to the orbital basis and
+        ! its trial vectors and error are passed on
+        trial_vectors = 0.0_rp
+        call arh%get_extra_trial_vectors(trial_vectors, error, context)
+        if (.not. associated(basis%received_context, context)) then
+            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Context not "// &
+                "handed to the orbital basis."
             test_get_extra_trial_vectors_arh = .false.
         end if
-        if (norm2(trial_vectors - expected) > tol) then
-            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Incorrect "// &
-                "trial vectors."
+        if (any(abs(trial_vectors - 3.0_rp) > tol)) then
+            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Trial "// &
+                "vectors of the orbital basis not passed on."
             test_get_extra_trial_vectors_arh = .false.
         end if
-        deallocate(arh, mo)
+        if (error /= 1) then
+            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Error of "// &
+                "the orbital basis not passed on."
+            test_get_extra_trial_vectors_arh = .false.
+        end if
 
     end function test_get_extra_trial_vectors_arh
 
     logical(c_bool) function test_project_arh_oao() bind(C)
         !
         ! this function tests the subroutine which applies the projection of the
-        ! orbitals in the OAO basis, which hands the vector to the projection of the
-        ! OAO object
+        ! orbitals in the OAO basis, which hands the vector and the context to the
+        ! projection of the orbital basis and passes on what it returns
         !
-        use otr_arh, only: arh_type, arh_oao_type
-        use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_oao_test_reference, only: n_param
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ
-        use otr_common_unit_tests, only: level_context, generate_random_density_matrix
-        use otr_oao_unit_tests, only: ref_pack_asymm, ref_project_asymm, &
-                                      ref_unpack_asymm
+        use otr_arh, only: arh_oao_type
+        use otr_common_unit_tests, only: level_context
 
-        type(test_context_type), target :: context
-        type(oao_type), allocatable, target :: oao
-        class(arh_type), allocatable, target :: arh
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), vector(n_param), expected(n_param)
+        integer(ip), parameter :: n_param = 4
+
+        type(arh_oao_type), target :: arh
+        type(recording_basis_type), target :: basis
+        class(*), pointer :: context
+        real(rp) :: vector(n_param), original(n_param)
         integer(ip) :: error
 
         ! assume tests pass
         test_project_arh_oao = .true.
 
-        ! set up the OAO object with random density matrices and the ARH object for it,
-        ! and a random vector
-        dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_occ(1))
-        dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, n_occ(2))
-        allocate(oao)
-        call setup_settings(oao%settings, context)
-        oao%n_ao = n_ao
-        oao%n_particle = n_particle
-        oao%dm_oao = dm_oao
-        allocate(arh, source=arh_oao_type(oao))
+        ! point the ARH object at a recording orbital basis whose projection fails
+        arh%orbitals => basis
+        basis%error = 1
+        context => level_context(arh, 1_ip)
         call random_number(vector)
+        original = vector
 
-        ! call routine and determine if the vector is projected by the OAO object
-        expected = ref_pack_asymm(ref_project_asymm( &
-            ref_unpack_asymm(vector, n_particle, n_ao), dm_oao), n_param)
-        call arh%project(vector, error, level_context(arh, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) "test_project_arh_oao failed: Produced error."
+        ! call routine and determine if the vector and the context are handed to the
+        ! orbital basis and its projected vector and error are passed on
+        call arh%project(vector, error, context)
+        if (.not. allocated(basis%received)) then
+            write(stderr, *) "test_project_arh_oao failed: Projection of the "// &
+                "orbital basis not called."
+            test_project_arh_oao = .false.
+        else if (any(shape(basis%received) /= [n_param])) then
+            write(stderr, *) "test_project_arh_oao failed: Vector not handed to "// &
+                "the orbital basis."
+            test_project_arh_oao = .false.
+        else if (norm2(basis%received - original) > tol) then
+            write(stderr, *) "test_project_arh_oao failed: Vector not handed to "// &
+                "the orbital basis."
             test_project_arh_oao = .false.
         end if
-        if (norm2(vector - expected) > tol) then
-            write(stderr, *) "test_project_arh_oao failed: Vector not projected by "// &
-                "the OAO object."
+        if (.not. associated(basis%received_context, context)) then
+            write(stderr, *) "test_project_arh_oao failed: Context not handed to "// &
+                "the orbital basis."
             test_project_arh_oao = .false.
         end if
-
-        ! deallocate ARH and OAO objects
-        deallocate(arh, oao)
+        if (norm2(vector - 3.0_rp * original) > tol) then
+            write(stderr, *) "test_project_arh_oao failed: Projected vector of the "// &
+                "orbital basis not passed on."
+            test_project_arh_oao = .false.
+        end if
+        if (error /= 1) then
+            write(stderr, *) "test_project_arh_oao failed: Error of the orbital "// &
+                "basis not passed on."
+            test_project_arh_oao = .false.
+        end if
 
     end function test_project_arh_oao
 
@@ -2660,7 +2857,11 @@ contains
         use otr_arh, only: arh_settings_type, default_settings => default_arh_settings
         use otr_arh_test_reference, only: operator(==)
 
+        type, extends(arh_settings_type) :: extended_settings_type
+        end type
+
         type(arh_settings_type) :: settings
+        type(extended_settings_type) :: extended_settings
         integer(ip) :: error
 
         ! assume tests pass
@@ -2679,6 +2880,15 @@ contains
         if (.not. (settings == default_settings)) then
             write(stderr, *) "test_init_arh_settings failed: Settings not "// &
                 "initialized correctly."
+            test_init_arh_settings = .false.
+        end if
+
+        ! initialize settings of a type extending these settings, which cannot be set
+        ! to the default values, and check that an error is returned
+        call extended_settings%init(error)
+        if (error /= 1) then
+            write(stderr, *) "test_init_arh_settings failed: No error returned for "// &
+                "extended settings type."
             test_init_arh_settings = .false.
         end if
 
@@ -2844,7 +3054,7 @@ contains
         use otr_arh, only: arh_mo_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
-        use otr_mo_test_reference, only: n_mo, n_param_os
+        use otr_mo_test_reference, only: n_mo, n_param
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, setup_mo_object, &
@@ -2855,7 +3065,7 @@ contains
         type(arh_mo_type) :: arh
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), mo_coeff_before(n_ao, n_mo, n_particle), &
-                    expected(n_ao, n_mo, n_particle), kappa(n_param_os), &
+                    expected(n_ao, n_mo, n_particle), kappa(n_param), &
                     rot_dm_ao(n_ao, n_ao, n_particle), &
                     rot_dm_hist(n_ao, n_ao, n_particle), expected_dm(n_ao, n_ao)
         integer(ip) :: error, k
@@ -2882,7 +3092,7 @@ contains
             write(stderr, *) "test_rotate_trial_arh_mo failed: Produced error."
             test_rotate_trial_arh_mo = .false.
         end if
-        do k = 1, 2
+        do k = 1, n_particle
             expected_dm = matmul(expected(:, :n_occ(k), k), &
                                  transpose(expected(:, :n_occ(k), k)))
             if (norm2(rot_dm_ao(:, :, k) - expected_dm) > tol) then
@@ -3045,7 +3255,7 @@ contains
         ! call routine and determine if the density matrix multiplied by the AO overlap
         ! matrix from both sides is returned
         dm = arh%history_dm()
-        do k = 1, 2
+        do k = 1, n_particle
             if (norm2(dm(:, :, k) - matmul(ao_overlap, matmul(mo%dm_ao(:, :, k), &
                                                               ao_overlap))) > tol) then
                 write(stderr, *) "test_history_dm_arh_mo failed: Incorrect density "// &
@@ -3120,7 +3330,7 @@ contains
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
         arh = arh_mo_type(mo)
-        do k = 1, 2
+        do k = 1, n_particle
             matrix(:, :, k) = generate_random_symm_matrix(n_ao)
         end do
 
@@ -3371,6 +3581,7 @@ contains
         type(arh_mo_type) :: arh
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         integer(ip), allocatable :: rows(:, :)
+        integer(ip) :: k
 
         ! assume tests pass
         test_history_channel_rows_arh_mo = .true.
@@ -3378,19 +3589,20 @@ contains
         ! set up the MO object with the number of particle channels and the MO
         ! coefficients, whose shape is all the routine reads of them
         allocate(mo)
-        mo%n_particle = 2
+        mo%n_particle = n_particle
         mo%mo_coeff => mo_coeff
         arh = arh_mo_type(mo)
 
         ! call routine and determine if every channel holds the full difference matrix
         ! in the MO basis
         rows = arh%history_channel_rows()
-        if (any(shape(rows) /= [2, 2])) then
+        if (any(shape(rows) /= [2_ip, n_particle])) then
             write(stderr, *) "test_history_channel_rows_arh_mo failed: Incorrect "// &
                 "dimensions."
             test_history_channel_rows_arh_mo = .false.
-        else if (any(rows /= reshape([1_ip, n_mo**2, &
-                                      n_mo**2 + 1_ip, 2_ip * n_mo**2], [2, 2]))) then
+        else if (any( &
+            rows /= reshape([([(k - 1) * n_mo**2 + 1, k * n_mo**2], k=1, n_particle)], &
+                            [2_ip, n_particle]))) then
             write(stderr, *) "test_history_channel_rows_arh_mo failed: Incorrect rows."
             test_history_channel_rows_arh_mo = .false.
         end if
@@ -3577,47 +3789,56 @@ contains
     logical(c_bool) function test_hess_x_static_arh_oao() bind(C)
         !
         ! this function tests the function which applies the static part of the Hessian
-        ! to a trial vector for the OAO basis
+        ! to a trial vector for the OAO basis, for the closed- and the open-shell case
         !
         use otr_arh, only: arh_oao_type
         use otr_oao, only: oao_type
-        use otr_oao_test_reference, only: n_param
-        use otr_common_test_reference, only: n_ao, n_particle, n_occ
+        use otr_common_test_reference, only: n_ao, n_occ, &
+                                             n_particle_ref => n_particle, shell_names
         use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
 
         type(oao_type), allocatable, target :: oao
         type(arh_oao_type) :: arh
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), fock_oo(n_ao, n_ao, n_particle), &
-                    fock_vv(n_ao, n_ao, n_particle), x(n_param), &
-                    response(n_ao, n_ao, n_particle)
+        real(rp), allocatable :: dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :), &
+                                 x(:), response(:, :, :)
+        integer(ip) :: n_particle, n_param
 
         ! assume tests pass
         test_hess_x_static_arh_oao = .true.
 
-        ! set up the OAO object with a random partition of the Fock matrix
-        call generate_random_fock_partition(n_ao, n_occ(:n_particle), dm_oao, fock_oo, &
-                                            fock_vv)
-        allocate(oao)
-        oao%n_ao = n_ao
-        oao%n_particle = n_particle
-        oao%dm_oao = dm_oao
-        oao%fock_oo = fock_oo
-        oao%fock_vv = fock_vv
-        arh = arh_oao_type(oao)
+        ! loop over the closed-shell and the open-shell case, whose static parts are
+        ! scaled differently
+        do n_particle = 1, n_particle_ref
+            n_param = n_particle * n_ao * (n_ao - 1) / 2
 
-        ! call routine and determine if the static part matches the independently
-        ! assembled one
-        x = generate_random_nonredundant_vector(n_param, n_particle, n_ao, dm_oao)
-        response = 0.0_rp
-        if (norm2(arh%hess_x_static(x) - &
-                  ref_hess_x_oao(ref_unpack_asymm(x, n_particle, n_ao), response, &
-                                 dm_oao, fock_oo, fock_vv, n_param)) > tol) then
-            write(stderr, *) "test_hess_x_static_arh_oao failed: Incorrect static part."
-            test_hess_x_static_arh_oao = .false.
-        end if
+            ! set up the OAO object with a random partition of the Fock matrix
+            allocate(dm_oao(n_ao, n_ao, n_particle), fock_oo(n_ao, n_ao, n_particle), &
+                     fock_vv(n_ao, n_ao, n_particle), response(n_ao, n_ao, n_particle))
+            call generate_random_fock_partition(n_ao, n_occ(:n_particle), dm_oao, &
+                                                fock_oo, fock_vv)
+            allocate(oao)
+            oao%n_ao = n_ao
+            oao%n_particle = n_particle
+            oao%dm_oao = dm_oao
+            oao%fock_oo = fock_oo
+            oao%fock_vv = fock_vv
+            arh = arh_oao_type(oao)
 
-        ! deallocate OAO object
-        deallocate(oao)
+            ! call routine and determine if the static part matches the independently
+            ! assembled one
+            x = generate_random_nonredundant_vector(n_param, n_particle, n_ao, dm_oao)
+            response = 0.0_rp
+            if (norm2(arh%hess_x_static(x) - &
+                      ref_hess_x_oao(ref_unpack_asymm(x, n_particle, n_ao), response, &
+                                     dm_oao, fock_oo, fock_vv, n_param)) > tol) then
+                write(stderr, *) "test_hess_x_static_arh_oao failed: Incorrect "// &
+                    "static part for the "//trim(shell_names(n_particle))//" case."
+                test_hess_x_static_arh_oao = .false.
+            end if
+
+            ! deallocate OAO object and arrays of the shell
+            deallocate(oao, dm_oao, fock_oo, fock_vv, response)
+        end do
 
     end function test_hess_x_static_arh_oao
 
@@ -3791,7 +4012,8 @@ contains
         arh%a_inv_comb = a_inv_comb
 
         ! call routine for every ARH type and both shells, whose coupling matrices
-        ! differ by a factor of two, and determine if the factors match
+        ! differ by a factor of two, and for an empty history, and determine if the
+        ! factors match
         do i_type = 1, size(arh_types)
             case_arh_type = trim(arh_types(i_type))
             do n_particle = 1, n_particle_ref
@@ -3872,21 +4094,24 @@ contains
                     end if
                 end if
             end do
-        end do
 
-        ! an empty history has to leave every factor unallocated
-        deallocate(arh%dm_dirs, arh%dm_dirs_nonlinear, arh%linear_potential_dirs, &
-                   arh%nonlinear_potential_dirs)
-        allocate(arh%dm_dirs(n_param, 0), arh%dm_dirs_nonlinear(n_param, 0), &
-                 arh%linear_potential_dirs(n_param, 0), &
-                 arh%nonlinear_potential_dirs(n_param, 0))
-        call arh%get_low_rank_hess_factors()
-        if (allocated(arh%expansion_dirs) .or. allocated(arh%projection_dirs) .or. &
-            allocated(arh%coupling_matrix)) then
-            write(stderr, *) "test_get_low_rank_hess_factors failed: Factors were "// &
-                "assembled for an empty history."
-            test_get_low_rank_hess_factors = .false.
-        end if
+            ! an empty history has to leave every factor of the type unallocated
+            arh%dm_dirs = density(:, :0)
+            arh%dm_dirs_nonlinear = density_nl(:, :0)
+            arh%linear_potential_dirs = linear(:, :0)
+            arh%nonlinear_potential_dirs = nonlinear(:, :0)
+            call arh%get_low_rank_hess_factors()
+            if (allocated(arh%expansion_dirs) .or. allocated(arh%projection_dirs) .or. &
+                allocated(arh%coupling_matrix)) then
+                write(stderr, *) "test_get_low_rank_hess_factors failed: Factors "// &
+                    "were assembled for an empty history for "//case_arh_type//"."
+                test_get_low_rank_hess_factors = .false.
+            end if
+            arh%dm_dirs = density
+            arh%dm_dirs_nonlinear = density_nl
+            arh%linear_potential_dirs = linear
+            arh%nonlinear_potential_dirs = nonlinear
+        end do
 
         ! deallocate ARH and OAO objects
         deallocate(arh, oao)
@@ -3937,7 +4162,8 @@ contains
             test_build_a_part = .false.
         end if
 
-        ! call routine for an empty history
+        ! call routine for an empty history, which has to return without handing BLAS
+        ! the vanishing leading dimension of its result, which reference BLAS rejects
         call build_a_part(dm_cols(:, :0), v_cols(:, :0), a_empty)
 
     end function test_build_a_part
@@ -4049,10 +4275,8 @@ contains
             write(stderr, *) "test_build_a_block_linear_os failed: Incorrect "// &
                 "dimensions."
             test_build_a_block_linear_os = .false.
-            return
-        end if
-        if (norm2(matmul(transpose(chol), matmul(a_block, chol)) - &
-                  expected_a_block(map, map)) > tol) then
+        else if (norm2(matmul(transpose(chol), matmul(a_block, chol)) - &
+                       expected_a_block(map, map)) > tol) then
             write(stderr, *) "test_build_a_block_linear_os failed: Result does not "// &
                 "invert back to the gathered, reordered raw block matrix."
             test_build_a_block_linear_os = .false.
@@ -4138,20 +4362,20 @@ contains
         !
         use otr_arh, only: cross_symmetrize
 
-        real(rp) :: a12(2, 2), a21(2, 2), expected12(2, 2), expected21(2, 2)
+        integer(ip), parameter :: n_rows = 2, n_cols = 3
+
+        real(rp) :: a12(n_rows, n_cols), a21(n_cols, n_rows), &
+                    expected12(n_rows, n_cols), expected21(n_cols, n_rows)
 
         ! assume tests pass
         test_cross_symmetrize = .true.
 
-        ! initialize blocks which are not transposes of each other
-        a12 = reshape([1.0_rp, 3.0_rp, &
-                       2.0_rp, 4.0_rp], [2, 2])
-        a21 = reshape([5.0_rp, 6.0_rp, &
-                       7.0_rp, 9.0_rp], [2, 2])
+        ! initialize random rectangular blocks which are not transposes of each other
+        call random_number(a12)
+        call random_number(a21)
 
         ! initialize expected blocks, averaging a12(i, k) with a21(k, i) directly
-        expected12 = reshape([3.0_rp, 5.0_rp, &
-                              4.0_rp, 6.5_rp], [2, 2])
+        expected12 = 0.5_rp * (a12 + transpose(a21))
         expected21 = transpose(expected12)
 
         ! call routine and determine if values of resulting blocks match and if these
@@ -4542,8 +4766,9 @@ contains
         ! a column repeating the direction of the first one but contributing a new
         ! component of resolvable norm is rejected when more than that norm is demanded
         ! and accepted when less is demanded, while the pivoting then ranks the columns
-        ! by length; without a demand, it is accepted as independent, so that it is the
-        ! demand rather than linear dependence that rejects it
+        ! by length; without a demand or with a vanishing one, which demands nothing, it
+        ! is accepted as independent, so that it is the demand rather than linear
+        ! dependence that rejects it
         cols(:, 3) = [0.5_rp, 0.0_rp, resolvable_norm, 0.0_rp]
         if (.not. check_factorization( &
             "a column contributing less than the demanded residual", cols, &
@@ -4555,6 +4780,9 @@ contains
             test_factorize_history = .false.
         if (.not. check_factorization("an omitted demanded residual", cols, &
                                       [1_ip, 2_ip, 3_ip])) &
+            test_factorize_history = .false.
+        if (.not. check_factorization("a vanishing demanded residual", cols, &
+                                      [1_ip, 2_ip, 3_ip], min_residual=0.0_rp)) &
             test_factorize_history = .false.
 
         ! an empty history returns an empty factorization
@@ -4716,9 +4944,10 @@ contains
         ! assume tests pass
         test_combine_channels = .true.
 
-        chol1 = reshape([1.0_rp, 0.0_rp, &
-                         2.0_rp, 3.0_rp], [n1, n1])
-        chol2 = reshape([4.0_rp], [n2, n2])
+        ! initialize random upper triangular factors of both channels and maps into
+        ! their histories
+        chol1 = generate_random_upper_triangular(n1)
+        chol2 = generate_random_upper_triangular(n2)
         map1 = [2, 4]
         map2 = [1]
 
@@ -5241,9 +5470,11 @@ contains
 
         ! each eigenvalue is placed at a fixed multiple of the criterion applied to its
         ! own response norm, so which directions are discarded does not depend on the
-        ! value of the skipping threshold; the multiples sit just either side of one so
-        ! that a response norm computed even slightly wrongly flips a decision
-        factor = [-0.95_rp, 0.95_rp, 1.05_rp, 1.05_rp]
+        ! value of the skipping threshold; the multiples sit just either side of one in
+        ! magnitude, with either sign, so that a response norm computed even slightly
+        ! wrongly flips a decision and only the magnitude of a negative eigenvalue
+        ! decides whether it is kept
+        factor = [-0.95_rp, 0.95_rp, 1.05_rp, -1.05_rp]
 
         ! a symmetric positive semi-definite response Gram matrix, built as B^T B so
         ! that v^T y_gram v is a genuine squared response norm, scaled so that the norm
@@ -5292,24 +5523,30 @@ contains
         ! from its eigenvectors and inverted eigenvalues
         !
         use otr_arh, only: spectral_to_dense
+        use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
-        integer(ip), parameter :: n = 2
+        integer(ip), parameter :: n = 3
 
         real(rp) :: eigvecs(n, n), inv_eigvals(n), expected(n, n)
         real(rp), allocatable :: mat(:, :)
+        integer(ip) :: i
 
         ! assume tests pass
         test_spectral_to_dense = .true.
 
-        ! initialize an orthonormal but non-symmetric eigenvector matrix, so that a
-        ! transposed reconstruction would be caught, and distinct inverted eigenvalues
-        eigvecs = reshape([0.6_rp, 0.8_rp, &
-                           -0.8_rp, 0.6_rp], [n, n])
-        inv_eigvals = [0.25_rp, 4.0_rp]
+        ! initialize a random orthonormal eigenvector matrix, which is not symmetric, so
+        ! that a transposed reconstruction would be caught, and distinct random
+        ! inverted eigenvalues
+        eigvecs = generate_random_orthogonal_matrix(n)
+        call random_number(inv_eigvals)
 
-        ! initialize the expected matrix 0.25 * v1 v1^T + 4 * v2 v2^T
-        expected = reshape([2.65_rp, -1.8_rp, &
-                            -1.8_rp, 1.6_rp], [n, n])
+        ! initialize the expected matrix as the sum of the outer products of the
+        ! eigenvectors weighted by the inverted eigenvalues
+        expected = 0.0_rp
+        do i = 1, n
+            expected = expected + inv_eigvals(i) * spread(eigvecs(:, i), 2, n) * &
+                       spread(eigvecs(:, i), 1, n)
+        end do
 
         ! call routine and determine if dimensions and values of the reconstructed
         ! matrix match
@@ -5406,14 +5643,15 @@ contains
         use otr_arh, only: prepend
 
         real(rp), allocatable :: list(:, :, :, :)
-        real(rp) :: new_array(2, 1, 1), expected(2, 1, 1, 3)
+        real(rp) :: new_array(2, 1, 1), new_arrays(2, 1, 1, 2), expected(2, 1, 1, 3)
 
         ! assume tests pass
         test_prepend = .true.
 
-        ! allocate empty list and initialize array to be prepended
+        ! allocate empty list and initialize random arrays to be prepended
         allocate(list(2, 1, 1, 0))
-        new_array = reshape([1.0_rp, 2.0_rp], [2, 1, 1])
+        call random_number(new_array)
+        call random_number(new_arrays)
 
         ! prepend array to empty list and determine if dimensions and values of
         ! resulting list match
@@ -5429,16 +5667,17 @@ contains
             test_prepend = .false.
         end if
 
-        ! initialize expected list after prepending two further arrays
-        expected = reshape([5.0_rp, 6.0_rp, &
-                            3.0_rp, 4.0_rp, &
-                            1.0_rp, 2.0_rp], [2, 1, 1, 3])
+        ! initialize expected list after prepending two further arrays, the latest
+        ! first
+        expected(:, :, :, 1) = new_arrays(:, :, :, 2)
+        expected(:, :, :, 2) = new_arrays(:, :, :, 1)
+        expected(:, :, :, 3) = new_array
 
         ! prepend two further arrays and determine if dimensions and values of
         ! resulting list match, so that new arrays are added at the front while the
         ! order of the existing arrays is retained
-        call prepend(list, reshape([3.0_rp, 4.0_rp], [2, 1, 1]))
-        call prepend(list, reshape([5.0_rp, 6.0_rp], [2, 1, 1]))
+        call prepend(list, new_arrays(:, :, :, 1))
+        call prepend(list, new_arrays(:, :, :, 2))
         if (size(list, 4) /= 3) then
             write(stderr, *) "test_prepend failed: Incorrect list dimensions after "// &
                 "prepending to non-empty list."

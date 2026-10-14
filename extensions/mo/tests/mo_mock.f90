@@ -49,7 +49,7 @@ contains
         use otr_common, only: extension_type, extension_solver_settings_type
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_mo, only: mo_type, mo_settings_type, default_mo_settings
-        use otr_common_test_reference, only: n_ao_ref => n_ao
+        use otr_common_test_reference, only: n_ao_ref => n_ao, ao_overlap_pattern
         use otr_mo_test_reference, only: n_mo_ref => n_mo
 
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -63,8 +63,13 @@ contains
 
         class(extension_type), allocatable, target :: object
 
-        ! check passed overlap matrix and numbers of AOs and MOs
-        if (any(abs(ao_overlap - 2.0_rp) > tol)) then
+        ! check shape and values of passed overlap matrix and numbers of AOs and MOs
+        if (any(shape(ao_overlap) /= [n_ao_ref, n_ao_ref])) then
+            test_passed = .false.
+            write(stderr, *) "test_mo_factory_c_wrapper failed: Passed AO overlap "// &
+                "matrix shaped wrong."
+        else if (any(abs(ao_overlap - real( &
+            ao_overlap_pattern(int(n_ao_ref, kind=c_ip)), kind=rp)) > tol)) then
             test_passed = .false.
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed AO overlap "// &
                 "matrix wrong."

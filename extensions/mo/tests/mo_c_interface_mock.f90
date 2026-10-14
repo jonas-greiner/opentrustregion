@@ -85,8 +85,8 @@ contains
         use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
                                          orbsym_c_ref => orbsym_c, mo_coeff_pattern, &
                                          operator(/=)
-        use otr_common_test_reference, only: n_ao_c_ref => n_ao_c, &
-                                             check_evaluate_dm_c_funptr
+        use otr_common_test_reference, only: &
+            n_ao_c_ref => n_ao_c, check_evaluate_dm_c_funptr, ao_overlap_pattern
         use otr_common_c_interface_mock, only: &
             mock_level_obj_func, check_and_wire_solver_settings_c, mock_extension
 
@@ -140,7 +140,8 @@ contains
                 "coefficients wrong."
             test_mo_factory_interface = .false.
         end if
-        if (any(abs(ao_overlap_c(:n_ao_c**2) - 2.0_c_rp) > tol_c)) then
+        if (any(abs(ao_overlap_c(:n_ao_c**2) - &
+                    reshape(ao_overlap_pattern(n_ao_c), [n_ao_c**2])) > tol_c)) then
             write(stderr, *) "test_mo_factory_py_interface failed: Passed AO "// &
                 "overlap matrix wrong."
             test_mo_factory_interface = .false.

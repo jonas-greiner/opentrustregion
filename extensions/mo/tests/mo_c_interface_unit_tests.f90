@@ -38,7 +38,7 @@ contains
         use otr_mo_test_reference, only: get_reference_mo_values, n_mo, &
                                          mo_coeff_pattern, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, n_particle, n_ao_c, &
-                                             shell_names
+                                             shell_names, ao_overlap_pattern
         use otr_common_c_interface_unit_tests, only: &
             mock_evaluate_dm_cs, mock_evaluate_dm_os, check_c_factory_wiring
         use c_interface_unit_tests, only: mock_logger, mock_update_orbs, mock_obj_func
@@ -67,9 +67,8 @@ contains
         mo_factory_cs => mock_mo_factory_cs
         mo_factory_os => mock_mo_factory_os
 
-        ! initialize AO overlap matrix
-        allocate(ao_overlap_c(n_ao, n_ao))
-        ao_overlap_c = 2.0_c_rp
+        ! initialize AO overlap matrix with values encoding the pairs of its indices
+        ao_overlap_c = ao_overlap_pattern(n_ao_c)
 
         ! associate optional settings with the reference values
         call get_reference_mo_values(settings_c)
@@ -164,7 +163,7 @@ contains
                 write(stderr, *) "test_mo_factory_c_wrapper failed: No extension "// &
                     "returned for the "//case_name//" case."
                 test_mo_factory_c_wrapper = .false.
-                return
+                cycle
             end if
             call c_f_pointer(extension_c, holder)
 
@@ -177,7 +176,8 @@ contains
                 write(stderr, *) "test_mo_factory_c_wrapper failed: Settings of "// &
                     "the holder not wired with an object for the "//case_name//" case."
                 test_mo_factory_c_wrapper = .false.
-                return
+                deallocate(holder)
+                cycle
             end if
             if (.not. associated(level%extension%state, holder%state)) then
                 write(stderr, *) "test_mo_factory_c_wrapper failed: Object does "// &
@@ -463,9 +463,10 @@ contains
         ! this function tests that the function that converts MO settings from Fortran
         ! to C correctly performs this conversion
         !
-        use otr_mo, only: mo_settings_type
+        use otr_mo, only: mo_settings_type, default_mo_settings
         use otr_mo_c_interface, only: mo_settings_type_c, assignment(=)
-        use otr_mo_test_reference, only: ref_mo_settings, operator(/=)
+        use otr_mo_test_reference, only: ref_mo_settings, get_reference_mo_values, &
+                                         operator(/=)
 
         type(mo_settings_type) :: settings
         type(mo_settings_type_c) :: settings_c
@@ -473,10 +474,10 @@ contains
         ! assume test passes
         test_assign_mo_c_f = .true.
 
-        ! initialize Fortran settings with reference values
+        ! convert Fortran settings with the reference values to C settings which hold a
+        ! logging function and a host context that the conversion has to discard
         settings = ref_mo_settings
-
-        ! convert to C settings
+        call get_reference_mo_values(settings_c)
         settings_c = settings
 
         ! check that no callback function pointers and host contexts are associated
@@ -501,6 +502,20 @@ contains
             test_assign_mo_c_f = .false.
             write(stderr, *) "test_assign_mo_c_f failed: Settings not marked as "// &
                 "initialized."
+        end if
+
+        ! convert the default settings into C settings which hold the reference values
+        ! and are marked as not initialized, so that a field which is not converted,
+        ! including the initialized flag, keeps a value that differs from the expected
+        ! one
+        call get_reference_mo_values(settings_c)
+        settings_c%initialized = .false.
+        settings = default_mo_settings
+        settings_c = settings
+        if (settings_c /= default_mo_settings) then
+            write(stderr, *) "test_assign_mo_c_f failed: Default settings not "// &
+                "converted correctly."
+            test_assign_mo_c_f = .false.
         end if
 
     end function test_assign_mo_c_f

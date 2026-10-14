@@ -31,6 +31,8 @@ from pyopentrustregion.extensions.common.tests import (
     release_mock_extension,
     assign_reference_settings,
     settings_hold_reference,
+    ao_overlap_pattern,
+    density_pattern,
     ExtensionCallbackMocks,
 )
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory
@@ -147,7 +149,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         """
         this function tests the OAO factory python interface
         """
-        ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
+        ao_overlap = ao_overlap_pattern()
 
         # initialize test flag
         test_passed = True
@@ -161,7 +163,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         self.test_logger = True
 
         # initialize density matrix
-        dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
+        dm_ao = density_pattern(1)[0]
 
         # initialize solver settings object
         solver_settings, python_functions = setup_wired_solver_settings()
@@ -292,12 +294,13 @@ class OAOPyInterfaceTests(unittest.TestCase):
         n_particle = 2
 
         # initialize density matrix
-        dm_ao = np.full((n_particle, n_ao, n_ao), 1.0, dtype=np.float64)
+        dm_ao = density_pattern(n_particle)
 
-        # call OAO factory python interface
+        # call OAO factory python interface with an AO overlap matrix of single
+        # precision, which the factory has to convert
         oao_factory(
             dm_ao,
-            ao_overlap,
+            ao_overlap.astype(np.float32),
             n_particle,
             n_ao,
             self.mock_evaluate_dm,
@@ -314,7 +317,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         evaluate_dm_flag = c_bool.in_dll(lib, "oao_evaluate_dm_passed")
         settings_flag.value = True
         evaluate_dm_flag.value = True
-        dm_ao = np.full((n_particle, n_ao, n_ao), 1.0, dtype=np.float64)
+        dm_ao = density_pattern(n_particle)
         solver_settings = setup_wired_solver_settings()[0]
         try:
             oao_factory(
@@ -355,7 +358,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         # settings keep alive and which keeps the state alive
         if not check_extension_owner(
             lambda solver_settings, solver_state: oao_factory(
-                np.full(2 * (n_ao,), 1.0, dtype=np.float64),
+                density_pattern(1)[0],
                 ao_overlap,
                 1,
                 n_ao,

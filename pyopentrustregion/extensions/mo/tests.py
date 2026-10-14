@@ -35,6 +35,7 @@ from pyopentrustregion.extensions.common.tests import (
     release_mock_extension,
     assign_reference_settings,
     settings_hold_reference,
+    ao_overlap_pattern,
     ExtensionCallbackMocks,
 )
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory
@@ -159,7 +160,7 @@ class MOPyInterfaceTests(unittest.TestCase):
         """
         this function tests the MO factory python interface
         """
-        ao_overlap = np.full(2 * (n_ao,), 2.0, dtype=np.float64)
+        ao_overlap = ao_overlap_pattern()
 
         # initialize test flag
         test_passed = True
@@ -191,8 +192,9 @@ class MOPyInterfaceTests(unittest.TestCase):
             return mo_coeff
 
         # MO coefficients stored row-major are copied back, those stored column-major
-        # are rotated in place and those of a different precision are converted, with
-        # the irreps of their MOs passed on only if they are given
+        # are rotated in place and those of a different precision are converted, like
+        # the AO overlap matrix of the same precision, with the irreps of their MOs
+        # passed on only if they are given
         cases = (
             ("closed-shell row-major", 1, False, np.float64, False),
             ("closed-shell column-major", 1, True, np.float64, False),
@@ -217,7 +219,7 @@ class MOPyInterfaceTests(unittest.TestCase):
             # call MO factory python interface
             update_orbs_mo, obj_func_mo = mo_factory(
                 mo_coeff,
-                ao_overlap,
+                ao_overlap.astype(dtype),
                 n_occ[0] if n_particle == 1 else n_occ[:n_particle],
                 n_particle,
                 n_ao,

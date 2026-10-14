@@ -46,7 +46,8 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: operator(/=)
-        use otr_common_test_reference, only: check_evaluate_dm_c_funptr
+        use otr_common_test_reference, only: check_evaluate_dm_c_funptr, &
+                                             density_pattern, ao_overlap_pattern
         use otr_common_c_interface_mock, only: &
             mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension
@@ -70,12 +71,14 @@ contains
             write(stderr, *) "test_oao_factory_py_interface failed: Passed number "// &
                 "of particles wrong."
             test_oao_factory_interface = .false.
-        else if (any(abs(dm_ao_c(:n_ao_c**2 * n_particle_c) - 1.0_c_rp) > tol_c)) then
+        else if (any(abs(dm_ao_c(:n_ao_c**2 * n_particle_c) - reshape(density_pattern( &
+            n_ao_c, n_particle_c, 0.0_c_rp), [n_ao_c**2 * n_particle_c])) > tol_c)) then
             write(stderr, *) "test_oao_factory_py_interface failed: Passed AO "// &
                 "density matrix wrong."
             test_oao_factory_interface = .false.
         end if
-        if (any(abs(ao_overlap_c(:n_ao_c**2) - 2.0_c_rp) > tol_c)) then
+        if (any(abs(ao_overlap_c(:n_ao_c**2) - &
+                    reshape(ao_overlap_pattern(n_ao_c), [n_ao_c**2])) > tol_c)) then
             write(stderr, *) "test_oao_factory_py_interface failed: Passed AO "// &
                 "overlap matrix wrong."
             test_oao_factory_interface = .false.
