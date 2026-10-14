@@ -1566,8 +1566,7 @@ contains
                                              n_particle_ref => n_particle, shell_names
         use otr_common_unit_tests, only: &
             level_context, mock_fock_factor, mock_requests, mock_get_response_cs, &
-            mock_get_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os, &
-            mock_evaluate_dm_failing_cs, mock_evaluate_dm_failing_os
+            mock_get_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os
 
         type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
@@ -1716,11 +1715,7 @@ contains
             ! call routine with an orbital rotation whose evaluation fails and
             ! determine if the error is passed on and the rotated orbitals are marked
             ! as not evaluated
-            if (n_particle == 1) then
-                mo%evaluate_dm_cs => mock_evaluate_dm_failing_cs
-            else
-                mo%evaluate_dm_os => mock_evaluate_dm_failing_os
-            end if
+            context%mock_error = 1
             kappa = 0.1_rp
             call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                 level_context(mo, 1_ip))
@@ -1736,11 +1731,7 @@ contains
                     " case."
                 test_update_orbs_mo = .false.
             end if
-            if (n_particle == 1) then
-                mo%evaluate_dm_cs => mock_evaluate_dm_cs
-            else
-                mo%evaluate_dm_os => mock_evaluate_dm_os
-            end if
+            context%mock_error = 0
 
             ! call routine with an orbital rotation, keeping the MO coefficients it
             ! starts from, and determine if the orbitals are rotated, consistently with

@@ -44,7 +44,7 @@ contains
                              default_s_gek_settings
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
                                   n_param_ref => n_param
-        use otr_s_gek_test_reference, only: test_change_reference_funptr
+        use otr_s_gek_test_reference, only: check_change_reference_funptr
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
 
         integer(ip), intent(in) :: n_param
@@ -82,7 +82,7 @@ contains
                                         solver_settings%context)) test_passed = .false.
 
         ! test passed change reference function
-        if (.not. test_change_reference_funptr( &
+        if (.not. check_change_reference_funptr( &
             change_reference_funptr, "s_gek_factory_c_wrapper", " by given change "// &
             "reference function", settings%context)) test_passed = .false.
 

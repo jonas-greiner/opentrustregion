@@ -45,7 +45,7 @@ contains
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao
         use otr_common_unit_tests, only: record_mock_call
-        use test_reference, only: check_host_context_c
+        use test_reference, only: check_host_context_c, host_context_error
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
@@ -66,7 +66,7 @@ contains
         if (present(get_response_c_funptr)) &
             get_response_c_funptr = c_funloc(mock_get_response_cs)
 
-        error = 0_c_ip
+        error = host_context_error(context_c)
 
     end function mock_evaluate_dm_cs
 
@@ -78,7 +78,7 @@ contains
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao, n_particle
         use otr_common_unit_tests, only: record_mock_call
-        use test_reference, only: check_host_context_c
+        use test_reference, only: check_host_context_c, host_context_error
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out) :: energy
@@ -99,7 +99,7 @@ contains
         if (present(get_response_c_funptr)) &
             get_response_c_funptr = c_funloc(mock_get_response_os)
 
-        error = 0_c_ip
+        error = host_context_error(context_c)
 
     end function mock_evaluate_dm_os
 
@@ -109,7 +109,7 @@ contains
         ! matrices
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao
-        use test_reference, only: check_host_context_c
+        use test_reference, only: check_host_context_c, host_context_error
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out), target :: response(*)
@@ -123,7 +123,7 @@ contains
 
         response(:flat_len) = evaluate_dm_factors(2) * dm_ao(:flat_len)
 
-        error = 0_c_ip
+        error = host_context_error(context_c)
 
     end function mock_get_response_cs
 
@@ -133,7 +133,7 @@ contains
         ! matrices
         !
         use otr_common_test_reference, only: evaluate_dm_factors, n_ao, n_particle
-        use test_reference, only: check_host_context_c
+        use test_reference, only: check_host_context_c, host_context_error
 
         real(c_rp), intent(in), target :: dm_ao(*)
         real(c_rp), intent(out), target :: response(*)
@@ -147,7 +147,7 @@ contains
 
         response(:flat_len) = evaluate_dm_factors(2) * dm_ao(:flat_len)
 
-        error = 0_c_ip
+        error = host_context_error(context_c)
 
     end function mock_get_response_os
 
@@ -585,6 +585,60 @@ contains
         end if
 
     end function test_setup_extension_holder
+
+    logical(c_bool) function test_refresh_state() bind(C)
+        !
+        ! this function tests the subroutine which refreshes the state the object of a
+        ! level of a holder reads from the host's record the level holds
+        !
+        use otr_common_c_interface, only: holder_level_type, refresh_state
+        use otr_common_unit_tests, only: mock_extension_type
+        use test_reference, only: get_reference_solver_state_values, operator(/=)
+
+        type(mock_extension_type), target :: extension
+        type(holder_level_type) :: held
+        type(solver_state_type), target :: state
+        type(solver_state_type_c), target :: state_c
+
+        ! assume tests pass
+        test_refresh_state = .true.
+
+        ! a level holding the host's record, which holds the reference values, has to
+        ! refresh the state the object reads from it
+        call get_reference_solver_state_values(state_c)
+        state = solver_state_type()
+        extension%state => state
+        extension%solver_level%extension => extension
+        held%level => extension%solver_level
+        held%state_c => state_c
+        call refresh_state(held)
+        if (state_c /= state) then
+            write(stderr, *) "test_refresh_state failed: State not refreshed from "// &
+                "the host's record."
+            test_refresh_state = .false.
+        end if
+
+        ! a level without a record has to leave the state the object reads unchanged
+        state = solver_state_type()
+        held%state_c => null()
+        call refresh_state(held)
+        if (.not. (state_c /= state)) then
+            write(stderr, *) "test_refresh_state failed: State changed without a "// &
+                "record."
+            test_refresh_state = .false.
+        end if
+
+        ! an object without a state has to be left alone
+        extension%state => null()
+        held%state_c => state_c
+        call refresh_state(held)
+        if (associated(extension%state) .or. .not. (state_c /= state)) then
+            write(stderr, *) "test_refresh_state failed: State of an object "// &
+                "without one changed."
+            test_refresh_state = .false.
+        end if
+
+    end function test_refresh_state
 
     logical(c_bool) function test_assign_solver_state_f_c() bind(C)
         !
@@ -1743,29 +1797,29 @@ contains
 
     end function test_logger_c_wrapper
 
-    logical(c_bool) function test_evaluate_dm_f_wrapper() bind(C)
+    logical(c_bool) function test_evaluate_dm_cs_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrappers for the density matrix evaluating
-        ! function of an orbital basis, which find the C function in the bundle they
-        ! receive as context
+        ! this function tests the Fortran wrapper for the density matrix evaluating
+        ! function of an orbital basis for the closed-shell case, which hands the C
+        ! function in the bundle it receives as context the density matrix as that of a
+        ! single particle channel
         !
-        use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type
-        use otr_common_c_interface, only: &
-            orbital_c_callbacks_type, evaluate_dm_cs_f_wrapper, evaluate_dm_os_f_wrapper
-        use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
-                                             test_evaluate_dm_os_funptr, n_ao
+        use otr_common, only: evaluate_dm_cs_type, get_response_cs_type
+        use otr_common_c_interface, only: orbital_c_callbacks_type, &
+                                          evaluate_dm_cs_f_wrapper
+        use otr_common_test_reference, only: check_evaluate_dm_cs_funptr, n_ao
         use otr_common_unit_tests, only: mock_requests
-        use test_reference, only: arm_host_context_c, host_context_reached
+        use test_reference, only: arm_host_context_c, host_context_reached, host_context
 
         type(orbital_c_callbacks_type), target :: callbacks
         procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
-        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        procedure(get_response_cs_type), pointer :: get_response_cs_funptr
         class(*), pointer :: context
-        real(rp) :: dm(n_ao, n_ao, 1), energy
+        real(rp) :: dm(n_ao, n_ao), energy
         integer(ip) :: request, error
 
         ! assume tests pass
-        test_evaluate_dm_f_wrapper = .true.
+        test_evaluate_dm_cs_f_wrapper = .true.
 
         ! inject mock C function into a bundle, which the wrapper receives as context
         callbacks%evaluate_dm => mock_evaluate_dm_cs
@@ -1779,23 +1833,72 @@ contains
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        if (.not. test_evaluate_dm_cs_funptr(evaluate_dm_cs_funptr, &
-                                             "evaluate_dm_f_wrapper", "", context)) &
-            test_evaluate_dm_f_wrapper = .false.
+        if (.not. check_evaluate_dm_cs_funptr( &
+            evaluate_dm_cs_funptr, "evaluate_dm_cs_f_wrapper", "", context)) &
+            test_evaluate_dm_cs_f_wrapper = .false.
         if (size(mock_requests) /= 4 .or. &
             .not. all([(any(mock_requests == request), request=0, 3)])) then
-            write(stderr, *) "test_evaluate_dm_f_wrapper failed: Outputs passed on "// &
-                "to density matrix evaluating C function for closed-shell case wrong."
-            test_evaluate_dm_f_wrapper = .false.
+            write(stderr, *) "test_evaluate_dm_cs_f_wrapper failed: Outputs passed "// &
+                "on to density matrix evaluating C function wrong."
+            test_evaluate_dm_cs_f_wrapper = .false.
         end if
 
         ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("evaluate_dm_f_wrapper")) &
-            test_evaluate_dm_f_wrapper = .false.
+        if (.not. host_context_reached("evaluate_dm_cs_f_wrapper")) &
+            test_evaluate_dm_cs_f_wrapper = .false.
 
-        ! inject mock C function and arm the host context again
+        ! a C function that fails has to have its error returned and neither return nor
+        ! keep the response function it produced
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 1
+        callbacks%get_response => null()
+        dm = 0.0_rp
+        call evaluate_dm_cs_f_wrapper(dm, energy, &
+                                      get_response_cs_funptr=get_response_cs_funptr, &
+                                      error=error, context=context)
+        if (error /= 1) then
+            write(stderr, *) "test_evaluate_dm_cs_f_wrapper failed: Error of the C "// &
+                "function not returned."
+            test_evaluate_dm_cs_f_wrapper = .false.
+        end if
+        if (associated(get_response_cs_funptr) .or. &
+            associated(callbacks%get_response)) then
+            write(stderr, *) "test_evaluate_dm_cs_f_wrapper failed: Response "// &
+                "function returned or kept after an error."
+            test_evaluate_dm_cs_f_wrapper = .false.
+        end if
+
+    end function test_evaluate_dm_cs_f_wrapper
+
+    logical(c_bool) function test_evaluate_dm_os_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the density matrix evaluating
+        ! function of an orbital basis for the open-shell case, which finds the C
+        ! function in the bundle it receives as context and keeps the response C
+        ! function it returns there
+        !
+        use otr_common, only: evaluate_dm_os_type, get_response_os_type
+        use otr_common_c_interface, only: orbital_c_callbacks_type, &
+                                          evaluate_dm_os_f_wrapper
+        use otr_common_test_reference, only: check_evaluate_dm_os_funptr, n_ao, &
+                                             n_particle
+        use otr_common_unit_tests, only: mock_requests
+        use test_reference, only: arm_host_context_c, host_context_reached, host_context
+
+        type(orbital_c_callbacks_type), target :: callbacks
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        procedure(get_response_os_type), pointer :: get_response_os_funptr
+        class(*), pointer :: context
+        real(rp) :: dm(n_ao, n_ao, n_particle), energy
+        integer(ip) :: request, error
+
+        ! assume tests pass
+        test_evaluate_dm_os_f_wrapper = .true.
+
+        ! inject mock C function into a bundle, which the wrapper receives as context
         callbacks%evaluate_dm => mock_evaluate_dm_os
         call arm_host_context_c(callbacks%host_context)
+        context => callbacks
 
         ! get pointer to subroutine
         evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
@@ -1804,55 +1907,73 @@ contains
         ! combination of requested outputs and has to pass each on to the C function
         ! unchanged
         mock_requests = [integer(ip) :: ]
-        if (.not. test_evaluate_dm_os_funptr(evaluate_dm_os_funptr, &
-                                             "evaluate_dm_f_wrapper", "", context)) &
-            test_evaluate_dm_f_wrapper = .false.
+        if (.not. check_evaluate_dm_os_funptr( &
+            evaluate_dm_os_funptr, "evaluate_dm_os_f_wrapper", "", context)) &
+            test_evaluate_dm_os_f_wrapper = .false.
         if (size(mock_requests) /= 4 .or. &
             .not. all([(any(mock_requests == request), request=0, 3)])) then
-            write(stderr, *) "test_evaluate_dm_f_wrapper failed: Outputs passed on "// &
-                "to density matrix evaluating C function for open-shell case wrong."
-            test_evaluate_dm_f_wrapper = .false.
+            write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: Outputs passed "// &
+                "on to density matrix evaluating C function wrong."
+            test_evaluate_dm_os_f_wrapper = .false.
         end if
 
         ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("evaluate_dm_f_wrapper")) &
-            test_evaluate_dm_f_wrapper = .false.
+        if (.not. host_context_reached("evaluate_dm_os_f_wrapper")) &
+            test_evaluate_dm_os_f_wrapper = .false.
+
+        ! a C function that fails has to have its error returned and neither return nor
+        ! keep the response function it produced
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 1
+        callbacks%get_response => null()
+        dm = 0.0_rp
+        call evaluate_dm_os_f_wrapper(dm, energy, &
+                                      get_response_funptr=get_response_os_funptr, &
+                                      error=error, context=context)
+        if (error /= 1) then
+            write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: Error of the C "// &
+                "function not returned."
+            test_evaluate_dm_os_f_wrapper = .false.
+        end if
+        if (associated(get_response_os_funptr) .or. &
+            associated(callbacks%get_response)) then
+            write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: Response "// &
+                "function returned or kept after an error."
+            test_evaluate_dm_os_f_wrapper = .false.
+        end if
 
         ! a context that is no bundle has to produce an error
-        dm = 0.0_rp
         context => null()
         call evaluate_dm_os_f_wrapper(dm, energy, error=error, context=context)
         if (error == 0) then
-            write(stderr, *) "test_evaluate_dm_f_wrapper failed: No error produced "// &
-                "without a bundle."
-            test_evaluate_dm_f_wrapper = .false.
+            write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: No error "// &
+                "produced without a bundle."
+            test_evaluate_dm_os_f_wrapper = .false.
         end if
 
-    end function test_evaluate_dm_f_wrapper
+    end function test_evaluate_dm_os_f_wrapper
 
-    logical(c_bool) function test_get_response_f_wrapper() bind(C)
+    logical(c_bool) function test_get_response_cs_f_wrapper() bind(C)
         !
-        ! this function tests the Fortran wrappers for the response function of an
-        ! orbital basis, which find the C function the density matrix evaluating
-        ! function returned last in the bundle they receive as context
+        ! this function tests the Fortran wrapper for the response function of an
+        ! orbital basis for the closed-shell case, which hands the C function the
+        ! density matrix evaluating function returned last the density matrix as that
+        ! of a single particle channel
         !
-        use otr_common, only: get_response_cs_type, get_response_os_type
+        use otr_common, only: get_response_cs_type
         use otr_common_c_interface, only: orbital_c_callbacks_type, &
-                                          get_response_cs_f_wrapper, &
-                                          get_response_os_f_wrapper
-        use otr_common_test_reference, only: test_get_response_cs_funptr, &
-                                             test_get_response_os_funptr, n_ao
-        use test_reference, only: arm_host_context_c, host_context_reached
+                                          get_response_cs_f_wrapper
+        use otr_common_test_reference, only: check_get_response_cs_funptr, n_ao
+        use test_reference, only: arm_host_context_c, host_context_reached, host_context
 
         type(orbital_c_callbacks_type), target :: callbacks
         procedure(get_response_cs_type), pointer :: get_response_cs_funptr
-        procedure(get_response_os_type), pointer :: get_response_os_funptr
         class(*), pointer :: context
-        real(rp) :: dm(n_ao, n_ao, 1), response(n_ao, n_ao, 1)
+        real(rp) :: dm(n_ao, n_ao), response(n_ao, n_ao)
         integer(ip) :: error
 
         ! assume tests pass
-        test_get_response_f_wrapper = .true.
+        test_get_response_cs_f_wrapper = .true.
 
         ! inject mock C function into a bundle, which the wrapper receives as context
         callbacks%get_response => mock_get_response_cs
@@ -1863,40 +1984,86 @@ contains
         get_response_cs_funptr => get_response_cs_f_wrapper
 
         ! test response function wrapper
-        if (.not. test_get_response_cs_funptr(get_response_cs_funptr, &
-                                              "get_response_f_wrapper", "", context)) &
-            test_get_response_f_wrapper = .false.
+        if (.not. check_get_response_cs_funptr( &
+            get_response_cs_funptr, "get_response_cs_f_wrapper", "", context)) &
+            test_get_response_cs_f_wrapper = .false.
 
         ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("get_response_f_wrapper")) &
-            test_get_response_f_wrapper = .false.
+        if (.not. host_context_reached("get_response_cs_f_wrapper")) &
+            test_get_response_cs_f_wrapper = .false.
 
-        ! inject mock C function and arm the host context again
+        ! a C function that fails has to have its error returned
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 1
+        dm = 0.0_rp
+        call get_response_cs_f_wrapper(dm, response, error, context)
+        if (error /= 1) then
+            write(stderr, *) "test_get_response_cs_f_wrapper failed: Error of the "// &
+                "C function not returned."
+            test_get_response_cs_f_wrapper = .false.
+        end if
+
+    end function test_get_response_cs_f_wrapper
+
+    logical(c_bool) function test_get_response_os_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the response function of an
+        ! orbital basis for the open-shell case, which finds the C function the density
+        ! matrix evaluating function returned last in the bundle it receives as context
+        !
+        use otr_common, only: get_response_os_type
+        use otr_common_c_interface, only: orbital_c_callbacks_type, &
+                                          get_response_os_f_wrapper
+        use otr_common_test_reference, only: check_get_response_os_funptr, n_ao, &
+                                             n_particle
+        use test_reference, only: arm_host_context_c, host_context_reached, host_context
+
+        type(orbital_c_callbacks_type), target :: callbacks
+        procedure(get_response_os_type), pointer :: get_response_os_funptr
+        class(*), pointer :: context
+        real(rp) :: dm(n_ao, n_ao, n_particle), response(n_ao, n_ao, n_particle)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_get_response_os_f_wrapper = .true.
+
+        ! inject mock C function into a bundle, which the wrapper receives as context
         callbacks%get_response => mock_get_response_os
         call arm_host_context_c(callbacks%host_context)
+        context => callbacks
 
         ! get pointer to subroutine
         get_response_os_funptr => get_response_os_f_wrapper
 
         ! test response function wrapper
-        if (.not. test_get_response_os_funptr(get_response_os_funptr, &
-                                              "get_response_f_wrapper", "", context)) &
-            test_get_response_f_wrapper = .false.
+        if (.not. check_get_response_os_funptr( &
+            get_response_os_funptr, "get_response_os_f_wrapper", "", context)) &
+            test_get_response_os_f_wrapper = .false.
 
         ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("get_response_f_wrapper")) &
-            test_get_response_f_wrapper = .false.
+        if (.not. host_context_reached("get_response_os_f_wrapper")) &
+            test_get_response_os_f_wrapper = .false.
+
+        ! a C function that fails has to have its error returned
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 1
+        dm = 0.0_rp
+        call get_response_os_f_wrapper(dm, response, error, context)
+        if (error /= 1) then
+            write(stderr, *) "test_get_response_os_f_wrapper failed: Error of the "// &
+                "C function not returned."
+            test_get_response_os_f_wrapper = .false.
+        end if
 
         ! a context that is no bundle has to produce an error
-        dm = 0.0_rp
         context => null()
         call get_response_os_f_wrapper(dm, response, error, context)
         if (error == 0) then
-            write(stderr, *) "test_get_response_f_wrapper failed: No error "// &
+            write(stderr, *) "test_get_response_os_f_wrapper failed: No error "// &
                 "produced without a bundle."
-            test_get_response_f_wrapper = .false.
+            test_get_response_os_f_wrapper = .false.
         end if
 
-    end function test_get_response_f_wrapper
+    end function test_get_response_os_f_wrapper
 
 end module otr_common_c_interface_unit_tests

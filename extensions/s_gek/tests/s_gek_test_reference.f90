@@ -54,8 +54,8 @@ module otr_s_gek_test_reference
 
 contains
 
-    function test_change_reference_funptr(change_reference_funptr, test_name, message, &
-                                          context) result(test_passed)
+    function check_change_reference_funptr(change_reference_funptr, test_name, &
+                                           message, context) result(test_passed)
         !
         ! this function tests a provided change reference function pointer
         !
@@ -129,10 +129,10 @@ contains
         ! deallocate arrays
         deallocate(new_ref, kappa_list, local_grad_list, grad_list, expected_lists)
 
-    end function test_change_reference_funptr
+    end function check_change_reference_funptr
 
-    function test_change_reference_c_funptr(change_reference_c_funptr, test_name, &
-                                            message, context_c) result(test_passed)
+    function check_change_reference_c_funptr(change_reference_c_funptr, test_name, &
+                                             message, context_c) result(test_passed)
         !
         ! this function tests a provided change reference C function pointer
         !
@@ -212,7 +212,7 @@ contains
         ! deallocate arrays
         deallocate(new_ref, kappa_list, local_grad_list, grad_list, expected_lists)
 
-    end function test_change_reference_c_funptr
+    end function check_change_reference_c_funptr
 
     subroutine get_reference_s_gek_values(ref_settings_out) bind(C)
         !

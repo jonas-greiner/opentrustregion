@@ -42,8 +42,8 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
                                   n_param
-        use otr_qn_test_reference, only: test_transport_c_funptr, &
-                                         test_init_hess_c_funptr, operator(/=)
+        use otr_qn_test_reference, only: check_transport_c_funptr, &
+                                         check_init_hess_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
             mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
             mock_extension
@@ -79,12 +79,12 @@ contains
             "function", c_null_ptr)) test_qn_factory_interface = .false.
 
         ! test passed transport function
-        if (.not. test_transport_c_funptr( &
+        if (.not. check_transport_c_funptr( &
             transport_c_funptr, "qn_factory_py_interface", " by given transport "// &
             "function", c_null_ptr)) test_qn_factory_interface = .false.
 
         ! test passed initial Hessian function
-        if (.not. test_init_hess_c_funptr( &
+        if (.not. check_init_hess_c_funptr( &
             init_hess_c_funptr, "qn_factory_py_interface", " by given initial "// &
             "Hessian function", c_null_ptr)) test_qn_factory_interface = .false.
 

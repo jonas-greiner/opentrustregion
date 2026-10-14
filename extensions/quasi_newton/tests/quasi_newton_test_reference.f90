@@ -51,7 +51,7 @@ module otr_qn_test_reference
 
 contains
 
-    function test_transport_funptr(transport_funptr, test_name, message, context) &
+    function check_transport_funptr(transport_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided transport function pointer
@@ -104,10 +104,10 @@ contains
         ! deallocate arrays
         deallocate(geodesic, tangent_vector, expected)
 
-    end function test_transport_funptr
+    end function check_transport_funptr
 
-    function test_transport_c_funptr(transport_c_funptr, test_name, message, &
-                                     context_c) result(test_passed)
+    function check_transport_c_funptr(transport_c_funptr, test_name, message, &
+                                      context_c) result(test_passed)
         !
         ! this function tests a provided transport C function pointer
         !
@@ -163,9 +163,9 @@ contains
         ! deallocate arrays
         deallocate(geodesic, tangent_vector, expected)
 
-    end function test_transport_c_funptr
+    end function check_transport_c_funptr
 
-    function test_init_hess_funptr(init_hess_funptr, test_name, message, context) &
+    function check_init_hess_funptr(init_hess_funptr, test_name, message, context) &
         result(test_passed)
         !
         ! this function tests a provided initial Hessian function pointer
@@ -217,10 +217,10 @@ contains
         ! deallocate arrays
         deallocate(vector, expected)
 
-    end function test_init_hess_funptr
+    end function check_init_hess_funptr
 
-    function test_init_hess_c_funptr(init_hess_c_funptr, test_name, message, &
-                                     context_c) result(test_passed)
+    function check_init_hess_c_funptr(init_hess_c_funptr, test_name, message, &
+                                      context_c) result(test_passed)
         !
         ! this function tests a provided initial Hessian C function pointer
         !
@@ -275,7 +275,7 @@ contains
         ! deallocate arrays
         deallocate(vector, expected)
 
-    end function test_init_hess_c_funptr
+    end function check_init_hess_c_funptr
 
     subroutine get_reference_qn_values(ref_settings_out) bind(C)
         !

@@ -135,7 +135,7 @@ contains
         use opentrustregion, only: update_orbs_type, solver_state_type
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type
         use otr_oao, only: oao_settings_type
-        use otr_common_test_reference, only: test_evaluate_dm_cs_funptr
+        use otr_common_test_reference, only: check_evaluate_dm_cs_funptr
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -171,7 +171,7 @@ contains
                     "matrix evaluating function passed without one."
             end if
         else if (present(settings)) then
-            if (.not. test_evaluate_dm_cs_funptr( &
+            if (.not. check_evaluate_dm_cs_funptr( &
                 evaluate_dm_funptr, "oao_factory_c_wrapper", " by given density "// &
                 "matrix evaluating function", settings%context)) test_passed = .false.
         end if
@@ -198,7 +198,7 @@ contains
         use opentrustregion, only: update_orbs_type, solver_state_type
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type
         use otr_oao, only: oao_settings_type
-        use otr_common_test_reference, only: test_evaluate_dm_os_funptr
+        use otr_common_test_reference, only: check_evaluate_dm_os_funptr
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -234,7 +234,7 @@ contains
                     "matrix evaluating function passed without one."
             end if
         else if (present(settings)) then
-            if (.not. test_evaluate_dm_os_funptr( &
+            if (.not. check_evaluate_dm_os_funptr( &
                 evaluate_dm_funptr, "oao_factory_c_wrapper", " by given density "// &
                 "matrix evaluating function", settings%context)) test_passed = .false.
         end if

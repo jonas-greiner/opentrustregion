@@ -46,16 +46,16 @@ contains
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_arh, only: arh_settings_type, arh_mo_type, default_arh_settings, &
-                           evaluate_dm_cs_type, evaluate_dm_os_type, arh_n_micro
+                           arh_evaluate_dm_cs_type, arh_evaluate_dm_os_type, arh_n_micro
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               orbital_basis_type
-        use otr_arh_test_reference, only: test_evaluate_dm_cs_funptr, &
-                                          test_evaluate_dm_os_funptr, operator(/=)
+        use otr_arh_test_reference, only: check_arh_evaluate_dm_cs_funptr, &
+                                          check_arh_evaluate_dm_os_funptr, operator(/=)
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
 
         type(extension_level_type), intent(in), pointer :: level
-        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs_funptr
-        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os_funptr
+        procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs_funptr
+        procedure(arh_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os_funptr
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings
@@ -91,13 +91,13 @@ contains
         end if
         if (n_particle == 1) then
             if (associated(evaluate_dm_os_funptr) .or. &
-                .not. test_evaluate_dm_cs_funptr( &
+                .not. check_arh_evaluate_dm_cs_funptr( &
                     evaluate_dm_cs_funptr, "arh_factory_c_wrapper", &
                     " by given closed-shell density matrix evaluating function", &
                     settings%context)) test_passed = .false.
         else if (n_particle == 2) then
             if (associated(evaluate_dm_cs_funptr) .or. &
-                .not. test_evaluate_dm_os_funptr( &
+                .not. check_arh_evaluate_dm_os_funptr( &
                     evaluate_dm_os_funptr, "arh_factory_c_wrapper", &
                     " by given open-shell density matrix evaluating function", &
                     settings%context)) test_passed = .false.

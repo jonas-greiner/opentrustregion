@@ -9,7 +9,7 @@ module otr_arh_c_interface
     use opentrustregion, only: ip, rp, kw_len, obj_func_type, update_orbs_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type
     use otr_arh, only: standard_arh_factory_common => arh_factory_common, &
-                       evaluate_dm_os_type, evaluate_dm_cs_type
+                       arh_evaluate_dm_os_type, arh_evaluate_dm_cs_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_associated, c_char, c_null_funptr, &
                                            c_null_ptr
@@ -18,8 +18,8 @@ module otr_arh_c_interface
 
     ! C-interoperable interfaces for the callback functions
     abstract interface
-        function evaluate_dm_c_type(dm_ao_c, energy_c, fock_c, v_coulomb_c, &
-                                    v_exchange_c, v_nonlinear_c, context_c) &
+        function arh_evaluate_dm_c_type(dm_ao_c, energy_c, fock_c, v_coulomb_c, &
+                                        v_exchange_c, v_nonlinear_c, context_c) &
             result(error_c) bind(C)
             import :: c_rp, c_ip, c_ptr
 
@@ -29,7 +29,7 @@ module otr_arh_c_interface
                                                  v_exchange_c(*), v_nonlinear_c(*)
             type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
-        end function evaluate_dm_c_type
+        end function arh_evaluate_dm_c_type
     end interface
 
     ! bundle of the C callback functions of ARH, which extends that of the core by the
@@ -37,7 +37,7 @@ module otr_arh_c_interface
     ! settings outlive the factory call, and reached through the context of the
     ! settings
     type, extends(c_callbacks_type) :: arh_c_callbacks_type
-        procedure(evaluate_dm_c_type), pointer, nopass :: evaluate_dm => null()
+        procedure(arh_evaluate_dm_c_type), pointer, nopass :: evaluate_dm => null()
     end type
 
     ! derived type for ARH settings
@@ -53,10 +53,10 @@ module otr_arh_c_interface
         standard_arh_factory_common
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_f_wrapper_ptr => &
-        evaluate_dm_os_f_wrapper
-    procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_f_wrapper_ptr => &
-        evaluate_dm_cs_f_wrapper
+    procedure(arh_evaluate_dm_os_type), pointer :: arh_evaluate_dm_os_f_wrapper_ptr => &
+        arh_evaluate_dm_os_f_wrapper
+    procedure(arh_evaluate_dm_cs_type), pointer :: arh_evaluate_dm_cs_f_wrapper_ptr => &
+        arh_evaluate_dm_cs_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -96,8 +96,8 @@ contains
         type(arh_settings_type_c), intent(in), optional :: settings_c
         integer(c_ip) :: error_c
 
-        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
-        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
+        procedure(arh_evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         type(arh_settings_type) :: settings
@@ -174,9 +174,9 @@ contains
             evaluate_dm_cs_funptr => null()
             evaluate_dm_os_funptr => null()
             if (n_particle == 1) then
-                evaluate_dm_cs_funptr => evaluate_dm_cs_f_wrapper
+                evaluate_dm_cs_funptr => arh_evaluate_dm_cs_f_wrapper
             else
-                evaluate_dm_os_funptr => evaluate_dm_os_f_wrapper
+                evaluate_dm_os_funptr => arh_evaluate_dm_os_f_wrapper
             end if
             call arh_factory_common(orbitals_level, evaluate_dm_cs_funptr, &
                                     evaluate_dm_os_funptr, update_orbs_arh_funptr, &
@@ -203,8 +203,8 @@ contains
 
     end function arh_factory_c_wrapper
 
-    subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
-                                        v_nonlinear, error, context)
+    subroutine arh_evaluate_dm_cs_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
+                                            v_nonlinear, error, context)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the closed-shell case
@@ -230,13 +230,13 @@ contains
         if (present(v_nonlinear)) &
             v_nonlinear_3d(1:size(v_nonlinear, 1), 1:size(v_nonlinear, 2), 1:1) => &
             v_nonlinear
-        call evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, v_coulomb_3d, &
-                                      v_exchange_3d, v_nonlinear_3d, error, context)
+        call arh_evaluate_dm_os_f_wrapper(dm_3d, energy, fock_3d, v_coulomb_3d, &
+                                          v_exchange_3d, v_nonlinear_3d, error, context)
 
-    end subroutine evaluate_dm_cs_f_wrapper
+    end subroutine arh_evaluate_dm_cs_f_wrapper
 
-    subroutine evaluate_dm_os_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
-                                        v_nonlinear, error, context)
+    subroutine arh_evaluate_dm_os_f_wrapper(dm, energy, fock, v_coulomb, v_exchange, &
+                                            v_nonlinear, error, context)
         !
         ! this subroutine wraps the density matrix evaluating subroutine to convert
         ! Fortran variables to C variables for the open-shell case, finding the C
@@ -308,7 +308,7 @@ contains
             end if
         end select
 
-    end subroutine evaluate_dm_os_f_wrapper
+    end subroutine arh_evaluate_dm_os_f_wrapper
 
     subroutine init_arh_settings_c(settings_c) bind(C, name="init_arh_settings")
         !

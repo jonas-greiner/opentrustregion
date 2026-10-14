@@ -45,7 +45,7 @@ contains
                           sr1_updating_type, default_qn_settings
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
                                   n_param_ref => n_param
-        use otr_qn_test_reference, only: test_transport_funptr, test_init_hess_funptr
+        use otr_qn_test_reference, only: check_transport_funptr, check_init_hess_funptr
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
 
         integer(ip), intent(in) :: n_param
@@ -84,14 +84,14 @@ contains
                                         solver_settings%context)) test_passed = .false.
 
         ! test passed transport function
-        if (.not. test_transport_funptr(transport_funptr, "qn_factory_c_wrapper", &
-                                        " by given transport function", &
-                                        settings%context)) test_passed = .false.
+        if (.not. check_transport_funptr(transport_funptr, "qn_factory_c_wrapper", &
+                                         " by given transport function", &
+                                         settings%context)) test_passed = .false.
 
         ! test passed initial Hessian function
-        if (.not. test_init_hess_funptr(init_hess_funptr, "qn_factory_c_wrapper", &
-                                        " by given initial Hessian function", &
-                                        settings%context)) test_passed = .false.
+        if (.not. check_init_hess_funptr(init_hess_funptr, "qn_factory_c_wrapper", &
+                                         " by given initial Hessian function", &
+                                         settings%context)) test_passed = .false.
 
         ! the C wrapper always passes settings, since their context points at the
         ! bundle of the host's callback functions, which the checks below read

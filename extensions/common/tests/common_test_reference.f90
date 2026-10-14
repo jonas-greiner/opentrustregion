@@ -58,8 +58,8 @@ module otr_common_test_reference
 
 contains
 
-    function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
-                                        context) result(test_passed)
+    function check_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
+                                         context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer for
         ! the closed-shell case for every combination of requested outputs
@@ -136,16 +136,16 @@ contains
 
             ! test returned response function
             if (btest(request, 1)) then
-                if (.not. test_get_response_cs_funptr( &
+                if (.not. check_get_response_cs_funptr( &
                     get_response_funptr, test_name, " by response function returned"// &
                     message//requested, context)) test_passed = .false.
             end if
         end do
 
-    end function test_evaluate_dm_cs_funptr
+    end function check_evaluate_dm_cs_funptr
 
-    function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message, &
-                                        context) result(test_passed)
+    function check_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message, &
+                                         context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer for
         ! the open-shell case for every combination of requested outputs
@@ -222,16 +222,16 @@ contains
 
             ! test returned response function
             if (btest(request, 1)) then
-                if (.not. test_get_response_os_funptr( &
+                if (.not. check_get_response_os_funptr( &
                     get_response_funptr, test_name, " by response function returned"// &
                     message//requested, context)) test_passed = .false.
             end if
         end do
 
-    end function test_evaluate_dm_os_funptr
+    end function check_evaluate_dm_os_funptr
 
-    function test_evaluate_dm_c_funptr(evaluate_dm_c_funptr, n_particle, test_name, &
-                                       message, context_c) result(test_passed)
+    function check_evaluate_dm_c_funptr(evaluate_dm_c_funptr, n_particle, test_name, &
+                                        message, context_c) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating C function pointer
         ! for the closed- (n_particle = 1) or open-shell (n_particle = 2) case for every
@@ -318,17 +318,17 @@ contains
 
             ! test returned response function
             if (btest(request, 1)) then
-                if (.not. test_get_response_c_funptr( &
+                if (.not. check_get_response_c_funptr( &
                     get_response_c_funptr, n_particle, test_name, &
                     " by response function returned"//message//requested, context_c)) &
                     test_passed = .false.
             end if
         end do
 
-    end function test_evaluate_dm_c_funptr
+    end function check_evaluate_dm_c_funptr
 
-    function test_get_response_cs_funptr(get_response_funptr, test_name, message, &
-                                         context) result(test_passed)
+    function check_get_response_cs_funptr(get_response_funptr, test_name, message, &
+                                          context) result(test_passed)
         !
         ! this function tests a provided response function pointer for the closed-shell
         ! case
@@ -381,10 +381,10 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_cs_funptr
+    end function check_get_response_cs_funptr
 
-    function test_get_response_os_funptr(get_response_funptr, test_name, message, &
-                                         context) result(test_passed)
+    function check_get_response_os_funptr(get_response_funptr, test_name, message, &
+                                          context) result(test_passed)
         !
         ! this function tests a provided response function pointer for the open-shell
         ! case
@@ -437,10 +437,10 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_os_funptr
+    end function check_get_response_os_funptr
 
-    function test_get_response_c_funptr(get_response_c_funptr, n_particle, test_name, &
-                                        message, context_c) result(test_passed)
+    function check_get_response_c_funptr(get_response_c_funptr, n_particle, test_name, &
+                                         message, context_c) result(test_passed)
         !
         ! this function tests a provided response C function pointer for the closed-
         ! (n_particle = 1) or open-shell (n_particle = 2) case
@@ -502,7 +502,7 @@ contains
         ! deallocate arrays
         deallocate(dm_ao, response)
 
-    end function test_get_response_c_funptr
+    end function check_get_response_c_funptr
 
     function request_label(outputs, request) result(label)
         !

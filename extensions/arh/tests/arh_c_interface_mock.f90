@@ -42,7 +42,7 @@ contains
         use otr_arh, only: arh_n_micro
         use otr_arh_c_interface, only: arh_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
-        use otr_arh_test_reference, only: test_evaluate_dm_c_funptr, operator(/=)
+        use otr_arh_test_reference, only: check_arh_evaluate_dm_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
             mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
             mock_extension
@@ -60,7 +60,7 @@ contains
 
         ! test passed density matrix evaluating function for the number of particles of
         ! the orbitals
-        if (.not. test_evaluate_dm_c_funptr( &
+        if (.not. check_arh_evaluate_dm_c_funptr( &
             evaluate_dm_c_funptr, int(arh_n_particle, kind=ip), &
             "arh_factory_py_interface", " by given density matrix evaluating "// &
             "function with Coulomb, exact-exchange and non-linear potential "// &

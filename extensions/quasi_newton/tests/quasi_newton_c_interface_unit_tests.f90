@@ -305,7 +305,7 @@ contains
         !
         use otr_qn, only: transport_type
         use otr_qn_c_interface, only: qn_c_callbacks_type, transport_f_wrapper
-        use otr_qn_test_reference, only: test_transport_funptr
+        use otr_qn_test_reference, only: check_transport_funptr
         use test_reference, only: arm_host_context_c, host_context_reached
 
         type(qn_c_callbacks_type), target :: callbacks
@@ -326,8 +326,8 @@ contains
         transport_funptr => transport_f_wrapper
 
         ! test transport Fortran wrapper
-        if (.not. test_transport_funptr(transport_funptr, "transport_f_wrapper", "", &
-                                        context)) test_transport_f_wrapper = .false.
+        if (.not. check_transport_funptr(transport_funptr, "transport_f_wrapper", "", &
+                                         context)) test_transport_f_wrapper = .false.
 
         ! check that the wrapper handed the host context to the C function
         if (.not. host_context_reached("transport_f_wrapper")) &
@@ -352,7 +352,7 @@ contains
         !
         use otr_qn, only: init_hess_type
         use otr_qn_c_interface, only: qn_c_callbacks_type, init_hess_f_wrapper
-        use otr_qn_test_reference, only: test_init_hess_funptr
+        use otr_qn_test_reference, only: check_init_hess_funptr
         use test_reference, only: arm_host_context_c, host_context_reached
 
         type(qn_c_callbacks_type), target :: callbacks
@@ -373,8 +373,8 @@ contains
         init_hess_funptr => init_hess_f_wrapper
 
         ! test initial Hessian Fortran wrapper
-        if (.not. test_init_hess_funptr(init_hess_funptr, "init_hess_f_wrapper", "", &
-                                        context)) test_init_hess_f_wrapper = .false.
+        if (.not. check_init_hess_funptr(init_hess_funptr, "init_hess_f_wrapper", "", &
+                                         context)) test_init_hess_f_wrapper = .false.
 
         ! check that the wrapper handed the host context to the C function
         if (.not. host_context_reached("init_hess_f_wrapper")) &

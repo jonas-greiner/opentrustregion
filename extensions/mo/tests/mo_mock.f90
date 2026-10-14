@@ -146,7 +146,7 @@ contains
         use opentrustregion, only: update_orbs_type, solver_state_type
         use otr_mo, only: mo_settings_type
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type
-        use otr_common_test_reference, only: test_evaluate_dm_cs_funptr, &
+        use otr_common_test_reference, only: check_evaluate_dm_cs_funptr, &
                                              n_ao_ref => n_ao, n_occ_ref => n_occ
         use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern, &
                                          case_irreps, case_names
@@ -202,7 +202,7 @@ contains
                     "evaluating function passed without one."
             end if
         else if (present(settings)) then
-            if (.not. test_evaluate_dm_cs_funptr( &
+            if (.not. check_evaluate_dm_cs_funptr( &
                 evaluate_dm_funptr, "mo_factory_c_wrapper", " by given density "// &
                 "matrix evaluating function", settings%context)) test_passed = .false.
         end if
@@ -245,7 +245,7 @@ contains
         use opentrustregion, only: update_orbs_type, solver_state_type
         use otr_mo, only: mo_settings_type
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type
-        use otr_common_test_reference, only: test_evaluate_dm_os_funptr, &
+        use otr_common_test_reference, only: check_evaluate_dm_os_funptr, &
                                              n_ao_ref => n_ao, n_occ_ref => n_occ
         use otr_mo_test_reference, only: n_mo_ref => n_mo, mo_coeff_pattern, &
                                          case_irreps, case_names
@@ -301,7 +301,7 @@ contains
                     "evaluating function passed without one."
             end if
         else if (present(settings)) then
-            if (.not. test_evaluate_dm_os_funptr( &
+            if (.not. check_evaluate_dm_os_funptr( &
                 evaluate_dm_funptr, "mo_factory_c_wrapper", " by given density "// &
                 "matrix evaluating function", settings%context)) test_passed = .false.
         end if

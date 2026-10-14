@@ -1047,8 +1047,7 @@ contains
             level_context, identity_matrix, generate_random_density_matrix, &
             generate_random_symm_matrix, mock_fock_factor, mock_requests, &
             mock_get_response_cs, mock_get_response_os, mock_evaluate_dm_cs, &
-            mock_evaluate_dm_os, mock_evaluate_dm_failing_cs, &
-            mock_evaluate_dm_failing_os
+            mock_evaluate_dm_os
         use otr_oao, only: oao_type
         use otr_common, only: hess_x_callback
         use opentrustregion, only: hess_x_type
@@ -1217,11 +1216,7 @@ contains
             ! call routine with an orbital rotation whose evaluation fails and
             ! determine if the error is passed on and the rotated density is marked as
             ! not evaluated
-            if (n_particle == 1) then
-                oao%evaluate_dm_cs => mock_evaluate_dm_failing_cs
-            else
-                oao%evaluate_dm_os => mock_evaluate_dm_failing_os
-            end if
+            context%mock_error = 1
             kappa = 0.1_rp
             call oao%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                  level_context(oao, 1_ip))
@@ -1237,11 +1232,7 @@ contains
                     " case."
                 test_update_orbs_oao = .false.
             end if
-            if (n_particle == 1) then
-                oao%evaluate_dm_cs => mock_evaluate_dm_cs
-            else
-                oao%evaluate_dm_os => mock_evaluate_dm_os
-            end if
+            context%mock_error = 0
 
             ! call routine with an orbital rotation, keeping the density matrix in the
             ! OAO basis it starts from, and determine if the density is moved,

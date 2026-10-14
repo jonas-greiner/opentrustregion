@@ -63,18 +63,18 @@ module otr_arh_test_reference
 
 contains
 
-    function test_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
-                                        context) result(test_passed)
+    function check_arh_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
+                                             context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer
         ! with Coulomb, exact-exchange and non-linear potential contributions for the
         ! closed-shell case for every combination of requested outputs
         !
-        use otr_arh, only: evaluate_dm_cs_type
+        use otr_arh, only: arh_evaluate_dm_cs_type
         use otr_common_test_reference, only: n_ao, request_label, capitalized
         use test_reference, only: tol
 
-        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
+        procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
         class(*), intent(in), pointer :: context
         logical :: test_passed
@@ -145,21 +145,21 @@ contains
             end do
         end do
 
-    end function test_evaluate_dm_cs_funptr
+    end function check_arh_evaluate_dm_cs_funptr
 
-    function test_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message, &
-                                        context) result(test_passed)
+    function check_arh_evaluate_dm_os_funptr(evaluate_dm_funptr, test_name, message, &
+                                             context) result(test_passed)
         !
         ! this function tests a provided density matrix evaluating function pointer
         ! with Coulomb, exact-exchange and non-linear potential contributions for the
         ! open-shell case for every combination of requested outputs
         !
-        use otr_arh, only: evaluate_dm_os_type
+        use otr_arh, only: arh_evaluate_dm_os_type
         use otr_common_test_reference, only: n_ao, n_particle, request_label, &
                                              capitalized
         use test_reference, only: tol
 
-        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
+        procedure(arh_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
         class(*), intent(in), pointer :: context
         logical :: test_passed
@@ -231,17 +231,18 @@ contains
             end do
         end do
 
-    end function test_evaluate_dm_os_funptr
+    end function check_arh_evaluate_dm_os_funptr
 
-    function test_evaluate_dm_c_funptr(evaluate_dm_c_funptr, n_particle, test_name, &
-                                       message, context_c) result(test_passed)
+    function check_arh_evaluate_dm_c_funptr(evaluate_dm_c_funptr, n_particle, &
+                                            test_name, message, context_c) &
+        result(test_passed)
         !
         ! this function tests a provided density matrix evaluating C function pointer
         ! with Coulomb, exact-exchange and non-linear potential contributions for the
         ! closed- (n_particle = 1) or open-shell (n_particle = 2) case for every
         ! combination of requested outputs
         !
-        use otr_arh_c_interface, only: evaluate_dm_c_type
+        use otr_arh_c_interface, only: arh_evaluate_dm_c_type
         use otr_common_test_reference, only: n_ao, request_label, capitalized, &
                                              shell_names
         use test_reference, only: tol_c
@@ -252,7 +253,7 @@ contains
         type(c_ptr), intent(in) :: context_c
         logical :: test_passed
 
-        procedure(evaluate_dm_c_type), pointer :: evaluate_dm_funptr
+        procedure(arh_evaluate_dm_c_type), pointer :: evaluate_dm_funptr
         real(c_rp), target :: &
             dm_ao(n_ao, n_ao, n_particle), &
             outputs(n_ao, n_ao, n_particle, size(arh_evaluate_dm_outputs))
@@ -327,7 +328,7 @@ contains
             end do
         end do
 
-    end function test_evaluate_dm_c_funptr
+    end function check_arh_evaluate_dm_c_funptr
 
     subroutine get_reference_arh_values(ref_settings_out) bind(C)
         !

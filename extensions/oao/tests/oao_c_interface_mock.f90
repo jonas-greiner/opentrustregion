@@ -45,7 +45,7 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c
         use otr_oao_test_reference, only: operator(/=)
-        use otr_common_test_reference, only: test_evaluate_dm_c_funptr
+        use otr_common_test_reference, only: check_evaluate_dm_c_funptr
         use otr_common_c_interface_mock, only: &
             mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
             mock_extension
@@ -89,7 +89,7 @@ contains
         ! test it for the number of particles
         oao_evaluate_dm_passed = c_associated(evaluate_dm_c_funptr)
         if (oao_evaluate_dm_passed) then
-            if (.not. test_evaluate_dm_c_funptr( &
+            if (.not. check_evaluate_dm_c_funptr( &
                 evaluate_dm_c_funptr, int(n_particle_c, kind=ip), &
                 "oao_factory_py_interface", " by given density matrix evaluating "// &
                 "function", c_null_ptr)) test_oao_factory_interface = .false.

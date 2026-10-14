@@ -85,7 +85,7 @@ contains
         ! so that non-vanishing differences are produced
         !
         use otr_common_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
-        use test_reference, only: check_host_context
+        use otr_common_mock, only: record_host_call
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
@@ -94,14 +94,21 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context
-        call check_host_context(context)
+        ! check host context and fail with the error code set in it
+        error = record_host_call("evaluate_dm", context)
+        if (error /= 0) then
+            energy = sum(dm)
+            if (present(fock)) fock = 0.0_rp
+            if (present(v_coulomb)) v_coulomb = 0.0_rp
+            if (present(v_exchange)) v_exchange = 0.0_rp
+            if (present(v_nonlinear)) v_nonlinear = 0.0_rp
+            return
+        end if
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
             2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
                               merge(8_ip, 0_ip, present(v_nonlinear)))
 
-        error = 0
         energy = sum(dm)
         if (present(fock)) fock = mock_potential(mock_factor(mock_fock_factor), dm)
         if (present(v_coulomb)) &
@@ -122,7 +129,7 @@ contains
         ! that non-vanishing differences are produced
         !
         use otr_common_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
-        use test_reference, only: check_host_context
+        use otr_common_mock, only: record_host_call
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
@@ -133,14 +140,21 @@ contains
 
         integer(ip) :: i
 
-        ! check host context
-        call check_host_context(context)
+        ! check host context and fail with the error code set in it
+        error = record_host_call("evaluate_dm", context)
+        if (error /= 0) then
+            energy = sum(dm)
+            if (present(fock)) fock = 0.0_rp
+            if (present(v_coulomb)) v_coulomb = 0.0_rp
+            if (present(v_exchange)) v_exchange = 0.0_rp
+            if (present(v_nonlinear)) v_nonlinear = 0.0_rp
+            return
+        end if
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + merge( &
             2_ip, 0_ip, present(v_coulomb)) + merge(4_ip, 0_ip, present(v_exchange)) + &
                               merge(8_ip, 0_ip, present(v_nonlinear)))
 
-        error = 0
         energy = sum(dm)
         do i = 1, size(dm, 3)
             if (present(fock)) fock(:, :, i) = &
@@ -154,50 +168,6 @@ contains
         end do
 
     end subroutine mock_evaluate_dm_os
-
-    subroutine mock_evaluate_dm_failing_cs(dm, energy, fock, v_coulomb, v_exchange, &
-                                           v_nonlinear, error, context)
-        !
-        ! this subroutine is a mock density matrix evaluating function for the
-        ! closed-shell case, which fails
-        !
-        real(rp), intent(in), target, contiguous :: dm(:, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target, contiguous :: &
-            fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        error = 1
-        energy = sum(dm)
-        if (present(fock)) fock = 0.0_rp
-        if (present(v_coulomb)) v_coulomb = 0.0_rp
-        if (present(v_exchange)) v_exchange = 0.0_rp
-        if (present(v_nonlinear)) v_nonlinear = 0.0_rp
-
-    end subroutine mock_evaluate_dm_failing_cs
-
-    subroutine mock_evaluate_dm_failing_os(dm, energy, fock, v_coulomb, v_exchange, &
-                                           v_nonlinear, error, context)
-        !
-        ! this subroutine is a mock density matrix evaluating function for the
-        ! open-shell case, which fails
-        !
-        real(rp), intent(in), target :: dm(:, :, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target :: &
-            fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        error = 1
-        energy = sum(dm)
-        if (present(fock)) fock = 0.0_rp
-        if (present(v_coulomb)) v_coulomb = 0.0_rp
-        if (present(v_exchange)) v_exchange = 0.0_rp
-        if (present(v_nonlinear)) v_nonlinear = 0.0_rp
-
-    end subroutine mock_evaluate_dm_failing_os
 
     subroutine generate_random_fock_partition(n_ao, n_occ, dm_oao, fock_oo, fock_vv)
         !
@@ -963,11 +933,7 @@ contains
             ! determine if the error is passed on and the rotated density is marked as
             ! not evaluated, so that a following call without an orbital rotation
             ! evaluates it without adding it to the history
-            if (n_particle == 1) then
-                arh%evaluate_dm_cs => mock_evaluate_dm_failing_cs
-            else
-                arh%evaluate_dm_os => mock_evaluate_dm_failing_os
-            end if
+            context%mock_error = 1
             call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                  level_context(arh, 1_ip))
             if (error == 0) then
@@ -980,11 +946,7 @@ contains
                     " failed: Evaluation not marked stale after a failed evaluation."
                 passed = .false.
             end if
-            if (n_particle == 1) then
-                arh%evaluate_dm_cs => mock_evaluate_dm_cs
-            else
-                arh%evaluate_dm_os => mock_evaluate_dm_os
-            end if
+            context%mock_error = 0
             n_list = size(arh%dm_list, 4, kind=ip)
             kappa = 0.0_rp
             call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
@@ -1442,7 +1404,7 @@ contains
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_arh, only: arh_factory_cs, arh_type, arh_settings_type, &
-                           evaluate_dm_cs_type
+                           arh_evaluate_dm_cs_type
         use otr_mo, only: mo_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback
@@ -1453,7 +1415,7 @@ contains
         type(solver_state_type), target :: state
         class(extension_type), allocatable, target :: basis
         type(arh_settings_type) :: settings
-        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
+        procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         integer(ip) :: error
@@ -1541,7 +1503,7 @@ contains
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_arh, only: arh_factory_os, arh_type, arh_settings_type, &
-                           evaluate_dm_os_type
+                           arh_evaluate_dm_os_type
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback
@@ -1552,7 +1514,7 @@ contains
         type(solver_state_type), target :: state
         class(extension_type), allocatable, target :: basis
         type(arh_settings_type) :: settings
-        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_funptr
+        procedure(arh_evaluate_dm_os_type), pointer :: evaluate_dm_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         integer(ip) :: error
@@ -1644,7 +1606,7 @@ contains
         use otr_arh, only: arh_factory_common, arh_type, arh_mo_type, arh_oao_type, &
                            arh_settings_type, default_arh_settings, arh_n_micro, &
                            arh_settings_uninitialized_warning_msg, &
-                           evaluate_dm_cs_type, evaluate_dm_os_type
+                           arh_evaluate_dm_cs_type, arh_evaluate_dm_os_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_level_type, &
@@ -1662,8 +1624,8 @@ contains
         type(extension_level_type), pointer :: level
         type(arh_settings_type) :: settings, expected_settings
         type(test_context_type), target :: context
-        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
-        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
+        procedure(arh_evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
         procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         integer(ip) :: i_case, error

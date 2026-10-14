@@ -42,7 +42,8 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
                                   n_param
-        use otr_s_gek_test_reference, only: test_change_reference_c_funptr, operator(/=)
+        use otr_s_gek_test_reference, only: check_change_reference_c_funptr, &
+                                            operator(/=)
         use otr_common_c_interface_mock, only: &
             mock_level_update_orbs, mock_level_obj_func, mock_wire_solver_settings_c, &
             mock_extension
@@ -79,7 +80,7 @@ contains
             "function", c_null_ptr)) test_s_gek_factory_interface = .false.
 
         ! test passed change reference function
-        if (.not. test_change_reference_c_funptr( &
+        if (.not. check_change_reference_c_funptr( &
             change_reference_c_funptr, "s_gek_factory_py_interface", &
             " by given change reference function", c_null_ptr)) &
             test_s_gek_factory_interface = .false.

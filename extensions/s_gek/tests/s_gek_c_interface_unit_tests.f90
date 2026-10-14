@@ -327,7 +327,7 @@ contains
         use otr_s_gek, only: change_reference_type
         use otr_s_gek_c_interface, only: s_gek_c_callbacks_type, &
                                          change_reference_f_wrapper
-        use otr_s_gek_test_reference, only: test_change_reference_funptr
+        use otr_s_gek_test_reference, only: check_change_reference_funptr
         use test_reference, only: arm_host_context_c, host_context_reached
 
         type(s_gek_c_callbacks_type), target :: callbacks
@@ -354,7 +354,7 @@ contains
         test_passed_mock_change_reference = .false.
 
         ! test change reference Fortran wrapper
-        if (.not. test_change_reference_funptr( &
+        if (.not. check_change_reference_funptr( &
             change_reference_funptr, "change_reference_f_wrapper", "", context)) &
             test_change_reference_f_wrapper = .false.
         if (.not. test_passed_mock_change_reference) &

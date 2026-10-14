@@ -108,11 +108,11 @@ fortran_tests = {
         "update_orbs_arh",
     ],
     "arh_c_interface_tests": [
+        "arh_evaluate_dm_cs_f_wrapper",
+        "arh_evaluate_dm_os_f_wrapper",
         "arh_factory_c_wrapper",
         "assign_arh_c_f",
         "assign_arh_f_c",
-        "evaluate_dm_cs_f_wrapper",
-        "evaluate_dm_os_f_wrapper",
         "init_arh_settings_c",
     ],
 }

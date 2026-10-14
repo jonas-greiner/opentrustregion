@@ -85,7 +85,7 @@ contains
                                          orbsym_c_ref => orbsym_c, mo_coeff_pattern, &
                                          operator(/=)
         use otr_common_test_reference, only: n_ao_c_ref => n_ao_c, &
-                                             test_evaluate_dm_c_funptr
+                                             check_evaluate_dm_c_funptr
         use otr_common_c_interface_mock, only: &
             mock_level_obj_func, mock_wire_solver_settings_c, mock_extension
 
@@ -149,7 +149,7 @@ contains
         ! test it for the number of particles
         mo_evaluate_dm_passed = c_associated(evaluate_dm_c_funptr)
         if (mo_evaluate_dm_passed) then
-            if (.not. test_evaluate_dm_c_funptr( &
+            if (.not. check_evaluate_dm_c_funptr( &
                 evaluate_dm_c_funptr, int(n_particle_c, kind=ip), &
                 "mo_factory_py_interface", " by given density matrix evaluating "// &
                 "function", c_null_ptr)) test_mo_factory_interface = .false.

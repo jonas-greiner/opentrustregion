@@ -42,8 +42,8 @@ module otr_arh
     integer(ip), parameter :: arh_n_micro = 300
 
     abstract interface
-        subroutine evaluate_dm_cs_type(dm, energy, fock, v_coulomb, v_exchange, &
-                                       v_nonlinear, error, context)
+        subroutine arh_evaluate_dm_cs_type(dm, energy, fock, v_coulomb, v_exchange, &
+                                           v_nonlinear, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
@@ -52,10 +52,10 @@ module otr_arh
                 fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
             integer(ip), intent(out) :: error
             class(*), intent(in), pointer :: context
-        end subroutine evaluate_dm_cs_type
+        end subroutine arh_evaluate_dm_cs_type
 
-        subroutine evaluate_dm_os_type(dm, energy, fock, v_coulomb, v_exchange, &
-                                       v_nonlinear, error, context)
+        subroutine arh_evaluate_dm_os_type(dm, energy, fock, v_coulomb, v_exchange, &
+                                           v_nonlinear, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
@@ -65,7 +65,7 @@ module otr_arh
                 v_nonlinear(:, :, :)
             integer(ip), intent(out) :: error
             class(*), intent(in), pointer :: context
-        end subroutine evaluate_dm_os_type
+        end subroutine arh_evaluate_dm_os_type
     end interface
 
     ! ARH object, holding the approximate Hessian model built from the history of the
@@ -85,8 +85,8 @@ module otr_arh
             linear_potential_dirs(:, :), nonlinear_potential_dirs(:, :), &
             dm_dirs(:, :), dm_dirs_nonlinear(:, :), expansion_dirs(:, :), &
             projection_dirs(:, :), coupling_matrix(:, :)
-        procedure(evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
-        procedure(evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
+        procedure(arh_evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
+        procedure(arh_evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
     contains
         procedure :: update_orbs => update_orbs_arh
         procedure :: obj_func => obj_func_arh
@@ -211,7 +211,7 @@ contains
         !
         use otr_common, only: extension_level
 
-        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
+        procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings
@@ -219,7 +219,7 @@ contains
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in), optional :: settings
 
-        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os
+        procedure(arh_evaluate_dm_os_type), pointer :: evaluate_dm_os
 
         ! call common setup with the closed-shell density matrix evaluating function on
         ! the level of the orbital basis object, which is the context of the settings
@@ -243,7 +243,7 @@ contains
         !
         use otr_common, only: extension_level
 
-        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
+        procedure(arh_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings
@@ -251,7 +251,7 @@ contains
         integer(ip), intent(out) :: error
         type(arh_settings_type), intent(in), optional :: settings
 
-        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs
+        procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_cs
 
         ! call common setup with the open-shell density matrix evaluating function on
         ! the level of the orbital basis object, which is the context of the settings
@@ -283,8 +283,8 @@ contains
                               obj_func_callback
 
         type(extension_level_type), intent(in), pointer :: level
-        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
+        procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
+        procedure(arh_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
         procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings

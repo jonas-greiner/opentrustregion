@@ -526,7 +526,7 @@ contains
         ! changes between calls so that non-vanishing differences are produced
         !
         use otr_common, only: get_response_cs_type
-        use test_reference, only: check_host_context
+        use otr_common_mock, only: record_host_call
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
@@ -536,13 +536,18 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context
-        call check_host_context(context)
+        ! check host context and fail with the error code set in it
+        error = record_host_call("evaluate_dm", context)
+        if (error /= 0) then
+            energy = sum(dm)
+            if (present(fock)) fock = 0.0_rp
+            if (present(get_response_funptr)) get_response_funptr => null()
+            return
+        end if
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
                               merge(2_ip, 0_ip, present(get_response_funptr)))
 
-        error = 0
         mock_dm_sum = sum(dm)
         energy = sum(dm)
         if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
@@ -558,7 +563,7 @@ contains
         ! between calls so that non-vanishing differences are produced
         !
         use otr_common, only: get_response_os_type
-        use test_reference, only: check_host_context
+        use otr_common_mock, only: record_host_call
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
@@ -568,65 +573,24 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context
-        call check_host_context(context)
+        ! check host context and fail with the error code set in it
+        error = record_host_call("evaluate_dm", context)
+        if (error /= 0) then
+            energy = sum(dm)
+            if (present(fock)) fock = 0.0_rp
+            if (present(get_response_funptr)) get_response_funptr => null()
+            return
+        end if
 
         call record_mock_call(merge(1_ip, 0_ip, present(fock)) + &
                               merge(2_ip, 0_ip, present(get_response_funptr)))
 
-        error = 0
         mock_dm_sum = sum(dm)
         energy = sum(dm)
         if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
         if (present(get_response_funptr)) get_response_funptr => mock_get_response_os
 
     end subroutine mock_evaluate_dm_os
-
-    subroutine mock_evaluate_dm_failing_cs(dm, energy, fock, get_response_funptr, &
-                                           error, context)
-        !
-        ! this subroutine is a mock density matrix evaluating function for the
-        ! closed-shell case, which fails
-        !
-        use otr_common, only: get_response_cs_type
-
-        real(rp), intent(in), target, contiguous :: dm(:, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target, contiguous :: fock(:, :)
-        procedure(get_response_cs_type), intent(out), optional, pointer :: &
-            get_response_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        error = 1
-        energy = sum(dm)
-        if (present(fock)) fock = 0.0_rp
-        if (present(get_response_funptr)) get_response_funptr => null()
-
-    end subroutine mock_evaluate_dm_failing_cs
-
-    subroutine mock_evaluate_dm_failing_os(dm, energy, fock, get_response_funptr, &
-                                           error, context)
-        !
-        ! this subroutine is a mock density matrix evaluating function for the
-        ! open-shell case, which fails
-        !
-        use otr_common, only: get_response_os_type
-
-        real(rp), intent(in), target :: dm(:, :, :)
-        real(rp), intent(out) :: energy
-        real(rp), intent(out), optional, target :: fock(:, :, :)
-        procedure(get_response_os_type), intent(out), optional, pointer :: &
-            get_response_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        error = 1
-        energy = sum(dm)
-        if (present(fock)) fock = 0.0_rp
-        if (present(get_response_funptr)) get_response_funptr => null()
-
-    end subroutine mock_evaluate_dm_failing_os
 
     subroutine mock_basis_update_orbs(self, kappa, func, grad, h_diag, hess_x_funptr, &
                                       error, context)
@@ -2931,7 +2895,7 @@ contains
 
         ! call routine with a failing density matrix evaluating function and determine
         ! if the error is passed on and the response stays marked stale
-        basis%evaluate_dm_os => mock_evaluate_dm_failing_os
+        context%mock_error = 1
         basis%response_stale = .true.
         call basis%refresh_response(error)
         if (error == 0) then

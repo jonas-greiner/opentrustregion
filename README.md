@@ -1122,7 +1122,7 @@ The ARH factory constructs and returns ARH versions of the orbital updating subr
 
   The linear (Coulomb and exact exchange) potential of a spin channel is thereby the Coulomb potential of both spin channels minus its own exact-exchange potential, and the non-linear potential is the rest of the effective potential, i.e. the effective potential minus this linear potential.
 
-  Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` in Python, and the callback must not build it. The arrays have the dimensions of the density matrices of the orbital basis, as for the `evaluate_dm` of the OAO extension; Fortran hosts call `arh_factory_cs` with the closed-shell and `arh_factory_os` with the open-shell interface, which has to be that of the orbitals.
+  Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` in Python, and the callback must not build it. The arrays have the dimensions of the density matrices of the orbital basis, as for the `evaluate_dm` of the OAO extension; Fortran hosts call `arh_factory_cs` with the closed-shell interface `arh_evaluate_dm_cs_type` and `arh_factory_os` with the open-shell interface `arh_evaluate_dm_os_type`, which has to be that of the orbitals.
 - **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_arh`** (function): Returned ARH objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new ARH object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, before the extension of the orbital basis object, which the ARH object uses. Fortran frees both objects together with the settings, which own them, and Python once the settings and the returned functions are gone.
@@ -1143,16 +1143,15 @@ The following Fortran snippet demonstrates how to use the ARH interface in the M
 ```fortran
 use opentrustregion, only: ip, rp, solver_state_type, solver, obj_func_type, &
                            update_orbs_type, hess_x_type
-use otr_common, only: extension_solver_settings_type, evaluate_dm_mo_cs_type => &
-                      evaluate_dm_cs_type
+use otr_common, only: extension_solver_settings_type, evaluate_dm_cs_type
 use otr_mo, only: mo_factory
-use otr_arh, only: arh_factory_cs, arh_settings_type, evaluate_dm_cs_type
+use otr_arh, only: arh_factory_cs, arh_settings_type, arh_evaluate_dm_cs_type
 
 type(extension_solver_settings_type), target :: settings
 type(solver_state_type), target :: state
 type(arh_settings_type) :: arh_settings
-procedure(evaluate_dm_mo_cs_type), pointer :: evaluate_dm_mo_funptr
-procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
+procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_mo_funptr
+procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
 procedure(update_orbs_type), pointer :: update_orbs_mo_funptr, update_orbs_arh_funptr
 procedure(obj_func_type), pointer :: obj_func_mo_funptr, obj_func_arh_funptr
 procedure(hess_x_type), pointer :: hess_x_mo_funptr
