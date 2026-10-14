@@ -48,6 +48,10 @@ module otr_qn
         qn_settings_type(logger=null(), initialized=.true., verbose=0, max_points=10, &
                          hess_update_scheme="sr1")
 
+    ! updating schemes
+    character(len=kw_len), parameter :: hess_update_schemes(2) = &
+        [character(len=kw_len) :: "sr1", "bfgs"]
+
     ! warning for settings that were not initialized
     character(len=*), parameter :: qn_settings_uninitialized_warning_msg = &
         "Quasi-Newton settings were not initialized. All quasi-Newton settings are "// &
@@ -64,10 +68,10 @@ module otr_qn
         procedure(init_hess_type), pointer, nopass :: init_hess => null()
     contains
         procedure :: update_orbs => update_orbs_qn
-        procedure :: init
-        procedure :: add
+        procedure :: init => init_qn
+        procedure :: add => add_qn
         procedure(skip_add_interface), deferred :: skip_add
-        procedure :: clear
+        procedure :: clear => clear_qn
     end type
 
     type, extends(updating_type) :: sr1_updating_type
@@ -106,7 +110,7 @@ contains
         ! callback functions keep receiving the host context, and which reads the state
         ! of the solver from the record the host also passes to the solver
         !
-        use opentrustregion, only: obj_func_type, solver_state_type, verbosity_error, &
+        use opentrustregion, only: obj_func_type, solver_state_type, &
                                    warn_uninitialized_settings
         use otr_common, only: extension_solver_settings_type, update_orbs_callback, &
                               obj_func_callback
@@ -146,16 +150,15 @@ contains
             local_settings = default_qn_settings
         end if
 
+        ! perform sanity check, which also converts the updating scheme to lowercase
+        call qn_sanity_check(local_settings, n_param, error)
+        if (error /= 0) return
+
         ! create the object of the updating scheme
         if (local_settings%hess_update_scheme == "sr1") then
             allocate(sr1_updating_type :: object)
-        else if (local_settings%hess_update_scheme == "bfgs") then
-            allocate(bfgs_updating_type :: object)
         else
-            call local_settings%log("Quasi-Newton updating scheme not implemented.", &
-                                    verbosity_error, .true.)
-            error = 1
-            return
+            allocate(bfgs_updating_type :: object)
         end if
 
         ! initialize the object with the host's transport and initial Hessian functions
@@ -178,6 +181,52 @@ contains
         obj_func_qn_funptr => obj_func_callback
 
     end subroutine qn_factory
+
+    subroutine qn_sanity_check(settings, n_param, error)
+        !
+        ! this subroutine performs a sanity check for quasi-Newton input parameters,
+        ! after converting the updating scheme to lowercase
+        !
+        use opentrustregion, only: verbosity_error, string_to_lowercase
+
+        type(qn_settings_type), intent(inout) :: settings
+        integer(ip), intent(in) :: n_param
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! check that the number of parameters is positive
+        if (n_param < 1) then
+            call settings%log("Number of parameters should be larger than 0.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that the number of stored points is not negative, while zero stores no
+        ! history
+        if (settings%max_points < 0) then
+            call settings%log("Maximum number of points should not be negative.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! convert strings to lowercase
+        settings%hess_update_scheme = string_to_lowercase(settings%hess_update_scheme)
+
+        ! check for character options
+        if (.not. any(settings%hess_update_scheme == hess_update_schemes)) then
+            call settings%log( &
+                "Quasi-Newton updating scheme option unknown. Possible values are "// &
+                """sr1"" (symmetric rank-1 update) and ""bfgs"" "// &
+                "(Broyden-Fletcher-Goldfarb-Shanno update).", verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+    end subroutine qn_sanity_check
 
     recursive subroutine update_orbs_qn(self, kappa, func, grad, h_diag, &
                                         hess_x_funptr, error, context)
@@ -243,7 +292,7 @@ contains
 
     end subroutine init_qn_settings
 
-    subroutine add(self, kappa, grad, error)
+    subroutine add_qn(self, kappa, grad, error)
         !
         ! this subroutine adds a new rotation and gradient to the corresponding lists
         ! and transports the history accordingly
@@ -301,9 +350,9 @@ contains
             deallocate(grad_diff)
         end if
 
-    end subroutine add
+    end subroutine add_qn
 
-    subroutine init(self, n_param, settings)
+    subroutine init_qn(self, n_param, settings)
         !
         ! this subroutine initializes an updating object with the given settings
         !
@@ -324,9 +373,9 @@ contains
         allocate(self%kappa_list(n_param, self%settings%max_points), &
                  self%grad_diff_list(n_param, self%settings%max_points))
 
-    end subroutine init
+    end subroutine init_qn
 
-    subroutine clear(self)
+    subroutine clear_qn(self)
         !
         ! this subroutine deallocates an updating object
         !
@@ -337,7 +386,7 @@ contains
         if (allocated(self%last_grad)) deallocate(self%last_grad)
         self%n_points = 0
 
-    end subroutine clear
+    end subroutine clear_qn
 
     function sr1_skip_add(self, kappa, grad_diff, error) result(skip)
         !

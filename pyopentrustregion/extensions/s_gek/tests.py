@@ -54,7 +54,28 @@ fortran_tests = {
         "init_s_gek_settings_c",
         "s_gek_factory_c_wrapper",
     ],
+    "s_gek_tests": [
+        "add_s_gek",
+        "init_s_gek",
+        "init_s_gek_settings",
+        "s_gek_factory",
+        "s_gek_sanity_check",
+    ],
 }
+
+
+@add_tests
+class SGEKTests(unittest.TestCase):
+    """
+    this class contains unit tests for S-GEK
+    """
+
+    tests = fortran_tests["s_gek_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running unit tests for S-GEK...")
+        return super().setUpClass()
 
 
 @add_tests

@@ -55,7 +55,31 @@ fortran_tests = {
         "qn_factory_c_wrapper",
         "transport_f_wrapper",
     ],
+    "qn_tests": [
+        "add_qn",
+        "hess_x_bfgs",
+        "hess_x_sr1",
+        "init_qn",
+        "init_qn_settings",
+        "qn_factory",
+        "qn_sanity_check",
+        "sr1_skip_add",
+    ],
 }
+
+
+@add_tests
+class QNTests(unittest.TestCase):
+    """
+    this class contains unit tests for quasi-Newton
+    """
+
+    tests = fortran_tests["qn_tests"]
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running unit tests for quasi-Newton...")
+        return super().setUpClass()
 
 
 @add_tests

@@ -1061,9 +1061,10 @@ solver(update_orbs_qn, obj_func_qn, n_param, settings, state)
 #### Optional Settings
 The quasi-Newton factory function can be fine-tuned using the following settings:
 
-- **`hess_update_scheme`** (string): Specifies which quasi-Newton updating scheme to use. Options include:
+- **`hess_update_scheme`** (string): Specifies which quasi-Newton updating scheme to use, in any case. Options include:
   - `"sr1"`: symmetric rank-1 update,
   - `"bfgs"`: Broyden-Fletcher-Goldfarb-Shanno update,
+- **`max_points`** (integer): Maximum number of points the history of steps and gradient differences keeps, at least 0, where 0 keeps none.
 - **`verbose`** (integer): Controls the verbosity of output of the quasi-Newton routines.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport` and `init_hess` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 
@@ -1572,7 +1573,7 @@ solver(update_orbs_s_gek, obj_func_s_gek, n_param, settings, state)
 The S-GEK factory function can be fine-tuned using the following settings:
 
 - **`use_subspace`** (boolean): Specifies whether the surrogate model is constructed in a subspace.
-- **`max_points`** (integer): Controls the number of points for the surrogate model and subspace construction.
+- **`max_points`** (integer): Controls the number of points for the surrogate model and subspace construction, at least 1.
 - **`verbose`** (integer): Controls the verbosity of output of the S-GEK routines.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `change_reference` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
 

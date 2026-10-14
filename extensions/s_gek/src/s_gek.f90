@@ -129,6 +129,10 @@ contains
             local_settings = default_s_gek_settings
         end if
 
+        ! perform sanity check
+        call s_gek_sanity_check(local_settings, n_param, error)
+        if (error /= 0) return
+
         ! create the object and initialize it with the host's change of reference
         ! function
         allocate(s_gek_type :: object)
@@ -150,6 +154,37 @@ contains
         obj_func_s_gek_funptr => obj_func_callback
 
     end subroutine s_gek_factory
+
+    subroutine s_gek_sanity_check(settings, n_param, error)
+        !
+        ! this subroutine performs a sanity check for S-GEK input parameters
+        !
+        use opentrustregion, only: verbosity_error
+
+        type(s_gek_settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: n_param
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! check that the number of parameters is positive
+        if (n_param < 1) then
+            call settings%log("Number of parameters should be larger than 0.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that at least the current point is stored
+        if (settings%max_points < 1) then
+            call settings%log("Maximum number of points should be larger than 0.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+    end subroutine s_gek_sanity_check
 
     recursive subroutine update_orbs_s_gek(self, kappa, func, grad, h_diag, &
                                            hess_x_funptr, error, context)

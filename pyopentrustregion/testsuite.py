@@ -48,6 +48,7 @@ except AttributeError:
 
 try:
     from pyopentrustregion.extensions.quasi_newton.tests import (
+        QNTests,
         QNCInterfaceTests,
         QNPyInterfaceTests,
         QNCSystemTests,
@@ -67,6 +68,7 @@ except AttributeError:
 
 try:
     from pyopentrustregion.extensions.s_gek.tests import (
+        SGEKTests,
         SGEKCInterfaceTests,
         SGEKPyInterfaceTests,
         SGEKCSystemTests,
