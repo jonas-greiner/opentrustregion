@@ -222,8 +222,9 @@ contains
         mo%mo_channels = masked_mo_channels(n_occ, n_mo, irreps)
         mo%n_param = &
             sum([(count(mo%mo_channels(i)%param_mask, kind=ip), i=1, n_particle)])
-        allocate(mo%dm_ao(n_ao, n_ao, n_particle), mo%grad(mo%n_param), &
+        allocate(mo%own_dm_ao(n_ao, n_ao, n_particle), mo%grad(mo%n_param), &
                  mo%h_diag(mo%n_param))
+        mo%dm_ao => mo%own_dm_ao
         do i = 1, n_particle
             mo%dm_ao(:, :, i) = matmul(mo_coeff(:, :n_occ(i), i), &
                                        transpose(mo_coeff(:, :n_occ(i), i)))
@@ -1128,6 +1129,12 @@ contains
                     if (.not. associated(mo%mo_coeff, mo_coeff(:, :, :n_particle))) then
                         write(stderr, *) "test_mo_factory_common failed: MO "// &
                             "coefficients of the caller not taken over "// &
+                            trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
+                    if (.not. associated(mo%dm_ao, mo%own_dm_ao)) then
+                        write(stderr, *) "test_mo_factory_common failed: Density "// &
+                            "matrix not held by the object "// &
                             trim(case_names_factory(i_case))//"."
                         test_mo_factory_common = .false.
                     end if
@@ -2699,38 +2706,6 @@ contains
         deallocate(mo)
 
     end function test_get_extra_trial_vectors_mo
-
-    logical(c_bool) function test_finalize_mo() bind(C)
-        !
-        ! this function tests the subroutine which frees the density matrix the MO
-        ! object allocated
-        !
-        use otr_mo, only: mo_type, finalize_mo
-
-        type(mo_type) :: mo
-
-        ! assume tests pass
-        test_finalize_mo = .true.
-
-        ! call routine for an MO object with an allocated density matrix and determine
-        ! if it is freed
-        allocate(mo%dm_ao(2, 2, 1))
-        call finalize_mo(mo)
-        if (associated(mo%dm_ao)) then
-            write(stderr, *) "test_finalize_mo failed: Density matrix not freed."
-            test_finalize_mo = .false.
-        end if
-
-        ! call routine for an MO object without a density matrix and determine if it is
-        ! left without one
-        call finalize_mo(mo)
-        if (associated(mo%dm_ao)) then
-            write(stderr, *) "test_finalize_mo failed: Density matrix associated "// &
-                "for an object without one."
-            test_finalize_mo = .false.
-        end if
-
-    end function test_finalize_mo
 
     logical(c_bool) function test_rotate_mo_coeff() bind(C)
         !

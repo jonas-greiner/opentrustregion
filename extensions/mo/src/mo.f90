@@ -38,12 +38,12 @@ module otr_mo
                                  occ_eigvals(:), virt_eigvecs(:, :), virt_eigvals(:)
     end type
 
-    ! orbitals parameterized in the MO basis, which allocates its density matrix, which
-    ! its finalizer frees
+    ! orbitals parameterized in the MO basis, which holds its density matrix itself, at
+    ! which the pointer of the orbital basis points
     type, extends(orbital_basis_type) :: mo_type
         integer(ip) :: n_mo
         real(rp), pointer, contiguous :: mo_coeff(:, :, :) => null()
-        real(rp), allocatable :: ao_overlap(:, :)
+        real(rp), allocatable :: ao_overlap(:, :), own_dm_ao(:, :, :)
         type(mo_channel_type), allocatable :: mo_channels(:)
     contains
         procedure :: update_orbs => update_orbs_mo
@@ -56,7 +56,6 @@ module otr_mo
         procedure :: rotate_to_hess_eigenbasis => rotate_to_hess_eigenbasis_mo
         procedure :: rotate_from_hess_eigenbasis => rotate_from_hess_eigenbasis_mo
         procedure :: get_hess_eigval_pairs => get_hess_eigval_pairs_mo
-        final :: finalize_mo
     end type
 
     ! define module procedures for different spin cases
@@ -223,7 +222,7 @@ contains
         end if
 
         ! set up the object, which performs every role but the projection itself, in
-        ! place, since its finalizer frees the density matrix it allocates, for the MO
+        ! place, since its density matrix points at the one it holds, for the MO
         ! coefficients of the caller, which it points to
         allocate(mo_type :: object)
         select type (object)
@@ -265,8 +264,9 @@ contains
             object%ao_overlap = ao_overlap
 
             ! construct the starting density matrix in the AO basis from the occupied
-            ! orbitals
-            allocate(object%dm_ao(n_ao, n_ao, n_particle))
+            ! orbitals in the one the object holds
+            allocate(object%own_dm_ao(n_ao, n_ao, n_particle))
+            object%dm_ao => object%own_dm_ao
             do i = 1, n_particle
                 call dgemm("N", "T", n_ao, n_ao, n_occ(i), 1.0_rp, mo_coeff(:, :, i), &
                            n_ao, mo_coeff(:, :, i), n_ao, 0.0_rp, &
@@ -895,16 +895,6 @@ contains
         call self%fill_extra_trial_vectors(self%get_hess_eigval_pairs(), trial_vectors)
 
     end subroutine get_extra_trial_vectors_mo
-
-    subroutine finalize_mo(self)
-        !
-        ! this subroutine frees the density matrix the MO object allocated
-        !
-        type(mo_type), intent(inout) :: self
-
-        if (associated(self%dm_ao)) deallocate(self%dm_ao)
-
-    end subroutine finalize_mo
 
     subroutine rotate_mo_coeff(kappa, mo_coeff, ao_overlap, mo_channels, rot_mo_coeff, &
                                rot_dm_ao, settings, error)

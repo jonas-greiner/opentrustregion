@@ -55,7 +55,6 @@ fortran_tests = {
         "calculate_grad_h_diag_mo",
         "count_mo_params",
         "diagonalize_per_irrep",
-        "finalize_mo",
         "get_extra_trial_vectors_mo",
         "get_hess_eigval_pairs_mo",
         "hess_x_mo",
