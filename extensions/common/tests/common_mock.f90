@@ -30,7 +30,8 @@ contains
     function record_host_call(name, context) result(error)
         !
         ! this function records the call of a mock host callback function, checks the
-        ! host context it received and returns the error code the test set in it
+        ! host context it received and returns the error code the test set in it, for
+        ! the call the test chose or every call
         !
         use test_reference, only: host_context_type, check_host_context
 
@@ -44,7 +45,9 @@ contains
         if (associated(context)) then
             select type (context)
             class is (host_context_type)
-                error = int(context%mock_error, kind=ip)
+                if (context%failing_call == 0 .or. &
+                    context%n_calls == context%failing_call) &
+                    error = int(context%mock_error, kind=ip)
             end select
         end if
 

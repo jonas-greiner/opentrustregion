@@ -173,8 +173,6 @@ contains
                 write(stderr, *) "test_s_gek_factory failed: Object not owned by "// &
                     "the solver settings "//trim(case_names(i_case))//"."
                 test_s_gek_factory = .false.
-                deallocate(solver_settings)
-                cycle
             end if
             select type (object => level%extension)
             type is (s_gek_type)
@@ -215,18 +213,69 @@ contains
         end do
 
         ! create an object for parameters the sanity check rejects, which has to return
-        ! its error and leave the solver settings untouched
+        ! its error without functions and leave the solver settings untouched
         allocate(solver_settings)
         solver_settings%solver_settings_type = default_solver_settings
         call setup_settings(settings, context)
+        update_orbs_s_gek_funptr => update_orbs_callback
+        obj_func_s_gek_funptr => obj_func_callback
         call s_gek_factory(0_ip, update_orbs_funptr, obj_func_funptr, &
                            change_reference_funptr, update_orbs_s_gek_funptr, &
                            obj_func_s_gek_funptr, solver_settings, state, error, &
                            settings)
-        if (error == 0 .or. associated(solver_settings%context) .or. &
+        if (error /= 1) then
+            write(stderr, *) "test_s_gek_factory failed: Error not returned for "// &
+                "parameters the sanity check rejects."
+            test_s_gek_factory = .false.
+        end if
+        if (associated(update_orbs_s_gek_funptr) .or. &
+            associated(obj_func_s_gek_funptr)) then
+            write(stderr, *) "test_s_gek_factory failed: Functions returned for "// &
+                "parameters the sanity check rejects."
+            test_s_gek_factory = .false.
+        end if
+        if (associated(solver_settings%context) .or. &
             allocated(solver_settings%extensions)) then
-            write(stderr, *) "test_s_gek_factory failed: Error not returned or "// &
-                "solver settings changed for parameters the sanity check rejects."
+            write(stderr, *) "test_s_gek_factory failed: Solver settings changed "// &
+                "for parameters the sanity check rejects."
+            test_s_gek_factory = .false.
+        end if
+        deallocate(solver_settings)
+
+        ! create an object for solver settings a factory wired, given the host's own
+        ! orbital update and objective function instead of those the factory returned,
+        ! which the wiring refuses, so that the factory has to return its error without
+        ! functions and leave the settings wired with the first object only
+        allocate(solver_settings)
+        solver_settings%solver_settings_type = default_solver_settings
+        call setup_settings(settings, context)
+        call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                           change_reference_funptr, update_orbs_s_gek_funptr, &
+                           obj_func_s_gek_funptr, solver_settings, state, error, &
+                           settings)
+        level => wired_level(solver_settings)
+        call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                           change_reference_funptr, update_orbs_s_gek_funptr, &
+                           obj_func_s_gek_funptr, solver_settings, state, error, &
+                           settings)
+        if (error /= 1) then
+            write(stderr, *) "test_s_gek_factory failed: Error not returned for "// &
+                "the host's own functions given with solver settings a factory wired."
+            test_s_gek_factory = .false.
+        end if
+        if (associated(update_orbs_s_gek_funptr) .or. &
+            associated(obj_func_s_gek_funptr)) then
+            write(stderr, *) "test_s_gek_factory failed: Functions returned for "// &
+                "the host's own functions given with solver settings a factory wired."
+            test_s_gek_factory = .false.
+        end if
+        owned = .false.
+        if (associated(level) .and. allocated(solver_settings%extensions)) &
+            owned = size(solver_settings%extensions) == 1 .and. &
+                    associated(wired_level(solver_settings), level)
+        if (.not. owned) then
+            write(stderr, *) "test_s_gek_factory failed: Solver settings a factory "// &
+                "wired changed for the host's own functions."
             test_s_gek_factory = .false.
         end if
         deallocate(solver_settings)
@@ -242,10 +291,20 @@ contains
                            change_reference_funptr, update_orbs_s_gek_funptr, &
                            obj_func_s_gek_funptr, solver_settings, state, error, &
                            settings)
+        if (error /= 0) then
+            write(stderr, *) "test_s_gek_factory failed: Produced error for the "// &
+                "first of two separate solver settings."
+            test_s_gek_factory = .false.
+        end if
         call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                            change_reference_funptr, update_orbs_s_gek_funptr, &
                            obj_func_s_gek_funptr, other_settings, other_state, error, &
                            settings)
+        if (error /= 0) then
+            write(stderr, *) "test_s_gek_factory failed: Produced error for the "// &
+                "second of two separate solver settings."
+            test_s_gek_factory = .false.
+        end if
         level => wired_level(solver_settings)
         other_level => wired_level(other_settings)
         if (.not. (associated(level) .and. associated(other_level))) then
@@ -305,8 +364,8 @@ contains
                 settings%max_points = 0
             end select
             call s_gek_sanity_check(settings, case_n_param, error)
-            if (error == 0) then
-                write(stderr, *) "test_s_gek_sanity_check failed: No error "// &
+            if (error /= 1) then
+                write(stderr, *) "test_s_gek_sanity_check failed: Error not "// &
                     "returned for "//trim(case_names(i_case))//"."
                 test_s_gek_sanity_check = .false.
             end if
@@ -524,46 +583,61 @@ contains
         !
         ! this function tests the subroutine which adds a new point to an S-GEK object,
         ! so far only that it hands the host's change of reference function the host
-        ! context of its settings, while its numerics are left to later tests
+        ! context of its settings and passes on its error, while its numerics are left
+        ! to later tests
         !
         use otr_s_gek, only: s_gek_type, default_s_gek_settings
         use test_reference, only: arm_host_context, host_context, host_context_reached
 
-        type(s_gek_type) :: object
+        type(s_gek_type) :: objects(2)
         real(rp) :: kappa(n_param), grad(n_param), h_diag(n_param)
-        integer(ip) :: i, error
+        integer(ip) :: error, i_case
 
         ! assume tests pass
         test_add_s_gek = .true.
 
-        ! add a first point to an object as after its initialization, without the
-        ! routine that initializes it, for which the routine moves the stored points to
-        ! the new reference
-        object%n_param = n_param
-        object%settings = default_s_gek_settings
-        call arm_host_context(object%settings)
-        object%change_reference => mock_change_reference
-        object%n_points = 0
-        object%n_covariance = 0
-        object%loosen_factor = 1.0_rp
-        allocate(object%h_diag(n_param), object%kappa_list(n_param, 0), &
-                 object%disp_list(n_param, 0), object%obj_func_list(0), &
-                 object%grad_list(n_param, 0), object%local_grad_list(n_param, 0), &
-                 object%y_list(n_param, 0))
-        kappa = [(0.1_rp * i, i=1, n_param)]
-        grad = [(0.3_rp * i - 0.5_rp, i=1, n_param)]
-        h_diag = [(1.0_rp + i, i=1, n_param)]
-        call object%add(kappa, 1.0_rp, grad, h_diag, error)
-        if (error /= 0) then
-            write(stderr, *) "test_add_s_gek failed: Produced error."
-            test_add_s_gek = .false.
-        end if
-        if (host_context%n_calls /= 1) then
-            write(stderr, *) "test_add_s_gek failed: Change of reference function "// &
-                "not called with the host context."
-            test_add_s_gek = .false.
-        end if
-        if (.not. host_context_reached("add_s_gek")) test_add_s_gek = .false.
+        ! add a random first point with a positive Hessian diagonal to objects as after
+        ! their initialization, without the routine that initializes them, for which
+        ! the routine moves the stored points to the new reference, with a change of
+        ! reference function that succeeds and with one that fails, whose error the
+        ! routine has to pass on
+        call random_number(kappa)
+        call random_number(grad)
+        call random_number(h_diag)
+        h_diag = h_diag + 1.0_rp
+        do i_case = 1, size(objects)
+            associate (object => objects(i_case))
+                object%n_param = n_param
+                object%settings = default_s_gek_settings
+                call arm_host_context(object%settings)
+                object%change_reference => mock_change_reference
+                object%n_points = 0
+                object%n_covariance = 0
+                object%loosen_factor = 1.0_rp
+                allocate(object%h_diag(n_param), object%kappa_list(n_param, 0), &
+                         object%disp_list(n_param, 0), object%obj_func_list(0), &
+                         object%grad_list(n_param, 0), &
+                         object%local_grad_list(n_param, 0), object%y_list(n_param, 0))
+                if (i_case == 2) host_context%mock_error = 7
+                call object%add(kappa, 1.0_rp, grad, h_diag, error)
+            end associate
+            if (i_case == 1) then
+                if (error /= 0) then
+                    write(stderr, *) "test_add_s_gek failed: Produced error."
+                    test_add_s_gek = .false.
+                end if
+                if (host_context%n_calls /= 1) then
+                    write(stderr, *) "test_add_s_gek failed: Change of reference "// &
+                        "function not called with the host context."
+                    test_add_s_gek = .false.
+                end if
+                if (.not. host_context_reached("add_s_gek")) test_add_s_gek = .false.
+            else if (error /= 7) then
+                write(stderr, *) "test_add_s_gek failed: Error of the change of "// &
+                    "reference function not passed on."
+                test_add_s_gek = .false.
+            end if
+        end do
 
     end function test_add_s_gek
 

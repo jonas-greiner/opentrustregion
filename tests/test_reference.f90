@@ -93,9 +93,10 @@ module test_reference
     ! host context handed to the callback functions by the tests that exercise it,
     ! together with the bookkeeping those callback functions keep, so that a test can
     ! check the context reached all of them unchanged, and the error code the C mock
-    ! callback functions report
+    ! callback functions report, which the Fortran mocks of the extensions return from
+    ! the call numbered failing_call or, while it is 0, from every call
     type :: host_context_type
-        integer(ip) :: n_calls = 0
+        integer(ip) :: n_calls = 0, failing_call = 0
         logical :: logger_called = .false., stability_warning_logged = .false.
         integer(c_ip) :: mock_error = 0
     end type
@@ -272,6 +273,7 @@ contains
         host_context%logger_called = .false.
         host_context%stability_warning_logged = .false.
         host_context%mock_error = 0
+        host_context%failing_call = 0
         host_context_armed = .true.
         host_context_wrong = .false.
         host_context_missing = .false.

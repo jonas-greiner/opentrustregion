@@ -81,11 +81,6 @@ contains
                                         " by given objective function", &
                                         solver_settings%context)) test_passed = .false.
 
-        ! test passed change reference function
-        if (.not. check_change_reference_funptr( &
-            change_reference_funptr, "s_gek_factory_c_wrapper", " by given change "// &
-            "reference function", settings%context)) test_passed = .false.
-
         ! the C wrapper always passes settings, since their context points at the bundle
         ! of the host's callback functions, which the checks below read
         if (.not. present(settings)) then
@@ -96,6 +91,11 @@ contains
             obj_func_s_gek_funptr => null()
             return
         end if
+
+        ! test passed change reference function
+        if (.not. check_change_reference_funptr( &
+            change_reference_funptr, "s_gek_factory_c_wrapper", " by given change "// &
+            "reference function", settings%context)) test_passed = .false.
 
         ! check if optional logging function is correctly passed
         if (mock_s_gek_factory_defaults) then

@@ -83,16 +83,6 @@ contains
                                         " by given objective function", &
                                         solver_settings%context)) test_passed = .false.
 
-        ! test passed transport function
-        if (.not. check_transport_funptr(transport_funptr, "qn_factory_c_wrapper", &
-                                         " by given transport function", &
-                                         settings%context)) test_passed = .false.
-
-        ! test passed initial Hessian function
-        if (.not. check_init_hess_funptr(init_hess_funptr, "qn_factory_c_wrapper", &
-                                         " by given initial Hessian function", &
-                                         settings%context)) test_passed = .false.
-
         ! the C wrapper always passes settings, since their context points at the
         ! bundle of the host's callback functions, which the checks below read
         if (.not. present(settings)) then
@@ -103,6 +93,16 @@ contains
             obj_func_qn_funptr => null()
             return
         end if
+
+        ! test passed transport function
+        if (.not. check_transport_funptr(transport_funptr, "qn_factory_c_wrapper", &
+                                         " by given transport function", &
+                                         settings%context)) test_passed = .false.
+
+        ! test passed initial Hessian function
+        if (.not. check_init_hess_funptr(init_hess_funptr, "qn_factory_c_wrapper", &
+                                         " by given initial Hessian function", &
+                                         settings%context)) test_passed = .false.
 
         ! check if optional logging function is correctly passed
         if (mock_qn_factory_defaults) then

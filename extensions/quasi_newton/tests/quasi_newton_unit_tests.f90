@@ -79,18 +79,17 @@ contains
 
     subroutine setup_updating_object(object)
         !
-        ! this subroutine sets up an updating object as after two orbital updates,
+        ! this subroutine sets up a new updating object as after three orbital updates,
         ! without the routines under test, with the default settings carrying the armed
-        ! host context, the mock transport and initial Hessian functions, one point in
-        ! its history, whose gradient difference has positive curvature along its step,
-        ! and the last gradient
+        ! host context, the mock transport and initial Hessian functions, two random
+        ! points in its history, whose gradient differences are twice their steps, so
+        ! that they have positive curvature along them, and a random last gradient, so
+        ! that every loop over the history calls the host's functions more than once
         !
         use otr_qn, only: updating_type, default_qn_settings
         use test_reference, only: arm_host_context
 
-        class(updating_type), intent(inout) :: object
-
-        integer(ip) :: i
+        class(updating_type), intent(out) :: object
 
         object%n_param = n_param
         object%settings = default_qn_settings
@@ -98,13 +97,14 @@ contains
         object%transport => mock_transport
         object%init_hess => mock_init_hess
         allocate(object%kappa_list(n_param, object%settings%max_points), &
-                 object%grad_diff_list(n_param, object%settings%max_points))
+                 object%grad_diff_list(n_param, object%settings%max_points), &
+                 object%last_grad(n_param))
         object%kappa_list = 0.0_rp
         object%grad_diff_list = 0.0_rp
-        object%n_points = 1
-        object%kappa_list(:, 1) = [(0.1_rp * i, i=1, n_param)]
-        object%grad_diff_list(:, 1) = 2.0_rp * object%kappa_list(:, 1)
-        object%last_grad = [(0.2_rp * i - 0.3_rp, i=1, n_param)]
+        object%n_points = 2
+        call random_number(object%kappa_list(:, :2))
+        object%grad_diff_list(:, :2) = 2.0_rp * object%kappa_list(:, :2)
+        call random_number(object%last_grad)
 
     end subroutine setup_updating_object
 
@@ -223,8 +223,6 @@ contains
                 write(stderr, *) "test_qn_factory failed: Object not owned by the "// &
                     "solver settings "//trim(case_names(i_case))//"."
                 test_qn_factory = .false.
-                deallocate(solver_settings)
-                cycle
             end if
             select type (object => level%extension)
             type is (sr1_updating_type)
@@ -274,17 +272,64 @@ contains
         end do
 
         ! create an object for parameters the sanity check rejects, which has to return
-        ! its error and leave the solver settings untouched
+        ! its error without functions and leave the solver settings untouched
         allocate(solver_settings)
         solver_settings%solver_settings_type = default_solver_settings
         call setup_settings(settings, context)
+        update_orbs_qn_funptr => update_orbs_callback
+        obj_func_qn_funptr => obj_func_callback
         call qn_factory(0_ip, update_orbs_funptr, obj_func_funptr, transport_funptr, &
                         init_hess_funptr, update_orbs_qn_funptr, obj_func_qn_funptr, &
                         solver_settings, state, error, settings)
-        if (error == 0 .or. associated(solver_settings%context) .or. &
+        if (error /= 1) then
+            write(stderr, *) "test_qn_factory failed: Error not returned for "// &
+                "parameters the sanity check rejects."
+            test_qn_factory = .false.
+        end if
+        if (associated(update_orbs_qn_funptr) .or. associated(obj_func_qn_funptr)) then
+            write(stderr, *) "test_qn_factory failed: Functions returned for "// &
+                "parameters the sanity check rejects."
+            test_qn_factory = .false.
+        end if
+        if (associated(solver_settings%context) .or. &
             allocated(solver_settings%extensions)) then
-            write(stderr, *) "test_qn_factory failed: Error not returned or solver "// &
-                "settings changed for parameters the sanity check rejects."
+            write(stderr, *) "test_qn_factory failed: Solver settings changed for "// &
+                "parameters the sanity check rejects."
+            test_qn_factory = .false.
+        end if
+        deallocate(solver_settings)
+
+        ! create an object for solver settings a factory wired, given the host's own
+        ! orbital update and objective function instead of those the factory returned,
+        ! which the wiring refuses, so that the factory has to return its error without
+        ! functions and leave the settings wired with the first object only
+        allocate(solver_settings)
+        solver_settings%solver_settings_type = default_solver_settings
+        call setup_settings(settings, context)
+        call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                        transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
+                        obj_func_qn_funptr, solver_settings, state, error, settings)
+        level => wired_level(solver_settings)
+        call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                        transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
+                        obj_func_qn_funptr, solver_settings, state, error, settings)
+        if (error /= 1) then
+            write(stderr, *) "test_qn_factory failed: Error not returned for the "// &
+                "host's own functions given with solver settings a factory wired."
+            test_qn_factory = .false.
+        end if
+        if (associated(update_orbs_qn_funptr) .or. associated(obj_func_qn_funptr)) then
+            write(stderr, *) "test_qn_factory failed: Functions returned for the "// &
+                "host's own functions given with solver settings a factory wired."
+            test_qn_factory = .false.
+        end if
+        owned = .false.
+        if (associated(level) .and. allocated(solver_settings%extensions)) &
+            owned = size(solver_settings%extensions) == 1 .and. &
+                    associated(wired_level(solver_settings), level)
+        if (.not. owned) then
+            write(stderr, *) "test_qn_factory failed: Solver settings a factory "// &
+                "wired changed for the host's own functions."
             test_qn_factory = .false.
         end if
         deallocate(solver_settings)
@@ -299,10 +344,20 @@ contains
         call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                         transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
                         obj_func_qn_funptr, solver_settings, state, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_qn_factory failed: Produced error for the first "// &
+                "of two separate solver settings."
+            test_qn_factory = .false.
+        end if
         call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                         transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
                         obj_func_qn_funptr, other_settings, other_state, error, &
                         settings)
+        if (error /= 0) then
+            write(stderr, *) "test_qn_factory failed: Produced error for the "// &
+                "second of two separate solver settings."
+            test_qn_factory = .false.
+        end if
         level => wired_level(solver_settings)
         other_level => wired_level(other_settings)
         if (.not. (associated(level) .and. associated(other_level))) then
@@ -369,8 +424,8 @@ contains
                 settings%hess_update_scheme = "dfp"
             end select
             call qn_sanity_check(settings, case_n_param, error)
-            if (error == 0) then
-                write(stderr, *) "test_qn_sanity_check failed: No error returned "// &
+            if (error /= 1) then
+                write(stderr, *) "test_qn_sanity_check failed: Error not returned "// &
                     "for "//trim(case_names(i_case))//"."
                 test_qn_sanity_check = .false.
             end if
@@ -574,36 +629,54 @@ contains
         !
         ! this function tests the subroutine which adds a new point to the history of a
         ! quasi-Newton object, so far only that it hands every call of the host's
-        ! transport function the host context of its settings, while its numerics are
-        ! left to later tests
+        ! transport function the host context of its settings and passes on the error
+        ! of every call, while its numerics are left to later tests
         !
         use otr_qn, only: bfgs_updating_type
         use test_reference, only: host_context, host_context_reached
 
         type(bfgs_updating_type) :: object
         real(rp) :: kappa(n_param), grad(n_param)
-        integer(ip) :: i, error
+        integer(ip) :: error, n_calls, i_call
+        character(len=8) :: call_number
 
         ! assume tests pass
         test_add_qn = .true.
 
-        ! add a point to an object with a point in its history and a last gradient, for
-        ! which the routine transports both history arrays and the last gradient, of
-        ! the scheme whose skipping criterion calls no host's function
+        ! add a point to an object with two points in its history and a last gradient,
+        ! for which the routine transports both history arrays of each point and the
+        ! last gradient, of the scheme whose skipping criterion calls no host's
+        ! function
         call setup_updating_object(object)
-        kappa = [(0.05_rp * i, i=1, n_param)]
-        grad = [(0.4_rp * i, i=1, n_param)]
+        call random_number(kappa)
+        call random_number(grad)
         call object%add(kappa, grad, error)
         if (error /= 0) then
             write(stderr, *) "test_add_qn failed: Produced error."
             test_add_qn = .false.
         end if
-        if (host_context%n_calls /= 3) then
+        n_calls = host_context%n_calls
+        if (n_calls /= 5) then
             write(stderr, *) "test_add_qn failed: Transport function not called "// &
                 "with the host context at every call site."
             test_add_qn = .false.
         end if
         if (.not. host_context_reached("add_qn")) test_add_qn = .false.
+
+        ! let every call of the transport function fail in turn, whose error the
+        ! routine has to pass on
+        do i_call = 1, n_calls
+            call setup_updating_object(object)
+            host_context%failing_call = i_call
+            host_context%mock_error = 7
+            call object%add(kappa, grad, error)
+            if (error /= 7) then
+                write(call_number, '(I0)') i_call
+                write(stderr, *) "test_add_qn failed: Error of call "// &
+                    trim(call_number)//" of the transport function not passed on."
+                test_add_qn = .false.
+            end if
+        end do
 
     end function test_add_qn
 
@@ -611,8 +684,8 @@ contains
         !
         ! this function tests the function which decides whether the SR1 updating
         ! scheme skips a new point, so far only that it hands the host's initial
-        ! Hessian function the host context of its settings, while its numerics are
-        ! left to later tests
+        ! Hessian function the host context of its settings and passes on the error of
+        ! every call, while its numerics are left to later tests
         !
         use otr_qn, only: sr1_updating_type
         use test_reference, only: host_context, host_context_reached
@@ -620,26 +693,43 @@ contains
         type(sr1_updating_type) :: object
         real(rp) :: kappa(n_param), grad_diff(n_param)
         logical :: skip
-        integer(ip) :: i, error
+        integer(ip) :: error, n_calls, i_call
+        character(len=8) :: call_number
 
         ! assume tests pass
         test_sr1_skip_add = .true.
 
         ! decide on a new point
         call setup_updating_object(object)
-        kappa = [(0.05_rp * i, i=1, n_param)]
+        call random_number(kappa)
         grad_diff = 3.0_rp * kappa
         skip = object%skip_add(kappa, grad_diff, error)
         if (error /= 0) then
             write(stderr, *) "test_sr1_skip_add failed: Produced error."
             test_sr1_skip_add = .false.
         end if
-        if (host_context%n_calls /= 1) then
+        n_calls = host_context%n_calls
+        if (n_calls /= 1) then
             write(stderr, *) "test_sr1_skip_add failed: Initial Hessian function "// &
                 "not called with the host context."
             test_sr1_skip_add = .false.
         end if
         if (.not. host_context_reached("sr1_skip_add")) test_sr1_skip_add = .false.
+
+        ! let every call of the initial Hessian function fail in turn, whose error the
+        ! routine has to pass on
+        do i_call = 1, n_calls
+            call setup_updating_object(object)
+            host_context%failing_call = i_call
+            host_context%mock_error = 7
+            skip = object%skip_add(kappa, grad_diff, error)
+            if (error /= 7) then
+                write(call_number, '(I0)') i_call
+                write(stderr, *) "test_sr1_skip_add failed: Error of call "// &
+                    trim(call_number)//" of the initial Hessian function not passed on."
+                test_sr1_skip_add = .false.
+            end if
+        end do
 
     end function test_sr1_skip_add
 
@@ -647,8 +737,8 @@ contains
         !
         ! this function tests the Hessian linear transformation of the SR1 updating
         ! scheme, so far only that it hands every call of the host's initial Hessian
-        ! function the host context of its settings, while its numerics are left to
-        ! later tests
+        ! function the host context of its settings and passes on the error of every
+        ! call, while its numerics are left to later tests
         !
         use otr_common_unit_tests, only: level_context
         use otr_qn, only: sr1_updating_type
@@ -656,27 +746,44 @@ contains
 
         type(sr1_updating_type), target :: object
         real(rp) :: x(n_param), hess_x(n_param)
-        integer(ip) :: error
+        integer(ip) :: error, n_calls, i_call
+        character(len=8) :: call_number
 
         ! assume tests pass
         test_hess_x_sr1 = .true.
 
-        ! apply the transformation of an object with a point in its history, for which
-        ! the initial Hessian is applied to the trial vector and to the step of the
-        ! point
+        ! apply the transformation of an object with two points in its history, for
+        ! which the initial Hessian is applied to the trial vector and to the step of
+        ! each point
         call setup_updating_object(object)
-        x = 1.0_rp
+        call random_number(x)
         call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_hess_x_sr1 failed: Produced error."
             test_hess_x_sr1 = .false.
         end if
-        if (host_context%n_calls /= 2) then
+        n_calls = host_context%n_calls
+        if (n_calls /= 3) then
             write(stderr, *) "test_hess_x_sr1 failed: Initial Hessian function not "// &
                 "called with the host context at every call site."
             test_hess_x_sr1 = .false.
         end if
         if (.not. host_context_reached("hess_x_sr1")) test_hess_x_sr1 = .false.
+
+        ! let every call of the initial Hessian function fail in turn, whose error the
+        ! routine has to pass on
+        do i_call = 1, n_calls
+            call setup_updating_object(object)
+            host_context%failing_call = i_call
+            host_context%mock_error = 7
+            call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
+            if (error /= 7) then
+                write(call_number, '(I0)') i_call
+                write(stderr, *) "test_hess_x_sr1 failed: Error of call "// &
+                    trim(call_number)//" of the initial Hessian function not passed on."
+                test_hess_x_sr1 = .false.
+            end if
+        end do
 
     end function test_hess_x_sr1
 
@@ -684,8 +791,8 @@ contains
         !
         ! this function tests the Hessian linear transformation of the BFGS updating
         ! scheme, so far only that it hands every call of the host's initial Hessian
-        ! function the host context of its settings, while its numerics are left to
-        ! later tests
+        ! function the host context of its settings and passes on the error of every
+        ! call, while its numerics are left to later tests
         !
         use otr_common_unit_tests, only: level_context
         use otr_qn, only: bfgs_updating_type
@@ -693,28 +800,45 @@ contains
 
         type(bfgs_updating_type), target :: object
         real(rp) :: x(n_param), hess_x(n_param)
-        integer(ip) :: error
+        integer(ip) :: error, n_calls, i_call
+        character(len=8) :: call_number
 
         ! assume tests pass
         test_hess_x_bfgs = .true.
 
-        ! apply the transformation of an object with a point in its history, for which
-        ! the initial Hessian is applied to the trial vector, to the step of the point
-        ! when the compact scaling matrix is built and to it again when the
+        ! apply the transformation of an object with two points in its history, for
+        ! which the initial Hessian is applied to the trial vector, to the step of each
+        ! point when the compact scaling matrix is built and to each again when the
         ! transformation is assembled
         call setup_updating_object(object)
-        x = 1.0_rp
+        call random_number(x)
         call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
         if (error /= 0) then
             write(stderr, *) "test_hess_x_bfgs failed: Produced error."
             test_hess_x_bfgs = .false.
         end if
-        if (host_context%n_calls /= 3) then
+        n_calls = host_context%n_calls
+        if (n_calls /= 5) then
             write(stderr, *) "test_hess_x_bfgs failed: Initial Hessian function "// &
                 "not called with the host context at every call site."
             test_hess_x_bfgs = .false.
         end if
         if (.not. host_context_reached("hess_x_bfgs")) test_hess_x_bfgs = .false.
+
+        ! let every call of the initial Hessian function fail in turn, whose error the
+        ! routine has to pass on
+        do i_call = 1, n_calls
+            call setup_updating_object(object)
+            host_context%failing_call = i_call
+            host_context%mock_error = 7
+            call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
+            if (error /= 7) then
+                write(call_number, '(I0)') i_call
+                write(stderr, *) "test_hess_x_bfgs failed: Error of call "// &
+                    trim(call_number)//" of the initial Hessian function not passed on."
+                test_hess_x_bfgs = .false.
+            end if
+        end do
 
     end function test_hess_x_bfgs
 
