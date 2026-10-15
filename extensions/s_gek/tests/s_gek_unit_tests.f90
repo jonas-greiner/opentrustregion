@@ -81,7 +81,7 @@ contains
                                    default_solver_settings
         use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
-                              update_orbs_callback, obj_func_callback
+                              update_orbs_callback, obj_func_callback, error_s_gek
         use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_s_gek, only: s_gek_factory, s_gek_settings_type, s_gek_type, &
@@ -223,7 +223,7 @@ contains
                            change_reference_funptr, update_orbs_s_gek_funptr, &
                            obj_func_s_gek_funptr, solver_settings, state, error, &
                            settings)
-        if (error /= 1) then
+        if (error /= error_s_gek + 1) then
             write(stderr, *) "test_s_gek_factory failed: Error not returned for "// &
                 "parameters the sanity check rejects."
             test_s_gek_factory = .false.
@@ -258,7 +258,7 @@ contains
                            change_reference_funptr, update_orbs_s_gek_funptr, &
                            obj_func_s_gek_funptr, solver_settings, state, error, &
                            settings)
-        if (error /= 1) then
+        if (error /= error_s_gek + 1) then
             write(stderr, *) "test_s_gek_factory failed: Error not returned for "// &
                 "the host's own functions given with solver settings a factory wired."
             test_s_gek_factory = .false.
@@ -389,7 +389,7 @@ contains
         !
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
-        use otr_common, only: hess_x_callback
+        use otr_common, only: hess_x_callback, error_s_gek
         use otr_common_mock, only: mock_update_orbs
         use otr_s_gek, only: default_s_gek_settings
         use test_reference, only: arm_host_context, host_context_reached
@@ -413,6 +413,7 @@ contains
         ! with a host context distinct from that of its settings
         object%n_param = n_param
         object%settings = default_s_gek_settings
+        object%error_origin = error_s_gek
         object%solver_level%host%update_orbs => mock_update_orbs
         object%solver_level%host%context => contexts(1)
         context => object%solver_level
@@ -529,6 +530,7 @@ contains
         !
         ! this function tests the subroutine which initializes an S-GEK object
         !
+        use otr_common, only: error_s_gek
         use otr_s_gek, only: s_gek_settings_type, s_gek_type
         use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
 
@@ -553,6 +555,11 @@ contains
                  object%provides%get_extra_trial_vectors])) then
             write(stderr, *) "test_init_s_gek failed: Roles the object performs "// &
                 "set wrong."
+            test_init_s_gek = .false.
+        end if
+        if (object%error_origin /= error_s_gek) then
+            write(stderr, *) "test_init_s_gek failed: Error origin of the object "// &
+                "not set."
             test_init_s_gek = .false.
         end if
         if (object%n_param /= n_param .or. object%settings /= settings) then
@@ -586,6 +593,7 @@ contains
         ! context of its settings and passes on its error, while its numerics are left
         ! to later tests
         !
+        use otr_common, only: error_s_gek
         use otr_s_gek, only: s_gek_type, default_s_gek_settings
         use test_reference, only: arm_host_context, host_context, host_context_reached
 
@@ -609,6 +617,7 @@ contains
             associate (object => objects(i_case))
                 object%n_param = n_param
                 object%settings = default_s_gek_settings
+                object%error_origin = error_s_gek
                 call arm_host_context(object%settings)
                 object%change_reference => mock_change_reference
                 object%n_points = 0

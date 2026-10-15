@@ -407,6 +407,7 @@ contains
         ! parameterized in the MO basis the way the MO and ARH factories would,
         ! pointing to the test-local MO coefficients
         !
+        use otr_common, only: error_arh
         use otr_arh, only: arh_type, arh_mo_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
@@ -424,6 +425,7 @@ contains
 
         ! set up the ARH object in the MO basis
         allocate(arh, source=arh_mo_type(mo))
+        arh%error_origin = error_arh
         call setup_settings(arh%settings, context)
 
     end subroutine setup_arh_and_mo_objects
@@ -464,6 +466,7 @@ contains
         ! transformation to the OAO basis scales by c^2, and the given ARH object
         ! pointing to it the way the ARH factory would
         !
+        use otr_common, only: error_oao, error_arh
         use otr_arh, only: arh_type, arh_oao_type
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
@@ -486,6 +489,7 @@ contains
         n_param = n_particle * n_ao * (n_ao - 1) / 2
         allocate(oao)
         call setup_settings(oao%settings, context)
+        oao%error_origin = error_oao
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%n_param = n_param
@@ -502,6 +506,7 @@ contains
 
         ! set up the ARH object
         allocate(arh, source=arh_oao_type(oao))
+        arh%error_origin = error_arh
         call setup_settings(arh%settings, context)
 
     end subroutine setup_arh_and_scaled_oao_objects
@@ -1121,7 +1126,7 @@ contains
                            arh_evaluate_dm_cs_type
         use otr_mo, only: mo_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
-                              update_orbs_callback, obj_func_callback
+                              update_orbs_callback, obj_func_callback, error_arh
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_arh_test_reference, only: operator(==)
 
@@ -1211,7 +1216,7 @@ contains
         call arh_factory_cs(evaluate_dm_funptr, update_orbs_arh_funptr, &
                             obj_func_arh_funptr, solver_settings, state, error, &
                             settings)
-        if (error /= 1) then
+        if (error /= error_arh + 1) then
             write(stderr, *) "test_arh_factory_cs failed: Error of the common "// &
                 "setup not passed on."
             test_arh_factory_cs = .false.
@@ -1231,7 +1236,7 @@ contains
                            arh_evaluate_dm_os_type
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
-                              update_orbs_callback, obj_func_callback
+                              update_orbs_callback, obj_func_callback, error_arh
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_arh_test_reference, only: operator(==)
 
@@ -1321,7 +1326,7 @@ contains
         call arh_factory_os(evaluate_dm_funptr, update_orbs_arh_funptr, &
                             obj_func_arh_funptr, solver_settings, state, error, &
                             settings)
-        if (error /= 1) then
+        if (error /= error_arh + 1) then
             write(stderr, *) "test_arh_factory_os failed: Error of the common "// &
                 "setup not passed on."
             test_arh_factory_os = .false.
@@ -1347,7 +1352,7 @@ contains
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_level_type, &
                               extension_solver_settings_type, orbital_basis_type, &
-                              update_orbs_callback, obj_func_callback
+                              update_orbs_callback, obj_func_callback, error_arh
         use otr_common_unit_tests, only: mock_extension_type
         use opentrustregion_unit_tests, only: setup_settings, setup_error_logging, &
                                               test_context_type
@@ -1465,6 +1470,11 @@ contains
                         trim(case_names(i_case))//"."
                     test_arh_factory_common = .false.
                 end if
+                if (arh%error_origin /= error_arh) then
+                    write(stderr, *) "test_arh_factory_common failed: Error origin "// &
+                        "of the object not set "//trim(case_names(i_case))//"."
+                    test_arh_factory_common = .false.
+                end if
                 if (i_case == 2) then
                     stored = associated(arh%evaluate_dm_os, mock_evaluate_dm_os) .and. &
                              .not. associated(arh%evaluate_dm_cs)
@@ -1540,7 +1550,7 @@ contains
                                     evaluate_dm_os_funptr, update_orbs_arh_funptr, &
                                     obj_func_arh_funptr, solver_settings, state, &
                                     error, settings)
-            if (error /= 1) then
+            if (error /= error_arh + 1) then
                 write(stderr, *) "test_arh_factory_common failed: No error "// &
                     "returned for "//trim(refusal_names(i_case))//"."
                 test_arh_factory_common = .false.
@@ -2363,6 +2373,7 @@ contains
         ! approximate Hessian in both the closed- and the open-shell case and for both
         ! orbital bases
         !
+        use otr_common, only: error_arh
         use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
         use otr_mo_test_reference, only: n_mo
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
@@ -2412,10 +2423,11 @@ contains
         arh%expansion_dirs(1, 1) = 1.0_rp
         arh%projection_dirs = arh%expansion_dirs
         arh%coupling_matrix = -2.0_rp
+        arh%error_origin = error_arh
         allocate(x(mo%n_param), inv_x(mo%n_param))
         call random_number(x)
         call arh%inv_hess_x(x, inv_x, inv_error)
-        if (inv_error /= 1) then
+        if (inv_error /= error_arh + 1) then
             write(stderr, *) "test_inv_hess_x_arh failed: No error returned for a "// &
                 "singular approximate Hessian."
             test_inv_hess_x_arh = .false.

@@ -2770,10 +2770,11 @@ contains
         end do
 
         ! check an orbital basis without one, which has to be refused with an error
-        ! message
+        ! tagged with the error origin of the object and an error message
         basis%evaluate_dm_os => null()
+        basis%error_origin = 4200
         call basis%check_evaluate_dm(error)
-        if (error /= 1) then
+        if (error /= 4201) then
             write(stderr, *) "test_check_evaluate_dm_orbital_basis failed: No "// &
                 "error returned without a density matrix evaluating function."
             test_check_evaluate_dm_orbital_basis = .false.

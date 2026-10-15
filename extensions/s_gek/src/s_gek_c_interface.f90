@@ -74,7 +74,8 @@ contains
         ! of the solver state, and writes the solver settings the factory wired back
         ! into the C solver settings
         !
-        use opentrustregion, only: warn_uninitialized_settings
+        use opentrustregion, only: warn_uninitialized_settings, add_error_origin
+        use otr_common, only: error_s_gek
         use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
                                obj_func_f_wrapper
         use otr_s_gek, only: s_gek_settings_type, default_s_gek_settings, &
@@ -144,6 +145,7 @@ contains
         call setup_extension_holder(holder, solver_settings_c, solver_state_c, &
                                     settings, error, update_orbs_c_funptr, &
                                     obj_func_c_funptr)
+        call add_error_origin(error, error_s_gek, settings)
 
         ! the factory wires the solver settings of the holder, which then own the
         ! object, reaches the host's callback functions through the core's wrappers,

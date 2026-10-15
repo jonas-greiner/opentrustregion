@@ -7,8 +7,8 @@
 module otr_qn
 
     use opentrustregion, only: rp, ip, kw_len, settings_type, update_orbs_type, &
-                               hess_x_type
-    use otr_common, only: extension_type, provided_roles_type
+                               hess_x_type, add_error_origin
+    use otr_common, only: extension_type, provided_roles_type, error_qn
 
     implicit none
 
@@ -150,6 +150,7 @@ contains
 
         ! perform sanity check, which also converts the updating scheme to lowercase
         call qn_sanity_check(local_settings, n_param, error)
+        call add_error_origin(error, error_qn, local_settings)
         if (error /= 0) return
 
         ! create the object of the updating scheme
@@ -172,6 +173,7 @@ contains
         ! and host contexts, and let the settings own it
         call solver_settings%wire(object, solver_state, local_settings, error, &
                                   update_orbs_funptr, obj_func_funptr)
+        call add_error_origin(error, error_qn, local_settings)
         if (error /= 0) return
 
         ! get the orbital updating function and the objective function of the object
@@ -369,6 +371,7 @@ contains
         ! set the roles the object performs itself, the orbital update and the Hessian
         ! linear transformation, the settings and the number of parameters
         self%provides = provided_roles_type(update_orbs=.true., hess_x=.true.)
+        self%error_origin = error_qn
         self%settings = settings
         self%n_param = n_param
 
@@ -484,6 +487,7 @@ contains
                 info
             call self%settings%log(msg, verbosity_error, .true.)
             error = 1
+            call add_error_origin(error, self%error_origin, self%settings)
             return
         end if
 
@@ -498,6 +502,7 @@ contains
             write(msg, '(A, I0)') "Matrix solve failed: Error in DGETRS, info = ", info
             call self%settings%log(msg, verbosity_error, .true.)
             error = 1
+            call add_error_origin(error, self%error_origin, self%settings)
             return
         end if
         deallocate(U, ipiv)
@@ -634,6 +639,7 @@ contains
                 info
             call self%settings%log(msg, verbosity_error, .true.)
             error = 1
+            call add_error_origin(error, self%error_origin, self%settings)
             return
         end if
 
@@ -648,6 +654,7 @@ contains
                 info
             call self%settings%log(msg, verbosity_error, .true.)
             error = 1
+            call add_error_origin(error, self%error_origin, self%settings)
             return
         end if
 

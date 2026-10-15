@@ -7,10 +7,11 @@
 module otr_arh
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_settings_type, solver_state_type
+                               hess_x_type, solver_settings_type, solver_state_type, &
+                               add_error_origin
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
                           orbital_basis_type, extension_type, &
-                          extension_solver_settings_type, channel_rows
+                          extension_solver_settings_type, channel_rows, error_arh
     use otr_oao, only: oao_type
     use otr_mo, only: mo_channel_type, mo_type
 
@@ -316,6 +317,7 @@ contains
 
         ! perform sanity check, which also converts the ARH type to lowercase
         call arh_sanity_check(local_settings, error)
+        call add_error_origin(error, error_arh, local_settings)
         if (error /= 0) return
 
         ! set up the object in the basis of the orbital basis object of the level,
@@ -332,6 +334,7 @@ contains
             call local_settings%log("The solver settings have to be those an MO or "// &
                                     "OAO factory wired last.", verbosity_error, .true.)
             error = 1
+            call add_error_origin(error, error_arh, local_settings)
             return
         end if
 
@@ -346,8 +349,10 @@ contains
                                         "the shell of the orbitals has to be given.", &
                                         verbosity_error, .true.)
                 error = 1
+                call add_error_origin(error, error_arh, local_settings)
                 return
             end if
+            object%error_origin = error_arh
             object%settings = local_settings
             object%evaluate_dm_cs => evaluate_dm_cs
             object%evaluate_dm_os => evaluate_dm_os
@@ -357,6 +362,7 @@ contains
         ! and saves the host's callback functions and host contexts, let the settings
         ! own it and adjust them to the approximate Hessian
         call solver_settings%wire(object, solver_state, local_settings, error)
+        call add_error_origin(error, error_arh, local_settings)
         if (error /= 0) return
         call arh_set_solver_settings(solver_settings%solver_settings_type, &
                                      local_settings)
@@ -674,12 +680,14 @@ contains
                                     v_coulomb_packed, v_exchange_packed, map, chol, &
                                     self%a_inv, self%linear_potential_dirs, &
                                     self%settings, error)
+            call add_error_origin(error, self%error_origin, self%settings)
             if (error /= 0) return
             ! non-linear part: kept on its own system so that it contracts against its
             ! own inverse and the exact linear secant relationship is not averaged with
             ! the approximate one
             call get_ms_a_inv(dm_cols, v_nonlinear_cols, map_nonlinear, &
                               chol_nonlinear, self%a_inv_comb, self%settings, error)
+            call add_error_origin(error, self%error_origin, self%settings)
             if (error /= 0) return
 
             ! cache the packed non-linear potential difference directions, rebased into
@@ -846,6 +854,7 @@ contains
                 v_coulomb_alpha_packed, v_coulomb_beta_packed, v_exchange_packed, &
                 history_rows, packed_rows, map_comb, chol_comb, self%a_inv, &
                 self%linear_potential_dirs, self%settings, error)
+            call add_error_origin(error, self%error_origin, self%settings)
             if (error /= 0) return
             ! non-linear part: get spin-combined multisecant SR1 matrix; the non-linear
             ! response mixes both channels at once, so this needs its own, separate
@@ -857,6 +866,7 @@ contains
                                    min_residual)
             call get_ms_a_inv(dm_cols, v_nonlinear_cols, map_nl, chol_nl, &
                               self%a_inv_comb, self%settings, error)
+            call add_error_origin(error, self%error_origin, self%settings)
             if (error /= 0) return
 
             ! cache the packed non-linear potential difference directions, which need
@@ -1101,6 +1111,7 @@ contains
                 "Error in DGESV, info = ", info
             call self%settings%log(msg, verbosity_error, .true.)
             error = 1
+            call add_error_origin(error, self%error_origin, self%settings)
             return
         end if
 
@@ -1267,6 +1278,7 @@ contains
         allocate(rot_mo_coeff, mold=self%mo_coeff)
         call rotate_mo_coeff(kappa, self%mo_coeff, self%ao_overlap, self%mo_channels, &
                              rot_mo_coeff, rot_dm_ao, self%settings, error)
+        call add_error_origin(error, self%error_origin, self%settings)
         if (error /= 0) return
 
         ! multiply the density matrix by the AO overlap matrix from both sides
@@ -1291,6 +1303,7 @@ contains
         ! rotate density matrix in the AO and OAO basis
         call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, &
                           self%settings, error, rot_dm_hist)
+        call add_error_origin(error, self%error_origin, self%settings)
 
     end subroutine rotate_trial_arh_oao
 

@@ -7,10 +7,10 @@
 module otr_oao
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_state_type
+                               hess_x_type, solver_state_type, add_error_origin
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
                           orbital_basis_type, evaluate_dm_cs_type, &
-                          evaluate_dm_os_type, extension_solver_settings_type
+                          evaluate_dm_os_type, extension_solver_settings_type, error_oao
 
     implicit none
 
@@ -180,6 +180,7 @@ contains
         ! perform sanity check
         call oao_sanity_check(local_settings, shape(dm_ao, kind=ip), &
                               shape(ao_overlap, kind=ip), n_particle, n_ao, error)
+        call add_error_origin(error, error_oao, local_settings)
         if (error /= 0) return
 
         ! without a density matrix evaluating function, the roles which need one are
@@ -195,6 +196,7 @@ contains
             object%provides = provided_roles_type( &
                 update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
                 precond_pd=.true., project=.true., get_extra_trial_vectors=.true.)
+            object%error_origin = error_oao
             object%settings = local_settings%orbital_settings_type
             object%evaluate_dm_cs => evaluate_dm_cs
             object%evaluate_dm_os => evaluate_dm_os
@@ -207,6 +209,7 @@ contains
             ! get square root and inverse square root of AO overlap matrix
             call compute_sqrt_and_inv_sqrt(ao_overlap, object%s_sqrt, &
                                            object%s_inv_sqrt, object%settings, error)
+            call add_error_origin(error, error_oao, local_settings)
             if (error /= 0) return
 
             ! starting density matrix, also in the orthogonalized AO basis
@@ -224,6 +227,7 @@ contains
         ! and saves the host's callback functions and host contexts, and let the
         ! settings own it
         call solver_settings%wire(object, solver_state, local_settings, error)
+        call add_error_origin(error, error_oao, local_settings)
         if (error /= 0) return
 
         ! get the orbital updating function and the objective function of the object
@@ -300,6 +304,7 @@ contains
         allocate(rot_dm_ao(self%n_ao, self%n_ao, self%n_particle))
         call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, &
                           self%settings, error)
+        call add_error_origin(error, self%error_origin, self%settings)
         if (error /= 0) return
 
         ! calculate the mean-field energy
@@ -549,6 +554,7 @@ contains
         allocate(rot_dm_oao, mold=self%dm_oao)
         call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, settings, &
                           error, rot_dm_oao)
+        call add_error_origin(error, self%error_origin, settings)
         if (error /= 0) return
         self%dm_ao = rot_dm_ao
         self%dm_oao = rot_dm_oao
@@ -690,6 +696,7 @@ contains
                     "failed: Error in DSYEV, info = ", info
                 call settings%log(msg, verbosity_error, .true.)
                 error = 1
+                call add_error_origin(error, self%error_origin, settings)
                 deallocate(a)
                 return
             end if

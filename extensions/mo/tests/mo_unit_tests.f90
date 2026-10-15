@@ -197,6 +197,7 @@ contains
         ! this subroutine sets up the given MO object the way the MO factory would,
         ! pointing to the test-local MO coefficients
         !
+        use otr_common, only: error_mo
         use otr_mo, only: mo_type
 
         type(mo_type), allocatable, intent(out), target :: mo
@@ -214,6 +215,7 @@ contains
 
         ! set up the MO object
         allocate(mo)
+        mo%error_origin = error_mo
         mo%n_ao = n_ao
         mo%n_mo = n_mo
         mo%n_particle = n_particle
@@ -674,7 +676,7 @@ contains
         use otr_mo, only: mo_factory_cs, mo_type, mo_settings_type
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback
+                              obj_func_callback, error_mo
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, operator(==)
@@ -800,7 +802,7 @@ contains
         call mo_factory_cs(mo_coeff, ao_overlap, n_occ(1), n_particle, n_ao, n_mo + 1, &
                            evaluate_dm_funptr, update_orbs_mo_funptr, &
                            obj_func_mo_funptr, solver_settings, state, error, settings)
-        if (error /= 1) then
+        if (error /= error_mo + 1) then
             write(stderr, *) "test_mo_factory_cs failed: Error of the common setup "// &
                 "not passed on."
             test_mo_factory_cs = .false.
@@ -820,7 +822,7 @@ contains
         use otr_mo, only: mo_factory_os, mo_type, mo_settings_type
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback
+                              obj_func_callback, error_mo
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, operator(==)
@@ -933,7 +935,7 @@ contains
         call mo_factory_os(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo + 1, &
                            evaluate_dm_funptr, update_orbs_mo_funptr, &
                            obj_func_mo_funptr, solver_settings, state, error, settings)
-        if (error /= 1) then
+        if (error /= error_mo + 1) then
             write(stderr, *) "test_mo_factory_os failed: Error of the common setup "// &
                 "not passed on."
             test_mo_factory_os = .false.
@@ -955,7 +957,7 @@ contains
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
-                              evaluate_dm_missing_warning_msg
+                              evaluate_dm_missing_warning_msg, error_mo
         use otr_mo, only: mo_factory_common, mo_type, mo_settings_type, &
                           default_mo_settings, mo_settings_uninitialized_warning_msg
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
@@ -1169,6 +1171,12 @@ contains
                             trim(case_names_factory(i_case))//"."
                         test_mo_factory_common = .false.
                     end if
+                    if (mo%error_origin /= error_mo) then
+                        write(stderr, *) "test_mo_factory_common failed: Error "// &
+                            "origin of the object not set "// &
+                            trim(case_names_factory(i_case))//"."
+                        test_mo_factory_common = .false.
+                    end if
                     if (.not. (mo%evaluation_stale .and. mo%response_stale .and. &
                                mo%hess_eigen_stale)) then
                         write(stderr, *) "test_mo_factory_common failed: Object "// &
@@ -1249,7 +1257,7 @@ contains
                                        obj_func_mo_funptr, solver_settings, state, &
                                        error, settings, irreps(:, :1))
             end if
-            if (error /= 1) then
+            if (error /= error_mo + 1) then
                 write(stderr, *) "test_mo_factory_common failed: Error not "// &
                     "returned for "//trim(case_names_rejected(i_case))//"."
                 test_mo_factory_common = .false.
@@ -1489,6 +1497,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! MO basis
         !
+        use otr_common, only: error_mo
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
@@ -1612,7 +1621,7 @@ contains
             mo%evaluate_dm_cs => null()
             mo%evaluate_dm_os => null()
             energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
-            if (error /= 1) then
+            if (error /= error_mo + 1) then
                 write(stderr, *) "test_obj_func_mo failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
                     case_name//" case."
@@ -1633,7 +1642,7 @@ contains
         !
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
-        use otr_common, only: hess_x_callback
+        use otr_common, only: hess_x_callback, error_mo
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
@@ -1848,7 +1857,7 @@ contains
             mo%evaluate_dm_os => null()
             call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                 level_context(mo, 1_ip))
-            if (error /= 1) then
+            if (error /= error_mo + 1) then
                 write(stderr, *) "test_update_orbs_mo failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
                     case_name//" case."
@@ -1904,6 +1913,7 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the MO basis
         !
+        use otr_common, only: error_mo
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
@@ -2039,7 +2049,7 @@ contains
         mo%evaluate_dm_cs => null()
         mo%evaluate_dm_os => null()
         call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
-        if (error /= 1) then
+        if (error /= error_mo + 1) then
             write(stderr, *) "test_hess_x_mo failed: No error returned without a "// &
                 "density matrix evaluating function."
             test_hess_x_mo = .false.

@@ -25,7 +25,7 @@ contains
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
-        use otr_common, only: extension_level_type
+        use otr_common, only: extension_level_type, error_mo
         use otr_common_unit_tests, only: wired_level
         use otr_common_c_interface, only: extension_holder_type, &
                                           orbital_c_callbacks_type
@@ -349,7 +349,8 @@ contains
             mo_coeff_c, ao_overlap_c, n_occ_c, 1_c_ip, n_ao_c, int(n_mo, kind=c_ip), &
             evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
             extension_c, solver_settings_c, c_null_ptr, settings_c)
-        if (error_c == 0 .or. test_passed .or. c_associated(update_orbs_c_funptr) .or. &
+        if (error_c /= error_mo + 1 .or. test_passed .or. &
+            c_associated(update_orbs_c_funptr) .or. &
             c_associated(obj_func_c_funptr) .or. c_associated(extension_c)) then
             write(stderr, *) "test_mo_factory_c_wrapper failed: No error produced "// &
                 "without a record of the state."

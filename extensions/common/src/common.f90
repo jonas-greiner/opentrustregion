@@ -10,7 +10,7 @@ module otr_common
         rp, ip, settings_type, solver_settings_type, stability_settings_type, &
         solver_state_type, update_orbs_type, obj_func_type, hess_x_type, precond_type, &
         precond_pd_type, project_type, get_extra_trial_vectors_type, conv_check_type, &
-        conv_check_stability_type, logger_type
+        conv_check_stability_type, logger_type, add_error_origin
 
     implicit none
 
@@ -67,12 +67,13 @@ module otr_common
     end type
 
     ! object of an extension, holding the number of parameters, the levels of the
-    ! solver and of its stability check, the roles it performs itself and the state of
-    ! the solver, which the host keeps current, whose type-bound procedures perform its
-    ! roles, by default forwarding to the host record of the level they receive as
-    ! context
+    ! solver and of its stability check, the roles it performs itself, the origin with
+    ! which it tags the errors it detects itself (none for an object no factory set up)
+    ! and the state of the solver, which the host keeps current, whose type-bound
+    ! procedures perform its roles, by default forwarding to the host record of the
+    ! level they receive as context
     type, abstract :: extension_type
-        integer(ip) :: n_param
+        integer(ip) :: n_param, error_origin = 0
         type(extension_level_type) :: solver_level, stability_level
         type(provided_roles_type) :: provides
         type(solver_state_type), pointer :: state => null()
@@ -102,6 +103,11 @@ module otr_common
         procedure :: init => init_extension_solver_settings
         procedure :: wire => wire_extension_solver_settings
     end type
+
+    ! error origins of the extensions, with which their factories and objects tag the
+    ! errors they detect themselves
+    integer(ip), parameter :: error_mo = 5100, error_oao = 5200, error_arh = 5300, &
+                              error_qn = 5400, error_s_gek = 5500
 
     ! warning for orbital bases set up without a density matrix evaluating function
     character(len=*), parameter :: evaluate_dm_missing_warning_msg = &
@@ -980,6 +986,7 @@ contains
                                "matrix evaluating function, which this function "// &
                                "needs.", verbosity_error, .true.)
         error = 1
+        call add_error_origin(error, self%error_origin, self%settings)
 
     end subroutine check_evaluate_dm_orbital_basis
 

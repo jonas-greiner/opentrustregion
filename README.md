@@ -490,6 +490,13 @@ The library uses structured integer return codes to indicate whether a function 
 | `16`               | `project`                                                                  |
 | `17`               | `get_extra_trial_vectors`, of the solver and of the stability check        |
 | `18`               | `precond_pd`                                                               |
+| `51`               | MO extension                                                               |
+| `52`               | OAO extension                                                              |
+| `53`               | ARH extension                                                              |
+| `54`               | Quasi-Newton extension                                                     |
+| `55`               | S-GEK extension                                                            |
+
+The factory of an extension tags the errors it detects, in its arguments, in the solver settings it wires or, in C, a missing record of the state, with the origin of its extension, and its object the errors it detects itself while performing a role, such as a missing density matrix evaluating function or a failed eigendecomposition. An error in the numerics of the orbital basis object an ARH object builds on carries the origin of the orbital basis. Errors of your own callback functions keep the origin of the role, such as `1201` for an `evaluate_dm` that fails during the orbital update.
 
 ### Error Codes (`EE`)
 

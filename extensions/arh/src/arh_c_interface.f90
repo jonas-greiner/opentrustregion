@@ -79,11 +79,11 @@ contains
         ! returning the holder as the extension the host releases before that of the
         ! orbital basis object
         !
-        use opentrustregion, only: warn_uninitialized_settings
+        use opentrustregion, only: warn_uninitialized_settings, add_error_origin
         use c_interface, only: solver_settings_type_c
         use otr_arh, only: arh_settings_type, default_arh_settings, &
                            arh_settings_uninitialized_warning_msg
-        use otr_common, only: extension_level_type, orbital_basis_type
+        use otr_common, only: extension_level_type, orbital_basis_type, error_arh
         use otr_common_c_interface, only: &
             extension_holder_type, holder_level_type, holder_level, bundle_settings_c, &
             setup_extension_holder, finish_extension_holder
@@ -161,6 +161,7 @@ contains
         ! settings
         call setup_extension_holder(holder, solver_settings_c, solver_state_c, &
                                     settings, error)
+        call add_error_origin(error, error_arh, settings)
 
         ! the factory wires the solver settings of the holder, which then own the
         ! object, on the orbital basis object of the level, reaches the density matrix

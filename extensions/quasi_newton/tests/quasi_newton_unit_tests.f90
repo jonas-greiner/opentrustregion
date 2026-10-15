@@ -86,11 +86,13 @@ contains
         ! that they have positive curvature along them, and a random last gradient, so
         ! that every loop over the history calls the host's functions more than once
         !
+        use otr_common, only: error_qn
         use otr_qn, only: updating_type, default_qn_settings
         use test_reference, only: arm_host_context
 
         class(updating_type), intent(out) :: object
 
+        object%error_origin = error_qn
         object%n_param = n_param
         object%settings = default_qn_settings
         call arm_host_context(object%settings)
@@ -119,7 +121,7 @@ contains
                                    default_solver_settings
         use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
-                              update_orbs_callback, obj_func_callback
+                              update_orbs_callback, obj_func_callback, error_qn
         use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_qn, only: qn_factory, qn_settings_type, updating_type, &
@@ -281,7 +283,7 @@ contains
         call qn_factory(0_ip, update_orbs_funptr, obj_func_funptr, transport_funptr, &
                         init_hess_funptr, update_orbs_qn_funptr, obj_func_qn_funptr, &
                         solver_settings, state, error, settings)
-        if (error /= 1) then
+        if (error /= error_qn + 1) then
             write(stderr, *) "test_qn_factory failed: Error not returned for "// &
                 "parameters the sanity check rejects."
             test_qn_factory = .false.
@@ -313,7 +315,7 @@ contains
         call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                         transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
                         obj_func_qn_funptr, solver_settings, state, error, settings)
-        if (error /= 1) then
+        if (error /= error_qn + 1) then
             write(stderr, *) "test_qn_factory failed: Error not returned for the "// &
                 "host's own functions given with solver settings a factory wired."
             test_qn_factory = .false.
@@ -449,7 +451,7 @@ contains
         !
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
-        use otr_common, only: hess_x_callback
+        use otr_common, only: hess_x_callback, error_qn
         use otr_common_mock, only: mock_update_orbs
         use otr_qn, only: default_qn_settings
         use test_reference, only: tol, arm_host_context, host_context_reached
@@ -471,6 +473,7 @@ contains
 
         ! set up an object whose solver level forwards to the host's mock orbital update
         ! with a host context distinct from that of its settings
+        object%error_origin = error_qn
         object%n_param = n_param
         object%settings = default_qn_settings
         object%solver_level%host%update_orbs => mock_update_orbs
@@ -589,6 +592,7 @@ contains
         !
         ! this function tests the subroutine which initializes a quasi-Newton object
         !
+        use otr_common, only: error_qn
         use otr_qn, only: qn_settings_type, sr1_updating_type
         use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
 
@@ -608,6 +612,10 @@ contains
                  object%provides%precond_pd, object%provides%project, &
                  object%provides%get_extra_trial_vectors])) then
             write(stderr, *) "test_init_qn failed: Roles the object performs set wrong."
+            test_init_qn = .false.
+        end if
+        if (object%error_origin /= error_qn) then
+            write(stderr, *) "test_init_qn failed: Error origin of the object not set."
             test_init_qn = .false.
         end if
         if (object%n_param /= n_param .or. object%settings /= settings) then

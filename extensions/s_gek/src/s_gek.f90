@@ -6,8 +6,9 @@
 
 module otr_s_gek
 
-    use opentrustregion, only: rp, ip, pi, settings_type, update_orbs_type, hess_x_type
-    use otr_common, only: extension_type, provided_roles_type
+    use opentrustregion, only: rp, ip, pi, settings_type, update_orbs_type, &
+                               hess_x_type, add_error_origin
+    use otr_common, only: extension_type, provided_roles_type, error_s_gek
 
     implicit none
 
@@ -129,6 +130,7 @@ contains
 
         ! perform sanity check
         call s_gek_sanity_check(local_settings, n_param, error)
+        call add_error_origin(error, error_s_gek, local_settings)
         if (error /= 0) return
 
         ! create the object and initialize it with the host's change of reference
@@ -145,6 +147,7 @@ contains
         ! and host contexts, and let the settings own it
         call solver_settings%wire(object, solver_state, local_settings, error, &
                                   update_orbs_funptr, obj_func_funptr)
+        call add_error_origin(error, error_s_gek, local_settings)
         if (error /= 0) return
 
         ! get the orbital updating function and the objective function of the object
@@ -262,6 +265,7 @@ contains
         ! set the roles the object performs itself, the orbital update and the Hessian
         ! linear transformation, and the settings
         self%provides = provided_roles_type(update_orbs=.true., hess_x=.true.)
+        self%error_origin = error_s_gek
         self%settings = settings
 
         ! initialize dimensions
@@ -620,6 +624,7 @@ contains
                  self%transform_matrix(self%n_space, self%n_space))
         call symm_mat_diag(approx_hessian, hess_eigvals, self%transform_matrix, &
                            self%settings, error)
+        call add_error_origin(error, self%error_origin, self%settings)
         if (error /= 0) return
 
         ! set the characteristic length such that the kriging hessian reproduces the
@@ -725,6 +730,7 @@ contains
             write(msg, '(A, I0)') "Linear solve failed: Error in DPOSV, info = ", info
             call self%settings%log(msg, verbosity_error, .true.)
             error = 1
+            call add_error_origin(error, self%error_origin, self%settings)
             return
         end if
 

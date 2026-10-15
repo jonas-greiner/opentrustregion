@@ -306,7 +306,7 @@ contains
         use otr_oao, only: oao_factory_cs, oao_type, oao_settings_type
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback
+                              obj_func_callback, error_oao
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix
         use otr_common_test_reference, only: n_ao, n_occ, operator(==)
@@ -415,7 +415,7 @@ contains
                             evaluate_dm_funptr, update_orbs_oao_funptr, &
                             obj_func_oao_funptr, solver_settings, state, error, &
                             settings)
-        if (error /= 1) then
+        if (error /= error_oao + 1) then
             write(stderr, *) "test_oao_factory_cs failed: Error of the common "// &
                 "setup not passed on for a density matrix with fewer AOs than given."
             test_oao_factory_cs = .false.
@@ -435,7 +435,7 @@ contains
         use otr_oao, only: oao_factory_os, oao_type, oao_settings_type
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback
+                              obj_func_callback, error_oao
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, operator(==)
@@ -530,7 +530,7 @@ contains
         call oao_factory_os(dm_ao, ao_overlap, 3_ip, n_ao, evaluate_dm_funptr, &
                             update_orbs_oao_funptr, obj_func_oao_funptr, &
                             solver_settings, state, error, settings)
-        if (error /= 1) then
+        if (error /= error_oao + 1) then
             write(stderr, *) "test_oao_factory_os failed: Error of the common "// &
                 "setup not passed on."
             test_oao_factory_os = .false.
@@ -551,7 +551,7 @@ contains
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
-                              evaluate_dm_missing_warning_msg
+                              evaluate_dm_missing_warning_msg, error_oao
         use otr_oao, only: oao_factory_common, oao_type, oao_settings_type, &
                            default_oao_settings, oao_settings_uninitialized_warning_msg
         use otr_common_test_reference, only: n_ao, n_occ, &
@@ -730,6 +730,12 @@ contains
                             trim(case_names(i_case))//"."
                         test_oao_factory_common = .false.
                     end if
+                    if (oao%error_origin /= error_oao) then
+                        write(stderr, *) "test_oao_factory_common failed: Error "// &
+                            "origin of the object not set "// &
+                            trim(case_names(i_case))//"."
+                        test_oao_factory_common = .false.
+                    end if
                     if (.not. (allocated(oao%grad) .and. allocated(oao%h_diag))) then
                         write(stderr, *) "test_oao_factory_common failed: Gradient "// &
                             "or Hessian diagonal not allocated "// &
@@ -806,7 +812,7 @@ contains
                                 evaluate_dm_os_funptr, update_orbs_oao_funptr, &
                                 obj_func_oao_funptr, solver_settings, state, error, &
                                 settings)
-        if (error /= 1) then
+        if (error /= error_oao + 1) then
             write(stderr, *) "test_oao_factory_common failed: Error not returned "// &
                 "for an invalid number of particle channels."
             test_oao_factory_common = .false.
@@ -937,6 +943,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! OAO basis
         !
+        use otr_common, only: error_oao
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
             level_context, generate_random_density_matrix, mock_requests, &
@@ -972,6 +979,7 @@ contains
             ! must not be used for it
             allocate(oao, dm_oao(n_ao, n_ao, n_particle), kappa(n_param))
             call setup_settings(oao%settings, context)
+            oao%error_origin = error_oao
             call arm_host_context(oao%settings, context)
             oao%n_ao = n_ao
             oao%n_particle = n_particle
@@ -1077,7 +1085,7 @@ contains
             oao%evaluate_dm_cs => null()
             oao%evaluate_dm_os => null()
             energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
-            if (error /= 1) then
+            if (error /= error_oao + 1) then
                 write(stderr, *) "test_obj_func_oao failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
                     case_name//" case."
@@ -1101,7 +1109,7 @@ contains
             mock_requests, mock_get_response_cs, mock_get_response_os, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
-        use otr_common, only: hess_x_callback
+        use otr_common, only: hess_x_callback, error_oao
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -1141,6 +1149,7 @@ contains
             end do
             allocate(oao)
             call setup_settings(oao%settings, context)
+            oao%error_origin = error_oao
             call arm_host_context(oao%settings, context)
             oao%n_ao = n_ao
             oao%n_particle = n_particle
@@ -1338,7 +1347,7 @@ contains
             oao%evaluate_dm_os => null()
             call oao%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                  level_context(oao, 1_ip))
-            if (error /= 1) then
+            if (error /= error_oao + 1) then
                 write(stderr, *) "test_update_orbs_oao failed: No error returned "// &
                     "without a density matrix evaluating function for the "// &
                     case_name//" case."
@@ -1394,6 +1403,7 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the OAO basis
         !
+        use otr_common, only: error_oao
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
             level_context, generate_random_density_matrix, mock_requests, &
@@ -1434,6 +1444,7 @@ contains
 
         ! set up the OAO object
         call setup_settings(oao%settings, context)
+        oao%error_origin = error_oao
         call arm_host_context(oao%settings, context)
         oao%n_ao = n_ao
         oao%s_inv_sqrt = s_inv_sqrt
@@ -1536,7 +1547,7 @@ contains
         oao%evaluate_dm_cs => null()
         oao%evaluate_dm_os => null()
         call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
-        if (error /= 1) then
+        if (error /= error_oao + 1) then
             write(stderr, *) "test_hess_x_oao failed: No error returned without a "// &
                 "density matrix evaluating function."
             test_hess_x_oao = .false.

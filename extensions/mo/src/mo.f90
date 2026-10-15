@@ -7,10 +7,10 @@
 module otr_mo
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_state_type
+                               hess_x_type, solver_state_type, add_error_origin
     use otr_common, only: orbital_settings_type, default_orbital_settings, &
                           orbital_basis_type, channel_rows, evaluate_dm_cs_type, &
-                          evaluate_dm_os_type, extension_solver_settings_type
+                          evaluate_dm_os_type, extension_solver_settings_type, error_mo
 
     implicit none
 
@@ -207,6 +207,7 @@ contains
         ! perform sanity check
         call mo_sanity_check(local_settings, shape(mo_coeff, kind=ip), shape( &
             ao_overlap, kind=ip), n_occ, n_particle, n_ao, n_mo, error, orbsym)
+        call add_error_origin(error, error_mo, local_settings)
         if (error /= 0) return
 
         ! without a density matrix evaluating function, the roles which need one are
@@ -230,6 +231,7 @@ contains
             object%provides = provided_roles_type( &
                 update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
                 precond_pd=.true., get_extra_trial_vectors=.true.)
+            object%error_origin = error_mo
             object%settings = local_settings%orbital_settings_type
             object%evaluate_dm_cs => evaluate_dm_cs
             object%evaluate_dm_os => evaluate_dm_os
@@ -281,6 +283,7 @@ contains
         ! and saves the host's callback functions and host contexts, and let the
         ! settings own it
         call solver_settings%wire(object, solver_state, local_settings, error)
+        call add_error_origin(error, error_mo, local_settings)
         if (error /= 0) return
 
         ! get the orbital updating function and the objective function of the object
@@ -413,6 +416,7 @@ contains
         allocate(rot_dm_ao, mold=self%dm_ao)
         call rotate_mo_coeff(kappa, self%mo_coeff, self%ao_overlap, self%mo_channels, &
                              rot_mo_coeff, rot_dm_ao, self%settings, error)
+        call add_error_origin(error, self%error_origin, self%settings)
         if (error /= 0) return
 
         ! calculate the mean-field energy
@@ -645,6 +649,7 @@ contains
         allocate(rot_dm_ao, mold=self%dm_ao)
         call rotate_mo_coeff(kappa, self%mo_coeff, self%ao_overlap, self%mo_channels, &
                              rot_mo_coeff, rot_dm_ao, settings, error)
+        call add_error_origin(error, self%error_origin, settings)
         if (error /= 0) return
         self%mo_coeff = rot_mo_coeff
         self%dm_ao = rot_dm_ao
@@ -745,10 +750,12 @@ contains
                 call diagonalize_per_irrep(channel%fock_oo, channel%irreps(:n_occ), &
                                            channel%occ_eigvals, channel%occ_eigvecs, &
                                            settings, error)
+                call add_error_origin(error, self%error_origin, settings)
                 if (error /= 0) return
                 call diagonalize_per_irrep( &
                     channel%fock_vv, channel%irreps(n_occ + 1:), channel%virt_eigvals, &
                     channel%virt_eigvecs, settings, error)
+                call add_error_origin(error, self%error_origin, settings)
                 if (error /= 0) return
             end associate
         end do
