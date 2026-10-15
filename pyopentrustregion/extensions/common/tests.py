@@ -115,7 +115,7 @@ fortran_tests = {
 
 # the shared extension routines are only built together with an extension which uses
 # them, so raise an AttributeError on import otherwise
-getattr(lib, "test_" + fortran_tests["common_tests"][0])
+getattr(lib, "test_n_ao")
 
 # number of AOs
 n_ao = c_int.in_dll(lib, "test_n_ao").value
