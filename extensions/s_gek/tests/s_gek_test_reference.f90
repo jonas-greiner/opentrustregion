@@ -70,15 +70,18 @@ contains
         allocate(new_ref(n_param), kappa_list(n_param, n_points), &
                  local_grad_list(n_param, n_points), grad_list(n_param, n_points))
 
-        ! initialize the new reference, which the mock change of reference checks, and
-        ! generate random lists, which it multiplies by 2, 3 and 4
-        new_ref = 1.0_rp
+        ! generate a random new reference and random lists, which the mock change of
+        ! reference changes to the new reference in a flat parameter space, subtracting
+        ! it from every stored point and taking the gradients over from the local
+        ! gradients, and whose local gradients it triples, so that a transposed or
+        ! shifted view of the lists or the new reference is detected
+        call random_number(new_ref)
         call random_number(kappa_list)
         call random_number(local_grad_list)
         call random_number(grad_list)
-        expected_lists = reshape( &
-            [2.0_rp * kappa_list, 3.0_rp * local_grad_list, 4.0_rp * grad_list], &
-            [n_param, n_points, 3_ip])
+        expected_lists = reshape([kappa_list - spread(new_ref, 2, n_points), &
+                                  3.0_rp * local_grad_list, local_grad_list], &
+                                 [n_param, n_points, 3_ip])
 
         ! call change reference function pointer
         call change_reference_funptr(new_ref, n_points, kappa_list, local_grad_list, &
@@ -153,15 +156,18 @@ contains
         allocate(new_ref(n_param), kappa_list(n_param, n_points), &
                  local_grad_list(n_param, n_points), grad_list(n_param, n_points))
 
-        ! initialize the new reference, which the mock change of reference checks, and
-        ! generate random lists, which it multiplies by 2, 3 and 4
-        new_ref = 1.0_c_rp
+        ! generate a random new reference and random lists, which the mock change of
+        ! reference changes to the new reference in a flat parameter space, subtracting
+        ! it from every stored point and taking the gradients over from the local
+        ! gradients, and whose local gradients it triples, so that a transposed or
+        ! shifted view of the lists or the new reference is detected
+        call random_number(new_ref)
         call random_number(kappa_list)
         call random_number(local_grad_list)
         call random_number(grad_list)
-        expected_lists = reshape( &
-            [2.0_c_rp * kappa_list, 3.0_c_rp * local_grad_list, 4.0_c_rp * grad_list], &
-            [n_param, n_points, 3_ip])
+        expected_lists = reshape([kappa_list - spread(new_ref, 2, n_points), &
+                                  3.0_c_rp * local_grad_list, local_grad_list], &
+                                 [n_param, n_points, 3_ip])
 
         ! call change reference function pointer
         error = change_reference_funptr(new_ref, int(n_points, kind=c_ip), kappa_list, &

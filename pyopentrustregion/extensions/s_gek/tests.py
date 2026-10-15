@@ -102,17 +102,15 @@ class SGEKPyInterfaceTests(unittest.TestCase):
 
     def mock_change_reference(self, new_ref, kappa_list, local_grad_list, grad_list):
         """
-        this function is a mock function for the change reference function
+        this function is a mock function for the change reference function, which
+        changes the stored points to the new reference in a flat parameter space,
+        subtracting it from every point and taking the gradients over from the local
+        gradients, and triples the local gradients, as the change of reference checkers
+        expect
         """
-        self.change_reference_new_ref = np.allclose(
-            new_ref, np.ones(n_param, dtype=np.float64)
-        )
-
-        kappa_list *= 2
+        kappa_list -= new_ref
+        grad_list[:] = local_grad_list
         local_grad_list *= 3
-        grad_list *= 4
-
-        return
 
     mock_logger = ExtensionCallbackMocks.mock_logger
 
@@ -180,12 +178,6 @@ class SGEKPyInterfaceTests(unittest.TestCase):
             test_passed = False
 
         # check results
-        if self.change_reference_new_ref is not True:
-            print(
-                " test_s_gek_factory_py_interface failed: New "
-                "reference parameters inside given change reference function wrong."
-            )
-            test_passed = False
         if func != 3.0:
             print(
                 " test_s_gek_factory_py_interface failed: Returned"

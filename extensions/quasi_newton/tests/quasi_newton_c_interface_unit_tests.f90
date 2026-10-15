@@ -19,9 +19,10 @@ contains
     function mock_transport(geodesic_c, tangent_vector_c, context_c) result(error) &
         bind(C)
         !
-        ! this subroutine is a mock subroutine for the transport C function
+        ! this subroutine is a mock subroutine for the transport C function, which
+        ! returns the error code set in the host context
         !
-        use test_reference, only: check_host_context_c
+        use test_reference, only: check_host_context_c, host_context_error
 
         real(c_rp), intent(in), target :: geodesic_c(*)
         real(c_rp), intent(inout), target :: tangent_vector_c(*)
@@ -33,15 +34,16 @@ contains
 
         tangent_vector_c(:n_param) = geodesic_c(:n_param) * tangent_vector_c(:n_param)
 
-        error = 0_c_ip
+        error = host_context_error(context_c)
 
     end function mock_transport
 
     function mock_init_hess(vector_c, context_c) result(error) bind(C)
         !
-        ! this subroutine is a mock subroutine for the initial Hessian C function
+        ! this subroutine is a mock subroutine for the initial Hessian C function, which
+        ! returns the error code set in the host context
         !
-        use test_reference, only: check_host_context_c
+        use test_reference, only: check_host_context_c, host_context_error
 
         real(c_rp), intent(inout), target :: vector_c(*)
         type(c_ptr), intent(in), value :: context_c
@@ -52,7 +54,7 @@ contains
 
         vector_c(:n_param) = 2.0_c_rp * vector_c(:n_param)
 
-        error = 0_c_ip
+        error = host_context_error(context_c)
 
     end function mock_init_hess
 
@@ -77,7 +79,8 @@ contains
         use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func, mock_logger
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
-        type(c_funptr) :: update_orbs_qn_c_funptr, obj_func_qn_c_funptr
+        type(c_funptr) :: update_orbs_qn_c_funptr, obj_func_qn_c_funptr, &
+                          first_update_orbs_c_funptr, first_obj_func_c_funptr
         type(solver_settings_type_c) :: solver_settings_c
         type(solver_state_type_c), target :: state_c
         type(qn_settings_type_c) :: settings
@@ -191,13 +194,26 @@ contains
             end if
         end if
 
-        ! call the factory again with the solver settings it wired, which has to stack
-        ! a new holder on the first
+        ! call the factory again with the solver settings it wired and the functions it
+        ! returned, as a host has to, which has to stack a new holder on the first,
+        ! whose functions the mock factory checks through the C wrappers of the first
+        ! holder, which forward to the host's functions with the armed host context
+        call arm_host_context_c(settings%context)
+        test_passed_mock_qn_factory = .false.
+        first_update_orbs_c_funptr = update_orbs_qn_c_funptr
+        first_obj_func_c_funptr = obj_func_qn_c_funptr
         error_c = qn_factory_c_wrapper( &
-            n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
+            n_param_c, first_update_orbs_c_funptr, first_obj_func_c_funptr, &
             c_funloc(mock_transport), c_funloc(mock_init_hess), &
             update_orbs_qn_c_funptr, obj_func_qn_c_funptr, stacked_extension_c, &
             solver_settings_c, c_loc(state_c), settings)
+        if (.not. test_passed_mock_qn_factory) then
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Mock factory "// &
+                "received wrong input for solver settings already wired."
+            test_qn_factory_c_wrapper = .false.
+        end if
+        if (.not. host_context_reached("qn_factory_c_wrapper")) &
+            test_qn_factory_c_wrapper = .false.
         if (error_c /= 0 .or. .not. c_associated(stacked_extension_c) .or. &
             c_associated(stacked_extension_c, extension_c)) then
             write(stderr, *) "test_qn_factory_c_wrapper failed: Solver settings "// &
@@ -277,11 +293,15 @@ contains
             test_qn_factory_c_wrapper = .false.
         end if
 
-        ! call the factory with a mock factory which produces an error, which has to be
-        ! returned without functions, an extension or writing back the solver settings
+        ! call the factory with a mock factory which produces an error after its checks,
+        ! with the armed host context, which has to be returned without functions, an
+        ! extension or writing back the solver settings
+        call arm_host_context_c(settings%context)
         solver_settings_c = default_solver_settings
+        solver_settings_c%context = c_loc(host_context)
         update_orbs_qn_c_funptr = c_funloc(mock_update_orbs)
         obj_func_qn_c_funptr = c_funloc(mock_obj_func)
+        test_passed_mock_qn_factory = .false.
         mock_qn_factory_error = 1
         error_c = qn_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
@@ -289,9 +309,16 @@ contains
             update_orbs_qn_c_funptr, obj_func_qn_c_funptr, extension_c, &
             solver_settings_c, c_loc(state_c), settings)
         mock_qn_factory_error = 0
+        if (.not. test_passed_mock_qn_factory) then
+            write(stderr, *) "test_qn_factory_c_wrapper failed: Mock factory "// &
+                "received wrong input for a failing factory."
+            test_qn_factory_c_wrapper = .false.
+        end if
+        if (.not. host_context_reached("qn_factory_c_wrapper")) &
+            test_qn_factory_c_wrapper = .false.
         if (error_c /= 1 .or. c_associated(update_orbs_qn_c_funptr) .or. &
             c_associated(obj_func_qn_c_funptr) .or. c_associated(extension_c) .or. &
-            c_associated(solver_settings_c%context)) then
+            .not. c_associated(solver_settings_c%context, c_loc(host_context))) then
             write(stderr, *) "test_qn_factory_c_wrapper failed: Error of the "// &
                 "factory not passed on."
             test_qn_factory_c_wrapper = .false.
@@ -310,12 +337,12 @@ contains
         use otr_qn, only: transport_type
         use otr_qn_c_interface, only: qn_c_callbacks_type, transport_f_wrapper
         use otr_qn_test_reference, only: check_transport_funptr
-        use test_reference, only: arm_host_context_c, host_context_reached
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(qn_c_callbacks_type), target :: callbacks
         procedure(transport_type), pointer :: transport_funptr
         class(*), pointer :: context
-        real(rp) :: vector(n_param)
+        real(rp) :: geodesic(n_param), tangent_vector(n_param)
         integer(ip) :: error
 
         ! assume tests pass
@@ -337,11 +364,22 @@ contains
         if (.not. host_context_reached("transport_f_wrapper")) &
             test_transport_f_wrapper = .false.
 
+        ! a C function that fails has to have its error returned
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 3
+        call random_number(geodesic)
+        call random_number(tangent_vector)
+        call transport_f_wrapper(geodesic, tangent_vector, error, context)
+        if (error /= 3) then
+            write(stderr, *) "test_transport_f_wrapper failed: Error of the C "// &
+                "function not returned."
+            test_transport_f_wrapper = .false.
+        end if
+
         ! a context that is no bundle has to produce an error
-        vector = 1.0_rp
         context => null()
-        call transport_f_wrapper(vector, vector, error, context)
-        if (error == 0) then
+        call transport_f_wrapper(geodesic, tangent_vector, error, context)
+        if (error /= 1) then
             write(stderr, *) "test_transport_f_wrapper failed: No error produced "// &
                 "without a bundle."
             test_transport_f_wrapper = .false.
@@ -357,7 +395,7 @@ contains
         use otr_qn, only: init_hess_type
         use otr_qn_c_interface, only: qn_c_callbacks_type, init_hess_f_wrapper
         use otr_qn_test_reference, only: check_init_hess_funptr
-        use test_reference, only: arm_host_context_c, host_context_reached
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
 
         type(qn_c_callbacks_type), target :: callbacks
         procedure(init_hess_type), pointer :: init_hess_funptr
@@ -384,11 +422,21 @@ contains
         if (.not. host_context_reached("init_hess_f_wrapper")) &
             test_init_hess_f_wrapper = .false.
 
+        ! a C function that fails has to have its error returned
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 3
+        call random_number(vector)
+        call init_hess_f_wrapper(vector, error, context)
+        if (error /= 3) then
+            write(stderr, *) "test_init_hess_f_wrapper failed: Error of the C "// &
+                "function not returned."
+            test_init_hess_f_wrapper = .false.
+        end if
+
         ! a context that is no bundle has to produce an error
-        vector = 1.0_rp
         context => null()
         call init_hess_f_wrapper(vector, error, context)
-        if (error == 0) then
+        if (error /= 1) then
             write(stderr, *) "test_init_hess_f_wrapper failed: No error produced "// &
                 "without a bundle."
             test_init_hess_f_wrapper = .false.
@@ -403,20 +451,23 @@ contains
         !
         use otr_qn_c_interface, only: qn_settings_type_c, init_qn_settings_c
         use otr_qn, only: default_qn_settings
-        use otr_qn_test_reference, only: operator(/=)
+        use otr_qn_test_reference, only: get_reference_qn_values, operator(/=)
 
         type(qn_settings_type_c) :: settings
 
         ! assume test passes
         test_init_qn_settings_c = .true.
 
-        ! initialize settings
+        ! initialize settings which hold the reference values with a logging function
+        ! and a host context, so that a field the initialization leaves alone keeps a
+        ! value that differs from its default
+        call get_reference_qn_values(settings)
         call init_qn_settings_c(settings)
 
-        ! check function pointers
-        if (c_associated(settings%logger)) then
-            write(stderr, *) "test_init_qn_settings_c failed: Function pointers "// &
-                "should not be initialized."
+        ! check function pointers and host context
+        if (c_associated(settings%logger) .or. c_associated(settings%context)) then
+            write(stderr, *) "test_init_qn_settings_c failed: Logging function or "// &
+                "host context kept."
             test_init_qn_settings_c = .false.
         end if
 
@@ -508,9 +559,10 @@ contains
         ! this function tests that the function that converts quasi-Newton settings
         ! from Fortran to C correctly performs this conversion
         !
-        use otr_qn, only: qn_settings_type
+        use otr_qn, only: qn_settings_type, default_qn_settings
         use otr_qn_c_interface, only: qn_settings_type_c, assignment(=)
-        use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
+        use otr_qn_test_reference, only: ref_qn_settings, get_reference_qn_values, &
+                                         operator(/=)
 
         type(qn_settings_type) :: settings
         type(qn_settings_type_c) :: settings_c
@@ -518,10 +570,10 @@ contains
         ! assume test passes
         test_assign_qn_c_f = .true.
 
-        ! initialize Fortran settings with reference values
+        ! convert Fortran settings with the reference values to C settings which hold a
+        ! logging function and a host context that the conversion has to discard
         settings = ref_qn_settings
-
-        ! convert to C settings
+        call get_reference_qn_values(settings_c)
         settings_c = settings
 
         ! check that no callback function pointers and host contexts are associated
@@ -546,6 +598,20 @@ contains
             test_assign_qn_c_f = .false.
             write(stderr, *) "test_assign_qn_c_f failed: Settings not marked as "// &
                 "initialized."
+        end if
+
+        ! convert the default settings into C settings which hold the reference values
+        ! and are marked as not initialized, so that a field which is not converted,
+        ! including the initialized flag, keeps a value that differs from the expected
+        ! one
+        call get_reference_qn_values(settings_c)
+        settings_c%initialized = .false.
+        settings = default_qn_settings
+        settings_c = settings
+        if (settings_c /= default_qn_settings) then
+            write(stderr, *) "test_assign_qn_c_f failed: Default settings not "// &
+                "converted correctly."
+            test_assign_qn_c_f = .false.
         end if
 
     end function test_assign_qn_c_f
