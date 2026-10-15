@@ -50,7 +50,8 @@ The build process can be customized using the following CMake options:
 | Option | Type | Default | Description |
 |--------|------|----------|------------|
 | **BUILD_SHARED_LIBS** | `BOOL` | `OFF` | Build shared libraries (`.so`, `.dylib`) instead of static ones. |
-| **OpenTrustRegion_BUILD_TESTING** | `BOOL` | `ON` | Build the project’s testsuite. |
+| **OpenTrustRegion_BUILD_TESTING** | `BOOL` | `ON` when built as the top-level project, `OFF` otherwise | Build the project’s testsuite. |
+| **OpenTrustRegion_INSTALL_TESTING_LIBRARY** | `BOOL` | `OFF` | Install the library the testsuite runs (`libotrtestsuite`) together with the library. |
 | **OpenTrustRegion_INSTALL_CMAKEDIR** | `STRING` | (auto) | Project install directory. |
 | **CMAKE_BUILD_TYPE** | `STRING` | `Release` | Choose the build type (`Debug`, `Release`, etc.). |
 | **INTEGER_SIZE** | `STRING` | *(auto)* | Set the integer precision to `4` (32-bit) or `8` (64-bit). Required when providing custom BLAS/LAPACK libraries. Otherwise defaults to 32-bit integers and tries to locate compatible BLAS and LAPACK libraries. Falls back to 64-bit integers if 32-bit libraries cannot be found. The resulting library name reflects the chosen integer precision (`libopentrustregion_32.*` or `libopentrustregion_64.*`). C programs compiled against the header of a library with 64-bit integers need `OTR_ILP64` defined, which linking the CMake target `OpenTrustRegion::opentrustregion` does automatically. |
@@ -260,7 +261,7 @@ The optimization process can be fine-tuned using the following settings:
 - **`verbose`** (integer): Controls the verbosity of output during optimization. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors and the random gradient perturbation.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The factories of the extensions create a new object for every call, so solves using them can run at the same time or be nested in the same way.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it, and the `solver` uses it only during the call. An extension factory, however, keeps the context of the settings it wires, nested stability check settings included, until the extension is released (see [Optional Extensions](#optional-extensions)), so it must stay valid that long. Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The factories of the extensions create a new object for every call, so solves using them can run at the same time or be nested in the same way.
 - **`stability_settings`** (stability_settings_type): Settings object controlling the internal stability check that is automatically performed upon convergence when `stability` is `True` and in any case at a starting point that is already converged and at a point with an exactly vanishing gradient (see the Stability Check section below). If `stability_settings%precond`, `stability_settings%project`, `stability_settings%logger`, or `stability_settings%context` are left unset, they default to the corresponding `precond`, `project`, `logger`, and `context` supplied to `solver`. The internal stability check hands its own context to every callback function it calls, so when `stability_settings%context` is set, the Hessian linear transformation returned by `update_orbs` and any inherited `precond`, `project` or `logger` receive it instead of the solver's `context` and must accept it. Leaving it unset keeps the solver's `context` everywhere. `stability_settings%verbose` is raised to at least the solver's own `verbose` level. Unless `stability_settings%conv_check` is set, the internal stability check stops as soon as an instability is certain (see `stop_on_instability`), and by default it uses a single random trial vector.
 
 ### Output
@@ -452,7 +453,7 @@ The stability check can be fine-tuned using the following settings:
 - **`verbose`** (integer): Controls the verbosity of output during the stability check. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors.
 - **`logger`** (function): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call. Two stability checks can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it, and `stability_check` uses it only during the call. Nested stability check settings are the exception: once an extension factory has wired the solver settings that hold them, their context stays in use until the extension is released. Two stability checks can therefore run at the same time, or be nested inside one another, as long as each is given its own settings object and state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 
 ### Output
 The stability check keeps the state it is given up to date during its iterations, starting from the default values on every call, and leaves its final state in it when it returns, also after an error. As for the solver, a callback function can therefore read the current state. The state holds the following fields:
@@ -514,7 +515,7 @@ Future versions may define more specific codes for other actionable failure mode
 
 OpenTrustRegion (OTR) supports additional optional modules that can be enabled during installation. These include **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **quasi-Newton**, **augmented Roothaan–Hall (ARH)**, and **subspace gradient-enhanced kriging (S-GEK)**.
 
-A host can wrap the functions a factory returns and the routines it wires into the solver settings, for example to count their calls. A Fortran or C wrapper passes the context it receives on to the wrapped function unchanged. Where a factory takes the functions another factory returned, as the quasi-Newton and S-GEK factories do on settings a factory wired, Python accepts a wrapper in their place only if it is made with `functools.wraps`, which marks the function it wraps:
+A host can wrap the functions a factory returns and the routines it wires into the solver settings, for example to count their calls. A Fortran or C wrapper passes the context it receives on to the wrapped function unchanged. Where a factory takes the functions another factory returned, as the quasi-Newton and S-GEK factories do on settings a factory wired, Fortran accepts only the returned functions themselves, C cannot tell a wrapper from your own function, and Python accepts a wrapper in their place only if it is made with `functools.wraps`, which marks the function it wraps:
 
 ```python
 import functools
@@ -618,6 +619,7 @@ call solver(update_orbs_mo_funptr, obj_func_mo_funptr, n_param, error, settings,
 The following C snippet demonstrates equivalent usage through the C interface:
 
 ```C
+#include <stddef.h>
 #include "opentrustregion.h"
 #include "opentrustregion_mo.h"
 
@@ -711,7 +713,8 @@ solver(update_orbs_mo, obj_func_mo, n_param, settings, state)
 The MO factory can be fine-tuned using the following settings:
 
 - **`verbose`** (integer): Controls the verbosity of output of the MO routines.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm`, of the `get_response` it returns and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
+- **`logger`** (subroutine): Accepts a log message of the MO routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm`, of the `get_response` it returns and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
 ### Orthogonal Atomic Orbitals (OAO)
 
@@ -802,7 +805,7 @@ call oao_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
                  oao_settings)
 
 ! set number of parameters
-n_param = n_ao * (n_ao - 1) / 2
+n_param = n_particle * n_ao * (n_ao - 1) / 2
 
 ! call solver
 call solver(update_orbs_oao_funptr, obj_func_oao_funptr, n_param, error, settings, &
@@ -850,7 +853,7 @@ c_int error = oao_factory(dm_ao,
                           &oao_settings);
 
 // set number of parameters
-n_param = n_ao * (n_ao - 1) / 2;
+n_param = n_particle * n_ao * (n_ao - 1) / 2;
 
 // call solver
 error = solver(update_orbs_oao_funptr, obj_func_oao_funptr, n_param, &settings, &state);
@@ -905,7 +908,8 @@ solver(update_orbs_oao, obj_func_oao, n_param, settings, state)
 The OAO factory can be fine-tuned using the following settings:
 
 - **`verbose`** (integer): Controls the verbosity of output of the OAO routines.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm`, of the `get_response` it returns and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
+- **`logger`** (subroutine): Accepts a log message of the OAO routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm`, of the `get_response` it returns and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
 ### Quasi-Newton Extension
 
@@ -939,7 +943,7 @@ This allows the solver to automatically update the Hessian using a quasi-Newton 
 - **`update_orbs_qn`** (subroutine): Returned quasi-Newton orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_qn`** (function): Returned objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new quasi-Newton object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, or wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran and Python refuse other functions with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`qn_settings`** (qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
@@ -1084,7 +1088,8 @@ The quasi-Newton factory function can be fine-tuned using the following settings
   - `"bfgs"`: Broyden-Fletcher-Goldfarb-Shanno update,
 - **`max_points`** (integer): Maximum number of points the history of steps and gradient differences keeps, at least 0, where 0 keeps none.
 - **`verbose`** (integer): Controls the verbosity of output of the quasi-Newton routines.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport` and `init_hess` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
+- **`logger`** (subroutine): Accepts a log message of the quasi-Newton routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport` and `init_hess` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
 ### Augmented Roothaan–Hall (ARH)
 
@@ -1206,6 +1211,7 @@ call solver(update_orbs_arh_funptr, obj_func_arh_funptr, n_param, error, setting
 The following C snippet demonstrates equivalent usage through the C interface:
 
 ```C
+#include <stddef.h>
 #include "opentrustregion.h"
 #include "opentrustregion_arh.h"
 
@@ -1340,7 +1346,8 @@ The ARH factory can be fine-tuned using the following settings:
   - `"ms_sp"`: subspace-projected multisecant method,
   - `"ms_sr1"`: multisecant symmetric-rank-1 method, which treats the linear (Coulomb and exact exchange) part of the response exactly as the difference of a Coulomb and an exact-exchange multisecant term, each bounded by its positive semidefinite kernel, and the non-linear (exchange-correlation) part through a separate multisecant system regularized by the multisecant analogue of the SR1 skipping criterion.
 - **`verbose`** (integer): Controls the verbosity of output of the ARH routines.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
+- **`logger`** (subroutine): Accepts a log message of the ARH routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
 ### Subspace Gradient-Enhanced Kriging Extension
 
@@ -1373,7 +1380,7 @@ This allows the solver to automatically update the Hessian by building and evalu
 - **`update_orbs_s_gek`** (subroutine): Returned S-GEK orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_s_gek`** (function): Returned objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new S-GEK object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `s_gek_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, or wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran and Python refuse other functions with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `s_gek_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`s_gek_settings`** (s_gek_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
@@ -1513,7 +1520,8 @@ The S-GEK factory function can be fine-tuned using the following settings:
 - **`use_subspace`** (boolean): Specifies whether the surrogate model is constructed in a subspace.
 - **`max_points`** (integer): Controls the number of points for the surrogate model and subspace construction, at least 1.
 - **`verbose`** (integer): Controls the verbosity of output of the S-GEK routines.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `change_reference` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
+- **`logger`** (subroutine): Accepts a log message of the S-GEK routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `change_reference` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
 ## AI Usage Disclosure
 
