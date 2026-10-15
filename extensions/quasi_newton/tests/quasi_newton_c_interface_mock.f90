@@ -10,7 +10,7 @@ module otr_qn_c_interface_mock
     use c_interface, only: c_ip
     use otr_qn_c_interface, only: qn_factory_c_wrapper, init_qn_settings_c
     use otr_qn_test_reference, only: ref_qn_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_null_funptr, &
                                            c_null_ptr
 
@@ -38,7 +38,6 @@ contains
         ! this subroutine is a mock routine for the quasi-Newton orbital updating
         ! factory C wrapper subroutine
         !
-        use, intrinsic :: iso_c_binding, only: c_ptr, c_null_ptr
         use otr_qn_c_interface, only: qn_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &

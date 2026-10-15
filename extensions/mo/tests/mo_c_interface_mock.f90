@@ -12,7 +12,7 @@ module otr_mo_c_interface_mock
     use otr_mo_test_reference, only: ref_mo_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_f_pointer, c_loc, &
-                                           c_null_funptr, c_null_ptr
+                                           c_null_funptr, c_null_ptr, c_associated
 
     implicit none
 
@@ -78,7 +78,6 @@ contains
         ! this subroutine is a mock routine for the MO orbital updating factory C
         ! wrapper subroutine
         !
-        use, intrinsic :: iso_c_binding, only: c_null_ptr, c_associated
         use otr_mo_c_interface, only: mo_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c

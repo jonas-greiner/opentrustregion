@@ -66,6 +66,7 @@ contains
         use otr_common, only: extension_level_type
         use otr_common_unit_tests, only: wired_level
         use otr_common_c_interface, only: extension_holder_type
+        use otr_qn, only: standard_qn_factory => qn_factory
         use otr_qn_c_interface, only: qn_settings_type_c, qn_c_callbacks_type, &
                                       qn_factory, qn_factory_c_wrapper
         use otr_qn_mock, only: mock_qn_factory, mock_qn_factory_error, &
@@ -143,52 +144,52 @@ contains
         if (.not. c_associated(extension_c)) then
             write(stderr, *) "test_qn_factory_c_wrapper failed: No extension returned."
             test_qn_factory_c_wrapper = .false.
-            return
-        end if
-        call c_f_pointer(extension_c, holder)
+        else
+            call c_f_pointer(extension_c, holder)
 
-        ! check that the settings of the holder, which own the object, were wired with
-        ! it, that it reads the state of the holder and that the holder holds the
-        ! bundle of the transport and initial Hessian functions and the host's record
-        ! of the state
-        level => wired_level(holder%solver_settings)
-        if (.not. associated(level)) then
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Settings of the "// &
-                "holder not wired with an object."
-            test_qn_factory_c_wrapper = .false.
-            return
-        end if
-        if (.not. associated(level%extension%state, holder%state)) then
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Object does not "// &
-                "read the state of the holder."
-            test_qn_factory_c_wrapper = .false.
-        end if
-        select type (callbacks => holder%extension_callbacks)
-        type is (qn_c_callbacks_type)
-            if (.not. (associated(callbacks%transport, mock_transport) .and. &
-                       associated(callbacks%init_hess, mock_init_hess))) then
-                write(stderr, *) "test_qn_factory_c_wrapper failed: Callback slots "// &
-                    "not set."
+            ! check that the settings of the holder, which own the object, were wired
+            ! with it, that it reads the state of the holder and that the holder holds
+            ! the bundle of the transport and initial Hessian functions and the host's
+            ! record of the state
+            level => wired_level(holder%solver_settings)
+            if (.not. associated(level)) then
+                write(stderr, *) "test_qn_factory_c_wrapper failed: Settings of "// &
+                    "the holder not wired with an object."
                 test_qn_factory_c_wrapper = .false.
-            end if
-        class default
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Bundle of the "// &
-                "callback functions not held."
-            test_qn_factory_c_wrapper = .false.
-        end select
-        if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
-                   associated(holder%stability_level%state_c, state_c))) then
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Host's record of "// &
-                "the state not held."
-            test_qn_factory_c_wrapper = .false.
-        end if
+            else
+                if (.not. associated(level%extension%state, holder%state)) then
+                    write(stderr, *) "test_qn_factory_c_wrapper failed: Object "// &
+                        "does not read the state of the holder."
+                    test_qn_factory_c_wrapper = .false.
+                end if
+                select type (callbacks => holder%extension_callbacks)
+                type is (qn_c_callbacks_type)
+                    if (.not. (associated(callbacks%transport, mock_transport) .and. &
+                               associated(callbacks%init_hess, mock_init_hess))) then
+                        write(stderr, *) "test_qn_factory_c_wrapper failed: "// &
+                            "Callback slots not set."
+                        test_qn_factory_c_wrapper = .false.
+                    end if
+                class default
+                    write(stderr, *) "test_qn_factory_c_wrapper failed: Bundle of "// &
+                        "the callback functions not held."
+                    test_qn_factory_c_wrapper = .false.
+                end select
+                if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
+                           associated(holder%stability_level%state_c, state_c))) then
+                    write(stderr, *) "test_qn_factory_c_wrapper failed: Host's "// &
+                        "record of the state not held."
+                    test_qn_factory_c_wrapper = .false.
+                end if
 
-        ! check that the factory returned the C wrappers of the object and wired the
-        ! solver settings with its holder
-        if (.not. check_c_factory_wiring("qn_factory_c_wrapper", holder, &
-                                         level%extension, update_orbs_qn_c_funptr, &
-                                         obj_func_qn_c_funptr, solver_settings_c)) &
-            test_qn_factory_c_wrapper = .false.
+                ! check that the factory returned the C wrappers of the object and
+                ! wired the solver settings with its holder
+                if (.not. check_c_factory_wiring( &
+                    "qn_factory_c_wrapper", holder, level%extension, &
+                    update_orbs_qn_c_funptr, obj_func_qn_c_funptr, solver_settings_c)) &
+                    test_qn_factory_c_wrapper = .false.
+            end if
+        end if
 
         ! call the factory again with the solver settings it wired, which has to stack
         ! a new holder on the first
@@ -295,6 +296,9 @@ contains
                 "factory not passed on."
             test_qn_factory_c_wrapper = .false.
         end if
+
+        ! restore the procedure pointer so later tests do not inherit the mock
+        qn_factory => standard_qn_factory
 
     end function test_qn_factory_c_wrapper
 

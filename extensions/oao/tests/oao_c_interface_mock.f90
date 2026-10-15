@@ -11,9 +11,9 @@ module otr_oao_c_interface_mock
     use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c
     use otr_oao_test_reference, only: ref_oao_settings
     use otr_common_test_reference, only: n_particle, n_ao
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_null_funptr, &
-                                           c_null_ptr
+                                           c_null_ptr, c_associated
 
     implicit none
 
@@ -41,7 +41,6 @@ contains
         ! this subroutine is a mock routine for the OAO orbital updating factory C
         ! wrapper subroutine
         !
-        use, intrinsic :: iso_c_binding, only: c_ptr, c_null_ptr, c_associated
         use otr_oao_c_interface, only: oao_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c

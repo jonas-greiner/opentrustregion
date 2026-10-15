@@ -74,6 +74,7 @@ contains
         use otr_common, only: extension_level_type
         use otr_common_unit_tests, only: wired_level
         use otr_common_c_interface, only: extension_holder_type
+        use otr_s_gek, only: standard_s_gek_factory => s_gek_factory
         use otr_s_gek_c_interface, only: s_gek_settings_type_c, &
                                          s_gek_c_callbacks_type, s_gek_factory, &
                                          s_gek_factory_c_wrapper
@@ -163,51 +164,52 @@ contains
             write(stderr, *) "test_s_gek_factory_c_wrapper failed: No extension "// &
                 "returned."
             test_s_gek_factory_c_wrapper = .false.
-            return
-        end if
-        call c_f_pointer(extension_c, holder)
+        else
+            call c_f_pointer(extension_c, holder)
 
-        ! check that the settings of the holder, which own the object, were wired with
-        ! it, that it reads the state of the holder and that the holder holds the
-        ! bundle of the change of reference function and the host's record of the state
-        level => wired_level(holder%solver_settings)
-        if (.not. associated(level)) then
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Settings of the "// &
-                "holder not wired with an object."
-            test_s_gek_factory_c_wrapper = .false.
-            return
-        end if
-        if (.not. associated(level%extension%state, holder%state)) then
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Object does not "// &
-                "read the state of the holder."
-            test_s_gek_factory_c_wrapper = .false.
-        end if
-        select type (callbacks => holder%extension_callbacks)
-        type is (s_gek_c_callbacks_type)
-            if (.not. associated(callbacks%change_reference, mock_change_reference)) &
-                then
-                write(stderr, *) "test_s_gek_factory_c_wrapper failed: Callback "// &
-                    "slot not set."
+            ! check that the settings of the holder, which own the object, were wired
+            ! with it, that it reads the state of the holder and that the holder holds
+            ! the bundle of the change of reference function and the host's record of
+            ! the state
+            level => wired_level(holder%solver_settings)
+            if (.not. associated(level)) then
+                write(stderr, *) "test_s_gek_factory_c_wrapper failed: Settings of "// &
+                    "the holder not wired with an object."
                 test_s_gek_factory_c_wrapper = .false.
-            end if
-        class default
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Bundle of the "// &
-                "callback functions not held."
-            test_s_gek_factory_c_wrapper = .false.
-        end select
-        if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
-                   associated(holder%stability_level%state_c, state_c))) then
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Host's record "// &
-                "of the state not held."
-            test_s_gek_factory_c_wrapper = .false.
-        end if
+            else
+                if (.not. associated(level%extension%state, holder%state)) then
+                    write(stderr, *) "test_s_gek_factory_c_wrapper failed: Object "// &
+                        "does not read the state of the holder."
+                    test_s_gek_factory_c_wrapper = .false.
+                end if
+                select type (callbacks => holder%extension_callbacks)
+                type is (s_gek_c_callbacks_type)
+                    if (.not. associated(callbacks%change_reference, &
+                                         mock_change_reference)) then
+                        write(stderr, *) "test_s_gek_factory_c_wrapper failed: "// &
+                            "Callback slot not set."
+                        test_s_gek_factory_c_wrapper = .false.
+                    end if
+                class default
+                    write(stderr, *) "test_s_gek_factory_c_wrapper failed: Bundle "// &
+                        "of the callback functions not held."
+                    test_s_gek_factory_c_wrapper = .false.
+                end select
+                if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
+                           associated(holder%stability_level%state_c, state_c))) then
+                    write(stderr, *) "test_s_gek_factory_c_wrapper failed: Host's "// &
+                        "record of the state not held."
+                    test_s_gek_factory_c_wrapper = .false.
+                end if
 
-        ! check that the factory returned the C wrappers of the object and wired the
-        ! solver settings with its holder
-        if (.not. check_c_factory_wiring("s_gek_factory_c_wrapper", holder, &
-                                         level%extension, update_orbs_s_gek_c_funptr, &
-                                         obj_func_s_gek_c_funptr, solver_settings_c)) &
-            test_s_gek_factory_c_wrapper = .false.
+                ! check that the factory returned the C wrappers of the object and
+                ! wired the solver settings with its holder
+                if (.not. check_c_factory_wiring( &
+                    "s_gek_factory_c_wrapper", holder, level%extension, &
+                    update_orbs_s_gek_c_funptr, obj_func_s_gek_c_funptr, &
+                    solver_settings_c)) test_s_gek_factory_c_wrapper = .false.
+            end if
+        end if
 
         ! call the factory again with the solver settings it wired, which has to stack
         ! a new holder on the first
@@ -316,6 +318,9 @@ contains
                 "factory not passed on."
             test_s_gek_factory_c_wrapper = .false.
         end if
+
+        ! restore the procedure pointer so later tests do not inherit the mock
+        s_gek_factory => standard_s_gek_factory
 
     end function test_s_gek_factory_c_wrapper
 

@@ -10,7 +10,7 @@ module otr_s_gek_c_interface_mock
     use c_interface, only: c_ip
     use otr_s_gek_c_interface, only: s_gek_factory_c_wrapper, init_s_gek_settings_c
     use otr_s_gek_test_reference, only: ref_s_gek_settings
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_null_funptr, &
                                            c_null_ptr
 
@@ -38,7 +38,6 @@ contains
         ! this subroutine is a mock routine for the S-GEK orbital updating factory C
         ! wrapper subroutine
         !
-        use, intrinsic :: iso_c_binding, only: c_ptr, c_null_ptr
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &

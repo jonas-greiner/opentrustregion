@@ -10,7 +10,7 @@ module otr_arh_c_interface_mock
     use c_interface, only: c_ip
     use otr_arh_test_reference, only: ref_arh_settings
     use otr_arh_c_interface, only: arh_factory_c_wrapper, init_arh_settings_c
-    use, intrinsic :: iso_c_binding, only: c_bool, c_funptr, c_f_procpointer, &
+    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_null_funptr, &
                                            c_null_ptr
 
@@ -39,7 +39,6 @@ contains
         !
         ! this subroutine is a mock routine for the C wrapper of the ARH factory
         !
-        use, intrinsic :: iso_c_binding, only: c_ptr, c_null_ptr
         use otr_arh, only: arh_n_micro
         use otr_arh_c_interface, only: arh_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
