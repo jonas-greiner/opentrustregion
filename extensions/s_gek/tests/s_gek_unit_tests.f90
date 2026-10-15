@@ -8,7 +8,7 @@ module otr_s_gek_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use test_reference, only: tol, n_param
-    use otr_s_gek, only: change_reference_type
+    use otr_s_gek, only: change_reference_type, s_gek_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -16,6 +16,16 @@ module otr_s_gek_unit_tests
     ! create function pointers to ensure that routines comply with interface
     procedure(change_reference_type), pointer :: mock_change_reference_ptr => &
         mock_change_reference
+
+    ! S-GEK object which records the point its orbital update adds and returns the
+    ! error code it is set to, for the test of the orbital update
+    type, extends(s_gek_type) :: recording_s_gek_type
+        integer(ip) :: n_added = 0, error = 0
+        real(rp) :: added_func = 0.0_rp
+        real(rp), allocatable :: added_kappa(:), added_grad(:), added_h_diag(:)
+    contains
+        procedure :: add => recording_add_s_gek
+    end type
 
 contains
 
@@ -40,6 +50,25 @@ contains
         error = record_host_call("change_reference", context)
 
     end subroutine mock_change_reference
+
+    subroutine recording_add_s_gek(self, kappa, obj_func, grad, h_diag, error)
+        !
+        ! this subroutine records the step, objective function, gradient and Hessian
+        ! diagonal of the point the recording S-GEK object is given and returns the
+        ! error code it is set to
+        !
+        class(recording_s_gek_type), intent(inout) :: self
+        real(rp), intent(in) :: kappa(:), obj_func, grad(:), h_diag(:)
+        integer(ip), intent(out) :: error
+
+        self%n_added = self%n_added + 1
+        self%added_kappa = kappa
+        self%added_func = obj_func
+        self%added_grad = grad
+        self%added_h_diag = h_diag
+        error = self%error
+
+    end subroutine recording_add_s_gek
 
     logical(c_bool) function test_s_gek_factory() bind(C)
         !
@@ -290,6 +319,113 @@ contains
 
     end function test_s_gek_sanity_check
 
+    logical(c_bool) function test_update_orbs_s_gek() bind(C)
+        !
+        ! this function tests the S-GEK orbital update, which forwards to the host's
+        ! orbital update with the host context of the solver level, returns its results
+        ! and error, returns the S-GEK Hessian linear transformation in place of the
+        ! host's and adds the point for a nonzero step and for the starting point, so
+        ! that the S-GEK Hessian linear transformation never runs on a model without
+        ! points, passing on the error of the addition
+        !
+        use opentrustregion, only: hess_x_type
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: hess_x_callback
+        use otr_common_mock, only: mock_update_orbs
+        use otr_s_gek, only: default_s_gek_settings
+        use test_reference, only: arm_host_context, host_context_reached
+
+        type(recording_s_gek_type), target :: object
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: kappa(n_param), func, grad(n_param), h_diag(n_param)
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        integer(ip) :: error, i_case
+        character(len=31), parameter :: case_names(5) = &
+            [character(len=31) :: "the starting point", "a zero step after the start", &
+             "a nonzero step", "a failing host's orbital update", "a failing addition"]
+        logical, parameter :: case_adds(5) = [.true., .false., .true., .false., .true.]
+        integer(ip), parameter :: case_errors(5) = [0, 0, 0, 3, 4]
+
+        ! assume tests pass
+        test_update_orbs_s_gek = .true.
+
+        ! set up an object whose solver level forwards to the host's mock orbital update
+        ! with a host context distinct from that of its settings
+        object%n_param = n_param
+        object%settings = default_s_gek_settings
+        object%solver_level%host%update_orbs => mock_update_orbs
+        object%solver_level%host%context => contexts(1)
+        context => object%solver_level
+
+        ! call the orbital update with a zero step before and after the starting point
+        ! was added, with a nonzero step, whose entries sum to a negative number, so
+        ! that only their magnitudes show it is nonzero, and with a failing host's
+        ! orbital update or addition, and determine if it forwards with the host
+        ! context of the solver level, returns the host's results and error, returns
+        ! the role callback function of the Hessian linear transformation and adds the
+        ! point exactly where it has to
+        do i_case = 1, size(case_names)
+            call arm_host_context(object%settings, contexts(2))
+            contexts(1)%n_calls = 0
+            contexts(1)%mock_error = 0
+            if (i_case == 4) contexts(1)%mock_error = case_errors(i_case)
+            object%error = 0
+            if (i_case == 5) object%error = case_errors(i_case)
+            object%n_added = 0
+            object%n_points = merge(0, 1, i_case == 1)
+            kappa = 0.0_rp
+            if (i_case > 2) then
+                call random_number(kappa)
+                kappa = kappa - 1.0_rp
+            end if
+            call object%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                    context)
+            if (error /= case_errors(i_case)) then
+                write(stderr, *) "test_update_orbs_s_gek failed: Returned error "// &
+                    "code wrong for "//trim(case_names(i_case))//"."
+                test_update_orbs_s_gek = .false.
+            end if
+            if (abs(func - sum(kappa)) > tol .or. &
+                any(abs(grad - 2.0_rp * kappa) > tol) .or. &
+                any(abs(h_diag - 3.0_rp * kappa) > tol)) then
+                write(stderr, *) "test_update_orbs_s_gek failed: Results of the "// &
+                    "host's orbital update not returned for "// &
+                    trim(case_names(i_case))//"."
+                test_update_orbs_s_gek = .false.
+            end if
+            if (contexts(1)%n_calls /= 1 .or. contexts(2)%n_calls /= 0) then
+                write(stderr, *) "test_update_orbs_s_gek failed: Host's orbital "// &
+                    "update not called with the host context of the solver level "// &
+                    "for "//trim(case_names(i_case))//"."
+                test_update_orbs_s_gek = .false.
+            end if
+            if (.not. host_context_reached("update_orbs_s_gek", contexts(1))) &
+                test_update_orbs_s_gek = .false.
+            if (i_case /= 4 .and. .not. associated(hess_x_funptr, hess_x_callback)) then
+                write(stderr, *) "test_update_orbs_s_gek failed: Role callback "// &
+                    "function of the Hessian linear transformation not returned "// &
+                    "for "//trim(case_names(i_case))//"."
+                test_update_orbs_s_gek = .false.
+            end if
+            if (object%n_added /= merge(1, 0, case_adds(i_case))) then
+                write(stderr, *) "test_update_orbs_s_gek failed: Point added "// &
+                    "wrongly for "//trim(case_names(i_case))//"."
+                test_update_orbs_s_gek = .false.
+            else if (case_adds(i_case)) then
+                if (any(abs(object%added_kappa - kappa) > tol) .or. &
+                    abs(object%added_func - func) > tol .or. &
+                    any(abs(object%added_grad - grad) > tol) .or. &
+                    any(abs(object%added_h_diag - h_diag) > tol)) then
+                    write(stderr, *) "test_update_orbs_s_gek failed: Values of the "// &
+                        "added point wrong for "//trim(case_names(i_case))//"."
+                    test_update_orbs_s_gek = .false.
+                end if
+            end if
+        end do
+
+    end function test_update_orbs_s_gek
+
     logical(c_bool) function test_init_s_gek_settings() bind(C)
         !
         ! this function tests the subroutine which initializes the S-GEK settings
@@ -343,17 +479,13 @@ contains
         ! assume tests pass
         test_init_s_gek = .true.
 
-        ! leave points, a covariance size, a loosened factor and arrays of another
-        ! dimension from an earlier setup behind and initialize the object, which has to
-        ! discard these, perform the orbital update and the Hessian linear
-        ! transformation itself and take over the settings and the number of parameters
+        ! give the counters and the loosening factor, which a new object leaves
+        ! undefined, other values and initialize the object, which has to set them,
+        ! perform the orbital update and the Hessian linear transformation itself, take
+        ! over the settings and the number of parameters and allocate empty lists
         object%n_points = 2
         object%n_covariance = 5
         object%loosen_factor = 2.0_rp
-        allocate(object%h_diag(n_param + 1), object%kappa_list(n_param + 1, 2), &
-                 object%disp_list(n_param + 1, 1), object%obj_func_list(2), &
-                 object%grad_list(n_param + 1, 2), &
-                 object%local_grad_list(n_param + 1, 2), object%y_list(n_param + 1, 2))
         settings = ref_s_gek_settings
         call object%init(n_param, settings)
         if (.not. all([object%provides%update_orbs, object%provides%hess_x]) .or. &
@@ -372,7 +504,7 @@ contains
         if (object%n_points /= 0 .or. object%n_covariance /= 0 .or. &
             abs(object%loosen_factor - 1.0_rp) > tol) then
             write(stderr, *) "test_init_s_gek failed: Points, covariance size or "// &
-                "loosening factor of an earlier setup kept."
+                "loosening factor not initialized."
             test_init_s_gek = .false.
         end if
         if (any(shape(object%h_diag) /= [n_param]) .or. &

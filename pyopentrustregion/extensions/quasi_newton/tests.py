@@ -56,6 +56,7 @@ fortran_tests = {
         "qn_factory",
         "qn_sanity_check",
         "sr1_skip_add",
+        "update_orbs_qn",
     ],
 }
 

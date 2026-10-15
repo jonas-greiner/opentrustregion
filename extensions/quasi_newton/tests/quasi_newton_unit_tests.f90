@@ -8,7 +8,7 @@ module otr_qn_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use test_reference, only: n_param
-    use otr_qn, only: transport_type, init_hess_type
+    use otr_qn, only: transport_type, init_hess_type, sr1_updating_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -16,6 +16,15 @@ module otr_qn_unit_tests
     ! create function pointers to ensure that routines comply with interface
     procedure(transport_type), pointer :: mock_transport_ptr => mock_transport
     procedure(init_hess_type), pointer :: mock_init_hess_ptr => mock_init_hess
+
+    ! quasi-Newton object which records the point its orbital update adds and returns
+    ! the error code it is set to, for the test of the orbital update
+    type, extends(sr1_updating_type) :: recording_qn_type
+        integer(ip) :: n_added = 0, error = 0
+        real(rp), allocatable :: added_kappa(:), added_grad(:)
+    contains
+        procedure :: add => recording_add_qn
+    end type
 
 contains
 
@@ -51,6 +60,22 @@ contains
         error = record_host_call("init_hess", context)
 
     end subroutine mock_init_hess
+
+    subroutine recording_add_qn(self, kappa, grad, error)
+        !
+        ! this subroutine records the step and gradient of the point the recording
+        ! quasi-Newton object is given and returns the error code it is set to
+        !
+        class(recording_qn_type), intent(inout) :: self
+        real(rp), intent(in) :: kappa(:), grad(:)
+        integer(ip), intent(out) :: error
+
+        self%n_added = self%n_added + 1
+        self%added_kappa = kappa
+        self%added_grad = grad
+        error = self%error
+
+    end subroutine recording_add_qn
 
     subroutine setup_updating_object(object)
         !
@@ -358,6 +383,112 @@ contains
 
     end function test_qn_sanity_check
 
+    logical(c_bool) function test_update_orbs_qn() bind(C)
+        !
+        ! this function tests the quasi-Newton orbital update, which forwards to the
+        ! host's orbital update with the host context of the solver level, returns its
+        ! results and error, returns the quasi-Newton Hessian linear transformation in
+        ! place of the host's and adds the point for a nonzero step and for the
+        ! starting point, whose gradient the first step pair needs, passing on the error
+        ! of the addition
+        !
+        use opentrustregion, only: hess_x_type
+        use opentrustregion_unit_tests, only: test_context_type
+        use otr_common, only: hess_x_callback
+        use otr_common_mock, only: mock_update_orbs
+        use otr_qn, only: default_qn_settings
+        use test_reference, only: tol, arm_host_context, host_context_reached
+
+        type(recording_qn_type), target :: object
+        type(test_context_type), target :: contexts(2)
+        class(*), pointer :: context
+        real(rp) :: kappa(n_param), func, grad(n_param), h_diag(n_param)
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        integer(ip) :: error, i_case, i
+        character(len=31), parameter :: case_names(5) = &
+            [character(len=31) :: "the starting point", "a zero step after the start", &
+             "a nonzero step", "a failing host's orbital update", "a failing addition"]
+        logical, parameter :: case_adds(5) = [.true., .false., .true., .false., .true.]
+        integer(ip), parameter :: case_errors(5) = [0, 0, 0, 3, 4]
+
+        ! assume tests pass
+        test_update_orbs_qn = .true.
+
+        ! set up an object whose solver level forwards to the host's mock orbital update
+        ! with a host context distinct from that of its settings
+        object%n_param = n_param
+        object%settings = default_qn_settings
+        object%solver_level%host%update_orbs => mock_update_orbs
+        object%solver_level%host%context => contexts(1)
+        context => object%solver_level
+
+        ! call the orbital update with a zero step before and after the starting point
+        ! was added, with a nonzero step, whose entries sum to a negative number, so
+        ! that only their magnitudes show it is nonzero, and with a failing host's
+        ! orbital update or addition, and determine if it forwards with the host
+        ! context of the solver level, returns the host's results and error, returns
+        ! the role callback function of the Hessian linear transformation and adds the
+        ! point exactly where it has to
+        do i_case = 1, size(case_names)
+            call arm_host_context(object%settings, contexts(2))
+            contexts(1)%n_calls = 0
+            contexts(1)%mock_error = 0
+            if (i_case == 4) contexts(1)%mock_error = case_errors(i_case)
+            object%error = 0
+            if (i_case == 5) object%error = case_errors(i_case)
+            object%n_added = 0
+            if (allocated(object%last_grad)) deallocate(object%last_grad)
+            if (i_case > 1) object%last_grad = [(0.1_rp * i, i=1, n_param)]
+            kappa = 0.0_rp
+            if (i_case > 2) then
+                call random_number(kappa)
+                kappa = kappa - 1.0_rp
+            end if
+            call object%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                    context)
+            if (error /= case_errors(i_case)) then
+                write(stderr, *) "test_update_orbs_qn failed: Returned error code "// &
+                    "wrong for "//trim(case_names(i_case))//"."
+                test_update_orbs_qn = .false.
+            end if
+            if (abs(func - sum(kappa)) > tol .or. &
+                any(abs(grad - 2.0_rp * kappa) > tol) .or. &
+                any(abs(h_diag - 3.0_rp * kappa) > tol)) then
+                write(stderr, *) "test_update_orbs_qn failed: Results of the "// &
+                    "host's orbital update not returned for "// &
+                    trim(case_names(i_case))//"."
+                test_update_orbs_qn = .false.
+            end if
+            if (contexts(1)%n_calls /= 1 .or. contexts(2)%n_calls /= 0) then
+                write(stderr, *) "test_update_orbs_qn failed: Host's orbital "// &
+                    "update not called with the host context of the solver level "// &
+                    "for "//trim(case_names(i_case))//"."
+                test_update_orbs_qn = .false.
+            end if
+            if (.not. host_context_reached("update_orbs_qn", contexts(1))) &
+                test_update_orbs_qn = .false.
+            if (i_case /= 4 .and. .not. associated(hess_x_funptr, hess_x_callback)) then
+                write(stderr, *) "test_update_orbs_qn failed: Role callback "// &
+                    "function of the Hessian linear transformation not returned "// &
+                    "for "//trim(case_names(i_case))//"."
+                test_update_orbs_qn = .false.
+            end if
+            if (object%n_added /= merge(1, 0, case_adds(i_case))) then
+                write(stderr, *) "test_update_orbs_qn failed: Point added wrongly "// &
+                    "for "//trim(case_names(i_case))//"."
+                test_update_orbs_qn = .false.
+            else if (case_adds(i_case)) then
+                if (any(abs(object%added_kappa - kappa) > tol) .or. &
+                    any(abs(object%added_grad - grad) > tol)) then
+                    write(stderr, *) "test_update_orbs_qn failed: Step or gradient "// &
+                        "of the added point wrong for "//trim(case_names(i_case))//"."
+                    test_update_orbs_qn = .false.
+                end if
+            end if
+        end do
+
+    end function test_update_orbs_qn
+
     logical(c_bool) function test_init_qn_settings() bind(C)
         !
         ! this function tests the subroutine which initializes the quasi-Newton
@@ -412,13 +543,9 @@ contains
         ! assume tests pass
         test_init_qn = .true.
 
-        ! leave a history, a last gradient and arrays of another dimension from an
-        ! earlier setup behind and initialize the object, which has to discard these,
-        ! perform the orbital update and the Hessian linear transformation itself and
-        ! take over the settings and the number of parameters
-        object%n_points = 2
-        allocate(object%kappa_list(n_param + 1, 2), &
-                 object%grad_diff_list(n_param + 1, 2), object%last_grad(n_param + 1))
+        ! initialize a new object, which has to perform the orbital update and the
+        ! Hessian linear transformation itself, take over the settings and the number
+        ! of parameters and allocate an empty history
         settings = ref_qn_settings
         call object%init(n_param, settings)
         if (.not. all([object%provides%update_orbs, object%provides%hess_x]) .or. &
@@ -436,8 +563,8 @@ contains
         if (object%n_points /= 0 .or. allocated(object%last_grad) .or. &
             any(shape(object%kappa_list) /= [n_param, settings%max_points]) .or. &
             any(shape(object%grad_diff_list) /= [n_param, settings%max_points])) then
-            write(stderr, *) "test_init_qn failed: History of an earlier setup "// &
-                "kept or arrays allocated wrong."
+            write(stderr, *) "test_init_qn failed: History not empty or arrays "// &
+                "allocated wrong."
             test_init_qn = .false.
         end if
 

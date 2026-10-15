@@ -52,6 +52,7 @@ fortran_tests = {
         "init_s_gek_settings",
         "s_gek_factory",
         "s_gek_sanity_check",
+        "update_orbs_s_gek",
     ],
 }
 

@@ -123,10 +123,6 @@ contains
             call warn_uninitialized_settings(settings, &
                                              s_gek_settings_uninitialized_warning_msg)
             call settings%init(error)
-            if (error /= 0) then
-                error_c = int(error, kind=c_ip)
-                return
-            end if
         end if
 
         ! create the holder, whose bundle hands the change of reference function and the

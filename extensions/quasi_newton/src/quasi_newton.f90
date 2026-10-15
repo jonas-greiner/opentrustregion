@@ -71,7 +71,6 @@ module otr_qn
         procedure :: init => init_qn
         procedure :: add => add_qn
         procedure(skip_add_interface), deferred :: skip_add
-        procedure :: clear => clear_qn
     end type
 
     type, extends(updating_type) :: sr1_updating_type
@@ -144,7 +143,6 @@ contains
                 call warn_uninitialized_settings(local_settings, &
                                                  qn_settings_uninitialized_warning_msg)
                 call local_settings%init(error)
-                if (error /= 0) return
             end if
         else
             local_settings = default_qn_settings
@@ -258,8 +256,9 @@ contains
         ! get pointer to the quasi-Newton Hessian linear transformation of the object
         hess_x_funptr => hess_x_callback
 
-        ! add new step
-        if (sum(abs(kappa)) > 0.0_rp) then
+        ! add the new point, also the starting point the first call reaches without a
+        ! step
+        if (sum(abs(kappa)) > 0.0_rp .or. .not. allocated(self%last_grad)) then
             call self%add(kappa, grad, error)
             if (error /= 0) return
         end if
@@ -360,9 +359,6 @@ contains
         integer(ip), intent(in) :: n_param
         type(qn_settings_type), intent(in) :: settings
 
-        ! start from an empty object so that nothing of an earlier setup survives
-        call self%clear()
-
         ! set the roles the object performs itself, the orbital update and the Hessian
         ! linear transformation, the settings and the number of parameters
         self%provides = provided_roles_type(update_orbs=.true., hess_x=.true.)
@@ -374,19 +370,6 @@ contains
                  self%grad_diff_list(n_param, self%settings%max_points))
 
     end subroutine init_qn
-
-    subroutine clear_qn(self)
-        !
-        ! this subroutine deallocates an updating object
-        !
-        class(updating_type), intent(inout) :: self
-
-        if (allocated(self%kappa_list)) deallocate(self%kappa_list)
-        if (allocated(self%grad_diff_list)) deallocate(self%grad_diff_list)
-        if (allocated(self%last_grad)) deallocate(self%last_grad)
-        self%n_points = 0
-
-    end subroutine clear_qn
 
     function sr1_skip_add(self, kappa, grad_diff, error) result(skip)
         !

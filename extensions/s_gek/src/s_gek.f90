@@ -59,7 +59,6 @@ module otr_s_gek
         procedure :: hess_x => hess_x_s_gek
         procedure :: init => init_s_gek
         procedure :: add => add_s_gek
-        procedure :: clear => clear_s_gek
         procedure :: setup_kriging
         procedure :: kriging_model
         procedure :: predict_hess
@@ -70,7 +69,7 @@ module otr_s_gek
     real(rp), parameter :: bias = 10.0_rp
 
     ! controls nu parameter of Matern covariance function (1 => 3/2, 2 => 5/2, 3 => 7/2)
-    integer(ip) :: p_matern = 2
+    integer(ip), parameter :: p_matern = 2
 
     ! undershoot avoidance parameters
     real(rp), parameter :: angle_lower_thres = cos(5.0_rp * pi / 180.0_rp), &
@@ -123,7 +122,6 @@ contains
                 call warn_uninitialized_settings( &
                     local_settings, s_gek_settings_uninitialized_warning_msg)
                 call local_settings%init(error)
-                if (error /= 0) return
             end if
         else
             local_settings = default_s_gek_settings
@@ -218,8 +216,9 @@ contains
         ! get pointer to the S-GEK Hessian linear transformation of the object
         hess_x_funptr => hess_x_callback
 
-        ! add new step
-        if (sum(abs(kappa)) > 0.0_rp) then
+        ! add the new point, also the starting point the first call reaches without a
+        ! step
+        if (sum(abs(kappa)) > 0.0_rp .or. self%n_points == 0) then
             call self%add(kappa, func, grad, h_diag, error)
             if (error /= 0) return
         end if
@@ -259,9 +258,6 @@ contains
         class(s_gek_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
         type(s_gek_settings_type), intent(in) :: settings
-
-        ! start from an empty object so that nothing of an earlier setup survives
-        call self%clear()
 
         ! set the roles the object performs itself, the orbital update and the Hessian
         ! linear transformation, and the settings
@@ -552,34 +548,6 @@ contains
         self%hess = self%predict_hess(self%actual_disp_list(:, self%n_points))
 
     end subroutine add_s_gek
-
-    subroutine clear_s_gek(self)
-        !
-        ! this subroutine deallocates the S-GEK object
-        !
-        class(s_gek_type), intent(inout) :: self
-
-        if (allocated(self%h_diag)) deallocate(self%h_diag)
-        if (allocated(self%kappa_list)) deallocate(self%kappa_list)
-        if (allocated(self%disp_list)) deallocate(self%disp_list)
-        if (allocated(self%obj_func_list)) deallocate(self%obj_func_list)
-        if (allocated(self%grad_list)) deallocate(self%grad_list)
-        if (allocated(self%local_grad_list)) deallocate(self%local_grad_list)
-        if (allocated(self%y_list)) deallocate(self%y_list)
-        if (allocated(self%char_length)) deallocate(self%char_length)
-        if (allocated(self%transform_matrix)) deallocate(self%transform_matrix)
-        if (allocated(self%kriging_weights)) deallocate(self%kriging_weights)
-        if (allocated(self%hess)) deallocate(self%hess)
-        if (allocated(self%actual_trans_kappa_list)) &
-            deallocate(self%actual_trans_kappa_list)
-        if (allocated(self%subspace)) deallocate(self%subspace)
-        if (allocated(self%actual_disp_list)) deallocate(self%actual_disp_list)
-        if (allocated(self%actual_grad_list)) deallocate(self%actual_grad_list)
-        if (allocated(self%actual_hess_approx)) deallocate(self%actual_hess_approx)
-        self%n_points = 0
-        self%n_covariance = 0
-
-    end subroutine clear_s_gek
 
     subroutine hess_x_s_gek(self, x, hess_x, error, context)
         !
