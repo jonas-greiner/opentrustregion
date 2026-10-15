@@ -336,13 +336,15 @@ contains
         end if
 
         ! the object evaluates the density matrices of the shell of the orbitals with
-        ! its own settings
+        ! its own settings, so the density matrix evaluating function of that shell has
+        ! to be given
         select type (object)
         class is (arh_type)
-            if (associated(evaluate_dm_cs) .neqv. object%orbitals%n_particle == 1) then
-                call local_settings%log("The density matrix evaluating function "// &
-                                        "has to be that of the shell of the "// &
-                                        "orbitals.", verbosity_error, .true.)
+            if (.not. merge(associated(evaluate_dm_cs), associated(evaluate_dm_os), &
+                            object%orbitals%n_particle == 1)) then
+                call local_settings%log("The density matrix evaluating function of "// &
+                                        "the shell of the orbitals has to be given.", &
+                                        verbosity_error, .true.)
                 error = 1
                 return
             end if
@@ -451,7 +453,7 @@ contains
         if (error /= 0) return
 
         ! calculate mean-field energy
-        if (associated(self%evaluate_dm_cs)) then
+        if (self%orbitals%n_particle == 1) then
             call self%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, &
                                      v_coulomb=v_coulomb_ao(:, :, 1), &
                                      v_exchange=v_exchange_ao(:, :, 1), &
@@ -539,7 +541,7 @@ contains
                      v_coulomb_ao(n_ao, n_ao, n_particle), &
                      v_exchange_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
-            if (associated(self%evaluate_dm_cs)) then
+            if (self%orbitals%n_particle == 1) then
                 call self%evaluate_dm_cs( &
                     self%orbitals%dm_ao(:, :, 1), self%orbitals%energy, &
                     fock_ao(:, :, 1), v_coulomb_ao(:, :, 1), v_exchange_ao(:, :, 1), &
@@ -569,7 +571,7 @@ contains
 
             ! assemble the approximate Hessian model from the history for the closed- or
             ! open-shell case
-            if (associated(self%evaluate_dm_cs)) then
+            if (self%orbitals%n_particle == 1) then
                 call self%build_hess_model_cs(error)
             else
                 call self%build_hess_model_os(error)
@@ -939,7 +941,7 @@ contains
         if (.not. self%model_stale) return
 
         ! rebuild model for the closed- or open-shell case
-        if (associated(self%evaluate_dm_cs)) then
+        if (self%orbitals%n_particle == 1) then
             call self%build_hess_model_cs(error)
         else
             call self%build_hess_model_os(error)

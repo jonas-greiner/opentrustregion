@@ -88,11 +88,17 @@ contains
         obj_func_mo_c_funptr = c_null_funptr
         extension_c = c_null_ptr
 
-        ! convert dimensions to Fortran kind
+        ! convert dimensions to Fortran kind and the occupations of every particle
+        ! channel if the number of particle channels is valid, since the conversion
+        ! would otherwise read out of bounds; the sanity check rejects an invalid number
         n_particle = int(n_particle_c, kind=ip)
         n_ao = int(n_ao_c, kind=ip)
         n_mo = int(n_mo_c, kind=ip)
-        n_occ = int(n_occ_c(:n_particle), kind=ip)
+        if (n_particle >= 1 .and. n_particle <= 2) then
+            n_occ = int(n_occ_c(:n_particle), kind=ip)
+        else
+            allocate(n_occ(0))
+        end if
 
         ! work on a copy of the given settings or, without any, of the default settings
         if (present(settings_c)) then

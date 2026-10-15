@@ -1370,11 +1370,13 @@ contains
             [character(len=41) :: "for the closed-shell case in the MO basis", &
              "for the open-shell case in the OAO basis", "without settings", &
              "for settings that were not initialized"]
-        character(len=74), parameter :: refusal_names(5) = [ &
+        character(len=74), parameter :: refusal_names(7) = [ &
             character(len=74) :: "an unknown ARH type", "solver settings no "// &
             "factory wired", "solver settings another extension wired", "an "// &
             "open-shell density matrix evaluating function for closed-shell orbitals", &
-            "a closed-shell density matrix evaluating function for open-shell orbitals"]
+            "a closed-shell density matrix evaluating function for open-shell "// &
+            "orbitals", "no density matrix evaluating function for closed-shell "// &
+            "orbitals", "no density matrix evaluating function for open-shell orbitals"]
 
         ! assume tests pass
         test_arh_factory_common = .true.
@@ -1509,11 +1511,11 @@ contains
 
         ! create objects for an unknown ARH type, for solver settings no factory wired,
         ! for solver settings another extension than an orbital basis wired and with
-        ! the density matrix evaluating function of the other shell for either shell of
-        ! the orbitals, which have to return an error with an error message and leave
-        ! the solver settings untouched
+        ! the density matrix evaluating function of the other shell or without any for
+        ! either shell of the orbitals, which have to return an error with an error
+        ! message and leave the solver settings untouched
         do i_case = 1, size(refusal_names)
-            call setup_basis(.true., merge(2_ip, 1_ip, i_case == 5))
+            call setup_basis(.true., merge(2_ip, 1_ip, i_case == 5 .or. i_case == 7))
             call setup_settings(settings, context)
             call setup_error_logging(settings, context)
             level => solver_settings%extensions(1)%object%solver_level
@@ -1531,6 +1533,8 @@ contains
             case (4)
                 evaluate_dm_cs_funptr => null()
                 evaluate_dm_os_funptr => mock_evaluate_dm_os
+            case (6, 7)
+                evaluate_dm_cs_funptr => null()
             end select
             call arh_factory_common(level, evaluate_dm_cs_funptr, &
                                     evaluate_dm_os_funptr, update_orbs_arh_funptr, &
@@ -2227,10 +2231,13 @@ contains
         !
         ! this function tests the subroutine which rebuilds the approximate Hessian
         ! model if the objective function has added points to the history since it was
-        ! last assembled, which calls the model builder of the shell of the density
-        ! matrix evaluating function and passes its error on
+        ! last assembled, which calls the model builder of the shell of the orbitals and
+        ! passes its error on
         !
+        use otr_mo, only: mo_type
+
         type(recording_arh_type) :: arh
+        type(mo_type), target :: mo
         integer(ip) :: i_case, error
         character(len=2), parameter :: expected_shells(3) = ["  ", "cs", "os"]
         character(len=36), parameter :: case_names(3) = &
@@ -2240,20 +2247,15 @@ contains
         ! assume tests pass
         test_rebuild_stale_hess_model = .true.
 
-        ! call routine for a model which is not stale and for stale models of either
-        ! shell, whose builders fail, and determine if only the builder of the shell is
-        ! called and its error passed on
+        ! call routine for a model which is not stale and for stale models of orbitals
+        ! of either shell, whose builders fail, and determine if only the builder of the
+        ! shell is called and its error passed on
+        arh%orbitals => mo
         do i_case = 1, size(case_names)
             arh%built_shell = ""
             arh%error = 1
             arh%model_stale = i_case /= 1
-            arh%evaluate_dm_cs => null()
-            arh%evaluate_dm_os => null()
-            if (i_case == 2) then
-                arh%evaluate_dm_cs => mock_evaluate_dm_cs
-            else
-                arh%evaluate_dm_os => mock_evaluate_dm_os
-            end if
+            mo%n_particle = merge(1_ip, 2_ip, i_case == 2)
             call arh%rebuild_stale_hess_model(error)
             if (arh%built_shell /= expected_shells(i_case)) then
                 write(stderr, *) "test_rebuild_stale_hess_model failed: Wrong "// &

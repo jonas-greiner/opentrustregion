@@ -316,7 +316,7 @@ contains
         type(test_context_type), target :: context
         integer(ip), parameter :: n_particle = 1
 
-        real(rp), target :: dm_ao(n_ao, n_ao)
+        real(rp), target :: dm_ao(n_ao, n_ao), dm_ao_fewer(n_ao - 1, n_ao - 1)
         real(rp) :: ao_overlap(n_ao, n_ao)
         integer(ip) :: error
         type(oao_settings_type) :: settings
@@ -408,14 +408,16 @@ contains
             end select
         end if
 
-        ! call routine for an invalid number of particle channels and determine if the
-        ! error of the common setup is passed on
-        call oao_factory_cs(dm_ao, ao_overlap, 3_ip, n_ao, evaluate_dm_funptr, &
-                            update_orbs_oao_funptr, obj_func_oao_funptr, &
-                            solver_settings, state, error, settings)
+        ! call routine for a density matrix with fewer AOs than given, whose shape the
+        ! common setup has to be handed, and determine if its error is passed on
+        dm_ao_fewer = 0.0_rp
+        call oao_factory_cs(dm_ao_fewer, ao_overlap, n_particle, n_ao, &
+                            evaluate_dm_funptr, update_orbs_oao_funptr, &
+                            obj_func_oao_funptr, solver_settings, state, error, &
+                            settings)
         if (error /= 1) then
             write(stderr, *) "test_oao_factory_cs failed: Error of the common "// &
-                "setup not passed on."
+                "setup not passed on for a density matrix with fewer AOs than given."
             test_oao_factory_cs = .false.
         end if
 
@@ -856,49 +858,73 @@ contains
 
     logical(c_bool) function test_oao_sanity_check() bind(C)
         !
-        ! this function tests the subroutine which performs a sanity check for the OAO
-        ! input parameters
+        ! this function tests the subroutine which performs a sanity check for the
+        ! dimensions of orbitals parameterized in the OAO basis
         !
         use otr_oao, only: oao_settings_type, oao_sanity_check
         use opentrustregion_unit_tests, only: test_context_type, setup_error_logging
 
+        type :: oao_sanity_case_type
+            integer(ip) :: dm_ao_shape(3), ao_overlap_shape(2), n_particle, n_ao
+            logical :: valid
+            character(len=53) :: name
+        end type
+
+        ! every invalid case fails a single check
+        type(oao_sanity_case_type), parameter :: cases(*) = [ &
+            ! dm_ao_shape, ao_overlap_shape, n_particle, n_ao, valid, then name
+            oao_sanity_case_type( &
+                [3, 3, 1], [3, 3], 1, 3, .true., "valid closed-shell dimensions"), &
+            oao_sanity_case_type( &
+                [3, 3, 2], [3, 3], 2, 3, .true., "valid open-shell dimensions"), &
+            oao_sanity_case_type( &
+                [0, 0, 1], [0, 0], 1, 0, .false., "vanishing number of AOs"), &
+            oao_sanity_case_type( &
+                [1, 1, 1], [1, 1], 1, 1, .false., "single AO"), &
+            oao_sanity_case_type( &
+                [3, 3, 0], [3, 3], 0, 3, .false., &
+                "vanishing number of particle channels"), &
+            oao_sanity_case_type( &
+                [3, 3, 3], [3, 3], 3, 3, .false., "three particle channels"), &
+            oao_sanity_case_type( &
+                [2, 2, 1], [3, 3], 1, 3, .false., &
+                "density matrix with wrong number of AOs"), &
+            oao_sanity_case_type( &
+                [3, 3, 1], [3, 3], 2, 3, .false., &
+                "density matrix with wrong number of particle channels"), &
+            oao_sanity_case_type( &
+                [3, 3, 1], [3, 2], 1, 3, .false., "wrongly shaped AO overlap matrix")]
+
+        type(oao_sanity_case_type) :: c
         type(test_context_type), target :: context
         type(oao_settings_type) :: settings
         integer(ip) :: i_case, error
-        integer(ip), parameter :: case_n_particle(5) = [1, 2, 1, 0, 3], &
-                                  case_n_ao(5) = [1, 1, 0, 1, 1]
-        logical, parameter :: case_valid(5) = &
-            [.true., .true., .false., .false., .false.]
-        character(len=25), parameter :: case_names(5) = &
-            [character(len=25) :: "one particle channel", "two particle channels", &
-             "a vanishing number of AOs", "no particle channel", &
-             "three particle channels"]
 
         ! assume tests pass
         test_oao_sanity_check = .true.
 
-        ! call routine for every case, each invalid one failing a single check, and
-        ! determine if valid dimensions are accepted without a message and invalid ones
-        ! rejected with an error message
-        do i_case = 1, size(case_names)
+        ! call routine for every case and determine if valid dimensions are accepted
+        ! without a message and invalid ones rejected with an error message
+        do i_case = 1, size(cases)
+            c = cases(i_case)
             call setup_error_logging(settings, context)
-            call oao_sanity_check(settings, case_n_particle(i_case), &
-                                  case_n_ao(i_case), error)
-            if (case_valid(i_case)) then
+            call oao_sanity_check(settings, c%dm_ao_shape, c%ao_overlap_shape, &
+                                  c%n_particle, c%n_ao, error)
+            if (c%valid) then
                 if (error /= 0 .or. context%log_message /= "") then
                     write(stderr, *) "test_oao_sanity_check failed: Valid input "// &
-                        "rejected for "//trim(case_names(i_case))//"."
+                        "rejected for "//trim(c%name)//"."
                     test_oao_sanity_check = .false.
                 end if
             else
                 if (error /= 1) then
                     write(stderr, *) "test_oao_sanity_check failed: No error "// &
-                        "returned for "//trim(case_names(i_case))//"."
+                        "returned for "//trim(c%name)//"."
                     test_oao_sanity_check = .false.
                 end if
                 if (context%log_message == "") then
                     write(stderr, *) "test_oao_sanity_check failed: No error "// &
-                        "message printed for "//trim(case_names(i_case))//"."
+                        "message printed for "//trim(c%name)//"."
                     test_oao_sanity_check = .false.
                 end if
             end if

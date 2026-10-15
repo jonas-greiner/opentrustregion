@@ -81,8 +81,10 @@ contains
         real(rp), pointer, contiguous :: dm_ao_3d(:, :, :)
         procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os
 
-        ! call common setup with the closed-shell density matrix evaluating function
-        dm_ao_3d(1:n_ao, 1:n_ao, 1:1) => dm_ao
+        ! call common setup with the density matrix of the caller as the only particle
+        ! channel, keeping its shape for the sanity check, and the closed-shell density
+        ! matrix evaluating function
+        dm_ao_3d(1:size(dm_ao, 1), 1:size(dm_ao, 2), 1:1) => dm_ao
         evaluate_dm_os => null()
         call oao_factory_common(dm_ao_3d, ao_overlap, n_particle, n_ao, &
                                 evaluate_dm_cs, evaluate_dm_os, &
@@ -176,7 +178,8 @@ contains
         end if
 
         ! perform sanity check
-        call oao_sanity_check(local_settings, n_particle, n_ao, error)
+        call oao_sanity_check(local_settings, shape(dm_ao, kind=ip), &
+                              shape(ao_overlap, kind=ip), n_particle, n_ao, error)
         if (error /= 0) return
 
         ! without a density matrix evaluating function, the roles which need one are
@@ -229,22 +232,25 @@ contains
 
     end subroutine oao_factory_common
 
-    subroutine oao_sanity_check(settings, n_particle, n_ao, error)
+    subroutine oao_sanity_check(settings, dm_ao_shape, ao_overlap_shape, n_particle, &
+                                n_ao, error)
         !
         ! this subroutine performs a sanity check for OAO input parameters
         !
         use opentrustregion, only: verbosity_error
 
         class(orbital_settings_type), intent(in) :: settings
-        integer(ip), intent(in) :: n_particle, n_ao
+        integer(ip), intent(in) :: dm_ao_shape(3), ao_overlap_shape(2), n_particle, n_ao
         integer(ip), intent(out) :: error
 
         ! initialize error flag
         error = 0
 
-        ! check that number of AOs is positive
-        if (n_ao < 1) then
-            call settings%log("Number of AOs should be larger than 0.", &
+        ! check that there are at least two AOs, since a single AO leaves no orbital
+        ! rotation
+        if (n_ao < 2) then
+            call settings%log("Number of AOs should be larger than 1, since a "// &
+                              "single AO leaves no orbital rotation.", &
                               verbosity_error, .true.)
             error = 1
             return
@@ -255,6 +261,16 @@ contains
         if (n_particle < 1 .or. n_particle > 2) then
             call settings%log("Number of particles should be 1 or 2.", &
                               verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that the arrays have the given dimensions
+        if (any(dm_ao_shape /= [n_ao, n_ao, n_particle]) .or. &
+            any(ao_overlap_shape /= [n_ao, n_ao])) then
+            call settings%log("Shapes of density matrix and AO overlap matrix "// &
+                              "should match the given dimensions.", verbosity_error, &
+                              .true.)
             error = 1
             return
         end if

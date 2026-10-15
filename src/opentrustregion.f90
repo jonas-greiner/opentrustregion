@@ -3994,6 +3994,14 @@ contains
         ! initialize error flag
         error = 0
 
+        ! check that number of parameters is positive
+        if (n_param < 1) then
+            call settings%log("Number of parameters should be larger than 0.", &
+                              verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
         ! convert strings to lowercase
         settings%diag_solver = string_to_lowercase(settings%diag_solver)
 

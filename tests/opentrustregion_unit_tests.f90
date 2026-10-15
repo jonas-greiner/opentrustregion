@@ -9958,13 +9958,13 @@ contains
         ! rejects
         character(len=*), parameter :: mixed_case_diag_solvers(2) = &
             [character(len=15) :: "Davidson", "Jacobi-Davidson"]
-        character(len=*), parameter :: error_case_names(4) = &
-            [character(len=55) :: "extra trial vector function without extra trial "// &
-             "vectors", "vanishing number of trial vectors", &
-             "unknown diagonalization solver", &
+        character(len=*), parameter :: error_case_names(5) = &
+            [character(len=55) :: "vanishing number of parameters", &
+             "extra trial vector function without extra trial vectors", &
+             "vanishing number of trial vectors", "unknown diagonalization solver", &
              "non-symmetric Hessian with Jacobi-Davidson solver"]
         type(stability_settings_type) :: settings
-        integer(ip) :: error, i_solver, i_case
+        integer(ip) :: error, i_solver, i_case, n_param
         type(test_context_type), target :: context
 
         ! assume tests pass
@@ -10013,20 +10013,23 @@ contains
         do i_case = 1, size(error_case_names)
             call setup_settings(settings, context)
             call setup_error_logging(settings, context)
+            n_param = 4
             select case (i_case)
             case (1)
+                n_param = 0
+            case (2)
                 settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
                 settings%n_extra_trial_vectors = 0
-            case (2)
+            case (3)
                 settings%n_extra_trial_vectors = 0
                 settings%n_random_trial_vectors = 0
-            case (3)
-                settings%diag_solver = "unknown"
             case (4)
+                settings%diag_solver = "unknown"
+            case (5)
                 settings%diag_solver = "jacobi-davidson"
                 settings%hess_symm = .false.
             end select
-            call stability_sanity_check(settings, 4_ip, error)
+            call stability_sanity_check(settings, n_param, error)
             if (error /= 1) then
                 write(stderr, *) "test_stability_sanity_check failed: No error "// &
                     "returned for "//trim(error_case_names(i_case))//"."
