@@ -4,10 +4,12 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import gc
 import os
 import sys
 import unittest
 import warnings
+import weakref
 from importlib import resources
 from ctypes import (
     CDLL,
@@ -1251,6 +1253,19 @@ class PyInterfaceUnitTests(unittest.TestCase):
             print(
                 " test_solver_settings failed: Keyword given as bytes not stored "
                 "correctly."
+            )
+            test_passed = False
+
+        # the nested stability check settings keep the settings alive, which own the
+        # extension objects wired into both, once nothing else refers to them
+        stability_settings = settings.stability_settings
+        settings_ref = weakref.ref(settings)
+        del settings, read_precond
+        gc.collect()
+        if settings_ref() is None or stability_settings._parent is not settings_ref():
+            print(
+                " test_solver_settings failed: Nested stability check settings do not "
+                "keep the settings alive."
             )
             test_passed = False
 
