@@ -294,7 +294,9 @@ contains
     subroutine add_qn(self, kappa, grad, error)
         !
         ! this subroutine adds a new rotation and gradient to the corresponding lists
-        ! and transports the history accordingly
+        ! and transports the history accordingly; the gradient becomes the last one
+        ! also if the skipping criterion rejects the pair, so that the next pair starts
+        ! at the current point
         !
         class(updating_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:), grad(:)
@@ -302,6 +304,7 @@ contains
 
         real(rp), allocatable :: grad_diff(:)
         integer(ip) :: n_param, i
+        logical :: skip
 
         ! initialize error flag
         error = 0
@@ -320,6 +323,7 @@ contains
         end do
 
         ! check if last gradient is available to calculate gradient difference
+        skip = .false.
         if (allocated(self%last_grad)) then
             ! calculate gradient difference
             call self%transport(kappa, self%last_grad, error, self%settings%context)
@@ -327,10 +331,13 @@ contains
             grad_diff = grad - self%last_grad
 
             ! check if step addition should be skipped
-            if (self%skip_add(kappa, grad_diff, error)) return
+            skip = self%skip_add(kappa, grad_diff, error)
             if (error /= 0) return
         end if
+
+        ! the next pair starts at the current point, also if this one is skipped
         self%last_grad = grad
+        if (skip) return
 
         ! check if point is added
         if (allocated(grad_diff) .and. self%settings%max_points > 0) then

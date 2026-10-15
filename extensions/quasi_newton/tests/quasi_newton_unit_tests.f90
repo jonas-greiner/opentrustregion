@@ -7,7 +7,7 @@
 module otr_qn_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
-    use test_reference, only: n_param
+    use test_reference, only: n_param, tol
     use otr_qn, only: transport_type, init_hess_type, sr1_updating_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
@@ -630,13 +630,15 @@ contains
         ! this function tests the subroutine which adds a new point to the history of a
         ! quasi-Newton object, so far only that it hands every call of the host's
         ! transport function the host context of its settings and passes on the error
-        ! of every call, while its numerics are left to later tests
+        ! of every call and that a pair the skipping criterion rejects leaves the
+        ! history unchanged while the gradient becomes the last one, while its numerics
+        ! are left to later tests
         !
         use otr_qn, only: bfgs_updating_type
         use test_reference, only: host_context, host_context_reached
 
         type(bfgs_updating_type) :: object
-        real(rp) :: kappa(n_param), grad(n_param)
+        real(rp) :: kappa(n_param), grad(n_param), orthogonal(n_param)
         integer(ip) :: error, n_calls, i_call
         character(len=8) :: call_number
 
@@ -677,6 +679,28 @@ contains
                 test_add_qn = .false.
             end if
         end do
+
+        ! add a point whose gradient differs from the last one, which the mock transport
+        ! leaves unchanged, by a random vector orthogonal to the step, which the
+        ! skipping criterion of the scheme rejects, so that the history has to keep its
+        ! points and the gradient has to become the last one, from which the next pair
+        ! starts
+        call setup_updating_object(object)
+        call random_number(orthogonal)
+        orthogonal = orthogonal - &
+                     dot_product(orthogonal, kappa) / dot_product(kappa, kappa) * kappa
+        grad = object%last_grad + orthogonal
+        call object%add(kappa, grad, error)
+        if (error /= 0 .or. object%n_points /= 2) then
+            write(stderr, *) "test_add_qn failed: Error produced or history "// &
+                "changed for a pair the skipping criterion rejects."
+            test_add_qn = .false.
+        end if
+        if (norm2(object%last_grad - grad) > tol) then
+            write(stderr, *) "test_add_qn failed: Gradient not the last one after "// &
+                "a pair the skipping criterion rejects."
+            test_add_qn = .false.
+        end if
 
     end function test_add_qn
 
