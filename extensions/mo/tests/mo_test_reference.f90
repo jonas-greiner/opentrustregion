@@ -8,7 +8,7 @@ module otr_mo_test_reference
 
     use opentrustregion, only: ip, kw_len
     use c_interface, only: c_ip, c_rp
-    use otr_mo, only: mo_settings_type
+    use otr_mo, only: mo_settings_type, mo_settings_uninitialized_warning_msg
     use otr_common_test_reference, only: n_particle, n_occ, ref_orbital_settings
     use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_char, &
                                            c_intptr_t, c_null_char, c_null_funptr, &
@@ -57,6 +57,16 @@ module otr_mo_test_reference
     ! reference MO settings, those shared by the orbital bases
     type(mo_settings_type), parameter :: ref_mo_settings = &
         mo_settings_type(orbital_settings_type=ref_orbital_settings)
+
+    ! warning the C factory prints for MO settings that were not initialized, as a
+    ! null-terminated string for the C integration tests
+    integer(ip), parameter :: settings_warning_len = &
+        len(mo_settings_uninitialized_warning_msg) + 1
+    character(kind=c_char), protected, &
+        bind(C, name="test_mo_settings_uninitialized_warning") :: &
+        settings_uninitialized_warning_c(settings_warning_len) = &
+        transfer(mo_settings_uninitialized_warning_msg//c_null_char, "a", &
+                 settings_warning_len)
 
     interface operator(==)
         module procedure equal_mo

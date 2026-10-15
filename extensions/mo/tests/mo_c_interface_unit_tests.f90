@@ -29,6 +29,8 @@ contains
         use otr_common_unit_tests, only: wired_level
         use otr_common_c_interface, only: extension_holder_type, &
                                           orbital_c_callbacks_type
+        use otr_mo, only: standard_mo_factory_cs => mo_factory_cs, &
+                          standard_mo_factory_os => mo_factory_os
         use otr_mo_c_interface, only: mo_settings_type_c, mo_factory_cs, &
                                       mo_factory_os, mo_factory_c_wrapper
         use otr_mo_mock, only: mock_mo_factory_cs, mock_mo_factory_os, &
@@ -348,6 +350,10 @@ contains
                 "without a record of the state."
             test_mo_factory_c_wrapper = .false.
         end if
+
+        ! restore the procedure pointers so later tests do not inherit the mocks
+        mo_factory_cs => standard_mo_factory_cs
+        mo_factory_os => standard_mo_factory_os
 
     end function test_mo_factory_c_wrapper
 

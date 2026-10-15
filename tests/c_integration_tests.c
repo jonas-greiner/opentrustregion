@@ -21,6 +21,8 @@
 
 #include "opentrustregion.h"
 
+#include "c_integration_tests.h"
+
 /* ------------------------------------------------------------------
  * Hartmann 6D function
  * ------------------------------------------------------------------ */
@@ -422,10 +424,9 @@ void get_reference_solver_state_values(solver_state_type *state);
 size_t solver_state_size(void);
 size_t stability_state_size(void);
 
-/* the warnings the library prints for settings and nested stability check settings
- * that were not initialized, provided by test_reference.f90 */
-extern const char test_settings_uninitialized_warning[];
-extern const char test_stability_settings_uninitialized_warning[];
+/* the flush of the standard error of the Fortran runtime, which buffers what the
+ * library writes there while it is a file, provided by test_reference.f90 */
+void flush_fortran_stderr(void);
 
 /* ------------------------------------------------------------------
  * Helpers
@@ -439,21 +440,22 @@ static bool hartmann_dimensions_match(const char *test_name) {
   return false;
 }
 
-/* Run the calls between these two functions with the standard error redirected to a
- * temporary file, the second returns whether the given warning was written to it, or
- * with NULL whether nothing was written to it. */
+/* the capture of the standard error declared in c_integration_tests.h, which the
+ * integration tests of the extensions use too */
 static FILE *stderr_capture;
 static int saved_stderr;
 
-static void start_stderr_capture(void) {
+void start_stderr_capture(void) {
   fflush(stderr);
+  flush_fortran_stderr();
   stderr_capture = tmpfile();
   saved_stderr = dup(STDERR_FILENO);
   dup2(fileno(stderr_capture), STDERR_FILENO);
 }
 
-static bool stop_stderr_capture(const char *warning) {
+bool stop_stderr_capture(const char *warning) {
   fflush(stderr);
+  flush_fortran_stderr();
   dup2(saved_stderr, STDERR_FILENO);
   close(saved_stderr);
   char captured[1024] = {0};

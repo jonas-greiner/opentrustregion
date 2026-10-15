@@ -19,10 +19,11 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "opentrustregion.h"
 #include "opentrustregion_s_gek.h"
+
+#include "../../common/tests/common_c_integration_tests.h"
 
 /* ------------------------------------------------------------------
  * Reference settings provided by s_gek_test_reference.f90: the reference value of a
@@ -34,21 +35,6 @@ void reference_s_gek_field(const char *name, c_real *value, char *keyword);
 void get_reference_s_gek_values(s_gek_settings_type *settings);
 size_t s_gek_settings_size(void);
 bool is_default_s_gek_settings(const s_gek_settings_type *settings);
-
-/* ------------------------------------------------------------------
- * Helpers
- * ------------------------------------------------------------------ */
-
-static bool check_field(c_real value, const char *name) {
-  c_real ref_value;
-  char ref_keyword[OTR_KW_LEN + 1];
-  reference_s_gek_field(name, &ref_value, ref_keyword);
-  if (value != ref_value) {
-    fprintf(stderr, "test_s_gek_settings_layout failed: Field %s misplaced.\n", name);
-    return false;
-  }
-  return true;
-}
 
 /* ------------------------------------------------------------------
  * Tests
@@ -70,12 +56,14 @@ bool test_s_gek_settings_layout(void) {
   bool ok = true;
   s_gek_settings_type s = {0};
   get_reference_s_gek_values(&s);
-  ok &= check_field((uintptr_t)s.logger, "logger");
-  ok &= check_field(s.initialized, "initialized");
-  ok &= check_field(s.use_subspace, "use_subspace");
-  ok &= check_field(s.verbose, "verbose");
-  ok &= check_field(s.max_points, "max_points");
-  ok &= check_field((uintptr_t)s.context, "context");
+  reference_field_fn *lookup = reference_s_gek_field;
+  const char *test_name = "test_s_gek_settings_layout";
+  ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
+  ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
+  ok &= check_settings_field(lookup, s.use_subspace, "use_subspace", test_name);
+  ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);
+  ok &= check_settings_field(lookup, s.max_points, "max_points", test_name);
+  ok &= check_settings_field(lookup, (uintptr_t)s.context, "context", test_name);
 
   return ok;
 }

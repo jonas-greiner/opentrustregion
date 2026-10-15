@@ -8,7 +8,7 @@ module otr_arh_test_reference
 
     use opentrustregion, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
-    use otr_arh, only: arh_settings_type
+    use otr_arh, only: arh_settings_type, arh_settings_uninitialized_warning_msg
     use otr_common_test_reference, only: ref_orbital_settings
     use, intrinsic :: iso_c_binding, only: &
         c_size_t, c_sizeof, c_bool, c_char, c_ptr, c_funptr, c_f_procpointer, &
@@ -20,6 +20,16 @@ module otr_arh_test_reference
     ! than the default
     type(arh_settings_type), parameter :: ref_arh_settings = arh_settings_type( &
         orbital_settings_type=ref_orbital_settings, arh_type="symm_arh")
+
+    ! warning the C factory prints for ARH settings that were not initialized, as a
+    ! null-terminated string for the C integration tests
+    integer(ip), parameter :: settings_warning_len = &
+        len(arh_settings_uninitialized_warning_msg) + 1
+    character(kind=c_char), protected, &
+        bind(C, name="test_arh_settings_uninitialized_warning") :: &
+        settings_uninitialized_warning_c(settings_warning_len) = &
+        transfer(arh_settings_uninitialized_warning_msg//c_null_char, "a", &
+                 settings_warning_len)
 
     ! multiples of the density matrix the mock density matrix evaluating functions of
     ! both shells return for each optional output, in the order of

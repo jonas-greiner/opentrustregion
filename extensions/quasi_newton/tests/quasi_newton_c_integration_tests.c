@@ -19,10 +19,11 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "opentrustregion.h"
 #include "opentrustregion_quasi_newton.h"
+
+#include "../../common/tests/common_c_integration_tests.h"
 
 /* ------------------------------------------------------------------
  * Reference settings provided by qn_test_reference.f90: the reference value of a field
@@ -34,32 +35,6 @@ void reference_qn_field(const char *name, c_real *value, char *keyword);
 void get_reference_qn_values(qn_settings_type *settings);
 size_t qn_settings_size(void);
 bool is_default_qn_settings(const qn_settings_type *settings);
-
-/* ------------------------------------------------------------------
- * Helpers
- * ------------------------------------------------------------------ */
-
-static bool check_field(c_real value, const char *name) {
-  c_real ref_value;
-  char ref_keyword[OTR_KW_LEN + 1];
-  reference_qn_field(name, &ref_value, ref_keyword);
-  if (value != ref_value) {
-    fprintf(stderr, "test_qn_settings_layout failed: Field %s misplaced.\n", name);
-    return false;
-  }
-  return true;
-}
-
-static bool check_keyword(const char *keyword, const char *name) {
-  c_real ref_value;
-  char ref_keyword[OTR_KW_LEN + 1];
-  reference_qn_field(name, &ref_value, ref_keyword);
-  if (strcmp(keyword, ref_keyword) != 0) {
-    fprintf(stderr, "test_qn_settings_layout failed: Field %s misplaced.\n", name);
-    return false;
-  }
-  return true;
-}
 
 /* ------------------------------------------------------------------
  * Tests
@@ -81,12 +56,15 @@ bool test_qn_settings_layout(void) {
   bool ok = true;
   qn_settings_type s = {0};
   get_reference_qn_values(&s);
-  ok &= check_field((uintptr_t)s.logger, "logger");
-  ok &= check_field(s.initialized, "initialized");
-  ok &= check_field(s.verbose, "verbose");
-  ok &= check_field(s.max_points, "max_points");
-  ok &= check_keyword(s.hess_update_scheme, "hess_update_scheme");
-  ok &= check_field((uintptr_t)s.context, "context");
+  reference_field_fn *lookup = reference_qn_field;
+  const char *test_name = "test_qn_settings_layout";
+  ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
+  ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
+  ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);
+  ok &= check_settings_field(lookup, s.max_points, "max_points", test_name);
+  ok &= check_settings_keyword(lookup, s.hess_update_scheme, "hess_update_scheme",
+                               test_name);
+  ok &= check_settings_field(lookup, (uintptr_t)s.context, "context", test_name);
 
   return ok;
 }

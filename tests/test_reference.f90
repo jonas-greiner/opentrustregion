@@ -552,6 +552,17 @@ contains
 
     end function stability_state_size
 
+    subroutine flush_fortran_stderr() bind(C)
+        !
+        ! this subroutine flushes the standard error of the Fortran runtime, which
+        ! buffers what the library writes there while it is a file, so that the C
+        ! integration tests capture exactly what the calls between the start and the
+        ! end of a capture write there
+        !
+        flush(stderr)
+
+    end subroutine flush_fortran_stderr
+
     subroutine reference_field(name_c, field_value, keyword_c) bind(C)
         !
         ! this subroutine returns the value of a field of the C solver settings

@@ -8,7 +8,7 @@ module otr_oao_test_reference
 
     use opentrustregion, only: ip, kw_len
     use c_interface, only: c_ip, c_rp
-    use otr_oao, only: oao_settings_type
+    use otr_oao, only: oao_settings_type, oao_settings_uninitialized_warning_msg
     use otr_common_test_reference, only: n_particle, n_ao, ref_orbital_settings
     use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_char, &
                                            c_intptr_t, c_null_char, c_null_funptr, &
@@ -22,6 +22,16 @@ module otr_oao_test_reference
     ! reference OAO settings, those shared by the orbital bases
     type(oao_settings_type), parameter :: ref_oao_settings = &
         oao_settings_type(orbital_settings_type=ref_orbital_settings)
+
+    ! warning the C factory prints for OAO settings that were not initialized, as a
+    ! null-terminated string for the C integration tests
+    integer(ip), parameter :: settings_warning_len = &
+        len(oao_settings_uninitialized_warning_msg) + 1
+    character(kind=c_char), protected, &
+        bind(C, name="test_oao_settings_uninitialized_warning") :: &
+        settings_uninitialized_warning_c(settings_warning_len) = &
+        transfer(oao_settings_uninitialized_warning_msg//c_null_char, "a", &
+                 settings_warning_len)
 
     interface operator(==)
         module procedure equal_oao

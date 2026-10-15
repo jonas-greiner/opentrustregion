@@ -28,6 +28,10 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
+    ToyRun,
+    check_released,
+    evaluate_dm_missing_warning,
+    toy_model,
     check_settings_layout,
     n_ao,
     setup_wired_solver_settings,
@@ -43,7 +47,11 @@ from pyopentrustregion.extensions.mo import MOSettings, mo_factory
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "mo_c_integration_tests": ["mo_settings_init", "mo_settings_layout"],
+    "mo_c_integration_tests": [
+        "mo_factory_c",
+        "mo_settings_init",
+        "mo_settings_layout",
+    ],
     "mo_tests": [
         "calculate_grad_h_diag_mo",
         "count_mo_params",
@@ -89,6 +97,27 @@ orbsym = [list(irreps) for irreps in ((c_int * n_mo) * 2).in_dll(lib, "test_orbs
 # multiples of the density matrix the mock density matrix evaluating function returns
 # for the Fock matrix and the response
 evaluate_dm_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_factors"))
+
+
+def setup_mo_toy_run(n_particle):
+    """
+    this function prepares a solve of the toy model in the MO basis and the given shell
+    through the MO factory and returns the run and the functions the factory returned,
+    also for the integration tests of ARH
+    """
+    run = ToyRun(True, n_particle)
+    update_orbs, obj_func = mo_factory(
+        run.orbitals,
+        toy_model().s,
+        run.n_occ,
+        n_particle,
+        n_ao,
+        run.n_mo,
+        run.evaluate_dm,
+        run.settings,
+        run.state,
+    )
+    return run, update_orbs, obj_func
 
 
 @add_tests
@@ -710,6 +739,56 @@ class MOPyIntegrationTests(unittest.TestCase):
     def setUpClass(cls):
         print_separator("Running integration tests for MO Python interface...")
         return super().setUpClass()
+
+    def test_mo_factory_py(self):
+        """
+        this function solves the toy model through the MO factory in the closed and the
+        open shell, the closed-shell MO coefficients row-major, so that the library
+        rotates a copy of them, which it copies back, and the open-shell ones
+        column-major, which it rotates in place, checks that the MO object is released
+        once nothing keeps it alive and that the factory warns through the logging
+        function of the MO settings about a missing density matrix evaluating function
+        """
+        test_passed = True
+
+        # solve the toy model in the closed and the open shell
+        for n_particle, case_name in ((1, "closed-shell"), (2, "open-shell")):
+            run, update_orbs, obj_func = setup_mo_toy_run(n_particle)
+            releases = [run.settings._extension_owner.release]
+            test_passed &= run.solve(
+                update_orbs, obj_func, "test_mo_factory_py", case_name
+            )
+            del run, update_orbs, obj_func
+            test_passed &= check_released(releases, "test_mo_factory_py", case_name)
+
+        # check that the factory warns about a missing density matrix evaluating
+        # function
+        run = ToyRun(True, 1)
+        messages = []
+        settings = MOSettings()
+        settings.logger = messages.append
+        settings.verbose = 3
+        mo_factory(
+            run.orbitals,
+            toy_model().s,
+            run.n_occ,
+            1,
+            n_ao,
+            run.n_mo,
+            None,
+            run.settings,
+            run.state,
+            settings,
+        )
+        if evaluate_dm_missing_warning not in "".join(messages):
+            print(
+                " test_mo_factory_py failed: No warning about a missing density matrix "
+                "evaluating function."
+            )
+            test_passed = False
+
+        self.assertTrue(test_passed, "test_mo_factory_py failed")
+        print(" test_mo_factory_py PASSED")
 
     def test_mo_settings_layout(self):
         """

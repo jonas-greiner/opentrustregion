@@ -7,7 +7,18 @@
 import functools
 import gc
 import unittest
-from ctypes import POINTER, Array, addressof, byref, c_bool, c_void_p, sizeof
+from ctypes import (
+    POINTER,
+    Array,
+    addressof,
+    byref,
+    c_bool,
+    c_char,
+    c_void_p,
+    sizeof,
+    string_at,
+)
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -24,6 +35,7 @@ from pyopentrustregion.python_interface import (
     hess_x_interface_type,
     SolverSettings,
     SolverState,
+    solver,
 )
 
 from pyopentrustregion.extensions.common.python_interface import (
@@ -107,6 +119,12 @@ getattr(lib, "test_" + fortran_tests["common_tests"][0])
 
 # number of AOs
 n_ao = c_int.in_dll(lib, "test_n_ao").value
+
+# warning the factories of the orbital bases print without a density matrix evaluating
+# function
+evaluate_dm_missing_warning = string_at(
+    addressof(c_char.in_dll(lib, "test_evaluate_dm_missing_warning"))
+).decode()
 
 
 class ExtensionCallbackMocks:
@@ -416,6 +434,235 @@ def check_extension_owner(call_factory, test_name):
         test_passed = False
 
     return test_passed
+
+
+@functools.cache
+def toy_model():
+    """
+    this function reads the toy model of common_test_reference.f90, which the
+    integration tests of the orbital bases and ARH solve: a mean-field energy in a
+    non-orthogonal AO basis with the core Hamiltonian, the AO overlap matrix, the
+    two-electron kernel g, whose Coulomb and exchange matrices are J[D]_pq = sum_rs
+    g_pqrs D_rs and K[D]_pq = sum_rs g_prqs D_rs, a non-linear term c sum_p n_p^3 of
+    the total diagonal density n_p, starting orbitals orthonormal in the AO metric and
+    the occupations of both particle channels
+    """
+    h, s, mo_coeff = (np.empty((n_ao, n_ao), order="F") for _ in range(3))
+    g = np.empty(4 * (n_ao,), order="F")
+    nonlinear_factor = c_real()
+    n_occ = (c_int * 2)()
+    lib.get_toy_model(
+        *(array.ctypes.data_as(POINTER(c_real)) for array in (h, s, g)),
+        byref(nonlinear_factor),
+        mo_coeff.ctypes.data_as(POINTER(c_real)),
+        n_occ,
+    )
+    return SimpleNamespace(
+        h=h, s=s, g=g, c=nonlinear_factor.value, mo_coeff=mo_coeff, n_occ=list(n_occ)
+    )
+
+
+class ToyRun:
+    """
+    this class prepares a solve of the toy model through the Python interface in the
+    given orbital basis and shell, with solver settings requesting a stability check,
+    the solver state and the orbitals the orbital basis moves, MO coefficients, the
+    closed-shell ones row-major, so that the library rotates a copy of them, and the
+    open-shell ones column-major, so that it rotates them in place, or density
+    matrices, together with the density matrix evaluating functions of the orbital
+    basis and ARH, which count their calls and record whether the solver state was
+    current in them
+    """
+
+    def __init__(self, mo_basis, n_particle):
+        model = toy_model()
+        self.mo_basis = mo_basis
+        self.n_particle = n_particle
+        self.n_occ = model.n_occ[:n_particle]
+        self.settings = SolverSettings()
+        self.settings.stability = True
+        self.state = SolverState()
+        self.calls = {"evaluate_dm": 0, "get_response": 0, "arh_evaluate_dm": 0}
+        self.n_updates_seen = {"evaluate_dm": 0, "arh_evaluate_dm": 0}
+        self.state_not_current = False
+
+        # MO coefficients of fewer MOs than AOs for every channel, so that the numbers
+        # of AOs and MOs cannot be confused, or the density matrices of their occupied
+        # orbitals for every channel
+        if mo_basis:
+            self.n_mo = n_ao - 1
+            mo_coeff = model.mo_coeff[:, : self.n_mo]
+            self.orbitals = (
+                np.ascontiguousarray(mo_coeff)
+                if n_particle == 1
+                else np.ascontiguousarray(np.array(2 * [mo_coeff.T])).swapaxes(-1, -2)
+            )
+            self.n_param = sum(occ * (self.n_mo - occ) for occ in self.n_occ)
+        else:
+            dm = np.array(
+                [
+                    model.mo_coeff[:, :occ] @ model.mo_coeff[:, :occ].T
+                    for occ in self.n_occ
+                ]
+            )
+            self.orbitals = np.ascontiguousarray(dm[0] if n_particle == 1 else dm)
+            self.n_param = n_particle * n_ao * (n_ao - 1) // 2
+        self.start_orbitals = self.orbitals.copy()
+
+    def called(self, name):
+        """
+        this function counts a call of a density matrix evaluating or response function
+        and records whether the number of orbital updates and objective function
+        evaluations in the solver state ever decreased between the calls of a density
+        matrix evaluating function, which it does once the state is not kept current
+        """
+        self.calls[name] += 1
+        if name in self.n_updates_seen:
+            n_updates = self.state.n_update_orbs + self.state.n_obj_func
+            if n_updates < self.n_updates_seen[name]:
+                self.state_not_current = True
+            self.n_updates_seen[name] = max(self.n_updates_seen[name], n_updates)
+
+    @staticmethod
+    def outputs(dm, fock=None, v_coulomb=None, v_exchange=None, v_nonlinear=None):
+        """
+        this function returns the energy and writes, where wanted, the Fock matrix and
+        the Coulomb, exact-exchange and non-linear potentials of the closed-shell
+        density matrix of one spin channel or the open-shell density matrices of both
+        channels
+        """
+        model = toy_model()
+        closed_shell = dm.ndim == 2
+        dms = dm.reshape(-1, n_ao, n_ao)
+        dm_total = 2.0 * dm if closed_shell else dm.sum(axis=0)
+        n_diag = np.diag(dm_total)
+        j = np.einsum("pqrs,irs->ipq", model.g, dms)
+        k = np.einsum("prqs,irs->ipq", model.g, dms)
+        j_total = np.einsum("pqrs,rs->pq", model.g, dm_total)
+        nonlinear = np.diag(3.0 * model.c * n_diag**2)
+        for output, value in (
+            (fock, model.h + j_total - k + nonlinear),
+            (v_coulomb, j_total if closed_shell else j),
+            (v_exchange, k),
+            (v_nonlinear, nonlinear),
+        ):
+            if output is not None:
+                output[...] = np.broadcast_to(value, dms.shape).reshape(output.shape)
+
+        # closed shell: E = 2 tr(h D) + tr(D J[2 D]) - tr(D K[D]) + c sum_p n_p^3, open
+        # shell: E = sum_s tr(h D_s) + tr(D_s J[D_a + D_b]) / 2 - tr(D_s K[D_s]) / 2 +
+        # c sum_p n_p^3
+        weight = 2.0 if closed_shell else 1.0
+        return weight * np.sum(
+            dms * (model.h + 0.5 * j_total - 0.5 * k)
+        ) + model.c * np.sum(n_diag**3)
+
+    def evaluate_dm(self, dm, fock, get_response):
+        """
+        this function is the density matrix evaluating function of the orbital basis,
+        whose response function belongs to the density matrices it was requested for,
+        which the library may overwrite after the call
+        """
+        self.called("evaluate_dm")
+        energy = self.outputs(dm, fock=fock)
+        if not get_response:
+            return energy, None
+        model = toy_model()
+        dm_total = 2.0 * dm if dm.ndim == 2 else dm.sum(axis=0)
+        n_diag = np.diag(dm_total)
+
+        def response(ddm, response):
+            self.called("get_response")
+            ddm_total = 2.0 * ddm if ddm.ndim == 2 else ddm.sum(axis=0)
+            response[...] = (
+                np.einsum("pqrs,rs->pq", model.g, ddm_total)
+                - np.einsum("prqs,...rs->...pq", model.g, ddm)
+                + np.diag(6.0 * model.c * n_diag * np.diag(ddm_total))
+            )
+
+        return energy, response
+
+    def arh_evaluate_dm(self, dm, fock, v_coulomb, v_exchange, v_nonlinear):
+        """
+        this function is the density matrix evaluating function of ARH
+        """
+        self.called("arh_evaluate_dm")
+        return self.outputs(dm, fock, v_coulomb, v_exchange, v_nonlinear)
+
+    def solve(self, update_orbs, obj_func, test_name, case_name, arh=False):
+        """
+        this function solves the prepared run with the functions a factory returned and
+        checks that the solve converged, that the density matrix evaluating functions
+        were called with the current solver state, that the exact Hessian of the
+        orbital basis and, with ARH, its density matrix evaluating function were used
+        and that the orbitals of the caller moved and stayed orthonormal
+        """
+        try:
+            solver(update_orbs, obj_func, self.n_param, self.settings, self.state)
+        except RuntimeError as e:
+            print(f" {test_name} failed: Solver raised for the {case_name} case: {e}")
+            return False
+        test_passed = True
+        if not (
+            self.state.grad_rms < self.settings.conv_tol
+            or self.state.max_precision_reached
+        ):
+            print(
+                f" {test_name} failed: Solver did not converge for the {case_name} case."
+            )
+            test_passed = False
+
+        # the exact Hessian of the orbital basis is used for the solve or, with ARH, for
+        # the stability check, so the response function is called
+        names = ["evaluate_dm", "get_response"] + (["arh_evaluate_dm"] if arh else [])
+        for name in names:
+            if self.calls[name] == 0:
+                print(
+                    f" {test_name} failed: {name} not called for the {case_name} case."
+                )
+                test_passed = False
+        n_updates = self.state.n_update_orbs + self.state.n_obj_func
+        if self.state_not_current or not all(
+            0 < self.n_updates_seen[name] <= n_updates
+            for name in names
+            if name in self.n_updates_seen
+        ):
+            print(
+                f" {test_name} failed: Solver state not current in the density matrix "
+                f"evaluating functions for the {case_name} case."
+            )
+            test_passed = False
+
+        # the orbitals of the caller moved and stayed orthonormal: C^T S C = I in the MO
+        # basis, D S D = D in the OAO basis
+        if np.max(np.abs(self.orbitals - self.start_orbitals)) < 1e-3:
+            print(
+                f" {test_name} failed: Orbitals of the caller not moved for the "
+                f"{case_name} case."
+            )
+            test_passed = False
+        s = toy_model().s
+        for x in self.orbitals.reshape((self.n_particle,) + self.orbitals.shape[-2:]):
+            target = np.eye(x.shape[1]) if self.mo_basis else x
+            if np.max(np.abs(x.T @ s @ x - target)) > 1e-8:
+                print(
+                    f" {test_name} failed: Orbitals of the caller not orthonormal for "
+                    f"the {case_name} case."
+                )
+                test_passed = False
+        return test_passed
+
+
+def check_released(releases, test_name, case_name):
+    """
+    this function checks that the extension objects whose owners have the given
+    finalizers were released once nothing keeps them alive any longer
+    """
+    gc.collect()
+    if any(release.alive for release in releases):
+        print(f" {test_name} failed: Extension not released for the {case_name} case.")
+        return False
+    return True
 
 
 @add_tests

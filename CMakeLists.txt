@@ -331,6 +331,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_unit_tests.f90
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
+            extensions/common/tests/common_c_integration_tests.c
             extensions/mo/tests/mo_test_reference.f90
             extensions/mo/tests/mo_unit_tests.f90
             extensions/mo/tests/mo_c_interface_unit_tests.f90
@@ -346,6 +347,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_unit_tests.f90
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
+            extensions/common/tests/common_c_integration_tests.c
             extensions/oao/tests/oao_test_reference.f90
             extensions/oao/tests/oao_unit_tests.f90
             extensions/oao/tests/oao_c_interface_unit_tests.f90
@@ -361,6 +363,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_unit_tests.f90
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
+            extensions/common/tests/common_c_integration_tests.c
             extensions/quasi_newton/tests/quasi_newton_test_reference.f90
             extensions/quasi_newton/tests/quasi_newton_unit_tests.f90
             extensions/quasi_newton/tests/quasi_newton_c_interface_unit_tests.f90
@@ -376,6 +379,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_unit_tests.f90
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
+            extensions/common/tests/common_c_integration_tests.c
             extensions/arh/tests/arh_test_reference.f90
             extensions/arh/tests/arh_unit_tests.f90
             extensions/arh/tests/arh_c_interface_unit_tests.f90
@@ -391,6 +395,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_unit_tests.f90
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
+            extensions/common/tests/common_c_integration_tests.c
             extensions/s_gek/tests/s_gek_test_reference.f90
             extensions/s_gek/tests/s_gek_unit_tests.f90
             extensions/s_gek/tests/s_gek_c_interface_unit_tests.f90

@@ -24,11 +24,14 @@ from pyopentrustregion.python_interface import (
     logger_interface_type,
 )
 from pyopentrustregion.extensions.arh import ARHSettings, arh_factory
+from pyopentrustregion.extensions.mo.tests import setup_mo_toy_run
+from pyopentrustregion.extensions.oao.tests import setup_oao_toy_run
 from pyopentrustregion.extensions.common.python_interface import (
     ExtensionOwner,
     OrbitalOwner,
 )
 from pyopentrustregion.extensions.common.tests import (
+    check_released,
     check_settings_layout,
     n_ao,
     setup_wired_solver_settings,
@@ -42,7 +45,11 @@ from pyopentrustregion.extensions.common.tests import (
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "arh_c_integration_tests": ["arh_settings_init", "arh_settings_layout"],
+    "arh_c_integration_tests": [
+        "arh_factory_c",
+        "arh_settings_init",
+        "arh_settings_layout",
+    ],
     "arh_tests": [
         "apply_ms_sr1_skip",
         "arh_factory_common",
@@ -434,6 +441,64 @@ class ARHPyIntegrationTests(unittest.TestCase):
     def setUpClass(cls):
         print_separator("Running integration tests for ARH Python interface...")
         return super().setUpClass()
+
+    def test_arh_factory_py(self):
+        """
+        this function solves the toy model with ARH, built through the ARH factory on
+        the objects of both orbital bases in the closed and the open shell, compares
+        with the minimum the exact Hessian of the orbital basis reaches and checks that
+        the ARH and the orbital basis object are released once nothing keeps them alive
+        """
+        test_passed = True
+
+        for setup_basis_run, basis_name in (
+            (setup_mo_toy_run, "MO-basis"),
+            (setup_oao_toy_run, "OAO-basis"),
+        ):
+            for n_particle, shell_name in ((1, "closed-shell"), (2, "open-shell")):
+                case_name = f"{basis_name} {shell_name}"
+
+                # solve with the exact Hessian of the orbital basis
+                run, update_orbs, obj_func = setup_basis_run(n_particle)
+                if not run.solve(
+                    update_orbs, obj_func, "test_arh_factory_py", case_name
+                ):
+                    test_passed = False
+                    continue
+                exact_energy = run.state.func
+
+                # wire the settings with a new orbital basis object and set the exact
+                # Hessian linear transformation its orbital update returns at the
+                # starting orbitals for the stability check, before the ARH factory
+                # wires them with ARH
+                run, update_orbs_basis, _ = setup_basis_run(n_particle)
+                releases = [run.settings._extension_owner.release]
+                _, hess_x = update_orbs_basis(
+                    np.zeros(run.n_param), np.empty(run.n_param), np.empty(run.n_param)
+                )
+                run.settings.stability_hess_x = hess_x
+                update_orbs, obj_func = arh_factory(
+                    run.arh_evaluate_dm, run.settings, run.state
+                )
+                releases.append(run.settings._extension_owner.release)
+
+                # solve with ARH, which reaches the same minimum
+                test_passed &= run.solve(
+                    update_orbs, obj_func, "test_arh_factory_py", case_name, arh=True
+                )
+                if abs(run.state.func - exact_energy) > 1e-8:
+                    print(
+                        " test_arh_factory_py failed: Minimum differs from the one of "
+                        f"the exact Hessian for the {case_name} case."
+                    )
+                    test_passed = False
+                del run, update_orbs, obj_func, update_orbs_basis, hess_x
+                test_passed &= check_released(
+                    releases, "test_arh_factory_py", case_name
+                )
+
+        self.assertTrue(test_passed, "test_arh_factory_py failed")
+        print(" test_arh_factory_py PASSED")
 
     def test_arh_settings_layout(self):
         """

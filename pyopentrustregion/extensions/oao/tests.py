@@ -24,6 +24,10 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
+    ToyRun,
+    check_released,
+    evaluate_dm_missing_warning,
+    toy_model,
     check_settings_layout,
     n_ao,
     setup_wired_solver_settings,
@@ -40,7 +44,11 @@ from pyopentrustregion.extensions.oao import OAOSettings, oao_factory
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "oao_c_integration_tests": ["oao_settings_init", "oao_settings_layout"],
+    "oao_c_integration_tests": [
+        "oao_factory_c",
+        "oao_settings_init",
+        "oao_settings_layout",
+    ],
     "oao_tests": [
         "calculate_grad_h_diag_oao",
         "get_extra_trial_vectors_oao",
@@ -78,6 +86,25 @@ fortran_tests = {
 # multiples of the density matrix the mock density matrix evaluating function returns
 # for the Fock matrix and the response
 evaluate_dm_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_factors"))
+
+
+def setup_oao_toy_run(n_particle):
+    """
+    this function prepares a solve of the toy model in the OAO basis and the given shell
+    through the OAO factory and returns the run and the functions the factory returned,
+    also for the integration tests of ARH
+    """
+    run = ToyRun(False, n_particle)
+    update_orbs, obj_func = oao_factory(
+        run.orbitals,
+        toy_model().s,
+        n_particle,
+        n_ao,
+        run.evaluate_dm,
+        run.settings,
+        run.state,
+    )
+    return run, update_orbs, obj_func
 
 
 @add_tests
@@ -516,6 +543,52 @@ class OAOPyIntegrationTests(unittest.TestCase):
     def setUpClass(cls):
         print_separator("Running integration tests for OAO Python interface...")
         return super().setUpClass()
+
+    def test_oao_factory_py(self):
+        """
+        this function solves the toy model through the OAO factory in the closed and
+        the open shell, checks that the OAO object is released once nothing keeps it
+        alive and that the factory warns through the logging function of the OAO
+        settings about a missing density matrix evaluating function
+        """
+        test_passed = True
+
+        # solve the toy model in the closed and the open shell
+        for n_particle, case_name in ((1, "closed-shell"), (2, "open-shell")):
+            run, update_orbs, obj_func = setup_oao_toy_run(n_particle)
+            releases = [run.settings._extension_owner.release]
+            test_passed &= run.solve(
+                update_orbs, obj_func, "test_oao_factory_py", case_name
+            )
+            del run, update_orbs, obj_func
+            test_passed &= check_released(releases, "test_oao_factory_py", case_name)
+
+        # check that the factory warns about a missing density matrix evaluating
+        # function
+        run = ToyRun(False, 1)
+        messages = []
+        settings = OAOSettings()
+        settings.logger = messages.append
+        settings.verbose = 3
+        oao_factory(
+            run.orbitals,
+            toy_model().s,
+            1,
+            n_ao,
+            None,
+            run.settings,
+            run.state,
+            settings,
+        )
+        if evaluate_dm_missing_warning not in "".join(messages):
+            print(
+                " test_oao_factory_py failed: No warning about a missing density matrix "
+                "evaluating function."
+            )
+            test_passed = False
+
+        self.assertTrue(test_passed, "test_oao_factory_py failed")
+        print(" test_oao_factory_py PASSED")
 
     def test_oao_settings_layout(self):
         """

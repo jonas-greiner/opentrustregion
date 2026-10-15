@@ -882,6 +882,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
         def raising(*args):
             raise ValueError("callback function failure")
 
+        # settings whose C callback functions are called below, kept alive until then,
+        # since these belong to the settings and a garbage collection frees them
+        # together with settings that nothing else refers to
+        called_settings = []
+
         def settings_callback(settings, name, func, interface_type, exception):
             """
             this function assigns a callable to a callback function of settings,
@@ -890,6 +895,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
             """
             setattr(settings, name, func)
             settings.prepare_call(n_param, exception)
+            called_settings.append(settings)
             return interface_type(getattr(settings.settings_c, name))
 
         for name, call in [

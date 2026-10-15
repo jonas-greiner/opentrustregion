@@ -15,7 +15,9 @@
  * fits into the padding of the bind(C) type, which changes neither the size nor the
  * offset of a named field. The header's inline initialization, which
  * test_oao_settings_init checks, takes both sides from the same Fortran assignment, so
- * it cannot detect such drift. */
+ * it cannot detect such drift. test_oao_factory_c solves the toy model of
+ * common_c_integration_tests.h through the OAO factory the header declares, in the
+ * closed and the open shell, and checks the warnings the factory prints. */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -24,27 +26,38 @@
 #include "opentrustregion.h"
 #include "opentrustregion_oao.h"
 
+#include "oao_c_integration_tests.h"
+
 /* ------------------------------------------------------------------
  * Reference settings provided by oao_test_reference.f90: the reference value of a field
  * by its name, C settings filled with these values field by field, the size of the
- * bind(C) settings type, and a comparison with the default settings
+ * bind(C) settings type, a comparison with the default settings, and the warning the
+ * factory prints for OAO settings that were not initialized
  * ------------------------------------------------------------------ */
 
 void reference_oao_field(const char *name, c_real *value, char *keyword);
 void get_reference_oao_values(oao_settings_type *settings);
 size_t oao_settings_size(void);
 bool is_default_oao_settings(const oao_settings_type *settings);
+extern const char test_oao_settings_uninitialized_warning[];
 
 /* ------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------ */
 
-static bool check_field(c_real value, const char *name) {
-  c_real ref_value;
-  char ref_keyword[OTR_KW_LEN + 1];
-  reference_oao_field(name, &ref_value, ref_keyword);
-  if (value != ref_value) {
-    fprintf(stderr, "test_oao_settings_layout failed: Field %s misplaced.\n", name);
+/* the setup declared in oao_c_integration_tests.h, which the integration tests of ARH
+ * use too */
+bool setup_oao_toy_run(toy_run *run, c_int n_particle, const char *test_name,
+                       const char *case_name) {
+  toy_run_init(run, false, n_particle);
+  oao_settings_type settings = oao_settings_init();
+  settings.context = &run->host;
+  c_int error = oao_factory(run->orbitals, toy.s, n_particle, toy.n_ao, toy_evaluate_dm,
+                            &run->update_orbs, &run->obj_func, &run->extension,
+                            &run->settings, &run->state, &settings);
+  if (error != 0) {
+    fprintf(stderr, "%s failed: OAO factory produced error %d for the %s case.\n",
+            test_name, (int)error, case_name);
     return false;
   }
   return true;
@@ -69,10 +82,12 @@ bool test_oao_settings_layout(void) {
   bool ok = true;
   oao_settings_type s = {0};
   get_reference_oao_values(&s);
-  ok &= check_field((uintptr_t)s.logger, "logger");
-  ok &= check_field(s.initialized, "initialized");
-  ok &= check_field(s.verbose, "verbose");
-  ok &= check_field((uintptr_t)s.context, "context");
+  reference_field_fn *lookup = reference_oao_field;
+  const char *test_name = "test_oao_settings_layout";
+  ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
+  ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
+  ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);
+  ok &= check_settings_field(lookup, (uintptr_t)s.context, "context", test_name);
 
   return ok;
 }
@@ -87,6 +102,76 @@ bool test_oao_settings_init(void) {
     fprintf(stderr, "test_oao_settings_init failed: Settings not initialized to the "
                     "default values without logging function and host context.\n");
     ok = false;
+  }
+
+  return ok;
+}
+
+bool test_oao_factory_c(void) {
+  bool ok = true;
+
+  if (!toy_model_load("test_oao_factory_c"))
+    return false;
+
+  // solve the toy model in the closed and the open shell
+  const char *shell_names[2] = {"closed-shell", "open-shell"};
+  for (c_int n_particle = 1; n_particle <= 2; n_particle++) {
+    toy_run run;
+    if (!setup_oao_toy_run(&run, n_particle, "test_oao_factory_c",
+                           shell_names[n_particle - 1])) {
+      ok = false;
+      continue;
+    }
+    ok &= toy_run_solve(&run, "test_oao_factory_c", shell_names[n_particle - 1]);
+    release_extension(run.extension);
+  }
+
+  // check that the factory warns on the standard error about OAO settings and solver
+  // settings that were not initialized, which provide no logging function, and only
+  // through the logging function of the OAO settings about a missing density matrix
+  // evaluating function
+  const char *case_names[3] = {"for OAO settings that were not initialized",
+                               "for solver settings that were not initialized",
+                               "without a density matrix evaluating function"};
+  const char *stderr_warnings[3] = {test_oao_settings_uninitialized_warning,
+                                    test_settings_uninitialized_warning, NULL};
+  for (int i_case = 0; i_case < 3; i_case++) {
+    toy_run run;
+    toy_run_init(&run, false, 1);
+    oao_settings_type settings = oao_settings_init();
+    settings.logger = toy_logger;
+    settings.verbose = 3;
+    settings.context = &run.host;
+    if (i_case == 0)
+      settings = (oao_settings_type){0};
+    if (i_case == 1)
+      run.settings = (solver_settings_type){0};
+    start_stderr_capture();
+    c_int error = oao_factory(run.orbitals, toy.s, 1, toy.n_ao,
+                              i_case == 2 ? NULL : toy_evaluate_dm, &run.update_orbs,
+                              &run.obj_func, &run.extension, &run.settings, &run.state,
+                              &settings);
+    if (!stop_stderr_capture(stderr_warnings[i_case])) {
+      fprintf(stderr,
+              "test_oao_factory_c failed: Warning on the standard error wrong %s.\n",
+              case_names[i_case]);
+      ok = false;
+    }
+    if ((strstr(run.host.log, test_evaluate_dm_missing_warning) != NULL) !=
+        (i_case == 2)) {
+      fprintf(stderr,
+              "test_oao_factory_c failed: Warning about the density matrix evaluating "
+              "function wrong %s.\n",
+              case_names[i_case]);
+      ok = false;
+    }
+    if (error != 0) {
+      fprintf(stderr, "test_oao_factory_c failed: Produced error %s.\n",
+              case_names[i_case]);
+      ok = false;
+      continue;
+    }
+    release_extension(run.extension);
   }
 
   return ok;

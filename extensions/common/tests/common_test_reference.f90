@@ -8,10 +8,11 @@ module otr_common_test_reference
 
     use opentrustregion, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
-    use otr_common, only: orbital_settings_type
+    use otr_common, only: orbital_settings_type, evaluate_dm_missing_warning_msg
     use test_reference, only: same_callbacks
     use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_f_procpointer, &
-                                           c_associated, c_null_funptr
+                                           c_associated, c_null_funptr, c_char, &
+                                           c_null_char
 
     implicit none
 
@@ -41,6 +42,15 @@ module otr_common_test_reference
     ! argument list
     character(len=17), parameter :: evaluate_dm_outputs(2) = &
         [character(len=17) :: "Fock matrix", "response function"]
+
+    ! warning the factories of the orbital bases print without a density matrix
+    ! evaluating function, as a null-terminated string for the C integration tests
+    integer(ip), parameter :: evaluate_dm_warning_len = &
+        len(evaluate_dm_missing_warning_msg) + 1
+    character(kind=c_char), protected, &
+        bind(C, name="test_evaluate_dm_missing_warning") :: &
+        evaluate_dm_missing_warning_c(evaluate_dm_warning_len) = transfer( &
+            evaluate_dm_missing_warning_msg//c_null_char, "a", evaluate_dm_warning_len)
 
     interface operator(==)
         module procedure equal_orbital
@@ -99,6 +109,101 @@ contains
         end do
 
     end function density_pattern
+
+    subroutine get_toy_model(h_c, s_c, g_c, nonlinear_factor_c, mo_coeff_c, n_occ_c) &
+        bind(C)
+        !
+        ! this subroutine returns the toy model which the integration tests of the
+        ! orbital bases and ARH solve through the C and Python interfaces, a mean-field
+        ! energy of the shared numbers of AOs and occupied orbitals in a non-orthogonal
+        ! AO basis: the core Hamiltonian, the AO overlap matrix, the positive
+        ! semidefinite two-electron kernel g_pqrs = sum_k M^k_pq M^k_rs of a few
+        ! symmetric matrices M^k, the factor of the non-linear term and starting
+        ! orbitals orthonormal in the AO metric, the inverse square root of the overlap
+        ! matrix rotated so that they are not stationary, all deterministic so that C
+        ! and Python solve the same model
+        !
+        use opentrustregion_unit_tests, only: identity_matrix
+
+        real(c_rp), intent(out) :: h_c(n_ao, n_ao), s_c(n_ao, n_ao), &
+                                   g_c(n_ao, n_ao, n_ao, n_ao), nonlinear_factor_c, &
+                                   mo_coeff_c(n_ao, n_ao)
+        integer(c_ip), intent(out) :: n_occ_c(n_particle)
+
+        integer(ip), parameter :: &
+            n_kernel = 3, n_rotations = 3, &
+            rotation_pairs(2, n_rotations) = reshape([1, 4, &
+                                                      2, 5, &
+                                                      1, 3], [2, n_rotations])
+        real(rp), parameter :: rotation_angles(n_rotations) = [0.6_rp, -0.6_rp, 0.3_rp]
+
+        real(rp) :: s(n_ao, n_ao), m(n_ao, n_ao, n_kernel), eigvals(n_ao), &
+                    eigvecs(n_ao, n_ao), rotation(n_ao, n_ao), givens(n_ao, n_ao)
+        real(rp), allocatable :: work(:)
+        integer(ip) :: p, q, k, i, lwork, info
+        external :: dsyev
+
+        ! core Hamiltonian with diagonal elements -2 to 2 coupled by small off-diagonal
+        ! elements, and AO overlap matrix close to the identity
+        do q = 1, n_ao
+            do p = 1, n_ao
+                if (p == q) then
+                    h_c(p, q) = real(p - 3, kind=c_rp)
+                    s(p, q) = 1.0_rp
+                else
+                    h_c(p, q) = real(0.2_rp / real(p + q, kind=rp), kind=c_rp)
+                    s(p, q) = 0.1_rp / real(p + q, kind=rp)
+                end if
+            end do
+        end do
+        s_c = real(s, kind=c_rp)
+
+        ! symmetric matrices M^k and the two-electron kernel they span, a Gram matrix
+        ! of AO pairs and therefore positive semidefinite
+        do k = 1, n_kernel
+            do q = 1, n_ao
+                do p = 1, n_ao
+                    m(p, q, k) = 0.4_rp * cos(real(k * p * q, kind=rp)) / &
+                                 real(k, kind=rp)
+                end do
+            end do
+        end do
+        g_c = real(reshape(matmul(reshape(m, [n_ao**2, n_kernel]), &
+                                  transpose(reshape(m, [n_ao**2, n_kernel]))), &
+                           [n_ao, n_ao, n_ao, n_ao]), kind=c_rp)
+
+        ! factor of the non-linear term
+        nonlinear_factor_c = 0.05_c_rp
+
+        ! inverse square root of the overlap matrix
+        eigvecs = s
+        allocate(work(1))
+        call dsyev("V", "U", n_ao, eigvecs, n_ao, eigvals, work, -1_ip, info)
+        lwork = int(work(1), kind=ip)
+        deallocate(work)
+        allocate(work(lwork))
+        call dsyev("V", "U", n_ao, eigvecs, n_ao, eigvals, work, lwork, info)
+        deallocate(work)
+
+        ! rotate it by plane rotations of a few pairs of orbitals
+        rotation = identity_matrix(n_ao)
+        do i = 1, n_rotations
+            p = rotation_pairs(1, i)
+            q = rotation_pairs(2, i)
+            givens = identity_matrix(n_ao)
+            givens(p, p) = cos(rotation_angles(i))
+            givens(q, q) = cos(rotation_angles(i))
+            givens(p, q) = -sin(rotation_angles(i))
+            givens(q, p) = sin(rotation_angles(i))
+            rotation = matmul(rotation, givens)
+        end do
+        mo_coeff_c = real(matmul(matmul(eigvecs * spread( &
+            1.0_rp / sqrt(eigvals), 1, n_ao), transpose(eigvecs)), rotation), kind=c_rp)
+
+        ! occupations of the particle channels
+        n_occ_c = int(n_occ, kind=c_ip)
+
+    end subroutine get_toy_model
 
     function check_evaluate_dm_cs_funptr(evaluate_dm_funptr, test_name, message, &
                                          context) result(test_passed)

@@ -118,6 +118,7 @@ contains
         use otr_common_c_interface, only: extension_holder_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
+        use otr_arh, only: standard_arh_factory_common => arh_factory_common
         use otr_arh_c_interface, only: arh_settings_type_c, arh_c_callbacks_type, &
                                        arh_factory_common, arh_factory_c_wrapper
         use otr_arh_mock, only: mock_arh_factory_common, mock_arh_factory_error, &
@@ -373,6 +374,9 @@ contains
             test_arh_factory_c_wrapper = .false.
         end if
         deallocate(orbitals)
+
+        ! restore the procedure pointer so later tests do not inherit the mock
+        arh_factory_common => standard_arh_factory_common
 
     end function test_arh_factory_c_wrapper
 
