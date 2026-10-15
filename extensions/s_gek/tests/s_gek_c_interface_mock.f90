@@ -16,7 +16,9 @@ module otr_s_gek_c_interface_mock
 
     implicit none
 
-    logical(c_bool), bind(C) :: test_s_gek_factory_interface = .true._c_bool
+    ! result of the mock factory, which the Python test clears before and reads after
+    ! every call whose arguments it checks
+    logical(c_bool), bind(C) :: test_s_gek_factory_interface = .false._c_bool
 
     ! whether the mock factory received settings, which the Python test reads
     logical(c_bool), bind(C) :: s_gek_settings_passed = .false._c_bool
@@ -61,6 +63,9 @@ contains
 
         procedure(logger_c_type), pointer :: logger_funptr
         character(len=:), allocatable, target :: message
+
+        ! assume tests pass
+        test_s_gek_factory_interface = .true.
 
         ! check if passed number of parameters is correct
         if (n_param_c /= n_param) then

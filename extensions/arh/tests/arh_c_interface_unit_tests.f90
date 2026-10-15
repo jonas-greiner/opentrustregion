@@ -283,6 +283,7 @@ contains
             solver_settings_c%context = c_loc(orbitals_holder%solver_level)
             update_orbs_c_funptr = c_funloc(mock_update_orbs)
             obj_func_c_funptr = c_funloc(mock_obj_func)
+            extension_c = c_loc(state_c)
             mock_arh_factory_error = 1
             error_c = arh_factory_c_wrapper( &
                 evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
@@ -360,8 +361,12 @@ contains
         end if
 
         ! call the factory without a record of the state, which has to produce an error
-        ! without calling the factory or returning functions or an extension
+        ! without calling the factory or returning functions or an extension, which are
+        ! set beforehand
         solver_settings_c = default_solver_settings
+        update_orbs_c_funptr = c_funloc(mock_update_orbs)
+        obj_func_c_funptr = c_funloc(mock_obj_func)
+        extension_c = c_loc(state_c)
         solver_settings_c%context = c_loc(orbitals_holder%solver_level)
         test_passed = .false.
         error_c = arh_factory_c_wrapper(evaluate_dm_c_funptr, update_orbs_c_funptr, &

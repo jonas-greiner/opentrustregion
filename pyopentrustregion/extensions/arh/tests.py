@@ -40,7 +40,6 @@ from pyopentrustregion.extensions.common.tests import (
     release_mock_extension,
     assign_reference_settings,
     settings_hold_reference,
-    ExtensionCallbackMocks,
 )
 
 # define all tests in alphabetical order
@@ -195,8 +194,6 @@ class ARHPyInterfaceTests(unittest.TestCase):
 
         return np.sum(dm_ao)
 
-    mock_logger = ExtensionCallbackMocks.mock_logger
-
     # replace original library with mock library, also for the release of the
     # extensions the factory returns
     @patch("pyopentrustregion.python_interface.lib.arh_factory", lib.mock_arh_factory)
@@ -211,10 +208,16 @@ class ARHPyInterfaceTests(unittest.TestCase):
         # initialize test flag
         test_passed = True
 
+        # the logging function records the messages, and the mock factory records in a
+        # flag whether it received what it expects, which is cleared before and read
+        # after every call of it
+        messages = []
+        mock_passed = c_bool.in_dll(lib, "test_arh_factory_interface")
+
         # initialize settings object
         settings = ARHSettings()
         assign_reference_settings(settings, lib.reference_arh_field)
-        settings.logger = self.mock_logger
+        settings.logger = messages.append
 
         # call the ARH factory python interface for solver settings an orbital basis
         # factory wired last for either shell, whose owner holds the dimensions of the
@@ -227,16 +230,25 @@ class ARHPyInterfaceTests(unittest.TestCase):
             orbitals = setup_orbital_owner(
                 solver_settings, n_particle, lambda: copy_back_calls.append(True)
             )
-            self.test_logger = True
+            messages.clear()
+            mock_passed.value = False
             update_orbs_arh, obj_func_arh = arh_factory(
                 self.mock_arh_evaluate_dm, solver_settings, SolverState(), settings
             )
+
+            # check if the mock factory received the correct input
+            if not mock_passed.value:
+                print(
+                    " test_arh_factory_py_interface failed: Mock factory received "
+                    f"wrong input for {n_particle} particle channel(s)."
+                )
+                test_passed = False
 
             # check that the settings were passed and the logging function called
             if not c_bool.in_dll(lib, "arh_settings_passed").value:
                 print(" test_arh_factory_py_interface failed: Settings not passed.")
                 test_passed = False
-            if not self.test_logger:
+            if "test" not in messages:
                 print(
                     " test_arh_factory_py_interface failed: Called logging function "
                     "wrong."
@@ -321,11 +333,20 @@ class ARHPyInterfaceTests(unittest.TestCase):
         settings_flag.value = True
         solver_settings = setup_wired_solver_settings()[0]
         setup_orbital_owner(solver_settings, 2)
+        mock_passed.value = False
         arh_factory(self.mock_arh_evaluate_dm, solver_settings, SolverState())
         if settings_flag.value:
             print(
                 " test_arh_factory_py_interface failed: Settings passed although none "
                 "were given."
+            )
+            test_passed = False
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_arh_factory_py_interface failed: Mock factory received wrong "
+                "input without settings."
             )
             test_passed = False
 
@@ -337,7 +358,16 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 self.mock_arh_evaluate_dm, solver_settings, solver_state, settings
             )
 
+        mock_passed.value = False
         if not check_extension_owner(call_factory, "arh_factory_py_interface"):
+            test_passed = False
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_arh_factory_py_interface failed: Mock factory received wrong "
+                "input for the check of the owner."
+            )
             test_passed = False
 
         # call the ARH factory python interface for solver settings no orbital basis
@@ -379,10 +409,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             except error_type:
                 pass
 
-        self.assertTrue(
-            c_bool.in_dll(lib, "test_arh_factory_interface").value and test_passed,
-            "test_arh_factory_py_interface failed",
-        )
+        self.assertTrue(test_passed, "test_arh_factory_py_interface failed")
         print(" test_arh_factory_py_interface PASSED")
 
     @patch.object(ARHSettings, "init_c_struct", lib.mock_init_arh_settings)

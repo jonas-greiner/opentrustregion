@@ -156,14 +156,6 @@ class ExtensionCallbackMocks:
         """
         return np.sum(kappa)
 
-    def mock_logger(self, message):
-        """
-        this function is a mock function for the logging function
-        """
-        if message != "test":
-            self.test_logger = False
-        return
-
 
 def ao_overlap_pattern():
     """

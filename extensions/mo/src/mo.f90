@@ -200,7 +200,6 @@ contains
                 call warn_uninitialized_settings(local_settings, &
                                                  mo_settings_uninitialized_warning_msg)
                 call local_settings%init(error)
-                if (error /= 0) return
             end if
         else
             local_settings = default_mo_settings

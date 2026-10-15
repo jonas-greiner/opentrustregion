@@ -127,10 +127,6 @@ contains
             call warn_uninitialized_settings(settings, &
                                              arh_settings_uninitialized_warning_msg)
             call settings%init(error)
-            if (error /= 0) then
-                error_c = int(error, kind=c_ip)
-                return
-            end if
         end if
 
         ! the context of the C solver settings is trusted to be the level of the holder

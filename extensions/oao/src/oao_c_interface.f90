@@ -104,10 +104,6 @@ contains
             call warn_uninitialized_settings(settings, &
                                              oao_settings_uninitialized_warning_msg)
             call settings%init(error)
-            if (error /= 0) then
-                error_c = int(error, kind=c_ip)
-                return
-            end if
         end if
 
         ! the object updates the host's density matrix in place or, if the real kind

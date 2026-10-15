@@ -16,7 +16,9 @@ module otr_arh_c_interface_mock
 
     implicit none
 
-    logical(c_bool), bind(C) :: test_arh_factory_interface = .true._c_bool
+    ! result of the mock factory, which the Python test clears before and reads after
+    ! every call whose arguments it checks
+    logical(c_bool), bind(C) :: test_arh_factory_interface = .false._c_bool
 
     ! whether the mock factory received settings, which the Python test reads, and the
     ! number of particles of the orbitals of the solver settings the Python test
@@ -57,6 +59,9 @@ contains
 
         procedure(logger_c_type), pointer :: logger_funptr
         character(len=:), allocatable, target :: message
+
+        ! assume tests pass
+        test_arh_factory_interface = .true.
 
         ! test passed density matrix evaluating function for the number of particles of
         ! the orbitals

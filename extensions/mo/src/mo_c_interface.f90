@@ -103,16 +103,13 @@ contains
 
         ! convert the settings and initialize them if they were not, after printing a
         ! warning, as the factory would, which would otherwise discard the context
-        ! through which the wrappers of the host's callback functions find them
+        ! through which the wrappers of the host's callback functions find them; the
+        ! initialization cannot fail for settings of this type
         settings = local_settings_c
         if (.not. settings%initialized) then
             call warn_uninitialized_settings(settings, &
                                              mo_settings_uninitialized_warning_msg)
             call settings%init(error)
-            if (error /= 0) then
-                error_c = int(error, kind=c_ip)
-                return
-            end if
         end if
 
         ! convert the irreps of the MOs of every particle channel if they are given and

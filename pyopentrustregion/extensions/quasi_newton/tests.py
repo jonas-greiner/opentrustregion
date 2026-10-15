@@ -120,8 +120,6 @@ class QNPyInterfaceTests(unittest.TestCase):
 
         return
 
-    mock_logger = ExtensionCallbackMocks.mock_logger
-
     # replace original library with mock library, also for the release of the
     # extensions the factory returns
     @patch(
@@ -139,16 +137,20 @@ class QNPyInterfaceTests(unittest.TestCase):
         # initialize test flag
         test_passed = True
 
+        # the logging function records the messages, and the mock factory records in a
+        # flag whether it received what it expects, which is cleared before and read
+        # after every call of it
+        messages = []
+        mock_passed = c_bool.in_dll(lib, "test_qn_factory_interface")
+
         # initialize settings objects
         settings = QNSettings()
         assign_reference_settings(settings, lib.reference_qn_field)
-        settings.logger = self.mock_logger
+        settings.logger = messages.append
         solver_settings, python_functions = setup_wired_solver_settings()
 
-        # initialize logging boolean
-        self.test_logger = True
-
         # call quasi-Newton orbital updating factory python interface
+        mock_passed.value = False
         update_orbs_qn, obj_func_qn = qn_factory(
             n_param,
             self.mock_update_orbs,
@@ -160,8 +162,16 @@ class QNPyInterfaceTests(unittest.TestCase):
             settings,
         )
 
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_qn_factory_py_interface failed: Mock factory received wrong "
+                "input for settings."
+            )
+            test_passed = False
+
         # check if logger was called correctly
-        if not self.test_logger:
+        if "test" not in messages:
             print(
                 " test_qn_factory_py_interface failed: Called logging "
                 "function wrong."
@@ -293,6 +303,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         # none so that the library uses its default settings
         settings_flag = c_bool.in_dll(lib, "qn_settings_passed")
         settings_flag.value = True
+        mock_passed.value = False
         try:
             qn_factory(
                 n_param,
@@ -316,8 +327,17 @@ class QNPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_qn_factory_py_interface failed: Mock factory received wrong "
+                "input without settings."
+            )
+            test_passed = False
+
         # the factory hands the extension it receives to an owner, which the solver
         # settings keep alive and which keeps the state alive
+        mock_passed.value = False
         if not check_extension_owner(
             lambda solver_settings, solver_state: qn_factory(
                 n_param,
@@ -331,6 +351,14 @@ class QNPyInterfaceTests(unittest.TestCase):
             ),
             "qn_factory_py_interface",
         ):
+            test_passed = False
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_qn_factory_py_interface failed: Mock factory received wrong "
+                "input for the check of the owner."
+            )
             test_passed = False
 
         # call qn_factory python interface for host callbacks which cannot be called
@@ -365,10 +393,7 @@ class QNPyInterfaceTests(unittest.TestCase):
             except TypeError:
                 pass
 
-        self.assertTrue(
-            c_bool.in_dll(lib, "test_qn_factory_interface").value and test_passed,
-            "test_qn_factory_py_interface failed",
-        )
+        self.assertTrue(test_passed, "test_qn_factory_py_interface failed")
         print(" test_qn_factory_py_interface PASSED")
 
     @patch.object(QNSettings, "init_c_struct", lib.mock_init_qn_settings)

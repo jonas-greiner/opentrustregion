@@ -274,8 +274,12 @@ contains
         end do
 
         ! call the factory without a record of the state, which has to produce an error
-        ! without calling the factory or returning functions or an extension
+        ! without calling the factory or returning functions or an extension, which are
+        ! set beforehand
         solver_settings_c = default_solver_settings
+        update_orbs_s_gek_c_funptr = c_funloc(mock_update_orbs)
+        obj_func_s_gek_c_funptr = c_funloc(mock_obj_func)
+        extension_c = c_loc(state_c)
         test_passed_mock_s_gek_factory = .false.
         error_c = s_gek_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
@@ -298,6 +302,7 @@ contains
         solver_settings_c%context = c_loc(host_context)
         update_orbs_s_gek_c_funptr = c_funloc(mock_update_orbs)
         obj_func_s_gek_c_funptr = c_funloc(mock_obj_func)
+        extension_c = c_loc(state_c)
         test_passed_mock_s_gek_factory = .false.
         mock_s_gek_factory_error = 1
         error_c = s_gek_factory_c_wrapper( &

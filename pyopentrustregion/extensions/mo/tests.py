@@ -41,7 +41,6 @@ from pyopentrustregion.extensions.common.tests import (
     assign_reference_settings,
     settings_hold_reference,
     ao_overlap_pattern,
-    ExtensionCallbackMocks,
 )
 from pyopentrustregion.extensions.mo import MOSettings, mo_factory
 
@@ -159,8 +158,6 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    mock_logger = ExtensionCallbackMocks.mock_logger
-
     def mock_evaluate_dm(self, dm_ao, fock, get_response):
         """
         this function is a mock function for the density matrix evaluating function,
@@ -195,10 +192,16 @@ class MOPyInterfaceTests(unittest.TestCase):
         # initialize test flag
         test_passed = True
 
+        # the logging function records the messages, and the mock factory records in a
+        # flag whether it received what it expects, which is cleared before and read
+        # after every call of it
+        messages = []
+        mock_passed = c_bool.in_dll(lib, "test_mo_factory_interface")
+
         # initialize settings object
         settings = MOSettings()
         assign_reference_settings(settings, lib.reference_mo_field)
-        settings.logger = self.mock_logger
+        settings.logger = messages.append
 
         def mo_coeff_pattern(n_particle, offset):
             # MO coefficients encoding their particle channel, AO and MO index
@@ -234,19 +237,19 @@ class MOPyInterfaceTests(unittest.TestCase):
             ("closed-shell with symmetry", 1, False, np.float64, True),
             ("open-shell with symmetry", 2, True, np.float64, True),
         )
-        mock_passed = c_bool.in_dll(lib, "test_mo_factory_interface")
         orbsym_passed = c_bool.in_dll(lib, "test_orbsym_passed")
         for case, n_particle, column_major, dtype, with_irreps in cases:
             # initialize MO coefficients
             mo_coeff = initial_mo_coeff(n_particle, column_major, dtype)
 
-            # initialize logging boolean
-            self.test_logger = True
+            # clear the recorded messages
+            messages.clear()
 
             # initialize solver settings object
             solver_settings, python_functions = setup_wired_solver_settings()
 
             # call MO factory python interface
+            mock_passed.value = False
             update_orbs_mo, obj_func_mo = mo_factory(
                 mo_coeff,
                 ao_overlap.astype(dtype),
@@ -281,17 +284,16 @@ class MOPyInterfaceTests(unittest.TestCase):
             ):
                 test_passed = False
 
-            # check if the mock factory received the correct input and reset its flag
+            # check if the mock factory received the correct input
             if not mock_passed.value:
                 print(
-                    " test_mo_factory_py_interface failed: Mock factory received "
-                    f"wrong input for the {case} case."
+                    " test_mo_factory_py_interface failed: Mock factory received wrong "
+                    f"input for the {case} case."
                 )
                 test_passed = False
-            mock_passed.value = True
 
             # check if logger was called correctly
-            if not self.test_logger:
+            if "test" not in messages:
                 print(
                     " test_mo_factory_py_interface failed: Called logging function "
                     f"wrong for the {case} case."
@@ -367,6 +369,7 @@ class MOPyInterfaceTests(unittest.TestCase):
         evaluate_dm_flag = c_bool.in_dll(lib, "mo_evaluate_dm_passed")
         settings_flag.value = True
         evaluate_dm_flag.value = True
+        mock_passed.value = False
         solver_settings = setup_wired_solver_settings()[0]
         try:
             mo_factory(
@@ -392,6 +395,14 @@ class MOPyInterfaceTests(unittest.TestCase):
                 "evaluating function passed although none were given."
             )
             test_passed = False
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_mo_factory_py_interface failed: Mock factory received wrong "
+                "input without settings."
+            )
+            test_passed = False
         owner = getattr(solver_settings, "_extension_owner", None)
         if not isinstance(owner, OrbitalOwner) or (owner.n_ao, owner.n_particle) != (
             n_ao,
@@ -405,6 +416,7 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         # the factory hands the extension it receives to an owner, which the solver
         # settings keep alive and which keeps the state alive
+        mock_passed.value = False
         if not check_extension_owner(
             lambda solver_settings, solver_state: mo_factory(
                 initial_mo_coeff(1, True, np.float64),
@@ -420,6 +432,14 @@ class MOPyInterfaceTests(unittest.TestCase):
             ),
             "mo_factory_py_interface",
         ):
+            test_passed = False
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_mo_factory_py_interface failed: Mock factory received wrong "
+                "input for the check of the owner."
+            )
             test_passed = False
 
         # call MO factory python interface for MO coefficients stored row-major and
@@ -441,7 +461,16 @@ class MOPyInterfaceTests(unittest.TestCase):
                 self.mock_evaluate_dm,
             )
             solver_settings = setup_wired_solver_settings()[0]
+            mock_passed.value = False
             returned = mo_factory(*args, solver_settings, SolverState(), settings)
+
+            # check if the mock factory received the correct input
+            if not mock_passed.value:
+                print(
+                    " test_mo_factory_py_interface failed: Mock factory received wrong "
+                    "input for the release of the MO coefficients."
+                )
+                test_passed = False
             mo_coeff_buffer_ref = weakref.ref(
                 solver_settings._extension_owner.saved_objects["mo_coeff_buffer"]
             )
@@ -462,6 +491,7 @@ class MOPyInterfaceTests(unittest.TestCase):
         # to the caller
         mo_coeff = initial_mo_coeff(1, False, np.float64)
         solver_settings = setup_wired_solver_settings()[0]
+        mock_passed.value = False
         update_orbs_mo = mo_factory(
             mo_coeff,
             ao_overlap,
@@ -477,6 +507,14 @@ class MOPyInterfaceTests(unittest.TestCase):
         mo_coeff_buffer = solver_settings._extension_owner.saved_objects[
             "mo_coeff_buffer"
         ]
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_mo_factory_py_interface failed: Mock factory received wrong "
+                "input for a failing orbital update."
+            )
+            test_passed = False
 
         def failing_update_orbs(
             kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_ptr, context
@@ -502,7 +540,6 @@ class MOPyInterfaceTests(unittest.TestCase):
                 "failing MO orbital updating function not copied back."
             )
             test_passed = False
-        mock_passed.value = True
 
         # invalid inputs have to raise an error before the library is called
         read_only_mo_coeff = mo_coeff_pattern(1, 0.0)[0]

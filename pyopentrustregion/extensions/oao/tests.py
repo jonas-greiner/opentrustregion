@@ -38,7 +38,6 @@ from pyopentrustregion.extensions.common.tests import (
     settings_hold_reference,
     ao_overlap_pattern,
     density_pattern,
-    ExtensionCallbackMocks,
 )
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory
 
@@ -146,8 +145,6 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    mock_logger = ExtensionCallbackMocks.mock_logger
-
     def mock_evaluate_dm(self, dm_ao, fock, get_response):
         """
         this function is a mock function for the density matrix evaluating function,
@@ -182,13 +179,16 @@ class OAOPyInterfaceTests(unittest.TestCase):
         # initialize test flag
         test_passed = True
 
+        # the logging function records the messages, and the mock factory records in a
+        # flag whether it received what it expects, which is cleared before and read
+        # after every call of it
+        messages = []
+        mock_passed = c_bool.in_dll(lib, "test_oao_factory_interface")
+
         # initialize settings object
         settings = OAOSettings()
         assign_reference_settings(settings, lib.reference_oao_field)
-        settings.logger = self.mock_logger
-
-        # initialize logging boolean
-        self.test_logger = True
+        settings.logger = messages.append
 
         # initialize density matrix
         dm_ao = density_pattern(1)[0]
@@ -197,6 +197,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         solver_settings, python_functions = setup_wired_solver_settings()
 
         # call OAO factory python interface
+        mock_passed.value = False
         update_orbs_oao, obj_func_oao = oao_factory(
             dm_ao,
             ao_overlap,
@@ -207,6 +208,14 @@ class OAOPyInterfaceTests(unittest.TestCase):
             SolverState(),
             settings,
         )
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_oao_factory_py_interface failed: Mock factory received wrong "
+                "input for settings."
+            )
+            test_passed = False
 
         # check that the settings and the density matrix evaluating function were
         # passed
@@ -239,7 +248,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
             test_passed = False
 
         # check if logger was called correctly
-        if not self.test_logger:
+        if "test" not in messages:
             print(
                 " test_oao_factory_py_interface failed: Called logging function wrong."
             )
@@ -326,6 +335,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
         # call OAO factory python interface with an AO overlap matrix of single
         # precision, which the factory has to convert
+        mock_passed.value = False
         oao_factory(
             dm_ao,
             ao_overlap.astype(np.float32),
@@ -337,6 +347,14 @@ class OAOPyInterfaceTests(unittest.TestCase):
             settings,
         )
 
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_oao_factory_py_interface failed: Mock factory received wrong "
+                "input for an AO overlap matrix of single precision."
+            )
+            test_passed = False
+
         # call OAO factory python interface without settings and without a density
         # matrix evaluating function, which have to be passed as none, and determine if
         # the owner of the object holds the dimensions of the orbitals for the ARH
@@ -345,6 +363,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         evaluate_dm_flag = c_bool.in_dll(lib, "oao_evaluate_dm_passed")
         settings_flag.value = True
         evaluate_dm_flag.value = True
+        mock_passed.value = False
         dm_ao = density_pattern(n_particle)
         solver_settings = setup_wired_solver_settings()[0]
         try:
@@ -369,6 +388,14 @@ class OAOPyInterfaceTests(unittest.TestCase):
                 "evaluating function passed although none were given."
             )
             test_passed = False
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_oao_factory_py_interface failed: Mock factory received wrong "
+                "input without settings."
+            )
+            test_passed = False
         owner = getattr(solver_settings, "_extension_owner", None)
         if (
             not isinstance(owner, OrbitalOwner)
@@ -384,6 +411,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
         # the factory hands the extension it receives to an owner, which the solver
         # settings keep alive and which keeps the state alive
+        mock_passed.value = False
         if not check_extension_owner(
             lambda solver_settings, solver_state: oao_factory(
                 density_pattern(1)[0],
@@ -397,6 +425,14 @@ class OAOPyInterfaceTests(unittest.TestCase):
             ),
             "oao_factory_py_interface",
         ):
+            test_passed = False
+
+        # check if the mock factory received the correct input
+        if not mock_passed.value:
+            print(
+                " test_oao_factory_py_interface failed: Mock factory received wrong "
+                "input for the check of the owner."
+            )
             test_passed = False
 
         # call oao_factory python interface for invalid density and overlap matrices,
@@ -481,10 +517,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
             except error_type:
                 pass
 
-        self.assertTrue(
-            c_bool.in_dll(lib, "test_oao_factory_interface").value and test_passed,
-            "test_oao_factory_py_interface failed",
-        )
+        self.assertTrue(test_passed, "test_oao_factory_py_interface failed")
         print(" test_oao_factory_py_interface PASSED")
 
     @patch.object(OAOSettings, "init_c_struct", lib.mock_init_oao_settings)

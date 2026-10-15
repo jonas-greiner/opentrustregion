@@ -17,7 +17,9 @@ module otr_oao_c_interface_mock
 
     implicit none
 
-    logical(c_bool), bind(C) :: test_oao_factory_interface = .true._c_bool
+    ! result of the mock factory, which the Python test clears before and reads after
+    ! every call whose arguments it checks
+    logical(c_bool), bind(C) :: test_oao_factory_interface = .false._c_bool
 
     ! whether the mock factory received settings and a density matrix evaluating
     ! function, which the Python test reads
@@ -64,6 +66,9 @@ contains
 
         procedure(logger_c_type), pointer :: logger_funptr
         character(len=:), allocatable, target :: message
+
+        ! assume tests pass
+        test_oao_factory_interface = .true.
 
         ! check passed arrays and number of AOs
         if (n_particle_c < 1 .or. n_particle_c > n_particle) then
