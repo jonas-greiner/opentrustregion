@@ -741,7 +741,7 @@ contains
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), step_mo(n_mo, n_mo, n_particle), &
                     v_diff_mo(n_mo, n_mo, n_particle), perturbation(n_ao, n_ao), &
-                    dm_step(n_ao, n_ao)
+                    dm_step(n_ao, n_ao), dm_hist(n_ao, n_ao, n_particle)
         real(rp), allocatable :: steps(:, :), orth(:, :), response(:), &
                                  dm_list(:, :, :, :), current(:, :, :, :), &
                                  lists(:, :, :, :, :)
@@ -768,6 +768,11 @@ contains
             matmul(mo_coeff(:, :, 1), generate_random_orthogonal_matrix(n_mo))
         call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, &
                                       n_occ(:n_particle), context)
+
+        ! current density matrix, multiplied by the AO overlap matrix from both sides
+        do j = 1, n_particle
+            dm_hist(:, :, j) = matmul(ao_overlap, matmul(mo%dm_ao(:, :, j), ao_overlap))
+        end do
 
         ! steps of every channel which are not orthogonal, so that the pivoted
         ! factorization of the history reorders them and its factor is not diagonal
@@ -822,8 +827,7 @@ contains
             if (case_arh_type == "ms_sr1") then
                 do k = 1, n_hist
                     do j = 1, n_particle
-                        dm_step = dm_list(:, :, j, k) - matmul( &
-                            ao_overlap, matmul(mo%dm_ao(:, :, j), ao_overlap))
+                        dm_step = dm_list(:, :, j, k) - dm_hist(:, :, j)
                         lists(:, :, j, k, 1) = current(:, :, j, 1) + 3.0_rp * dm_step
                         lists(:, :, j, k, 2) = current(:, :, j, 2) + dm_step
                     end do
@@ -879,6 +883,7 @@ contains
         do j = 1, n_particle
             oao%dm_oao(:, :, j) = generate_random_density_matrix(n_ao, n_occ(j))
         end do
+        dm_hist = oao%dm_oao
 
         ! build the model from a history of independent points, one spanning very
         ! different step lengths and one whose non-linear response is noise in one
@@ -1084,11 +1089,13 @@ contains
 
         subroutine build_from_history()
             !
-            ! this subroutine hands the history and the current potentials to the ARH
-            ! object, marks its model stale and builds the model for the shell
+            ! this subroutine hands the history, the current density matrix and the
+            ! current potentials to the ARH object, marks its model stale and builds
+            ! the model for the shell
             !
-            ! history and current potentials
+            ! history, current density matrix and current potentials
             arh%dm_list = dm_list
+            arh%dm_current = dm_hist
             if (n_particle == 1) then
                 arh%evaluate_dm_cs => mock_evaluate_dm_cs
             else
@@ -2569,12 +2576,17 @@ contains
                 allocate(arh, source=arh_oao_type(oao))
                 call setup_settings(arh%settings, context)
 
-                ! cache a wrong eigendecomposition, which has to be refreshed since the
-                ! static part is marked as changed
+                ! cache a wrong eigendecomposition and wrong directions rotated into
+                ! its eigenbasis, which have to be refreshed since the static part is
+                ! marked as changed
                 allocate(oao%hess_eigvecs(n_ao, n_ao, n_particle), &
-                         oao%hess_eigvals(n_ao, n_particle))
+                         oao%hess_eigvals(n_ao, n_particle), &
+                         arh%rotated_expansion_dirs(oao%n_param, n_dirs), &
+                         arh%rotated_projection_dirs(oao%n_param, n_dirs))
                 oao%hess_eigvecs = 0.0_rp
                 oao%hess_eigvals = 1.0_rp
+                arh%rotated_expansion_dirs = 0.0_rp
+                arh%rotated_projection_dirs = 0.0_rp
             end if
             n_param = arh%orbitals%n_param
 
@@ -2618,6 +2630,12 @@ contains
                 arh%coupling_matrix, transpose(arh%projection_dirs)))
             call check_inv_hess_x_arh(hess, dirs(:, 2 * n_dirs + 1), mu, case_name, &
                                       passed)
+            if (.not. (allocated(arh%rotated_expansion_dirs) .and. &
+                       allocated(arh%rotated_projection_dirs))) then
+                write(stderr, *) "test_inv_hess_x_arh failed: Directions rotated "// &
+                    "into the eigenbasis not kept for the "//case_name//" case."
+                passed = .false.
+            end if
 
             ! mark the model stale on an empty history and determine if it is rebuilt
             ! before it is inverted, which discards the low-rank part and leaves the
@@ -4074,10 +4092,21 @@ contains
                     coupling = scale * identity_matrix(n_both)
                 end select
 
-                ! call routine and determine if the factors match
+                ! call routine with directions rotated into the eigenbasis of the
+                ! static part, and determine if the factors match and these are
+                ! discarded
                 oao%n_particle = n_particle
                 arh%settings%arh_type = case_arh_type
+                arh%rotated_expansion_dirs = density
+                arh%rotated_projection_dirs = density
                 call arh%get_low_rank_hess_factors()
+                if (allocated(arh%rotated_expansion_dirs) .or. &
+                    allocated(arh%rotated_projection_dirs)) then
+                    write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
+                        "Rotated directions of the previous factors not discarded "// &
+                        "for "//case_name//"."
+                    test_get_low_rank_hess_factors = .false.
+                end if
                 if (.not. (allocated(arh%expansion_dirs) .and. &
                            allocated(arh%projection_dirs) .and. &
                            allocated(arh%coupling_matrix))) then

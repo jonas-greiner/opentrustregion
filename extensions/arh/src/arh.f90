@@ -79,15 +79,16 @@ module otr_arh
         logical :: evaluation_stale = .true., model_stale = .false.
         class(orbital_basis_type), pointer :: orbitals => null()
         real(rp), allocatable :: &
-            v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :), &
-            a_sym(:, :), a_sym_nonlinear(:, :), a_inv(:, :), a_inv_comb(:, :), &
-            dm_list(:, :, :, :), v_coulomb_list(:, :, :, :), &
+            dm_current(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), &
+            v_nonlinear(:, :, :), a_sym(:, :), a_sym_nonlinear(:, :), a_inv(:, :), &
+            a_inv_comb(:, :), dm_list(:, :, :, :), v_coulomb_list(:, :, :, :), &
             v_exchange_list(:, :, :, :), v_nonlinear_list(:, :, :, :), &
             linear_potential_dirs(:, :), nonlinear_potential_dirs(:, :), &
             dm_dirs(:, :), dm_dirs_nonlinear(:, :), expansion_dirs(:, :), &
-            projection_dirs(:, :), coupling_matrix(:, :)
-        procedure(arh_evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
+            projection_dirs(:, :), coupling_matrix(:, :), &
+            rotated_expansion_dirs(:, :), rotated_projection_dirs(:, :)
         procedure(arh_evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
+        procedure(arh_evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
     contains
         procedure :: update_orbs => update_orbs_arh
         procedure :: obj_func => obj_func_arh
@@ -272,12 +273,13 @@ contains
         ! given level, with the density matrix evaluating function of the shell of its
         ! orbitals, wires the solver settings with it and returns its orbital updating
         ! function and objective function; the object moves the orbitals of the orbital
-        ! basis object, whose preconditioners and extra trial vectors and, in the OAO
-        ! basis, whose projection it uses, while the projection in the MO basis is left
-        ! to the caller, since the parameters are non-redundant, and reads the state of
-        ! the solver from the record the host also passes to the solver; the settings
-        ! are also asked to rebuild the Hessian information of the subsystem solver
-        ! after rejected steps and told whether the approximate Hessian is symmetric
+        ! basis object, whose positive-definite preconditioner and extra trial vectors
+        ! and, in the OAO basis, whose projection it uses, while the projection in the
+        ! MO basis is left to the caller, since the parameters are non-redundant, and
+        ! reads the state of the solver from the record the host also passes to the
+        ! solver; the settings are also asked to rebuild the Hessian information of the
+        ! subsystem solver after rejected steps and told whether the approximate
+        ! Hessian is symmetric
         !
         use opentrustregion, only: warn_uninitialized_settings, verbosity_error
         use otr_common, only: extension_level_type, update_orbs_callback, &
@@ -503,9 +505,8 @@ contains
         class(*), intent(in), pointer :: context
 
         integer(ip) :: n_ao, n_particle
-        real(rp), allocatable :: dm_current(:, :, :), fock_ao(:, :, :), &
-                                 v_coulomb_ao(:, :, :), v_exchange_ao(:, :, :), &
-                                 v_nonlinear_ao(:, :, :)
+        real(rp), allocatable :: fock_ao(:, :, :), v_coulomb_ao(:, :, :), &
+                                 v_exchange_ao(:, :, :), v_nonlinear_ao(:, :, :)
 
         ! initialize error flag
         error = 0
@@ -527,19 +528,20 @@ contains
                          self%v_exchange_list(n_ao, n_ao, n_particle, 0), &
                          self%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
             else if (.not. self%evaluation_stale) then
-                dm_current = self%history_dm()
-                if (.not. self%density_in_history(dm_current)) then
-                    call prepend(self%dm_list, dm_current)
+                if (.not. self%density_in_history(self%dm_current)) then
+                    call prepend(self%dm_list, self%dm_current)
                     call prepend(self%v_coulomb_list, self%v_coulomb)
                     call prepend(self%v_exchange_list, self%v_exchange)
                     call prepend(self%v_nonlinear_list, self%v_nonlinear)
                 end if
             end if
 
-            ! rotate orbitals, which have not been evaluated until this succeeds
+            ! rotate orbitals, which have not been evaluated until this succeeds, and
+            ! keep their density matrix in the history basis
             self%evaluation_stale = .true.
-            call self%orbitals%rotate_orbitals(kappa, self%settings, error)
+            call self%orbitals%rotate_orbitals(kappa, error)
             if (error /= 0) return
+            self%dm_current = self%history_dm()
 
             ! get energy, Fock matrix, Coulomb and exact-exchange potentials, and
             ! non-linear potential
@@ -607,7 +609,7 @@ contains
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc, n_acc_nonlinear
         real(rp) :: min_residual
         real(rp), allocatable :: &
-            dm_current(:, :, :), dm_diff(:, :, :, :), v_coulomb_diff(:, :, :, :), &
+            dm_diff(:, :, :, :), v_coulomb_diff(:, :, :, :), &
             v_exchange_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :), dm_cols(:, :), &
             v_coulomb_cols(:, :), v_exchange_cols(:, :), v_linear_cols(:, :), &
             v_nonlinear_cols(:, :), dm_packed(:, :), v_coulomb_packed(:, :), &
@@ -627,13 +629,12 @@ contains
         ! split into its Coulomb and exact-exchange parts, whose difference it is, and
         ! the non-linear (XC) potential is kept apart
         n_list = size(self%dm_list, 4)
-        dm_current = self%history_dm()
         allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
                  v_coulomb_diff(n_ao, n_ao, n_particle, n_list), &
                  v_exchange_diff(n_ao, n_ao, n_particle, n_list), &
                  v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
         do i = 1, n_list
-            dm_diff(:, :, :, i) = self%dm_list(:, :, :, i) - dm_current
+            dm_diff(:, :, :, i) = self%dm_list(:, :, :, i) - self%dm_current
             v_coulomb_diff(:, :, :, i) = self%v_coulomb_list(:, :, :, i) - &
                                          self%v_coulomb
             v_exchange_diff(:, :, :, i) = self%v_exchange_list(:, :, :, i) - &
@@ -642,17 +643,21 @@ contains
                                            self%v_nonlinear
         end do
 
-        ! express the differences as history and packed columns, and the linear
-        ! potential differences as the difference of their Coulomb and exact-exchange
-        ! parts, which the transformation to columns preserves
+        ! express the differences as history and packed columns: multisecant SR1 takes
+        ! the Coulomb and exact-exchange potential differences, while the ARH family
+        ! only takes the linear potential difference, their difference
         call self%history_columns(dm_diff, dm_cols, dm_packed)
-        call self%history_columns(v_coulomb_diff, v_coulomb_cols, v_coulomb_packed)
-        call self%history_columns(v_exchange_diff, v_exchange_cols, v_exchange_packed)
         call self%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
                                   v_nonlinear_packed)
+        if (self%settings%arh_type == "ms_sr1") then
+            call self%history_columns(v_coulomb_diff, v_coulomb_cols, v_coulomb_packed)
+            call self%history_columns(v_exchange_diff, v_exchange_cols, &
+                                      v_exchange_packed)
+        else
+            call self%history_columns(v_coulomb_diff - v_exchange_diff, v_linear_cols, &
+                                      v_linear_packed)
+        end if
         deallocate(dm_diff, v_coulomb_diff, v_exchange_diff, v_nonlinear_diff)
-        v_linear_cols = v_coulomb_cols - v_exchange_cols
-        v_linear_packed = v_coulomb_packed - v_exchange_packed
 
         ! factorize the density-matrix-difference history for the linear part which
         ! resolves linear dependencies in the history; the coupling formulas below
@@ -742,7 +747,7 @@ contains
                                     history_rows(:, :), packed_rows(:, :)
         logical, allocatable :: keep_nonlinear(:)
         real(rp), allocatable :: &
-            dm_current(:, :, :), dm_diff(:, :, :, :), v_coulomb_diff(:, :, :, :), &
+            dm_diff(:, :, :, :), v_coulomb_diff(:, :, :, :), &
             v_exchange_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :), &
             v_coulomb_alpha_diff(:, :, :, :), v_coulomb_beta_diff(:, :, :, :), &
             v_same_spin_diff(:, :, :, :), v_opposite_spin_diff(:, :, :, :), &
@@ -770,13 +775,12 @@ contains
         ! drifting Hessian and is fitted only to the history entries the screening
         ! below admits
         n_list = size(self%dm_list, 4)
-        dm_current = self%history_dm()
         allocate(dm_diff(n_ao, n_ao, n_particle, n_list), &
                  v_coulomb_diff(n_ao, n_ao, n_particle, n_list), &
                  v_exchange_diff(n_ao, n_ao, n_particle, n_list), &
                  v_nonlinear_diff(n_ao, n_ao, n_particle, n_list))
         do i = 1, n_list
-            dm_diff(:, :, :, i) = self%dm_list(:, :, :, i) - dm_current
+            dm_diff(:, :, :, i) = self%dm_list(:, :, :, i) - self%dm_current
             v_coulomb_diff(:, :, :, i) = self%v_coulomb_list(:, :, :, i) - &
                                          self%v_coulomb
             v_exchange_diff(:, :, :, i) = self%v_exchange_list(:, :, :, i) - &
@@ -1029,7 +1033,6 @@ contains
         real(rp) :: mu
         character(len=300) :: msg
         real(rp), allocatable :: rotated_x(:), divisors(:), scaled_x(:), &
-                                 rotated_expansion(:, :), rotated_projection(:, :), &
                                  weighted_projection(:, :), dirs_overlap(:, :), &
                                  bracket_matrix(:, :), projected_x(:), bracket_rhs(:), &
                                  bracket_solution(:), correction(:)
@@ -1047,8 +1050,12 @@ contains
         mu = 0.0_rp
         if (present(level_shift)) mu = level_shift
 
-        ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%orbitals%refresh_hess_eigen(self%settings, error)
+        ! refresh the eigendecomposition if the static Hessian part has changed, which
+        ! discards the directions rotated into the previous eigenbasis
+        if (self%orbitals%hess_eigen_stale .and. &
+            allocated(self%rotated_expansion_dirs)) &
+            deallocate(self%rotated_expansion_dirs, self%rotated_projection_dirs)
+        call self%orbitals%refresh_hess_eigen(error)
         if (error /= 0) return
 
         ! rotate x into the static-Hessian eigenbasis and apply the level-shifted
@@ -1067,29 +1074,33 @@ contains
         n_param = size(x)
         n_dirs = size(self%expansion_dirs, 2)
 
-        ! rotate both sets of directions into the same eigenbasis
-        allocate(rotated_expansion(n_param, n_dirs), &
-                 rotated_projection(n_param, n_dirs))
-        do i = 1, n_dirs
-            rotated_expansion(:, i) = &
-                self%orbitals%rotate_to_hess_eigenbasis(self%expansion_dirs(:, i))
-            rotated_projection(:, i) = &
-                self%orbitals%rotate_to_hess_eigenbasis(self%projection_dirs(:, i))
-        end do
+        ! rotate both sets of directions into the same eigenbasis, once for every model
+        ! and eigendecomposition
+        if (.not. allocated(self%rotated_expansion_dirs)) then
+            allocate(self%rotated_expansion_dirs(n_param, n_dirs), &
+                     self%rotated_projection_dirs(n_param, n_dirs))
+            do i = 1, n_dirs
+                self%rotated_expansion_dirs(:, i) = &
+                    self%orbitals%rotate_to_hess_eigenbasis(self%expansion_dirs(:, i))
+                self%rotated_projection_dirs(:, i) = &
+                    self%orbitals%rotate_to_hess_eigenbasis(self%projection_dirs(:, i))
+            end do
+        end if
 
         ! projected_x = P^T D^-1 x
         allocate(projected_x(n_dirs))
-        call dgemv("T", n_param, n_dirs, 1.0_rp, rotated_projection, n_param, &
-                   scaled_x, 1_ip, 0.0_rp, projected_x, 1_ip)
+        call dgemv("T", n_param, n_dirs, 1.0_rp, self%rotated_projection_dirs, &
+                   n_param, scaled_x, 1_ip, 0.0_rp, projected_x, 1_ip)
 
         ! dirs_overlap = P^T D^-1 E
         allocate(weighted_projection(n_param, n_dirs))
         do i = 1, n_param
-            weighted_projection(i, :) = rotated_projection(i, :) / divisors(i)
+            weighted_projection(i, :) = self%rotated_projection_dirs(i, :) / divisors(i)
         end do
         allocate(dirs_overlap(n_dirs, n_dirs))
         call dgemm("T", "N", n_dirs, n_dirs, n_param, 1.0_rp, weighted_projection, &
-                   n_param, rotated_expansion, n_param, 0.0_rp, dirs_overlap, n_dirs)
+                   n_param, self%rotated_expansion_dirs, n_param, 0.0_rp, &
+                   dirs_overlap, n_dirs)
         deallocate(weighted_projection)
 
         ! solve (I + C * P^T D^-1 E) bracket_solution = C * projected_x
@@ -1117,7 +1128,7 @@ contains
 
         ! correction = D^-1 E bracket_solution, result = D^-1 x - correction
         allocate(correction(n_param))
-        call dgemv("N", n_param, n_dirs, 1.0_rp, rotated_expansion, n_param, &
+        call dgemv("N", n_param, n_dirs, 1.0_rp, self%rotated_expansion_dirs, n_param, &
                    bracket_solution, 1_ip, 0.0_rp, correction, 1_ip)
         correction = correction / divisors
         inv_hess_x = self%orbitals%rotate_from_hess_eigenbasis(scaled_x - correction)
@@ -1427,13 +1438,10 @@ contains
         real(rp), intent(in) :: diff(:, :, :, :)
         real(rp), intent(out), allocatable :: cols(:, :), packed(:, :)
 
-        integer(ip) :: n_list, n_param, k
-        integer(ip), allocatable :: packed_rows(:, :)
+        integer(ip) :: n_list, k
 
-        ! number of history entries and parameters
+        ! number of history entries
         n_list = size(diff, 4, kind=ip)
-        packed_rows = self%packed_channel_rows()
-        n_param = packed_rows(2, size(packed_rows, 2))
 
         ! flatten every difference matrix into a history column
         cols = reshape(diff, [size(diff, 1, kind=ip) * size(diff, 2, kind=ip) * &
@@ -1441,10 +1449,10 @@ contains
 
         ! project every difference matrix onto the occupied-virtual and
         ! virtual-occupied subspace and pack it
-        allocate(packed(n_param, n_list))
+        allocate(packed(self%orbitals%n_param, n_list))
         do k = 1, n_list
             packed(:, k) = pack_asymm(project_asymm(diff(:, :, :, k), self%dm_oao), &
-                                      n_param)
+                                      self%orbitals%n_param)
         end do
 
     end subroutine history_columns_arh_oao
@@ -1664,10 +1672,13 @@ contains
         integer(ip) :: n_linear, n_nonlinear, n_total, i
         real(rp) :: shell_scale
 
-        ! discard the factors assembled for the previous history
+        ! discard the factors assembled for the previous history, together with their
+        ! directions rotated into the eigenbasis of the static part
         if (allocated(self%expansion_dirs)) deallocate(self%expansion_dirs)
         if (allocated(self%projection_dirs)) deallocate(self%projection_dirs)
         if (allocated(self%coupling_matrix)) deallocate(self%coupling_matrix)
+        if (allocated(self%rotated_expansion_dirs)) &
+            deallocate(self%rotated_expansion_dirs, self%rotated_projection_dirs)
 
         ! set scaling factor for closed- and open-shell systems
         shell_scale = merge(1.0_rp, 0.5_rp, self%orbitals%n_particle == 1)

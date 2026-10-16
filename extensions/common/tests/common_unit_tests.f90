@@ -632,15 +632,12 @@ contains
 
     end subroutine mock_basis_hess_x
 
-    subroutine mock_rotate_orbitals(self, kappa, settings, error)
+    subroutine mock_rotate_orbitals(self, kappa, error)
         !
         ! this subroutine is a mock of moving the orbitals, which does nothing
         !
-        use opentrustregion, only: settings_type
-
         class(mock_orbital_basis_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:)
-        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         error = 0
@@ -657,16 +654,13 @@ contains
 
     end subroutine mock_calculate_grad_h_diag
 
-    subroutine mock_refresh_hess_eigen(self, settings, error)
+    subroutine mock_refresh_hess_eigen(self, error)
         !
         ! this subroutine is a mock of refreshing the eigendecomposition of the static
         ! part of the Hessian, which takes over the eigenvalue pairs of the current
         ! static part if the cached ones are stale
         !
-        use opentrustregion, only: settings_type
-
         class(mock_orbital_basis_type), intent(inout) :: self
-        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         error = 0

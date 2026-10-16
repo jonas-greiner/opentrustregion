@@ -469,7 +469,7 @@ contains
 
             ! rotate orbitals, which have not been evaluated until this succeeds
             self%evaluation_stale = .true.
-            call self%rotate_orbitals(kappa, self%settings, error)
+            call self%rotate_orbitals(kappa, error)
             if (error /= 0) return
 
             ! get energy, Fock matrix, and response function
@@ -631,7 +631,7 @@ contains
 
     end subroutine init_mo_settings
 
-    subroutine rotate_orbitals_mo(self, kappa, settings, error)
+    subroutine rotate_orbitals_mo(self, kappa, error)
         !
         ! this subroutine moves the current orbitals by the orbital rotation kappa,
         ! updating the MO coefficients in place together with the density matrix in the
@@ -639,7 +639,6 @@ contains
         !
         class(mo_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:)
-        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         real(rp), allocatable :: rot_mo_coeff(:, :, :), rot_dm_ao(:, :, :)
@@ -648,8 +647,8 @@ contains
         allocate(rot_mo_coeff, mold=self%mo_coeff)
         allocate(rot_dm_ao, mold=self%dm_ao)
         call rotate_mo_coeff(kappa, self%mo_coeff, self%ao_overlap, self%mo_channels, &
-                             rot_mo_coeff, rot_dm_ao, settings, error)
-        call add_error_origin(error, self%error_origin, settings)
+                             rot_mo_coeff, rot_dm_ao, self%settings, error)
+        call add_error_origin(error, self%error_origin, self%settings)
         if (error /= 0) return
         self%mo_coeff = rot_mo_coeff
         self%dm_ao = rot_dm_ao
@@ -713,7 +712,7 @@ contains
 
     end subroutine calculate_grad_h_diag_mo
 
-    subroutine refresh_hess_eigen_mo(self, settings, error)
+    subroutine refresh_hess_eigen_mo(self, error)
         !
         ! this subroutine refreshes the eigendecomposition of the static part of the
         ! Hessian in the MO basis, if the static part has changed since it was last
@@ -722,7 +721,6 @@ contains
         ! eigenvectors diagonalize the static part
         !
         class(mo_type), intent(inout) :: self
-        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_occ, n_virt, i
@@ -749,13 +747,13 @@ contains
                 ! diagonalize occupied-occupied and virtual-virtual blocks
                 call diagonalize_per_irrep(channel%fock_oo, channel%irreps(:n_occ), &
                                            channel%occ_eigvals, channel%occ_eigvecs, &
-                                           settings, error)
-                call add_error_origin(error, self%error_origin, settings)
+                                           self%settings, error)
+                call add_error_origin(error, self%error_origin, self%settings)
                 if (error /= 0) return
                 call diagonalize_per_irrep( &
                     channel%fock_vv, channel%irreps(n_occ + 1:), channel%virt_eigvals, &
-                    channel%virt_eigvecs, settings, error)
-                call add_error_origin(error, self%error_origin, settings)
+                    channel%virt_eigvecs, self%settings, error)
+                call add_error_origin(error, self%error_origin, self%settings)
                 if (error /= 0) return
             end associate
         end do
@@ -894,7 +892,7 @@ contains
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(self%settings, error)
+        call self%refresh_hess_eigen(error)
         if (error /= 0) return
 
         ! fill the requested slots with the rotations belonging to the most negative

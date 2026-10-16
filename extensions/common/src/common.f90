@@ -227,12 +227,11 @@ module otr_common
     end type
 
     abstract interface
-        subroutine rotate_orbitals_basis_type(self, kappa, settings, error)
-            import :: orbital_basis_type, settings_type, rp, ip
+        subroutine rotate_orbitals_basis_type(self, kappa, error)
+            import :: orbital_basis_type, rp, ip
 
             class(orbital_basis_type), intent(inout) :: self
             real(rp), intent(in) :: kappa(:)
-            class(settings_type), intent(in) :: settings
             integer(ip), intent(out) :: error
         end subroutine rotate_orbitals_basis_type
 
@@ -243,11 +242,10 @@ module otr_common
             real(rp), intent(in) :: fock(:, :, :)
         end subroutine calculate_grad_h_diag_basis_type
 
-        subroutine refresh_hess_eigen_basis_type(self, settings, error)
-            import :: orbital_basis_type, settings_type, ip
+        subroutine refresh_hess_eigen_basis_type(self, error)
+            import :: orbital_basis_type, ip
 
             class(orbital_basis_type), intent(inout) :: self
-            class(settings_type), intent(in) :: settings
             integer(ip), intent(out) :: error
         end subroutine refresh_hess_eigen_basis_type
 
@@ -1040,7 +1038,7 @@ contains
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(self%settings, error)
+        call self%refresh_hess_eigen(error)
         if (error /= 0) return
 
         ! rotate residual into the eigenbasis of the static Hessian part
@@ -1076,7 +1074,7 @@ contains
         error = 0
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(self%settings, error)
+        call self%refresh_hess_eigen(error)
         if (error /= 0) return
 
         ! rotate residual into the eigenbasis of the static Hessian part

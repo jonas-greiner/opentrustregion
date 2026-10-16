@@ -2186,7 +2186,6 @@ contains
         ! this function tests the subroutine which moves the current orbitals by an
         ! orbital rotation in the MO basis
         !
-        use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_param
@@ -2198,18 +2197,15 @@ contains
         real(rp) :: ao_overlap(n_ao, n_ao), expected(n_ao, n_mo, n_particle), &
                     kappa(n_param)
         integer(ip) :: error, k
-        type(orbital_settings_type) :: settings
 
         ! assume tests pass
         test_rotate_orbitals_mo = .true.
-
-        ! setup settings object
-        call setup_settings(settings, context)
 
         ! set up the MO object with random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
+        call setup_settings(mo%settings, context)
 
         ! call routine and determine if the MO coefficients of the caller and the
         ! density matrix are rotated and the response, which was not rebuilt, is marked
@@ -2218,7 +2214,7 @@ contains
         kappa = 0.2_rp * (kappa - 0.5_rp)
         expected = ref_rotate_mo_coeff(kappa, mo_coeff, mo%mo_channels)
         mo%response_stale = .false.
-        call mo%rotate_orbitals(kappa, settings, error)
+        call mo%rotate_orbitals(kappa, error)
         if (error /= 0) then
             write(stderr, *) "test_rotate_orbitals_mo failed: Produced error."
             test_rotate_orbitals_mo = .false.
@@ -2390,7 +2386,6 @@ contains
         ! occupied-occupied and virtual-virtual blocks of the Fock matrix per irrep, if
         ! it is stale
         !
-        use otr_common, only: orbital_settings_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -2403,13 +2398,9 @@ contains
         real(rp), allocatable :: eigvals_before(:)
         integer(ip) :: error, k, n_occ, n_virt, i_case, n_particle
         character(len=:), allocatable :: case_name
-        type(orbital_settings_type) :: settings
 
         ! assume tests pass
         test_refresh_hess_eigen_mo = .true.
-
-        ! setup settings object
-        call setup_settings(settings, context)
 
         ! loop over every occupation case, replace both Fock matrix blocks of every
         ! channel by random ones which also couple orbitals of different irreps,
@@ -2422,6 +2413,7 @@ contains
             case_name = trim(case_names(i_case))
             call setup_minimal_mo_object(mo, case_n_occ(:n_particle, i_case), &
                                          case_irreps(:, :n_particle, i_case))
+            call setup_settings(mo%settings, context)
             do k = 1, n_particle
                 associate (channel => mo%mo_channels(k))
                     channel%fock_oo = generate_random_symm_matrix(channel%n_occ)
@@ -2431,7 +2423,7 @@ contains
                 end associate
             end do
             mo%hess_eigen_stale = .true.
-            call mo%refresh_hess_eigen(settings, error)
+            call mo%refresh_hess_eigen(error)
             if (error /= 0) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: Produced "// &
                     "error for the "//case_name//" case."
@@ -2501,7 +2493,7 @@ contains
             ! recomputed
             eigvals_before = mo%mo_channels(1)%occ_eigvals
             mo%mo_channels(1)%fock_oo = 2.0_rp * mo%mo_channels(1)%fock_oo
-            call mo%refresh_hess_eigen(settings, error)
+            call mo%refresh_hess_eigen(error)
             if (error /= 0) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: Produced "// &
                     "error without stale eigendecomposition for the "//case_name// &
@@ -2518,7 +2510,7 @@ contains
             ! mark the eigendecomposition stale and determine if the one computed
             ! before is replaced by that of the doubled block, whose eigenvalues double
             mo%hess_eigen_stale = .true.
-            call mo%refresh_hess_eigen(settings, error)
+            call mo%refresh_hess_eigen(error)
             if (error /= 0) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: Produced "// &
                     "error when replacing an eigendecomposition for the "//case_name// &

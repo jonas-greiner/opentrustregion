@@ -1653,7 +1653,7 @@ contains
         ! orbital rotation, updating the density matrix in the AO and in the OAO basis
         !
         use otr_common_unit_tests, only: generate_random_density_matrix
-        use otr_oao, only: oao_type, oao_settings_type
+        use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
                                               generate_random_symm_matrix
@@ -1663,7 +1663,6 @@ contains
         real(rp), parameter :: angle = 0.3_rp
 
         type(oao_type) :: oao
-        type(oao_settings_type) :: settings
         real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), s_inv_sqrt(n_ao, n_ao), &
                     rotation(n_ao, n_ao), expected_dm_oao(n_ao, n_ao, n_particle), &
@@ -1674,7 +1673,7 @@ contains
         test_rotate_orbitals_oao = .true.
 
         ! setup settings object
-        call setup_settings(settings, context)
+        call setup_settings(oao%settings, context)
 
         ! set up the OAO object with a random transformation to the AO basis
         dm_oao(:, :, 1) = generate_random_density_matrix(n_ao, n_occ)
@@ -1696,7 +1695,7 @@ contains
 
         ! call routine and determine if the density matrices are moved and the response
         ! is marked stale
-        call oao%rotate_orbitals([angle], settings, error)
+        call oao%rotate_orbitals([angle], error)
         if (error /= 0) then
             write(stderr, *) "test_rotate_orbitals_oao failed: Produced error."
             test_rotate_orbitals_oao = .false.
@@ -1835,14 +1834,13 @@ contains
         ! this function tests the subroutine that diagonalizes the static part of the
         ! Hessian and caches the result if the static part has changed
         !
-        use otr_oao, only: oao_type, oao_settings_type
+        use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               generate_random_symm_matrix
         use otr_common_test_reference, only: n_ao, n_particle
 
         type(test_context_type), target :: context
         type(oao_type) :: oao
-        type(oao_settings_type) :: settings
         real(rp) :: fock_oo(n_ao, n_ao, n_particle), fock_vv(n_ao, n_ao, n_particle), &
                     expected_eigvecs(n_ao, n_ao, n_particle), &
                     expected_eigvals(n_ao, n_particle)
@@ -1852,7 +1850,7 @@ contains
         test_refresh_hess_eigen_oao = .true.
 
         ! setup settings object
-        call setup_settings(settings, context)
+        call setup_settings(oao%settings, context)
 
         ! generate random Fock matrix contributions
         do j = 1, n_particle
@@ -1872,7 +1870,7 @@ contains
                                          expected_eigvals)
 
         ! call routine and determine if the cached eigendecomposition matches
-        call oao%refresh_hess_eigen(settings, error)
+        call oao%refresh_hess_eigen(error)
         if (error /= 0) then
             write(stderr, *) "test_refresh_hess_eigen_oao failed: Produced error."
             test_refresh_hess_eigen_oao = .false.
@@ -1896,7 +1894,7 @@ contains
         ! change the static part without marking the eigendecomposition stale and
         ! determine if the cached eigendecomposition is kept
         oao%fock_vv = 2.0_rp * fock_vv
-        call oao%refresh_hess_eigen(settings, error)
+        call oao%refresh_hess_eigen(error)
         if (error /= 0) then
             write(stderr, *) "test_refresh_hess_eigen_oao failed: Produced error "// &
                 "for an up-to-date eigendecomposition."

@@ -53,10 +53,10 @@ module otr_arh_c_interface
         standard_arh_factory_common
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(arh_evaluate_dm_os_type), pointer :: arh_evaluate_dm_os_f_wrapper_ptr => &
-        arh_evaluate_dm_os_f_wrapper
     procedure(arh_evaluate_dm_cs_type), pointer :: arh_evaluate_dm_cs_f_wrapper_ptr => &
         arh_evaluate_dm_cs_f_wrapper
+    procedure(arh_evaluate_dm_os_type), pointer :: arh_evaluate_dm_os_f_wrapper_ptr => &
+        arh_evaluate_dm_os_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)

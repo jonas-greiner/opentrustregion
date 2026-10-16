@@ -357,7 +357,7 @@ contains
 
             ! rotate orbitals, which have not been evaluated until this succeeds
             self%evaluation_stale = .true.
-            call self%rotate_orbitals(kappa, self%settings, error)
+            call self%rotate_orbitals(kappa, error)
             if (error /= 0) return
 
             ! get energy, Fock matrix, and response function
@@ -537,14 +537,13 @@ contains
 
     end subroutine init_oao_settings
 
-    subroutine rotate_orbitals_oao(self, kappa, settings, error)
+    subroutine rotate_orbitals_oao(self, kappa, error)
         !
         ! this subroutine moves the current orbitals by the orbital rotation kappa,
         ! updating the density matrix in the AO and in the OAO basis
         !
         class(oao_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:)
-        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         real(rp), allocatable :: rot_dm_ao(:, :, :), rot_dm_oao(:, :, :)
@@ -552,9 +551,9 @@ contains
         ! rotate density matrix
         allocate(rot_dm_ao, mold=self%dm_ao)
         allocate(rot_dm_oao, mold=self%dm_oao)
-        call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, settings, &
-                          error, rot_dm_oao)
-        call add_error_origin(error, self%error_origin, settings)
+        call rotate_dm_ao(kappa, self%dm_oao, self%s_inv_sqrt, rot_dm_ao, &
+                          self%settings, error, rot_dm_oao)
+        call add_error_origin(error, self%error_origin, self%settings)
         if (error /= 0) return
         self%dm_ao = rot_dm_ao
         self%dm_oao = rot_dm_oao
@@ -635,7 +634,7 @@ contains
 
     end subroutine calculate_grad_h_diag_oao
 
-    subroutine refresh_hess_eigen_oao(self, settings, error)
+    subroutine refresh_hess_eigen_oao(self, error)
         !
         ! this subroutine diagonalizes the static part of the Hessian for each particle
         ! channel and caches the result if the static part has changed since it was
@@ -649,7 +648,6 @@ contains
         use opentrustregion, only: verbosity_error
 
         class(oao_type), intent(inout) :: self
-        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, i, lwork, info
@@ -694,9 +692,9 @@ contains
             if (info /= 0) then
                 write(msg, '(A, I0)') "Eigendecomposition of static Hessian part "// &
                     "failed: Error in DSYEV, info = ", info
-                call settings%log(msg, verbosity_error, .true.)
+                call self%settings%log(msg, verbosity_error, .true.)
                 error = 1
-                call add_error_origin(error, self%error_origin, settings)
+                call add_error_origin(error, self%error_origin, self%settings)
                 deallocate(a)
                 return
             end if
@@ -845,7 +843,7 @@ contains
         n_particle = self%n_particle
 
         ! refresh the eigendecomposition if the static Hessian part has changed
-        call self%refresh_hess_eigen(self%settings, error)
+        call self%refresh_hess_eigen(error)
         if (error /= 0) return
 
         ! determine which eigenvectors span the occupied space; the eigenspaces of the
