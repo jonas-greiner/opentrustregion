@@ -48,8 +48,10 @@ contains
         use opentrustregion, only: update_orbs_type, solver_state_type
         use otr_common, only: extension_type, extension_solver_settings_type
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
+        use otr_common_unit_tests, only: check_mock_factory_logger, &
+                                         check_mock_factory_ao_overlap, &
+                                         setup_owning_solver_settings
         use otr_mo, only: mo_type, mo_settings_type, default_mo_settings
-        use otr_common_test_reference, only: n_ao_ref => n_ao, ao_overlap_pattern
         use otr_mo_test_reference, only: n_mo_ref => n_mo
 
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -64,21 +66,8 @@ contains
         class(extension_type), allocatable, target :: object
 
         ! check shape and values of passed overlap matrix and numbers of AOs and MOs
-        if (any(shape(ao_overlap) /= [n_ao_ref, n_ao_ref])) then
-            test_passed = .false.
-            write(stderr, *) "test_mo_factory_c_wrapper failed: Passed AO overlap "// &
-                "matrix shaped wrong."
-        else if (any(abs(ao_overlap - real( &
-            ao_overlap_pattern(int(n_ao_ref, kind=c_ip)), kind=rp)) > tol)) then
-            test_passed = .false.
-            write(stderr, *) "test_mo_factory_c_wrapper failed: Passed AO overlap "// &
-                "matrix wrong."
-        end if
-        if (n_ao /= n_ao_ref) then
-            test_passed = .false.
-            write(stderr, *) "test_mo_factory_c_wrapper failed: Passed number of "// &
-                "AOs wrong."
-        end if
+        if (.not. check_mock_factory_ao_overlap( &
+            ao_overlap, n_ao, "test_mo_factory_c_wrapper")) test_passed = .false.
         if (n_mo /= n_mo_ref) then
             test_passed = .false.
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed number of "// &
@@ -97,19 +86,9 @@ contains
         end if
 
         ! check if optional logging function is correctly passed
-        if (mock_mo_factory_defaults) then
-            if (associated(settings%logger)) then
-                test_passed = .false.
-                write(stderr, *) "test_mo_factory_c_wrapper failed: Logging "// &
-                    "function passed for settings that were not initialized."
-            end if
-        else if (.not. associated(settings%logger)) then
+        if (.not. check_mock_factory_logger(settings, mock_mo_factory_defaults, &
+                                            "test_mo_factory_c_wrapper")) &
             test_passed = .false.
-            write(stderr, *) "test_mo_factory_c_wrapper failed: Passed logging "// &
-                "function not associated with value."
-        else
-            call settings%logger("test", settings%context)
-        end if
 
         ! check if optional settings are correctly passed
         if (mock_mo_factory_defaults) then
@@ -129,10 +108,7 @@ contains
         if (error /= 0) return
         allocate(mo_type :: object)
         object%state => solver_state
-        object%solver_level%extension => object
-        solver_settings%context => object%solver_level
-        allocate(solver_settings%extensions(1))
-        call move_alloc(object, solver_settings%extensions(1)%object)
+        call setup_owning_solver_settings(solver_settings, object)
         update_orbs_mo_funptr => mock_update_orbs
         obj_func_mo_funptr => mock_obj_func
 

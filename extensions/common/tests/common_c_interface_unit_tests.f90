@@ -227,47 +227,78 @@ contains
 
     end subroutine setup_mock_extension_holder
 
-    function check_c_factory_wiring(test_name, holder, extension, &
-                                    update_orbs_c_funptr, obj_func_c_funptr, &
-                                    solver_settings_c) result(test_passed)
+    function check_c_factory_wiring(test_name, holder, state_c, update_orbs_c_funptr, &
+                                    obj_func_c_funptr, solver_settings_c, case_name) &
+        result(test_passed)
         !
-        ! this function checks that the C wrapper of a factory returned the shared C
-        ! wrappers of the orbital update and the objective function and wrote the
-        ! solver settings back with the address of the level of the solver of its
-        ! holder as context, which has to hold the levels of the extension object and
-        ! the settings it wired with the object's level of the solver as context
+        ! this function checks that the C wrapper of a factory wired the settings of
+        ! the holder it returned with an object, which reads the state of the holder,
+        ! that the holder holds the host's record of the state at both levels, and that
+        ! the wrapper returned the shared C wrappers of the orbital update and the
+        ! objective function and wrote the solver settings back with the address of the
+        ! level of the solver of its holder as context, which has to hold the levels of
+        ! the object and the settings it wired with the object's level of the solver as
+        ! context
         !
-        use c_interface, only: solver_settings_type_c
-        use otr_common, only: extension_type
+        use c_interface, only: solver_settings_type_c, solver_state_type_c
+        use otr_common, only: extension_level_type
         use otr_common_c_interface, only: extension_holder_type, &
                                           update_orbs_c_wrapper, obj_func_c_wrapper
+        use otr_common_unit_tests, only: wired_level
 
         character(len=*), intent(in) :: test_name
         type(extension_holder_type), intent(in), target :: holder
-        class(extension_type), intent(in), target :: extension
+        type(solver_state_type_c), intent(in), target :: state_c
         type(c_funptr), intent(in) :: update_orbs_c_funptr, obj_func_c_funptr
         type(solver_settings_type_c), intent(in) :: solver_settings_c
+        character(len=*), intent(in), optional :: case_name
         logical :: test_passed
+
+        type(extension_level_type), pointer :: level
+        character(len=:), allocatable :: suffix
 
         ! assume tests pass
         test_passed = .true.
+
+        ! name the case in the messages
+        suffix = ""
+        if (present(case_name)) suffix = " for the "//case_name//" case"
 
         if (.not. c_associated(update_orbs_c_funptr, &
                                c_funloc(update_orbs_c_wrapper)) .or. &
             .not. c_associated(obj_func_c_funptr, c_funloc(obj_func_c_wrapper))) then
             write(stderr, *) "test_"//test_name// &
-                " failed: C wrappers of the object not returned."
+                " failed: C wrappers of the object not returned"//suffix//"."
+            test_passed = .false.
+        end if
+
+        ! the settings of the holder, which own the object, have to be wired with it,
+        ! whose inspection would crash without one
+        level => wired_level(holder%solver_settings)
+        if (.not. associated(level)) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Settings of the holder not wired with an object"//suffix//"."
+            test_passed = .false.
+            return
+        end if
+        if (.not. associated(level%extension%state, holder%state)) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Object does not read the state of the holder"//suffix//"."
+            test_passed = .false.
+        end if
+        if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
+                   associated(holder%stability_level%state_c, state_c))) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Host's record of the state not held"//suffix//"."
             test_passed = .false.
         end if
         if (.not. c_associated(solver_settings_c%context, &
                                c_loc(holder%solver_level)) .or. &
-            .not. associated(holder%solver_level%level, extension%solver_level) .or. &
-            .not. associated(holder%stability_level%level, &
-                             extension%stability_level) .or. &
-            .not. associated(holder%solver_settings%context, extension%solver_level)) &
-            then
-            write(stderr, *) "test_"//test_name// &
-                " failed: Solver settings not wired with the holder of the object."
+            .not. associated(holder%solver_level%level, level) .or. .not. associated( &
+                holder%stability_level%level, level%extension%stability_level) .or. &
+            .not. associated(holder%solver_settings%context, level)) then
+            write(stderr, *) "test_"//test_name//" failed: Solver settings not "// &
+                "wired with the holder of the object"//suffix//"."
             test_passed = .false.
         end if
 

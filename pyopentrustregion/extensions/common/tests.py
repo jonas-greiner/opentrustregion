@@ -31,6 +31,7 @@ from pyopentrustregion.tests import (
     print_separator,
 )
 from pyopentrustregion.python_interface import (
+    logger_interface_type,
     c_real,
     c_int,
     hess_x_interface_type,
@@ -362,7 +363,9 @@ def settings_hold_reference(test_name, settings, lookup):
     this function checks that the logging function of the settings of an extension is
     unset and that every other field but the host context holds the reference value the
     lookup function of the Fortran test reference module of the extension returns by
-    name
+    name, and that assigning a logging function writes the C callback function the
+    settings built for it into the C settings, which calls it whatever context it
+    receives, while reading returns the logging function
     """
     test_passed = True
     for field_name, field_type in settings.c_struct._fields_:
@@ -382,6 +385,15 @@ def settings_hold_reference(test_name, settings, lookup):
         if not match:
             print(f" {test_name} failed: Field {field_name} not initialized correctly.")
             test_passed = False
+
+    # assign a logging function and call the C callback function the settings built
+    messages = []
+    settings.logger = messages.append
+    logger_interface_type(settings.settings_c.logger)(b"test", 12345)
+    if settings.logger != messages.append or messages != ["test"]:
+        print(f" {test_name} failed: Logging function not set correctly.")
+        test_passed = False
+
     return test_passed
 
 

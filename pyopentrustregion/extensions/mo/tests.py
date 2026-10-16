@@ -23,7 +23,6 @@ from pyopentrustregion.python_interface import (
     update_orbs_interface_type,
     SolverSettings,
     SolverState,
-    logger_interface_type,
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
@@ -715,31 +714,15 @@ class MOPyInterfaceTests(unittest.TestCase):
     @patch.object(MOSettings, "init_c_struct", lib.mock_init_mo_settings)
     def test_mo_settings(self):
         """
-        this function ensure the MOSettings object is properly initialized and
+        this function ensures the MOSettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        test_passed = True
-        settings = MOSettings()
-        if not settings_hold_reference(
-            "test_mo_settings", settings, lib.reference_mo_field
-        ):
-            test_passed = False
-
-        # assigning a logging function writes the C callback function the settings
-        # built for it into the C settings, which calls it whatever context it
-        # receives, and reading returns the logging function
-        messages = []
-
-        def logger(message):
-            messages.append(message)
-
-        settings.logger = logger
-        logger_interface_type(settings.settings_c.logger)(b"test", 12345)
-        if settings.logger is not logger or messages != ["test"]:
-            print(" test_mo_settings failed: Logging function not set correctly.")
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_mo_settings failed")
+        self.assertTrue(
+            settings_hold_reference(
+                "test_mo_settings", MOSettings(), lib.reference_mo_field
+            ),
+            "test_mo_settings failed",
+        )
         print(" test_mo_settings PASSED")
 
 

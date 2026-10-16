@@ -20,7 +20,6 @@ from pyopentrustregion.python_interface import (
     c_real,
     SolverSettings,
     SolverState,
-    logger_interface_type,
 )
 from pyopentrustregion.extensions.quasi_newton.python_interface import (
     TransportInterface,
@@ -436,31 +435,15 @@ class QNPyInterfaceTests(unittest.TestCase):
     @patch.object(QNSettings, "init_c_struct", lib.mock_init_qn_settings)
     def test_qn_settings(self):
         """
-        this function ensure the QNSettings object is properly initialized and
+        this function ensures the QNSettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        test_passed = True
-        settings = QNSettings()
-        if not settings_hold_reference(
-            "test_qn_settings", settings, lib.reference_qn_field
-        ):
-            test_passed = False
-
-        # assigning a logging function writes the C callback function the settings
-        # built for it into the C settings, which calls it whatever context it
-        # receives, and reading returns the logging function
-        messages = []
-
-        def logger(message):
-            messages.append(message)
-
-        settings.logger = logger
-        logger_interface_type(settings.settings_c.logger)(b"test", 12345)
-        if settings.logger is not logger or messages != ["test"]:
-            print(" test_qn_settings failed: Logging function not set correctly.")
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_qn_settings failed")
+        self.assertTrue(
+            settings_hold_reference(
+                "test_qn_settings", QNSettings(), lib.reference_qn_field
+            ),
+            "test_qn_settings failed",
+        )
         print(" test_qn_settings PASSED")
 
 

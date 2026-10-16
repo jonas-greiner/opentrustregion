@@ -19,7 +19,6 @@ from pyopentrustregion.tests import (
 from pyopentrustregion.python_interface import (
     SolverSettings,
     SolverState,
-    logger_interface_type,
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
@@ -516,31 +515,15 @@ class OAOPyInterfaceTests(unittest.TestCase):
     @patch.object(OAOSettings, "init_c_struct", lib.mock_init_oao_settings)
     def test_oao_settings(self):
         """
-        this function ensure the OAOSettings object is properly initialized and
+        this function ensures the OAOSettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        test_passed = True
-        settings = OAOSettings()
-        if not settings_hold_reference(
-            "test_oao_settings", settings, lib.reference_oao_field
-        ):
-            test_passed = False
-
-        # assigning a logging function writes the C callback function the settings
-        # built for it into the C settings, which calls it whatever context it
-        # receives, and reading returns the logging function
-        messages = []
-
-        def logger(message):
-            messages.append(message)
-
-        settings.logger = logger
-        logger_interface_type(settings.settings_c.logger)(b"test", 12345)
-        if settings.logger is not logger or messages != ["test"]:
-            print(" test_oao_settings failed: Logging function not set correctly.")
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_oao_settings failed")
+        self.assertTrue(
+            settings_hold_reference(
+                "test_oao_settings", OAOSettings(), lib.reference_oao_field
+            ),
+            "test_oao_settings failed",
+        )
         print(" test_oao_settings PASSED")
 
 

@@ -52,6 +52,8 @@ contains
         use otr_arh_test_reference, only: check_arh_evaluate_dm_cs_funptr, &
                                           check_arh_evaluate_dm_os_funptr, operator(/=)
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
+        use otr_common_unit_tests, only: check_mock_factory_logger, &
+                                         setup_owning_solver_settings
 
         type(extension_level_type), intent(in), pointer :: level
         procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs_funptr
@@ -104,19 +106,9 @@ contains
         end if
 
         ! check if optional logging function is correctly passed
-        if (mock_arh_factory_defaults) then
-            if (associated(settings%logger)) then
-                test_passed = .false.
-                write(stderr, *) "test_arh_factory_c_wrapper failed: Logging "// &
-                    "function passed for settings that were not initialized."
-            end if
-        else if (.not. associated(settings%logger)) then
+        if (.not. check_mock_factory_logger(settings, mock_arh_factory_defaults, &
+                                            "test_arh_factory_c_wrapper")) &
             test_passed = .false.
-            write(stderr, *) "test_arh_factory_c_wrapper failed: Passed logging "// &
-                "function not associated with value."
-        else
-            call settings%logger("test", settings%context)
-        end if
 
         ! check if optional settings are correctly passed
         if (mock_arh_factory_defaults) then
@@ -136,10 +128,7 @@ contains
         if (error /= 0) return
         allocate(arh_mo_type :: object)
         object%state => solver_state
-        object%solver_level%extension => object
-        solver_settings%context => object%solver_level
-        allocate(solver_settings%extensions(1))
-        call move_alloc(object, solver_settings%extensions(1)%object)
+        call setup_owning_solver_settings(solver_settings, object)
         solver_settings%refresh_hess = .true.
         solver_settings%hess_symm = .false.
         solver_settings%n_micro = arh_n_micro

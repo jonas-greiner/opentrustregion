@@ -113,9 +113,7 @@ contains
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
-        use otr_common, only: extension_type, extension_level_type, &
-                              orbital_basis_type, error_arh
-        use otr_common_unit_tests, only: wired_level
+        use otr_common, only: extension_type, orbital_basis_type, error_arh
         use otr_common_c_interface, only: extension_holder_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
@@ -138,7 +136,6 @@ contains
         type(solver_state_type_c), target :: state_c
         type(c_ptr) :: extension_c
         type(extension_holder_type), pointer :: holder
-        type(extension_level_type), pointer :: level
         real(rp), target :: copy(1, 1, 1)
         real(c_rp), target :: host_array(1, 1, 1)
         integer(ip) :: n_particle, i_case
@@ -220,23 +217,8 @@ contains
             end if
             call c_f_pointer(extension_c, holder)
 
-            ! check that the settings of the holder, which own the object, were wired
-            ! with it, that it reads the state of the holder and that the holder holds
-            ! the bundle of the density matrix evaluating function, the host's record
-            ! of the state and the copy of the orbitals of the orbital basis object
-            level => wired_level(holder%solver_settings)
-            if (.not. associated(level)) then
-                write(stderr, *) "test_arh_factory_c_wrapper failed: Settings of "// &
-                    "the holder not wired with an object for the "//case_name//" case."
-                test_arh_factory_c_wrapper = .false.
-                deallocate(holder)
-                cycle
-            end if
-            if (.not. associated(level%extension%state, holder%state)) then
-                write(stderr, *) "test_arh_factory_c_wrapper failed: Object does "// &
-                    "not read the state of the holder for the "//case_name//" case."
-                test_arh_factory_c_wrapper = .false.
-            end if
+            ! check that the holder holds the bundle of the density matrix evaluating
+            ! function and the copy of the orbitals of the orbital basis object
             select type (callbacks => holder%extension_callbacks)
             type is (arh_c_callbacks_type)
                 if (.not. ( &
@@ -252,12 +234,6 @@ contains
                     "callback functions not held for the "//case_name//" case."
                 test_arh_factory_c_wrapper = .false.
             end select
-            if (.not. (associated(holder%solver_level%state_c, state_c) .and. &
-                       associated(holder%stability_level%state_c, state_c))) then
-                write(stderr, *) "test_arh_factory_c_wrapper failed: Host's record "// &
-                    "of the state not held for the "//case_name//" case."
-                test_arh_factory_c_wrapper = .false.
-            end if
             if (.not. (associated(holder%solver_level%orbitals, copy) .and. &
                        associated(holder%solver_level%orbitals_c, host_array))) then
                 write(stderr, *) "test_arh_factory_c_wrapper failed: Copy of the "// &
@@ -266,11 +242,13 @@ contains
                 test_arh_factory_c_wrapper = .false.
             end if
 
-            ! check that the factory returned the C wrappers of the object and wired the
-            ! solver settings with its holder
-            if (.not. check_c_factory_wiring("arh_factory_c_wrapper", holder, &
-                                             level%extension, update_orbs_c_funptr, &
-                                             obj_func_c_funptr, solver_settings_c)) &
+            ! check that the factory wired the settings of the holder with an object,
+            ! which reads the state of the holder, that the holder holds the host's
+            ! record of the state, and that the factory returned the C wrappers of the
+            ! object and wired the solver settings with its holder
+            if (.not. check_c_factory_wiring("arh_factory_c_wrapper", holder, state_c, &
+                                             update_orbs_c_funptr, obj_func_c_funptr, &
+                                             solver_settings_c, case_name)) &
                 test_arh_factory_c_wrapper = .false.
             if (c_associated(extension_c)) then
                 call c_f_pointer(extension_c, holder)

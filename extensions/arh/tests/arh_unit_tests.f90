@@ -364,16 +364,13 @@ contains
         !
         use opentrustregion, only: default_solver_settings
         use otr_common, only: extension_type, extension_solver_settings_type
+        use otr_common_unit_tests, only: setup_owning_solver_settings
 
         type(extension_solver_settings_type), intent(out), target :: solver_settings
         class(extension_type), allocatable, intent(inout), target :: basis
 
         solver_settings%solver_settings_type = default_solver_settings
-        basis%solver_level%extension => basis
-        basis%stability_level%extension => basis
-        solver_settings%context => basis%solver_level
-        allocate(solver_settings%extensions(1))
-        call move_alloc(basis, solver_settings%extensions(1)%object)
+        call setup_owning_solver_settings(solver_settings, basis)
 
     end subroutine setup_basis_solver_settings
 

@@ -47,6 +47,8 @@ contains
                                   n_param_ref => n_param
         use otr_qn_test_reference, only: check_transport_funptr, check_init_hess_funptr
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
+        use otr_common_unit_tests, only: check_mock_factory_logger, &
+                                         setup_owning_solver_settings
 
         integer(ip), intent(in) :: n_param
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
@@ -105,19 +107,9 @@ contains
                                          settings%context)) test_passed = .false.
 
         ! check if optional logging function is correctly passed
-        if (mock_qn_factory_defaults) then
-            if (associated(settings%logger)) then
-                test_passed = .false.
-                write(stderr, *) "test_qn_factory_c_wrapper failed: Logging "// &
-                    "function passed for settings that were not initialized."
-            end if
-        else if (.not. associated(settings%logger)) then
+        if (.not. check_mock_factory_logger(settings, mock_qn_factory_defaults, &
+                                            "test_qn_factory_c_wrapper")) &
             test_passed = .false.
-            write(stderr, *) "test_qn_factory_c_wrapper failed: Passed logging "// &
-                "function not associated with value."
-        else
-            call settings%logger("test", settings%context)
-        end if
 
         ! check if optional settings are correctly passed
         if (mock_qn_factory_defaults) then
@@ -140,10 +132,7 @@ contains
         allocate(sr1_updating_type :: object)
         object%n_param = n_param
         object%state => solver_state
-        object%solver_level%extension => object
-        solver_settings%context => object%solver_level
-        allocate(solver_settings%extensions(1))
-        call move_alloc(object, solver_settings%extensions(1)%object)
+        call setup_owning_solver_settings(solver_settings, object)
         update_orbs_qn_funptr => mock_update_orbs
         obj_func_qn_funptr => mock_obj_func
 

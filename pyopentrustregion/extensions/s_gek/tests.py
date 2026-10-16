@@ -20,7 +20,6 @@ from pyopentrustregion.python_interface import (
     c_real,
     SolverSettings,
     SolverState,
-    logger_interface_type,
 )
 from pyopentrustregion.extensions.s_gek.python_interface import (
     ChangeReferenceInterface,
@@ -407,31 +406,15 @@ class SGEKPyInterfaceTests(unittest.TestCase):
     @patch.object(SGEKSettings, "init_c_struct", lib.mock_init_s_gek_settings)
     def test_s_gek_settings(self):
         """
-        this function ensure the SGEKSettings object is properly initialized and
+        this function ensures the SGEKSettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        test_passed = True
-        settings = SGEKSettings()
-        if not settings_hold_reference(
-            "test_s_gek_settings", settings, lib.reference_s_gek_field
-        ):
-            test_passed = False
-
-        # assigning a logging function writes the C callback function the settings
-        # built for it into the C settings, which calls it whatever context it
-        # receives, and reading returns the logging function
-        messages = []
-
-        def logger(message):
-            messages.append(message)
-
-        settings.logger = logger
-        logger_interface_type(settings.settings_c.logger)(b"test", 12345)
-        if settings.logger is not logger or messages != ["test"]:
-            print(" test_s_gek_settings failed: Logging function not set correctly.")
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_s_gek_settings failed")
+        self.assertTrue(
+            settings_hold_reference(
+                "test_s_gek_settings", SGEKSettings(), lib.reference_s_gek_field
+            ),
+            "test_s_gek_settings failed",
+        )
         print(" test_s_gek_settings PASSED")
 
 

@@ -927,6 +927,26 @@ contains
 
     end subroutine setup_owned_mock_extension
 
+    subroutine setup_owning_solver_settings(solver_settings, object)
+        !
+        ! this subroutine lets solver settings own an extension object as the wiring
+        ! does, pointing the levels of the object back at it, making its level of the
+        ! solver the context of the settings and moving it into the list of the objects
+        ! they own
+        !
+        use otr_common, only: extension_solver_settings_type
+
+        type(extension_solver_settings_type), intent(inout), target :: solver_settings
+        class(extension_type), allocatable, intent(inout), target :: object
+
+        object%solver_level%extension => object
+        object%stability_level%extension => object
+        solver_settings%context => object%solver_level
+        allocate(solver_settings%extensions(1))
+        call move_alloc(object, solver_settings%extensions(1)%object)
+
+    end subroutine setup_owning_solver_settings
+
     function wired_level(solver_settings) result(level)
         !
         ! this function returns the level of the solver of the extension object the
@@ -1043,6 +1063,68 @@ contains
         end if
 
     end function check_role_called
+
+    logical function check_mock_factory_logger(settings, defaults, test_name) &
+        result(passed)
+        !
+        ! this function checks the logging function of the settings a mock factory
+        ! received, which settings that were not initialized and are expected as the
+        ! default settings do not carry and every other settings carry, and calls it
+        ! with their host context
+        !
+        use opentrustregion, only: settings_type
+
+        class(settings_type), intent(in) :: settings
+        logical, intent(in) :: defaults
+        character(len=*), intent(in) :: test_name
+
+        passed = .true.
+        if (defaults) then
+            if (associated(settings%logger)) then
+                passed = .false.
+                write(stderr, *) test_name//" failed: Logging function passed for "// &
+                    "settings that were not initialized."
+            end if
+        else if (.not. associated(settings%logger)) then
+            passed = .false.
+            write(stderr, *) test_name// &
+                " failed: Passed logging function not associated with value."
+        else
+            call settings%logger("test", settings%context)
+        end if
+
+    end function check_mock_factory_logger
+
+    logical function check_mock_factory_ao_overlap(ao_overlap, n_ao, test_name) &
+        result(passed)
+        !
+        ! this function checks the shape and values of the AO overlap matrix and the
+        ! number of AOs a mock factory of an orbital basis received, which the C
+        ! wrapper hands over from the patterns of the shared test reference
+        !
+        use c_interface, only: c_ip
+        use otr_common_test_reference, only: n_ao_ref => n_ao, ao_overlap_pattern
+
+        real(rp), intent(in) :: ao_overlap(:, :)
+        integer(ip), intent(in) :: n_ao
+        character(len=*), intent(in) :: test_name
+
+        passed = .true.
+        if (any(shape(ao_overlap) /= [n_ao_ref, n_ao_ref])) then
+            passed = .false.
+            write(stderr, *) test_name// &
+                " failed: Passed AO overlap matrix shaped wrong."
+        else if (any(abs(ao_overlap - real( &
+            ao_overlap_pattern(int(n_ao_ref, kind=c_ip)), kind=rp)) > tol)) then
+            passed = .false.
+            write(stderr, *) test_name//" failed: Passed AO overlap matrix wrong."
+        end if
+        if (n_ao /= n_ao_ref) then
+            passed = .false.
+            write(stderr, *) test_name//" failed: Passed number of AOs wrong."
+        end if
+
+    end function check_mock_factory_ao_overlap
 
     logical(c_bool) function test_init_orbital_settings() bind(C)
         !

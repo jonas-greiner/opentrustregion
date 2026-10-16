@@ -21,7 +21,6 @@ from pyopentrustregion.python_interface import (
     c_int,
     SolverSettings,
     SolverState,
-    logger_interface_type,
 )
 from pyopentrustregion.extensions.arh import ARHSettings, arh_factory
 from pyopentrustregion.extensions.mo.tests import setup_mo_toy_run
@@ -428,31 +427,15 @@ class ARHPyInterfaceTests(unittest.TestCase):
     @patch.object(ARHSettings, "init_c_struct", lib.mock_init_arh_settings)
     def test_arh_settings(self):
         """
-        this function ensure the ARHSettings object is properly initialized and
+        this function ensures the ARHSettings object is properly initialized and
         synchronized with the underlying C struct
         """
-        test_passed = True
-        settings = ARHSettings()
-        if not settings_hold_reference(
-            "test_arh_settings", settings, lib.reference_arh_field
-        ):
-            test_passed = False
-
-        # assigning a logging function writes the C callback function the settings
-        # built for it into the C settings, which calls it whatever context it
-        # receives, and reading returns the logging function
-        messages = []
-
-        def logger(message):
-            messages.append(message)
-
-        settings.logger = logger
-        logger_interface_type(settings.settings_c.logger)(b"test", 12345)
-        if settings.logger is not logger or messages != ["test"]:
-            print(" test_arh_settings failed: Logging function not set correctly.")
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_arh_settings failed")
+        self.assertTrue(
+            settings_hold_reference(
+                "test_arh_settings", ARHSettings(), lib.reference_arh_field
+            ),
+            "test_arh_settings failed",
+        )
         print(" test_arh_settings PASSED")
 
 
