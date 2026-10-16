@@ -77,8 +77,6 @@ contains
         ! records its call, checks the host context it receives and returns the error
         ! code set in it
         !
-        use opentrustregion, only: hess_x_type
-
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)

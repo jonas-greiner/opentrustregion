@@ -1052,7 +1052,8 @@ contains
 
     subroutine purify(dm)
         !
-        ! this function purifies a density matrix (dm_purified = 3*dm^2 - 2*dm^3)
+        ! this subroutine purifies the density matrix of every particle channel
+        ! (dm_purified = 3*dm^2 - 2*dm^3)
         !
         real(rp), intent(inout) :: dm(:, :, :)
 
@@ -1137,8 +1138,8 @@ contains
 
     function pack_asymm(matrix, n_param) result(matrix_nonred)
         !
-        ! this function packs an antisymmetric matrix for RHF while deallocating the
-        ! original unpacked matrix
+        ! this function packs the upper triangles of the antisymmetric matrices of every
+        ! particle channel into a parameter vector
         !
         real(rp), intent(in) :: matrix(:, :, :)
         integer(ip), intent(in) :: n_param
@@ -1146,10 +1147,10 @@ contains
 
         integer(ip) :: idx, i, j, k
 
-        ! allocate redundant matrix
+        ! allocate non-redundant parameter vector
         allocate(matrix_nonred(n_param))
 
-        ! pack asymmetric matrix
+        ! pack antisymmetric matrix
         idx = 1
         do k = 1, size(matrix, 3)
             do j = 1, size(matrix, 2)

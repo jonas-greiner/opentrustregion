@@ -205,8 +205,6 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! real(rp), allocatable :: step(:), test_kappa(:)
-
         ! initialize error flag
         error = 0
 

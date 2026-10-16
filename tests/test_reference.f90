@@ -28,8 +28,8 @@ module test_reference
 
     ! number of extra trial vectors
     integer(ip), parameter :: n_extra_trial_vectors = 2_ip
-    integer(c_ip), protected, bind(C, name="test_n_extra_trial_vectors") :: &
-        n_extra_trial_vectors_c = int(n_extra_trial_vectors, kind=c_ip)
+    integer(c_ip), parameter :: n_extra_trial_vectors_c = &
+        int(n_extra_trial_vectors, kind=c_ip)
 
     ! warnings the C entry points print for settings and nested stability check
     ! settings that were not initialized, as null-terminated strings for the C

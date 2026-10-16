@@ -121,7 +121,8 @@ contains
 
         ! convert the settings and initialize them if they were not, after printing a
         ! warning, as the factory would, which would otherwise discard the context
-        ! through which the wrappers of the host's callback functions find them
+        ! through which the wrappers of the host's callback functions find them; the
+        ! initialization cannot fail for settings of this type
         settings = local_settings_c
         if (.not. settings%initialized) then
             call warn_uninitialized_settings(settings, &
@@ -309,7 +310,7 @@ contains
 
     subroutine init_arh_settings_c(settings_c) bind(C, name="init_arh_settings")
         !
-        ! this subroutine initializes the ARH solver settings
+        ! this subroutine initializes the ARH settings
         !
         use otr_arh, only: default_arh_settings
 

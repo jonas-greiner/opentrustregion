@@ -1442,6 +1442,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! MO basis
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
         use otr_common, only: error_mo
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type
@@ -1572,6 +1573,18 @@ contains
                 test_obj_func_mo = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with a rotation that is not finite, which the matrix
+            ! exponential refuses, and determine if its error is returned with the
+            ! origin of the object
+            kappa(1) = ieee_value(1.0_rp, ieee_quiet_nan)
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
+            if (error /= error_mo + 1) then
+                write(stderr, *) "test_obj_func_mo failed: Error for a rotation "// &
+                    "that is not finite not returned with the origin of the object "// &
+                    "for the "//case_name//" case."
+                test_obj_func_mo = .false.
+            end if
 
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
@@ -2157,6 +2170,8 @@ contains
         ! this function tests the subroutine which moves the current orbitals by an
         ! orbital rotation in the MO basis
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+        use otr_common, only: error_mo
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_param
@@ -2209,6 +2224,23 @@ contains
                 test_rotate_orbitals_mo = .false.
             end if
         end do
+
+        ! call routine with a rotation that is not finite, which the matrix exponential
+        ! refuses, and determine if its error is returned with the origin of the object
+        ! while the orbitals stay in place
+        expected = mo_coeff
+        kappa(1) = ieee_value(1.0_rp, ieee_quiet_nan)
+        call mo%rotate_orbitals(kappa, error)
+        if (error /= error_mo + 1) then
+            write(stderr, *) "test_rotate_orbitals_mo failed: Error for a rotation "// &
+                "that is not finite not returned with the origin of the object."
+            test_rotate_orbitals_mo = .false.
+        end if
+        if (norm2(mo_coeff - expected) > tol) then
+            write(stderr, *) "test_rotate_orbitals_mo failed: Orbitals moved by a "// &
+                "rotation that is not finite."
+            test_rotate_orbitals_mo = .false.
+        end if
 
         ! deallocate MO object
         deallocate(mo)

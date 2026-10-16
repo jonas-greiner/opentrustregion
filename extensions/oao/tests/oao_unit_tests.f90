@@ -971,6 +971,7 @@ contains
         ! this function tests the function which defines the energy evaluation in the
         ! OAO basis
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
         use otr_common, only: error_oao
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
@@ -1119,6 +1120,18 @@ contains
                 test_obj_func_oao = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with a rotation that is not finite, which the matrix
+            ! exponential refuses, and determine if its error is returned with the
+            ! origin of the object
+            kappa(1) = ieee_value(1.0_rp, ieee_quiet_nan)
+            energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
+            if (error /= error_oao + 1) then
+                write(stderr, *) "test_obj_func_oao failed: Error for a rotation "// &
+                    "that is not finite not returned with the origin of the object "// &
+                    "for the "//case_name//" case."
+                test_obj_func_oao = .false.
+            end if
 
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
@@ -1827,6 +1840,8 @@ contains
         ! orbital rotation, updating the density matrix in the AO and in the OAO basis
         !
         use otr_common_unit_tests, only: generate_random_density_matrix
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+        use otr_common, only: error_oao
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -1857,6 +1872,7 @@ contains
         oao%dm_oao = dm_oao
         oao%s_inv_sqrt = s_inv_sqrt
         oao%response_stale = .false.
+        oao%error_origin = error_oao
 
         ! initialize expected density matrices, where the rotation matrix is the
         ! exponential of the antisymmetric matrix the rotation is unpacked into
@@ -1887,6 +1903,23 @@ contains
         if (.not. oao%response_stale) then
             write(stderr, *) "test_rotate_orbitals_oao failed: Response not marked "// &
                 "stale."
+            test_rotate_orbitals_oao = .false.
+        end if
+
+        ! call routine with a rotation that is not finite, which the matrix exponential
+        ! refuses, and determine if its error is returned with the origin of the object
+        ! while the density matrices stay in place
+        call oao%rotate_orbitals([ieee_value(1.0_rp, ieee_quiet_nan)], error)
+        if (error /= error_oao + 1) then
+            write(stderr, *) "test_rotate_orbitals_oao failed: Error for a "// &
+                "rotation that is not finite not returned with the origin of the "// &
+                "object."
+            test_rotate_orbitals_oao = .false.
+        end if
+        if (norm2(oao%dm_oao - expected_dm_oao) > tol .or. &
+            norm2(dm_ao - expected_dm_ao) > tol) then
+            write(stderr, *) "test_rotate_orbitals_oao failed: Density matrices "// &
+                "moved by a rotation that is not finite."
             test_rotate_orbitals_oao = .false.
         end if
 

@@ -55,7 +55,7 @@ contains
 
     logical(c_bool) function test_s_gek_factory_c_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the S-GEK orbital update factory
+        ! this function tests the C wrapper for the S-GEK factory
         !
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
@@ -105,7 +105,7 @@ contains
         solver_settings_c = default_solver_settings
         solver_settings_c%context = c_loc(host_context)
 
-        ! call S-GEK orbital updating factory C wrapper
+        ! call S-GEK factory C wrapper
         test_passed_mock_s_gek_factory = .false.
         mock_s_gek_factory_error = 0
         error_c = s_gek_factory_c_wrapper( &

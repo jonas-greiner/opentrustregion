@@ -77,8 +77,7 @@ contains
         extension_c, solver_settings_c, solver_state_c, settings_c, orbsym_c) &
         result(error_c) bind(C, name="mock_mo_factory")
         !
-        ! this subroutine is a mock routine for the MO orbital updating factory C
-        ! wrapper subroutine
+        ! this subroutine is a mock routine for the MO factory C wrapper subroutine
         !
         use otr_mo_c_interface, only: mo_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c

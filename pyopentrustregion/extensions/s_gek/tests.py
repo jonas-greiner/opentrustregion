@@ -165,7 +165,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
     )
     def test_s_gek_factory_py_interface(self):
         """
-        this function tests the S-GEK orbital updating factory python interface
+        this function tests the S-GEK factory python interface
         """
         # initialize test flag
         test_passed = True
@@ -182,7 +182,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         settings.logger = messages.append
         solver_settings, python_functions = setup_wired_solver_settings()
 
-        # call S-GEK orbital updating factory python interface
+        # call S-GEK factory python interface
         mock_passed.value = False
         update_orbs_s_gek, obj_func_s_gek = s_gek_factory(
             n_param,

@@ -40,8 +40,7 @@ contains
         solver_settings_c, solver_state_c, settings_c) result(error_c) &
         bind(C, name="mock_oao_factory")
         !
-        ! this subroutine is a mock routine for the OAO orbital updating factory C
-        ! wrapper subroutine
+        ! this subroutine is a mock routine for the OAO factory C wrapper subroutine
         !
         use otr_oao_c_interface, only: oao_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c

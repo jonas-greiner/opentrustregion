@@ -60,7 +60,7 @@ contains
 
     logical(c_bool) function test_qn_factory_c_wrapper() bind(C)
         !
-        ! this function tests the C wrapper for the quasi-Newton orbital update factory
+        ! this function tests the C wrapper for the quasi-Newton factory
         !
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
@@ -109,7 +109,7 @@ contains
         solver_settings_c = default_solver_settings
         solver_settings_c%context = c_loc(host_context)
 
-        ! call quasi-Newton orbital updating factory C wrapper
+        ! call quasi-Newton factory C wrapper
         test_passed_mock_qn_factory = .false.
         mock_qn_factory_error = 0
         error_c = qn_factory_c_wrapper( &

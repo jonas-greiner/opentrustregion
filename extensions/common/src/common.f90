@@ -1202,8 +1202,12 @@ contains
         ! of the exponential, the scale factor is derived from the Frobenius norm which
         ! is an upper bound for the spectral norm, convergence is tested against the
         ! last term of the expansion which works because the sum of the Frobenius norms
-        ! of two matrices is larger than the Frobenius norm of the sum of both matrices
+        ! of two matrices is larger than the Frobenius norm of the sum of both
+        ! matrices; the scaling bounds the norm of the scaled matrix by 1/8, so that
+        ! the terms fall below the threshold after about ten orders, while a matrix
+        ! whose norm is not finite, for which no scale factor exists, is refused
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
         use opentrustregion, only: verbosity_error
 
         real(rp), intent(in) :: A(:, :)
@@ -1225,8 +1229,14 @@ contains
         ! workspace allocation
         allocate(An(n, n), tmp(n, n), expA(n, n))
 
-        ! compute Frobenius norm of A
+        ! compute Frobenius norm of A, which has to be finite
         A_norm = sqrt(sum(A**2))
+        if (.not. ieee_is_finite(A_norm)) then
+            call settings%log("Matrix exponential of a matrix whose norm is not "// &
+                              "finite requested.", verbosity_error, .true.)
+            error = 1
+            return
+        end if
 
         ! determine scale factor
         power = 3
@@ -1260,15 +1270,8 @@ contains
             ! convergence check for last expansion order
             A_norm = fac * sqrt(sum(An**2))
 
-            ! check if maximum number of iterations is reached
+            ! next expansion order
             i = i + 1
-            if (i > 100) then
-                call settings%log("Maximum number of iterations for Taylor "// &
-                                  "expansion of matrix exponential reached.", &
-                                  verbosity_error, .true.)
-                error = 1
-                return
-            end if
         end do
         deallocate(An)
 

@@ -37,8 +37,8 @@ contains
         extension_c, solver_settings_c, solver_state_c, settings_c) result(error_c) &
         bind(C, name="mock_qn_factory")
         !
-        ! this subroutine is a mock routine for the quasi-Newton orbital updating
-        ! factory C wrapper subroutine
+        ! this subroutine is a mock routine for the quasi-Newton factory C wrapper
+        ! subroutine
         !
         use otr_qn_c_interface, only: qn_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c

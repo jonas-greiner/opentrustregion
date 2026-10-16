@@ -37,8 +37,7 @@ contains
         solver_settings_c, solver_state_c, settings_c) result(error_c) &
         bind(C, name="mock_s_gek_factory")
         !
-        ! this subroutine is a mock routine for the S-GEK orbital updating factory C
-        ! wrapper subroutine
+        ! this subroutine is a mock routine for the S-GEK factory C wrapper subroutine
         !
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c

@@ -2595,14 +2595,20 @@ contains
         end if
 
         ! run solver with settings which the sanity check rejects and check that its
-        ! error is returned with the solver's origin
+        ! error is returned with the solver's origin before the orbitals are updated
         context%vars = near_minimum
         call settings%init(error)
         settings%n_micro = 0
         call setup_error_logging(settings, context)
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
+                    state)
         if (error /= error_solver + 1) then
             write(stderr, *) "test_solver failed: Did not return error of sanity check."
+            test_solver = .false.
+        end if
+        if (state%n_update_orbs /= 0) then
+            write(stderr, *) "test_solver failed: Orbitals updated before settings "// &
+                "the sanity check rejects were refused."
             test_solver = .false.
         end if
 
@@ -9770,15 +9776,14 @@ contains
                                    subsystem_solver_options, trust_region_shape_options
 
         ! settings which the sanity check rejects
-        character(len=*), parameter :: error_case_names(8) = [ &
-            character(len=61) :: "vanishing number of parameters", &
-            "negative number of parameters", "vanishing number of micro iterations", &
-            "extra trial vector function without extra trial vectors", "gradient "// &
-            "of wrong size", "unknown subsystem solver", "unknown trust region shape", &
-            "ellipsoidal trust region with Davidson-based subsystem solver"]
+        character(len=*), parameter :: error_case_names(7) = &
+            [character(len=61) :: "vanishing number of parameters", &
+             "negative number of parameters", "vanishing number of micro iterations", &
+             "extra trial vector function without extra trial vectors", &
+             "unknown subsystem solver", "unknown trust region shape", &
+             "ellipsoidal trust region with Davidson-based subsystem solver"]
         type(solver_settings_type) :: settings
-        real(rp) :: grad(4)
-        integer(ip) :: n_param, grad_size, error, i_solver, i_shape, i_case
+        integer(ip) :: n_param, error, i_solver, i_shape, i_case
         logical :: davidson
         type(test_context_type), target :: context
 
@@ -9789,7 +9794,6 @@ contains
         ! supports, and that the number of random trial vectors is reduced to half the
         ! number of parameters with a warning for the Davidson-based subsystem solvers,
         ! which use them, and left unchanged without any message for the others
-        call random_number(grad)
         do i_solver = 1, size(subsystem_solver_options)
             davidson = index(subsystem_solver_options(i_solver), "davidson") > 0
             do i_shape = 1, size(trust_region_shape_options)
@@ -9799,7 +9803,7 @@ contains
                 settings%subsystem_solver = subsystem_solver_options(i_solver)
                 settings%trust_region_shape = trust_region_shape_options(i_shape)
                 settings%n_random_trial_vectors = 3
-                call solver_sanity_check(settings, 4_ip, grad, error)
+                call solver_sanity_check(settings, 4_ip, error)
                 if (error /= 0) then
                     write(stderr, *) "test_solver_sanity_check failed: Error "// &
                         "returned for "//trim(subsystem_solver_options(i_solver))// &
@@ -9825,18 +9829,15 @@ contains
         end do
 
         ! check that every rejected setting returns an error and prints an error
-        ! message, with a gradient of the size of the number of parameters also when
-        ! this vanishes, so that the gradient size is not what is rejected there
+        ! message
         do i_case = 1, size(error_case_names)
             call setup_settings(settings, context)
             call setup_error_logging(settings, context)
             settings%trust_region_shape = "spherical"
             n_param = 4
-            grad_size = 4
             select case (i_case)
             case (1)
                 n_param = 0
-                grad_size = 0
             case (2)
                 n_param = -1
             case (3)
@@ -9845,16 +9846,14 @@ contains
                 settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
                 settings%n_extra_trial_vectors = 0
             case (5)
-                n_param = 3
-            case (6)
                 settings%subsystem_solver = "unknown"
-            case (7)
+            case (6)
                 settings%trust_region_shape = "unknown"
-            case (8)
+            case (7)
                 settings%subsystem_solver = "davidson_ls"
                 settings%trust_region_shape = "ellipsoidal"
             end select
-            call solver_sanity_check(settings, n_param, grad(:grad_size), error)
+            call solver_sanity_check(settings, n_param, error)
             if (error /= 1) then
                 write(stderr, *) "test_solver_sanity_check failed: No error "// &
                     "returned for "//trim(error_case_names(i_case))//"."
@@ -9875,7 +9874,7 @@ contains
             settings%subsystem_solver = subsystem_solver_options(i_solver)
             settings%trust_region_shape = "spherical"
             settings%hess_symm = .false.
-            call solver_sanity_check(settings, 4_ip, grad, error)
+            call solver_sanity_check(settings, 4_ip, error)
             if (subsystem_solver_options(i_solver) == "davidson_ls") then
                 if (error /= 0) then
                     write(stderr, *) "test_solver_sanity_check failed: "// &
@@ -9895,7 +9894,7 @@ contains
         call setup_settings(settings, context)
         settings%trust_region_shape = "spherical"
         settings%project => mock_project_out_pair
-        call solver_sanity_check(settings, 4_ip, grad, error)
+        call solver_sanity_check(settings, 4_ip, error)
         if (error /= 0 .or. index(context%log_message, " "//project_warning_msg) == 0) &
             then
             write(stderr, *) "test_solver_sanity_check failed: Warning not printed "// &

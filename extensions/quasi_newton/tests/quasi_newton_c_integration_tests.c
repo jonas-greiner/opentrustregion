@@ -7,13 +7,13 @@
 /* Pure-C integration tests for the public C interface declared in
  * opentrustregion_quasi_newton.h
  *
- * The Fortran-side qn_c_interface_unit_tests cover the bind(C) wrappers but never
- * compile against the C header itself. These tests do, and test_qn_settings_layout
- * checks that the settings struct has the size of the bind(C) type and that every
- * field is read back under its own name, so any drift between the bind(C) type
- * (Fortran) and the struct (C) is caught here, except a field left in the struct that
- * fits into the padding of the bind(C) type, which changes neither the size nor the
- * offset of a named field. The header's inline initialization, which
+ * The Fortran-side quasi_newton_c_interface_unit_tests cover the bind(C) wrappers but
+ * never compile against the C header itself. These tests do, and
+ * test_qn_settings_layout checks that the settings struct has the size of the bind(C)
+ * type and that every field is read back under its own name, so any drift between the
+ * bind(C) type (Fortran) and the struct (C) is caught here, except a field left in the
+ * struct that fits into the padding of the bind(C) type, which changes neither the size
+ * nor the offset of a named field. The header's inline initialization, which
  * test_qn_settings_init checks, takes both sides from the same Fortran assignment, so
  * it cannot detect such drift. */
 
@@ -26,9 +26,9 @@
 #include "../../common/tests/common_c_integration_tests.h"
 
 /* ------------------------------------------------------------------
- * Reference settings provided by qn_test_reference.f90: the reference value of a field
- * by its name, C settings filled with these values field by field, the size of the
- * bind(C) settings type, and a comparison with the default settings
+ * Reference settings provided by quasi_newton_test_reference.f90: the reference value
+ * of a field by its name, C settings filled with these values field by field, the size
+ * of the bind(C) settings type, and a comparison with the default settings
  * ------------------------------------------------------------------ */
 
 void reference_qn_field(const char *name, c_real *value, char *keyword);

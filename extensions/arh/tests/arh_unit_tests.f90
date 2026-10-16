@@ -3088,6 +3088,8 @@ contains
         ! by an orbital rotation in the AO basis and in the history basis, S D S, for
         ! the MO basis without moving the current orbitals
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+        use otr_common, only: error_arh
         use otr_arh, only: arh_mo_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
@@ -3116,6 +3118,7 @@ contains
         mo_coeff_before = mo_coeff
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
         arh = arh_mo_type(mo)
+        arh%error_origin = error_arh
         call setup_settings(arh%settings, context)
 
         ! call routine and determine if the density matrix of the independently rotated
@@ -3150,6 +3153,17 @@ contains
             test_rotate_trial_arh_mo = .false.
         end if
 
+        ! call routine with a rotation that is not finite, which the matrix exponential
+        ! refuses, and determine if its error is returned with the origin of the object
+        kappa(1) = ieee_value(1.0_rp, ieee_quiet_nan)
+        call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        if (error /= error_arh + 1) then
+            write(stderr, *) "test_rotate_trial_arh_mo failed: Error for a "// &
+                "rotation that is not finite not returned with the origin of the "// &
+                "object."
+            test_rotate_trial_arh_mo = .false.
+        end if
+
         ! deallocate MO object
         deallocate(mo)
 
@@ -3161,6 +3175,8 @@ contains
         ! by an orbital rotation in the AO and OAO basis without moving the current
         ! orbitals
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+        use otr_common, only: error_arh
         use otr_arh, only: arh_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ
@@ -3197,6 +3213,7 @@ contains
         oao%dm_ao => dm_ao
         oao%dm_oao = dm_oao
         arh = arh_oao_type(oao)
+        arh%error_origin = error_arh
         call setup_settings(arh%settings, context)
 
         ! call routine and determine if the density matrix is rotated consistently in
@@ -3254,6 +3271,17 @@ contains
             transpose(rotation), matmul(dm_oao(:, :, 1), rotation))) > tol) then
             write(stderr, *) "test_rotate_trial_arh_oao failed: Incorrect density "// &
                 "matrix for a plane rotation."
+            test_rotate_trial_arh_oao = .false.
+        end if
+
+        ! call routine with a rotation that is not finite, which the matrix exponential
+        ! refuses, and determine if its error is returned with the origin of the object
+        kappa(1) = ieee_value(1.0_rp, ieee_quiet_nan)
+        call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        if (error /= error_arh + 1) then
+            write(stderr, *) "test_rotate_trial_arh_oao failed: Error for a "// &
+                "rotation that is not finite not returned with the origin of the "// &
+                "object."
             test_rotate_trial_arh_oao = .false.
         end if
 

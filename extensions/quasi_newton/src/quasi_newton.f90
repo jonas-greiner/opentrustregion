@@ -305,14 +305,11 @@ contains
         integer(ip), intent(out) :: error
 
         real(rp), allocatable :: grad_diff(:)
-        integer(ip) :: n_param, i
+        integer(ip) :: i
         logical :: skip
 
         ! initialize error flag
         error = 0
-
-        ! get number of parameters
-        n_param = size(kappa)
 
         ! transport history
         do i = 1, self%n_points

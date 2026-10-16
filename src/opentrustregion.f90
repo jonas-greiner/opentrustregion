@@ -41,7 +41,7 @@ module opentrustregion
 
     ! define useful parameters
     real(rp), parameter :: &
-        numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, precond_factor = 1e-1_rp, &
+        numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
         hess_symm_thres = 1e-12_rp, residual_norm_floor = 1e-12_rp, &
         level_shift_local_thres = 1e-12_rp, newton_eigval_thresh = -1e-5_rp, &
         stability_thresh = -1e-2_rp, precond_rel_floor_factor = 1e-2_rp
@@ -419,6 +419,11 @@ contains
         ! resolve the defaults that depend on other settings
         call init_defaults(local_settings)
 
+        ! perform sanity check
+        call solver_sanity_check(local_settings, n_param, error)
+        call add_error_origin(error, error_solver, local_settings)
+        if (error /= 0) return
+
         ! set starting trust radius
         current_state%trust_radius = local_settings%start_trust_radius
 
@@ -460,13 +465,6 @@ contains
                                             verbosity_error, .true.)
                     error = error_solver + 1
                     return
-                end if
-
-                ! perform sanity check
-                if (imacro == 1) then
-                    call solver_sanity_check(local_settings, n_param, grad, error)
-                    call add_error_origin(error, error_solver, local_settings)
-                    if (error /= 0) return
                 end if
 
                 ! calculate gradient norm
@@ -907,7 +905,7 @@ contains
         ! this subroutine performs bisection to find the parameter alpha that matches
         ! the desired trust radius
         !
-        real(rp), intent(inout) :: red_space_hess(:, :)
+        real(rp), intent(in) :: red_space_hess(:, :)
         real(rp), intent(in) :: grad_norm, red_space_basis(:, :), &
                                 red_space_hess_eigvals(:), &
                                 red_space_hess_right_eigvecs(:, :), &
@@ -1551,12 +1549,13 @@ contains
 
     end function bracket
 
-    subroutine extend_matrix(matrix, row, column)
+    subroutine extend_matrix(matrix, column, row)
         !
-        ! this subroutine extends a matrix with a row and a column
+        ! this subroutine extends a matrix with a column and a row, whose last elements
+        ! have to agree, since both fill the new corner
         !
         real(rp), allocatable, intent(inout) :: matrix(:, :)
-        real(rp), intent(in) :: row(:), column(:)
+        real(rp), intent(in) :: column(:), row(:)
 
         real(rp), allocatable :: new_matrix(:, :)
         integer(ip) :: nrows, ncols
@@ -1568,9 +1567,9 @@ contains
         allocate(new_matrix(nrows + 1, ncols + 1))
         new_matrix(:nrows, :ncols) = matrix
 
-        ! add new row and column
-        new_matrix(:, ncols + 1) = row
-        new_matrix(nrows + 1, :) = column
+        ! add new column and row
+        new_matrix(:, ncols + 1) = column
+        new_matrix(nrows + 1, :) = row
 
         ! transfer allocation back into matrix; old storage is freed by move_alloc
         call move_alloc(new_matrix, matrix)
@@ -1826,7 +1825,7 @@ contains
 
         call random_seed(size=n)
         allocate(seed_arr(n))
-        seed_arr = int(seed, kind=4)
+        seed_arr = int(seed, kind=kind(seed_arr))
         call random_seed(put=seed_arr)
         deallocate(seed_arr)
 
@@ -3091,8 +3090,8 @@ contains
         real(rp), allocatable :: &
             perturbed_grad(:), red_space_basis(:, :), h_basis(:, :), &
             red_space_hess(:, :), red_space_solution(:), h_solution(:), residual(:), &
-            solution_normalized(:), last_solution_normalized(:), row_vec(:), &
-            col_vec(:), red_space_hess_right_eigvecs(:, :), &
+            solution_normalized(:), last_solution_normalized(:), column_vec(:), &
+            row_vec(:), red_space_hess_right_eigvecs(:, :), &
             red_space_hess_left_eigvecs(:, :), red_space_hess_eigvals_re(:)
         complex(rp), allocatable :: red_space_hess_eigvals(:)
         integer(ip) :: n_trial, i, imicro, initial_imicro, min_idx, jacobi_davidson_iter
@@ -3199,7 +3198,6 @@ contains
                             perturbed_grad_norm, red_space_basis, &
                             red_space_hess_eigvals_re, red_space_hess_right_eigvecs, &
                             red_space_hess_left_eigvecs, solution, red_space_solution)
-                        if (error /= 0) return
                         mu = 0.0_rp
                         if (dnrm2(n_param, solution, 1_ip) < state%trust_radius) &
                             newton = .true.
@@ -3298,16 +3296,16 @@ contains
                 n_trial = n_trial + 1
 
                 ! construct new augmented Hessian
-                allocate(row_vec(n_trial))
+                allocate(column_vec(n_trial))
                 call dgemv("T", n_param, n_trial, 1.0_rp, red_space_basis, n_param, &
-                           h_basis(:, n_trial), 1_ip, 0.0_rp, row_vec, 1_ip)
-                col_vec = row_vec
+                           h_basis(:, n_trial), 1_ip, 0.0_rp, column_vec, 1_ip)
+                row_vec = column_vec
                 if (.not. settings%hess_symm) then
                     call dgemv("T", n_param, n_trial, 1.0_rp, h_basis, n_param, &
-                               red_space_basis(:, n_trial), 1_ip, 0.0_rp, col_vec, 1_ip)
+                               red_space_basis(:, n_trial), 1_ip, 0.0_rp, row_vec, 1_ip)
                 end if
-                call extend_matrix(red_space_hess, row_vec, col_vec)
-                deallocate(row_vec, col_vec)
+                call extend_matrix(red_space_hess, column_vec, row_vec)
+                deallocate(column_vec, row_vec)
 
                 ! reallocate reduced space solution
                 deallocate(red_space_solution)
@@ -3420,15 +3418,12 @@ contains
         ! iterate until step is accepted
         accept_step = .false.
         do while (.not. accept_step)
-            ! reset microiteration convergence threshold
+            ! reset micro iteration convergence flag
             micro_converged = .false.
 
             ! reset problem
             residual = perturbed_grad
             solution = 0.0_rp
-
-            ! initialize micro iteration convergence flag
-            micro_converged = .false.
 
             ! initialize error flag
             error = 0
@@ -3665,7 +3660,7 @@ contains
         ! iterate until step is accepted
         accept_step = .false.
         do while (.not. accept_step)
-            ! reset microiteration convergence threshold
+            ! reset micro iteration convergence flag
             micro_converged = .false.
 
             ! reset problem
@@ -3874,13 +3869,12 @@ contains
 
     end subroutine inherit_solver_callbacks
 
-    subroutine solver_sanity_check(settings, n_param, grad, error)
+    subroutine solver_sanity_check(settings, n_param, error)
         !
         ! this subroutine performs a sanity check for solver input parameters
         !
         type(solver_settings_type), intent(inout) :: settings
         integer(ip), intent(in) :: n_param
-        real(rp), intent(in) :: grad(:)
         integer(ip), intent(out) :: error
 
         character(len=300) :: msg
@@ -3919,15 +3913,6 @@ contains
             settings%n_extra_trial_vectors <= 0) then
             call settings%log("Number of extra trial vectors should be larger than "// &
                               "zero when extra trial vector function is passed.", &
-                              verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
-        ! sanity check for gradient size
-        if (size(grad) /= n_param) then
-            call settings%log("Size of gradient array returned by subroutine "// &
-                              "update_orbs does not equal number of parameters.", &
                               verbosity_error, .true.)
             error = 1
             return

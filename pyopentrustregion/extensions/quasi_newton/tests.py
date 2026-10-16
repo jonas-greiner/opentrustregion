@@ -178,7 +178,7 @@ class QNPyInterfaceTests(unittest.TestCase):
     )
     def test_qn_factory_py_interface(self):
         """
-        this function tests the quasi-Newton orbital updating factory python interface
+        this function tests the quasi-Newton factory python interface
         """
         # initialize test flag
         test_passed = True
@@ -195,7 +195,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         settings.logger = messages.append
         solver_settings, python_functions = setup_wired_solver_settings()
 
-        # call quasi-Newton orbital updating factory python interface
+        # call quasi-Newton factory python interface
         mock_passed.value = False
         update_orbs_qn, obj_func_qn = qn_factory(
             n_param,

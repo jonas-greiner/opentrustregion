@@ -3158,15 +3158,21 @@ contains
         ! this function tests the function which calculates the matrix exponential of a
         ! real antisymmetric matrix
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, &
+                                                 ieee_positive_inf
         use otr_common, only: matrix_exponential
         use opentrustregion, only: solver_settings_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
 
         type(test_context_type), target :: context
         integer(ip), parameter :: n = 2
         real(rp), parameter :: angles(3) = [0.0_rp, 0.3_rp, 200.0_rp]
         character(len=9), parameter :: case_names(3) = &
             [character(len=9) :: "vanishing", "small", "large"]
+        character(len=48), parameter :: non_finite_names(3) = &
+            [character(len=48) :: "a NaN entry", "an infinite entry", &
+             "entries whose Frobenius norm overflows"]
 
         real(rp) :: a(n, n), expected(n, n)
         real(rp), allocatable :: exp_a(:, :)
@@ -3207,6 +3213,34 @@ contains
             if (norm2(exp_a - expected) > tol) then
                 write(stderr, *) "test_matrix_exponential failed for "// &
                     trim(case_names(i))//" angle: Incorrect matrix values."
+                test_matrix_exponential = .false.
+            end if
+        end do
+
+        ! call routine for matrices whose norm is not finite, for which no scale factor
+        ! exists, and determine if an error is returned with an error message
+        call setup_error_logging(settings, context)
+        do i = 1, size(non_finite_names)
+            a = 0.0_rp
+            select case (i)
+            case (1)
+                a(1, 2) = ieee_value(1.0_rp, ieee_quiet_nan)
+            case (2)
+                a(1, 2) = ieee_value(1.0_rp, ieee_positive_inf)
+            case (3)
+                a(1, 2) = 0.5_rp * huge(1.0_rp)
+            end select
+            a(2, 1) = -a(1, 2)
+            context%log_message = ""
+            exp_a = matrix_exponential(a, settings, error)
+            if (error /= 1) then
+                write(stderr, *) "test_matrix_exponential failed: No error "// &
+                    "returned for a matrix with "//trim(non_finite_names(i))//"."
+                test_matrix_exponential = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_matrix_exponential failed: No error message "// &
+                    "printed for a matrix with "//trim(non_finite_names(i))//"."
                 test_matrix_exponential = .false.
             end if
         end do

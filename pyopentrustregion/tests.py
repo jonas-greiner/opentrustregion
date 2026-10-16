@@ -312,9 +312,6 @@ def add_tests(cls):
 # number of parameters
 n_param = c_int.in_dll(lib, "test_n_param").value
 
-# number of extra trial vectors
-n_extra_trial_vectors = c_int.in_dll(lib, "test_n_extra_trial_vectors").value
-
 
 @add_tests
 class OpenTrustRegionUnitTests(unittest.TestCase):
