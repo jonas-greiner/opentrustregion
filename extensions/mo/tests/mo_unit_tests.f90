@@ -12,74 +12,7 @@ module otr_mo_unit_tests
 
     implicit none
 
-    ! factor of the density matrix in the Fock matrix of the quadratic model energy of
-    ! the closed-shell and the open-shell case, which is also its response
-    real(rp), parameter :: model_response_scale(2) = [1.0_rp, 0.5_rp]
-
-    ! multiple of the density matrix displacements of the other particle channels in
-    ! the response of every channel of the open-shell response function which couples
-    ! the channels
-    real(rp), parameter :: mock_response_coupling = 0.5_rp
-
 contains
-
-    subroutine model_response_cs(dm, response, error, context)
-        !
-        ! this subroutine is the response function of the closed-shell quadratic model
-        ! energy
-        !
-        real(rp), intent(in), target, contiguous :: dm(:, :)
-        real(rp), intent(out), target, contiguous :: response(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        error = 0
-        response = model_response_scale(1) * dm
-
-    end subroutine model_response_cs
-
-    subroutine model_response_os(dm, response, error, context)
-        !
-        ! this subroutine is the response function of the open-shell quadratic model
-        ! energy
-        !
-        real(rp), intent(in), target :: dm(:, :, :)
-        real(rp), intent(out), target :: response(:, :, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        error = 0
-        response = model_response_scale(2) * dm
-
-    end subroutine model_response_os
-
-    subroutine mock_get_coupled_response_os(dm, response, error, context)
-        !
-        ! this subroutine is a mock response function for the open-shell case which
-        ! couples the particle channels, as the Coulomb response does: the response of
-        ! every channel is the multiple of the mock response function of its own
-        ! density matrix displacement plus a multiple of those of the other channels
-        !
-        use test_reference, only: check_host_context
-        use otr_common_unit_tests, only: mock_response_factor
-
-        real(rp), intent(in), target :: dm(:, :, :)
-        real(rp), intent(out), target :: response(:, :, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        integer(ip) :: k
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        do k = 1, size(dm, 3, kind=ip)
-            response(:, :, k) = mock_response_factor * dm(:, :, k) + &
-                                mock_response_coupling * (sum(dm, dim=3) - dm(:, :, k))
-        end do
-
-    end subroutine mock_get_coupled_response_os
 
     function diagonal_matrix(values) result(matrix)
         !
@@ -962,7 +895,8 @@ contains
                           default_mo_settings, mo_settings_uninitialized_warning_msg
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, &
-                                             n_particle_ref => n_particle, operator(==)
+                                             n_particle_ref => n_particle, &
+                                             operator(==), same_logger_and_context
         use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use otr_common_unit_tests, only: mock_evaluate_dm_cs, mock_evaluate_dm_os, &
                                          wired_level
@@ -1185,7 +1119,8 @@ contains
                         test_mo_factory_common = .false.
                     end if
                     if (.not. ( &
-                        mo%settings == expected_settings%orbital_settings_type)) then
+                        mo%settings == expected_settings%orbital_settings_type .and. &
+                        same_logger_and_context(mo%settings, expected_settings))) then
                         write(stderr, *) "test_mo_factory_common failed: Settings "// &
                             "not stored "//trim(case_names_factory(i_case))//"."
                         test_mo_factory_common = .false.
@@ -1287,10 +1222,20 @@ contains
                                n_mo, evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
                                update_orbs_mo_funptr, obj_func_mo_funptr, &
                                solver_settings, state, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_mo_factory_common failed: Produced error for "// &
+                "the first of two separate solver settings."
+            test_mo_factory_common = .false.
+        end if
         call mo_factory_common(mo_coeff(:, :, :1), ao_overlap, n_occ(:1), 1_ip, n_ao, &
                                n_mo, evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
                                update_orbs_mo_funptr, obj_func_mo_funptr, &
                                other_settings, other_state, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_mo_factory_common failed: Produced error for "// &
+                "the second of two separate solver settings."
+            test_mo_factory_common = .false.
+        end if
         level => wired_level(solver_settings)
         other_level => wired_level(other_settings)
         if (.not. (associated(level) .and. associated(other_level))) then
@@ -1616,6 +1561,18 @@ contains
             if (.not. host_context_reached("obj_func_mo", context)) &
                 test_obj_func_mo = .false.
 
+            ! call routine with a density matrix evaluating function that fails and
+            ! determine if its error is returned unchanged
+            context%mock_error = 3
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
+            if (error /= 3) then
+                write(stderr, *) "test_obj_func_mo failed: Error of the density "// &
+                    "matrix evaluating function not returned for the "//case_name// &
+                    " case."
+                test_obj_func_mo = .false.
+            end if
+            context%mock_error = 0
+
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
             mo%evaluate_dm_cs => null()
@@ -1923,8 +1880,11 @@ contains
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
         use otr_common_unit_tests, only: &
-            level_context, mock_requests, mock_response_factor, mock_get_response_cs, &
-            mock_get_stale_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os
+            level_context, mock_requests, mock_response_factor, &
+            mock_response_coupling, model_response_scale, mock_get_response_cs, &
+            mock_get_coupled_response_os, mock_get_stale_response_os, &
+            model_response_cs, model_response_os, mock_evaluate_dm_cs, &
+            mock_evaluate_dm_os
 
         type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
@@ -1993,6 +1953,17 @@ contains
             ! check that the host context reached the callback functions unchanged
             if (.not. host_context_reached("hess_x_mo", context)) &
                 test_hess_x_mo = .false.
+
+            ! call routine with a response function that fails and determine if its
+            ! error is returned unchanged
+            context%mock_error = 3
+            call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
+            if (error /= 3) then
+                write(stderr, *) "test_hess_x_mo failed: Error of the response "// &
+                    "function not returned for the "//case_name//" case."
+                test_hess_x_mo = .false.
+            end if
+            context%mock_error = 0
 
             deallocate(mo, x, hess_x)
         end do

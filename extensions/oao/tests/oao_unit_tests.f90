@@ -244,6 +244,22 @@ contains
 
     end function ref_hess_eigval_pairs_oao
 
+    function generate_random_nonredundant_vector(n_param, n_particle, n_ao, dm_oao) &
+        result(vector)
+        !
+        ! this function generates a random vector confined to the non-redundant
+        ! subspace
+        !
+        integer(ip), intent(in) :: n_param, n_particle, n_ao
+        real(rp), intent(in) :: dm_oao(:, :, :)
+        real(rp) :: vector(n_param)
+
+        call random_number(vector)
+        vector = ref_pack_asymm(ref_project_asymm( &
+            ref_unpack_asymm(vector, n_particle, n_ao), dm_oao), n_param)
+
+    end function generate_random_nonredundant_vector
+
     function check_rotate_hess_eigenbasis_oao(to_eigenbasis) result(passed)
         !
         ! this function checks the rotation of a random packed antisymmetric vector
@@ -555,7 +571,8 @@ contains
         use otr_oao, only: oao_factory_common, oao_type, oao_settings_type, &
                            default_oao_settings, oao_settings_uninitialized_warning_msg
         use otr_common_test_reference, only: n_ao, n_occ, &
-                                             n_particle_ref => n_particle, operator(==)
+                                             n_particle_ref => n_particle, &
+                                             operator(==), same_logger_and_context
         use opentrustregion_unit_tests, only: setup_settings, test_context_type
         use otr_common_unit_tests, only: generate_random_density_matrix, &
                                          mock_evaluate_dm_cs, mock_evaluate_dm_os, &
@@ -754,7 +771,8 @@ contains
                         test_oao_factory_common = .false.
                     end if
                     if (.not. ( &
-                        oao%settings == expected_settings%orbital_settings_type)) then
+                        oao%settings == expected_settings%orbital_settings_type .and. &
+                        same_logger_and_context(oao%settings, expected_settings))) then
                         write(stderr, *) "test_oao_factory_common failed: Settings "// &
                             "not stored "//trim(case_names(i_case))//"."
                         test_oao_factory_common = .false.
@@ -841,10 +859,20 @@ contains
                                 evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
                                 update_orbs_oao_funptr, obj_func_oao_funptr, &
                                 solver_settings, state, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_oao_factory_common failed: Produced error for "// &
+                "the first of two separate solver settings."
+            test_oao_factory_common = .false.
+        end if
         call oao_factory_common(dm_ao(:, :, :1), ao_overlap, 1_ip, n_ao, &
                                 evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
                                 update_orbs_oao_funptr, obj_func_oao_funptr, &
                                 other_settings, other_state, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_oao_factory_common failed: Produced error for "// &
+                "the second of two separate solver settings."
+            test_oao_factory_common = .false.
+        end if
         level => wired_level(solver_settings)
         other_level => wired_level(other_settings)
         if (.not. (associated(level) .and. associated(other_level))) then
@@ -1079,6 +1107,18 @@ contains
             ! check that the host context reached the callback functions unchanged
             if (.not. host_context_reached("obj_func_oao", context)) &
                 test_obj_func_oao = .false.
+
+            ! call routine with a density matrix evaluating function that fails and
+            ! determine if its error is returned unchanged
+            context%mock_error = 3
+            energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
+            if (error /= 3) then
+                write(stderr, *) "test_obj_func_oao failed: Error of the density "// &
+                    "matrix evaluating function not returned for the "//case_name// &
+                    " case."
+                test_obj_func_oao = .false.
+            end if
+            context%mock_error = 0
 
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
@@ -1407,8 +1447,10 @@ contains
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
             level_context, generate_random_density_matrix, mock_requests, &
-            mock_response_factor, mock_get_response_cs, mock_get_response_os, &
-            mock_get_stale_response_os, mock_evaluate_dm_cs, mock_evaluate_dm_os
+            mock_response_factor, mock_response_coupling, model_response_scale, &
+            mock_get_response_cs, mock_get_coupled_response_os, &
+            mock_get_stale_response_os, model_response_cs, model_response_os, &
+            mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -1418,12 +1460,17 @@ contains
 
         type(test_context_type), target :: context
         type(oao_type), target :: oao
+        ! step of the finite difference and its tolerance relative to the second
+        ! derivative it approximates
+        real(rp), parameter :: step = 1e-3_rp, fd_tol = 1e-5_rp
+
         integer(ip) :: n_particle, n_param
         real(rp), target :: dm_oao(n_ao, n_ao, n_particle_ref)
         real(rp) :: fock_oo(n_ao, n_ao, n_particle_ref), &
-                    fock_vv(n_ao, n_ao, n_particle_ref), s_inv_sqrt(n_ao, n_ao)
-        real(rp), allocatable :: x(:), x_full(:, :, :), delta_dm(:, :, :), &
-                                 response(:, :, :), hess_x(:), expected_hess_x(:)
+                    fock_vv(n_ao, n_ao, n_particle_ref), s_inv_sqrt(n_ao, n_ao), &
+                    model_h(n_ao, n_ao), fock(n_ao, n_ao), complement(n_ao, n_ao), &
+                    model_scale, second_diff
+        real(rp), allocatable :: x(:), hess_x(:), expected_hess_x(:)
         integer(ip) :: i, error
         character(len=:), allocatable :: case_name
 
@@ -1451,7 +1498,9 @@ contains
         oao%response_stale = .false.
 
         ! loop over the closed-shell and the open-shell case, for which the object
-        ! holds the density matrices and Fock matrix contributions of the shell
+        ! holds the density matrices and Fock matrix contributions of the shell and the
+        ! mock response function, which couples the particle channels in the open-shell
+        ! case
         do n_particle = 1, n_particle_ref
             case_name = trim(shell_names(n_particle))
             n_param = n_particle * n_ao * (n_ao - 1) / 2
@@ -1467,25 +1516,14 @@ contains
                 oao%evaluate_dm_cs => null()
                 oao%get_response_cs => null()
                 oao%evaluate_dm_os => mock_evaluate_dm_os
-                oao%get_response_os => mock_get_response_os
+                oao%get_response_os => mock_get_coupled_response_os
             end if
 
-            ! the response is the mock response of the density matrix displacement of a
-            ! random trial vector in the AO basis, transformed back to the OAO basis
+            ! a random trial vector
             if (allocated(x)) deallocate(x, hess_x)
             allocate(x(n_param), hess_x(n_param))
             call random_number(x)
-            x_full = ref_unpack_asymm(x, n_particle, n_ao)
-            delta_dm = ref_project_symm(x_full, dm_oao(:, :, :n_particle))
-            response = delta_dm
-            do i = 1, n_particle
-                response(:, :, i) = matmul( &
-                    s_inv_sqrt, matmul(mock_response_factor * matmul( &
-                        s_inv_sqrt, matmul(delta_dm(:, :, i), s_inv_sqrt)), s_inv_sqrt))
-            end do
-            expected_hess_x = ref_hess_x_oao( &
-                x_full, response, dm_oao(:, :, :n_particle), &
-                fock_oo(:, :, :n_particle), fock_vv(:, :, :n_particle), n_param)
+            expected_hess_x = ref_coupled_hess_x_oao(mock_response_coupling)
 
             ! call routine and determine if values of resulting Hessian linear
             ! transformation match
@@ -1500,6 +1538,17 @@ contains
                     "transformation for the "//case_name//" case."
                 test_hess_x_oao = .false.
             end if
+
+            ! call routine with a response function that fails and determine if its
+            ! error is returned unchanged
+            context%mock_error = 3
+            call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
+            if (error /= 3) then
+                write(stderr, *) "test_hess_x_oao failed: Error of the response "// &
+                    "function not returned for the "//case_name//" case."
+                test_hess_x_oao = .false.
+            end if
+            context%mock_error = 0
         end do
 
         ! mark the response as stale, as ARH would after moving the density without
@@ -1511,6 +1560,8 @@ contains
         oao%evaluate_dm_os => mock_evaluate_dm_os
         oao%get_response_os => mock_get_stale_response_os
         oao%response_stale = .true.
+        n_particle = n_particle_ref
+        expected_hess_x = ref_coupled_hess_x_oao(0.0_rp)
         mock_requests = [integer(ip) :: ]
         call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
         if (error /= 0) then
@@ -1552,6 +1603,129 @@ contains
                 "density matrix evaluating function."
             test_hess_x_oao = .false.
         end if
+
+        ! set up the OAO object with the Fock matrix and the response of a quadratic
+        ! model energy at its current density, and determine if the quadratic form of
+        ! the Hessian linear transformation along a random non-redundant trial vector
+        ! matches the second finite difference of the model energy along it, which
+        ! checks the static and the response part together with their scaling
+        ! independently of how the routine assembles them
+        model_h = generate_random_symm_matrix(n_ao)
+        do n_particle = 1, n_particle_ref
+            case_name = trim(shell_names(n_particle))
+            model_scale = model_response_scale(n_particle)
+            n_param = n_particle * n_ao * (n_ao - 1) / 2
+            do i = 1, n_particle
+                fock = matmul(s_inv_sqrt, matmul(model_h + model_scale * matmul( &
+                    s_inv_sqrt, matmul(dm_oao(:, :, i), s_inv_sqrt)), s_inv_sqrt))
+                complement = identity_matrix(n_ao) - dm_oao(:, :, i)
+                fock_oo(:, :, i) = matmul(dm_oao(:, :, i), &
+                                          matmul(fock, dm_oao(:, :, i)))
+                fock_vv(:, :, i) = matmul(complement, matmul(fock, complement))
+            end do
+            oao%n_particle = n_particle
+            oao%n_param = n_param
+            oao%dm_oao = dm_oao(:, :, :n_particle)
+            oao%fock_oo = fock_oo(:, :, :n_particle)
+            oao%fock_vv = fock_vv(:, :, :n_particle)
+            oao%evaluate_dm_cs => null()
+            oao%get_response_cs => null()
+            oao%evaluate_dm_os => null()
+            oao%get_response_os => null()
+            if (n_particle == 1) then
+                oao%evaluate_dm_cs => mock_evaluate_dm_cs
+                oao%get_response_cs => model_response_cs
+            else
+                oao%evaluate_dm_os => mock_evaluate_dm_os
+                oao%get_response_os => model_response_os
+            end if
+            oao%response_stale = .false.
+            deallocate(x, hess_x)
+            allocate(hess_x(n_param))
+            x = generate_random_nonredundant_vector(n_param, n_particle, n_ao, &
+                                                    dm_oao(:, :, :n_particle))
+            call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
+            if (error /= 0) then
+                write(stderr, *) "test_hess_x_oao failed: Produced error for the "// &
+                    "quadratic model energy for the "//case_name//" case."
+                test_hess_x_oao = .false.
+            end if
+            second_diff = (model_energy(step * x) - 2.0_rp * &
+                           model_energy(0.0_rp * x) + model_energy(-step * x)) / step**2
+            if (abs(dot_product(x, hess_x) - second_diff) > &
+                fd_tol * max(1.0_rp, abs(second_diff))) then
+                write(stderr, *) "test_hess_x_oao failed: Hessian linear "// &
+                    "transformation does not match the finite difference of the "// &
+                    "quadratic model energy for the "//case_name//" case."
+                test_hess_x_oao = .false.
+            end if
+        end do
+
+    contains
+
+        function ref_coupled_hess_x_oao(coupling) result(expected)
+            !
+            ! this function returns the Hessian linear transformation of the trial
+            ! vector of the current shell for the mock response of the density matrix
+            ! displacement in the AO basis, which adds the given multiple of the
+            ! displacements of the other particle channels to the response of every
+            ! channel, transformed back to the OAO basis
+            !
+            real(rp), intent(in) :: coupling
+            real(rp), allocatable :: expected(:)
+
+            real(rp), allocatable :: x_full(:, :, :), delta_dm(:, :, :), &
+                                     delta_dm_ao(:, :, :), response(:, :, :)
+            integer(ip) :: k
+
+            x_full = ref_unpack_asymm(x, n_particle, n_ao)
+            delta_dm = ref_project_symm(x_full, dm_oao(:, :, :n_particle))
+            delta_dm_ao = delta_dm
+            do k = 1, n_particle
+                delta_dm_ao(:, :, k) = matmul(s_inv_sqrt, &
+                                              matmul(delta_dm(:, :, k), s_inv_sqrt))
+            end do
+            response = delta_dm
+            do k = 1, n_particle
+                response(:, :, k) = matmul(s_inv_sqrt, matmul( &
+                    mock_response_factor * delta_dm_ao(:, :, k) + coupling * &
+                    (sum(delta_dm_ao, dim=3) - delta_dm_ao(:, :, k)), s_inv_sqrt))
+            end do
+            expected = ref_hess_x_oao(x_full, response, dm_oao(:, :, :n_particle), &
+                                      fock_oo(:, :, :n_particle), &
+                                      fock_vv(:, :, :n_particle), n_param)
+
+        end function ref_coupled_hess_x_oao
+
+        function model_energy(kappa) result(energy)
+            !
+            ! this function evaluates the quadratic model energy at the current density
+            ! matrix of the shell rotated by kappa, as in test_hess_x_mo, for the
+            ! density matrix in the AO basis; the rotation exp(-K) D exp(K) by the
+            ! antisymmetric matrix K kappa unpacks to is expanded to second order, whose
+            ! error is odd in kappa and drops out of the second central difference
+            !
+            real(rp), intent(in) :: kappa(:)
+            real(rp) :: energy
+
+            real(rp) :: kappa_full(n_ao, n_ao, n_particle), dm(n_ao, n_ao), &
+                        commutator(n_ao, n_ao)
+            integer(ip) :: k
+
+            kappa_full = ref_unpack_asymm(kappa, n_particle, n_ao)
+            energy = 0.0_rp
+            do k = 1, n_particle
+                commutator = matmul(dm_oao(:, :, k), kappa_full(:, :, k)) - &
+                             matmul(kappa_full(:, :, k), dm_oao(:, :, k))
+                dm = dm_oao(:, :, k) + commutator + &
+                     0.5_rp * (matmul(commutator, kappa_full(:, :, k)) - &
+                               matmul(kappa_full(:, :, k), commutator))
+                dm = matmul(s_inv_sqrt, matmul(dm, s_inv_sqrt))
+                energy = energy + merge(2.0_rp, 1.0_rp, n_particle == 1) * &
+                         (sum(model_h * dm) + 0.5_rp * model_scale * sum(dm * dm))
+            end do
+
+        end function model_energy
 
     end function test_hess_x_oao
 
@@ -1903,6 +2077,28 @@ contains
         if (norm2(oao%hess_eigvals - expected_eigvals) > tol) then
             write(stderr, *) "test_refresh_hess_eigen_oao failed: Up-to-date "// &
                 "eigendecomposition recomputed."
+            test_refresh_hess_eigen_oao = .false.
+        end if
+
+        ! mark the eigendecomposition stale and determine if the one computed before is
+        ! replaced by that of the changed static part
+        call ref_diagonalize_static_part(fock_oo, 2.0_rp * fock_vv, expected_eigvecs, &
+                                         expected_eigvals)
+        oao%hess_eigen_stale = .true.
+        call oao%refresh_hess_eigen(error)
+        if (error /= 0) then
+            write(stderr, *) "test_refresh_hess_eigen_oao failed: Produced error "// &
+                "when replacing an eigendecomposition."
+            test_refresh_hess_eigen_oao = .false.
+        end if
+        if (norm2(oao%hess_eigvals - expected_eigvals) > tol) then
+            write(stderr, *) "test_refresh_hess_eigen_oao failed: "// &
+                "Eigendecomposition not replaced although stale."
+            test_refresh_hess_eigen_oao = .false.
+        end if
+        if (oao%hess_eigen_stale) then
+            write(stderr, *) "test_refresh_hess_eigen_oao failed: "// &
+                "Eigendecomposition still marked stale after being replaced."
             test_refresh_hess_eigen_oao = .false.
         end if
 

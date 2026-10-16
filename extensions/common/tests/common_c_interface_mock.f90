@@ -10,7 +10,8 @@ module otr_common_c_interface_mock
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, obj_func_c_type, &
                            hess_x_c_type, precond_c_type
     use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_funloc, c_loc, &
-                                           c_f_pointer, c_associated, c_null_ptr
+                                           c_f_pointer, c_associated, c_null_ptr, &
+                                           c_null_funptr
 
     implicit none
 
@@ -27,6 +28,11 @@ module otr_common_c_interface_mock
                             returned_extension = c_null_ptr, &
                             released_extension = c_null_ptr
     integer(c_ip), bind(C) :: n_released_extensions = 0
+
+    ! function pointers of the host's callback functions the latest mock factory
+    ! received, which the Python tests compare with the callback interfaces the owner of
+    ! the extension keeps alive
+    type(c_funptr), bind(C) :: received_callbacks(4) = c_null_funptr
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_c_type), pointer :: mock_level_update_orbs_ptr => &
@@ -200,6 +206,18 @@ contains
         returned_extension = extension_c
 
     end function mock_extension
+
+    subroutine record_received_callbacks(callbacks_c)
+        !
+        ! this subroutine records the function pointers of the host's callback functions
+        ! a mock factory received
+        !
+        type(c_funptr), intent(in) :: callbacks_c(:)
+
+        received_callbacks = c_null_funptr
+        received_callbacks(:size(callbacks_c)) = callbacks_c
+
+    end subroutine record_received_callbacks
 
     subroutine mock_release_extension(extension_c) &
         bind(C, name="mock_release_extension")

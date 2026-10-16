@@ -324,25 +324,6 @@ contains
 
     end subroutine generate_random_fock_partition
 
-    function generate_random_nonredundant_vector(n_param, n_particle, n_ao, dm_oao) &
-        result(vector)
-        !
-        ! this function generates a random vector confined to the non-redundant
-        ! subspace
-        !
-        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_project_asymm, &
-                                      ref_pack_asymm
-
-        integer(ip), intent(in) :: n_param, n_particle, n_ao
-        real(rp), intent(in) :: dm_oao(:, :, :)
-        real(rp) :: vector(n_param)
-
-        call random_number(vector)
-        vector = ref_pack_asymm(ref_project_asymm( &
-            ref_unpack_asymm(vector, n_particle, n_ao), dm_oao), n_param)
-
-    end function generate_random_nonredundant_vector
-
     function generate_random_upper_triangular(n) result(matrix)
         !
         ! this function generates a random upper triangular matrix whose diagonal is
@@ -704,12 +685,15 @@ contains
         !
         ! this function checks the assembly of the approximate Hessian model from the
         ! history for the closed- or open-shell case: standard ARH has to reproduce any
-        ! history in the MO basis exactly and multisecant SR1 one that symmetric linear
-        ! Coulomb and exact-exchange kernels produce, while every ARH type in the OAO
-        ! basis has to keep the whole history in the linear system, drop the entries
-        ! beyond the step-length cutoff and those whose response is noise from the
-        ! non-linear system and cache every quantity in the basis of its own system,
-        ! without evaluating the density matrix or changing the history
+        ! history in the MO basis exactly and every other ARH type one that symmetric
+        ! linear Coulomb and exact-exchange kernels produce, subspace-projected
+        ! multisecant and symmetrized ARH only in the closed-shell case, where its
+        ! potential differences lie in the span of the density matrix differences,
+        ! while every ARH type in the OAO basis has to keep the whole history in the
+        ! linear system, drop the entries beyond the step-length cutoff and those whose
+        ! response is noise from the non-linear system and cache every quantity in the
+        ! basis of its own system, without evaluating the density matrix or changing
+        ! the history
         !
         use otr_arh, only: arh_type, arh_types, arh_oao_type
         use otr_mo, only: mo_type
@@ -812,19 +796,26 @@ contains
             lists(:, :, :, k, n_pot) = current(:, :, :, n_pot)
         end do
 
-        ! build the model for standard ARH and for multisecant SR1 and determine if the
-        ! low-rank part reproduces the linear potential difference of every step, which
-        ! pins the scaling of the low-rank part and the (map, chol) pair its directions
-        ! are rebased with
-        do i_type = 1, 2
-            case_arh_type = trim(merge("arh   ", "ms_sr1", i_type == 1))
+        ! build the model for every ARH type and determine if the low-rank part
+        ! reproduces the linear potential difference of every step, which pins the
+        ! scaling of the low-rank part, the matrices it couples the directions with and
+        ! the (map, chol) pair its directions are rebased with
+        do i_type = 1, size(arh_types)
+            case_arh_type = trim(arh_types(i_type))
             arh%settings%arh_type = case_arh_type
 
-            ! multisecant SR1 only reproduces a history that symmetric linear kernels
-            ! produce: Coulomb and exact-exchange potentials of every channel that are
-            ! positive multiples of its density matrix difference, so that the Coulomb
-            ! potentials of both channels act on every channel
-            if (case_arh_type == "ms_sr1") then
+            ! subspace-projected multisecant and symmetrized ARH only reproduce
+            ! potential differences in the span of the density matrix differences,
+            ! which the Coulomb potential of the other channel leaves in the open-shell
+            ! case
+            if ((case_arh_type == "ms_sp" .or. case_arh_type == "symm_arh") .and. &
+                n_particle == 2) cycle
+
+            ! every type but standard ARH only reproduces a history that symmetric
+            ! linear kernels produce: Coulomb and exact-exchange potentials of every
+            ! channel that are positive multiples of its density matrix difference, so
+            ! that the Coulomb potentials of both channels act on every channel
+            if (case_arh_type /= "arh") then
                 do k = 1, n_hist
                     do j = 1, n_particle
                         dm_step = dm_list(:, :, j, k) - dm_hist(:, :, j)
@@ -1361,6 +1352,7 @@ contains
                               extension_solver_settings_type, orbital_basis_type, &
                               update_orbs_callback, obj_func_callback, error_arh
         use otr_common_unit_tests, only: mock_extension_type
+        use otr_common_test_reference, only: same_logger_and_context
         use opentrustregion_unit_tests, only: setup_settings, setup_error_logging, &
                                               test_context_type
         use otr_arh_test_reference, only: operator(==)
@@ -1489,7 +1481,9 @@ contains
                     stored = associated(arh%evaluate_dm_cs, mock_evaluate_dm_cs) .and. &
                              .not. associated(arh%evaluate_dm_os)
                 end if
-                if (.not. (stored .and. arh%settings == expected_settings)) then
+                if (.not. (stored .and. arh%settings == expected_settings .and. &
+                           same_logger_and_context(arh%settings, expected_settings))) &
+                    then
                     write(stderr, *) "test_arh_factory_common failed: Settings or "// &
                         "density matrix evaluating function not stored "// &
                         trim(case_names(i_case))//"."
@@ -1590,10 +1584,20 @@ contains
                                 evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
                                 update_orbs_arh_funptr, obj_func_arh_funptr, &
                                 solver_settings, state, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_arh_factory_common failed: Produced error for "// &
+                "the first of two separate solver settings."
+            test_arh_factory_common = .false.
+        end if
         call arh_factory_common(other_settings%extensions(1)%object%solver_level, &
                                 evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
                                 update_orbs_arh_funptr, obj_func_arh_funptr, &
                                 other_settings, other_state, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_arh_factory_common failed: Produced error for "// &
+                "the second of two separate solver settings."
+            test_arh_factory_common = .false.
+        end if
         if (size(solver_settings%extensions) /= 2 .or. &
             size(other_settings%extensions) /= 2) then
             write(stderr, *) "test_arh_factory_common failed: Separate solver "// &
@@ -2508,7 +2512,8 @@ contains
             use otr_mo_test_reference, only: n_mo
             use otr_common_test_reference, only: n_ao, n_occ, shell_names
             use opentrustregion_unit_tests, only: identity_matrix, setup_settings
-            use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
+            use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao, &
+                                          generate_random_nonredundant_vector
             use otr_arh, only: arh_oao_type
 
             logical, intent(in) :: mo_basis
@@ -3827,7 +3832,8 @@ contains
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
-        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao
+        use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao, &
+                                      generate_random_nonredundant_vector
 
         type(oao_type), allocatable, target :: oao
         type(arh_oao_type) :: arh

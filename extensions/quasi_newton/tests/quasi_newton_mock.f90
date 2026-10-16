@@ -138,6 +138,7 @@ contains
         obj_func_qn_funptr => null()
         if (error /= 0) return
         allocate(sr1_updating_type :: object)
+        object%n_param = n_param
         object%state => solver_state
         object%solver_level%extension => object
         solver_settings%context => object%solver_level

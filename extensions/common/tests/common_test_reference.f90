@@ -739,4 +739,23 @@ contains
 
     end function same_host_record_callbacks
 
+    logical function same_logger_and_context(settings, expected)
+        !
+        ! this function checks that the logging function and the host context of the
+        ! settings of an extension are those of the expected settings, unset where these
+        ! have none, which the comparisons of the settings values leave out
+        !
+        use opentrustregion, only: settings_type
+
+        class(settings_type), intent(in) :: settings, expected
+
+        same_logger_and_context = &
+            (associated(settings%logger, expected%logger) .or. &
+             .not. (associated(settings%logger) .or. &
+                    associated(expected%logger))) .and. &
+            (associated(settings%context, expected%context) .or. &
+             .not. (associated(settings%context) .or. associated(expected%context)))
+
+    end function same_logger_and_context
+
 end module otr_common_test_reference

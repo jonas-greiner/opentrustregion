@@ -79,7 +79,8 @@ contains
         !
         use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type, &
                                    default_solver_settings
-        use opentrustregion_unit_tests, only: setup_settings, test_context_type
+        use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
+        use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, error_s_gek
         use otr_common_unit_tests, only: wired_level
@@ -125,6 +126,8 @@ contains
             select case (i_case)
             case (1)
                 settings = ref_s_gek_settings
+                settings%logger => logger
+                settings%context => context
                 expected_settings = settings
             case (2)
                 expected_settings = default_s_gek_settings
@@ -177,7 +180,9 @@ contains
             select type (object => level%extension)
             type is (s_gek_type)
                 if (object%n_param /= n_param .or. &
-                    object%settings /= expected_settings) then
+                    object%settings /= expected_settings .or. &
+                    .not. same_logger_and_context(object%settings, expected_settings)) &
+                    then
                     write(stderr, *) "test_s_gek_factory failed: Object not "// &
                         "initialized with the settings "//trim(case_names(i_case))//"."
                     test_s_gek_factory = .false.
@@ -533,9 +538,12 @@ contains
         use otr_common, only: error_s_gek
         use otr_s_gek, only: s_gek_settings_type, s_gek_type
         use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
+        use otr_common_test_reference, only: same_logger_and_context
+        use opentrustregion_unit_tests, only: test_context_type, logger
 
         type(s_gek_type) :: object
         type(s_gek_settings_type) :: settings
+        type(test_context_type), target :: context
 
         ! assume tests pass
         test_init_s_gek = .true.
@@ -548,6 +556,8 @@ contains
         object%n_covariance = 5
         object%loosen_factor = 2.0_rp
         settings = ref_s_gek_settings
+        settings%logger => logger
+        settings%context => context
         call object%init(n_param, settings)
         if (.not. all([object%provides%update_orbs, object%provides%hess_x]) .or. &
             any([object%provides%obj_func, object%provides%precond, &
@@ -562,7 +572,8 @@ contains
                 "not set."
             test_init_s_gek = .false.
         end if
-        if (object%n_param /= n_param .or. object%settings /= settings) then
+        if (object%n_param /= n_param .or. object%settings /= settings .or. &
+            .not. same_logger_and_context(object%settings, settings)) then
             write(stderr, *) "test_init_s_gek failed: Settings or number of "// &
                 "parameters not taken over."
             test_init_s_gek = .false.

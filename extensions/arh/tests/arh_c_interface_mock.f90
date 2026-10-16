@@ -46,7 +46,7 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c
         use otr_arh_test_reference, only: check_arh_evaluate_dm_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
-            mock_level_update_orbs, mock_level_obj_func, &
+            record_received_callbacks, mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension
 
         type(c_funptr), intent(in), value :: evaluate_dm_c_funptr
@@ -101,6 +101,7 @@ contains
         ! return an extension, recording the record of the state
         update_orbs_arh_c_funptr = c_funloc(mock_level_update_orbs)
         obj_func_arh_c_funptr = c_funloc(mock_level_obj_func)
+        call record_received_callbacks([evaluate_dm_c_funptr])
         extension_c = mock_extension(solver_state_c)
 
         ! set return arguments

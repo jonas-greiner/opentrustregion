@@ -50,7 +50,7 @@ contains
         use otr_common_test_reference, only: check_evaluate_dm_c_funptr, &
                                              density_pattern, ao_overlap_pattern
         use otr_common_c_interface_mock, only: &
-            mock_level_update_orbs, mock_level_obj_func, &
+            record_received_callbacks, mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension
 
         real(c_rp), intent(inout), target :: dm_ao_c(*)
@@ -131,6 +131,7 @@ contains
         ! return an extension, recording the record of the state
         update_orbs_oao_c_funptr = c_funloc(mock_level_update_orbs)
         obj_func_oao_c_funptr = c_funloc(mock_level_obj_func)
+        call record_received_callbacks([evaluate_dm_c_funptr])
         extension_c = mock_extension(solver_state_c)
 
         ! set return arguments

@@ -15,6 +15,7 @@ from ctypes import (
     c_bool,
     c_char,
     c_void_p,
+    cast,
     sizeof,
     string_at,
 )
@@ -403,11 +404,13 @@ def check_extension_owner(call_factory, test_name):
     this function checks that a mock factory, which call_factory calls with solver
     settings and a solver state, received the record of the state and handed the
     extension it returned to an owner, which the solver settings keep alive and which
-    keeps the state alive
+    keeps the state and exactly the callback interfaces whose C functions the factory
+    received alive
     """
     test_passed = True
     received_solver_state = c_void_p.in_dll(lib, "received_solver_state")
     returned_extension = c_void_p.in_dll(lib, "returned_extension")
+    received_callbacks = (c_void_p * 4).in_dll(lib, "received_callbacks")
 
     # call the factory
     solver_settings = setup_wired_solver_settings()[0]
@@ -426,6 +429,16 @@ def check_extension_owner(call_factory, test_name):
         or owner.saved_objects.get("solver_state") is not solver_state
     ):
         print(f" test_{test_name} failed: Returned extension not owned.")
+        test_passed = False
+    elif {
+        cast(interface, c_void_p).value
+        for key, interface in owner.saved_objects.items()
+        if key.endswith("_interface") and interface is not None
+    } != {callback for callback in received_callbacks if callback}:
+        print(
+            f" test_{test_name} failed: Callback interfaces whose C functions the "
+            "factory received not kept alive."
+        )
         test_passed = False
 
     return test_passed

@@ -47,7 +47,7 @@ contains
         use otr_qn_test_reference, only: check_transport_c_funptr, &
                                          check_init_hess_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
-            mock_level_update_orbs, mock_level_obj_func, &
+            record_received_callbacks, mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension
 
         integer(c_ip), intent(in), value :: n_param_c
@@ -119,6 +119,8 @@ contains
         ! return an extension, recording the record of the state
         update_orbs_qn_c_funptr = c_funloc(mock_level_update_orbs)
         obj_func_qn_c_funptr = c_funloc(mock_level_obj_func)
+        call record_received_callbacks([update_orbs_c_funptr, obj_func_c_funptr, &
+                                        transport_c_funptr, init_hess_c_funptr])
         extension_c = mock_extension(solver_state_c)
 
         ! set return arguments

@@ -38,6 +38,15 @@ module otr_common_unit_tests
     ! multiplier of the density matrix returned by the mock response functions
     real(rp), parameter :: mock_response_factor = 2.0_rp
 
+    ! factor of the density matrix in the Fock matrix of the quadratic model energy of
+    ! the closed-shell and the open-shell case, which is also its response
+    real(rp), parameter :: model_response_scale(2) = [1.0_rp, 0.5_rp]
+
+    ! multiple of the density matrix displacements of the other particle channels in
+    ! the response of every channel of the open-shell response function which couples
+    ! the channels
+    real(rp), parameter :: mock_response_coupling = 0.5_rp
+
     ! mock extension for testing the routines which dispatch to an extension object:
     ! its roles record their name and the context they received and return what the
     ! shared mocks of the host's callback functions return, computed here, since these
@@ -469,17 +478,15 @@ contains
         !
         ! this subroutine is a mock response function for the closed-shell case
         !
-        use test_reference, only: check_host_context
+        use otr_common_mock, only: record_host_call
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out), target, contiguous :: response(:, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
+        ! check host context and fail with the error code set in it
+        error = record_host_call("get_response", context)
         response = mock_response_factor * dm
 
     end subroutine mock_get_response_cs
@@ -488,17 +495,15 @@ contains
         !
         ! this subroutine is a mock response function for the open-shell case
         !
-        use test_reference, only: check_host_context
+        use otr_common_mock, only: record_host_call
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
+        ! check host context and fail with the error code set in it
+        error = record_host_call("get_response", context)
         response = mock_response_factor * dm
 
     end subroutine mock_get_response_os
@@ -517,6 +522,61 @@ contains
         response = 0.0_rp * dm
 
     end subroutine mock_get_stale_response_os
+
+    subroutine model_response_cs(dm, response, error, context)
+        !
+        ! this subroutine is the response function of the closed-shell quadratic model
+        ! energy
+        !
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out), target, contiguous :: response(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = 0
+        response = model_response_scale(1) * dm
+
+    end subroutine model_response_cs
+
+    subroutine model_response_os(dm, response, error, context)
+        !
+        ! this subroutine is the response function of the open-shell quadratic model
+        ! energy
+        !
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out), target :: response(:, :, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = 0
+        response = model_response_scale(2) * dm
+
+    end subroutine model_response_os
+
+    subroutine mock_get_coupled_response_os(dm, response, error, context)
+        !
+        ! this subroutine is a mock response function for the open-shell case which
+        ! couples the particle channels, as the Coulomb response does: the response of
+        ! every channel is the multiple of the mock response function of its own
+        ! density matrix displacement plus a multiple of those of the other channels
+        !
+        use otr_common_mock, only: record_host_call
+
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out), target :: response(:, :, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        integer(ip) :: k
+
+        ! check host context and fail with the error code set in it
+        error = record_host_call("get_response", context)
+        do k = 1, size(dm, 3, kind=ip)
+            response(:, :, k) = mock_response_factor * dm(:, :, k) + &
+                                mock_response_coupling * (sum(dm, dim=3) - dm(:, :, k))
+        end do
+
+    end subroutine mock_get_coupled_response_os
 
     subroutine mock_evaluate_dm_cs(dm, energy, fock, get_response_funptr, error, &
                                    context)
@@ -1042,12 +1102,13 @@ contains
             settings_uninitialized_warning_msg
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
-        use otr_common, only: &
-            orbital_settings_type, host_record_type, provided_roles_type, &
-            precond_callback, precond_pd_callback, project_callback, &
-            get_extra_trial_vectors_callback, stability_hess_x_callback, &
-            approx_hess_x_callback, conv_check_stability_callback, logger_callback, &
-            update_orbs_callback, obj_func_callback
+        use otr_common, only: orbital_settings_type, host_record_type, &
+                              provided_roles_type, precond_callback, &
+                              precond_pd_callback, project_callback, &
+                              get_extra_trial_vectors_callback, conv_check_callback, &
+                              stability_hess_x_callback, approx_hess_x_callback, &
+                              conv_check_stability_callback, logger_callback, &
+                              update_orbs_callback, obj_func_callback
         use otr_common_test_reference, only: same_callbacks
         use otr_common_mock, only: mock_update_orbs, mock_obj_func, mock_precond, &
                                    mock_precond_pd, mock_get_extra_trial_vectors
@@ -1084,21 +1145,21 @@ contains
         update_orbs_funptr => mock_update_orbs
         obj_func_funptr => mock_obj_func
 
-        ! the host record of the solver has to hold the host's callback functions, of
-        ! which the convergence check is unset
+        ! the host record of the solver has to hold the host's callback functions
         expected_host = host_record_type( &
             update_orbs=mock_update_orbs, obj_func=mock_obj_func, &
             precond=mock_precond, precond_pd=mock_precond_pd, &
             project=mock_host_project, &
             get_extra_trial_vectors=mock_get_extra_trial_vectors, &
+            conv_check=mock_host_conv_check, &
             stability_hess_x=mock_host_stability_hess_x, logger=mock_host_logger)
 
-        ! wire solver settings that leave their convergence check unset and whose
-        ! nested settings provide a context, a preconditioner, an extra trial vector
-        ! function and a convergence check but no projection, logging function or
-        ! approximate Hessian linear transformation of their own, which have to be
-        ! inherited from the solver or left unset, and solver settings whose nested
-        ! settings provide nothing of their own and have to be left untouched
+        ! wire solver settings with every callback function of the solver whose nested
+        ! settings provide a context, a preconditioner, an extra trial vector function
+        ! and a convergence check but no projection, logging function or approximate
+        ! Hessian linear transformation of their own, which have to be inherited from
+        ! the solver or left unset, and solver settings whose nested settings provide
+        ! nothing of their own and have to be left untouched
         do i_case = 1, size(case_names)
             call setup_host_solver_settings()
             if (i_case == 1) then
@@ -1124,6 +1185,7 @@ contains
             expected_settings%project => project_callback
             expected_settings%get_extra_trial_vectors => &
                 get_extra_trial_vectors_callback
+            expected_settings%conv_check => conv_check_callback
             expected_settings%stability_hess_x => stability_hess_x_callback
             expected_settings%logger => logger_callback
             if (i_case == 1) then
@@ -1358,8 +1420,8 @@ contains
         subroutine setup_host_solver_settings()
             !
             ! this subroutine sets up the host's solver settings with every mock host
-            ! callback function of the solver except the convergence check and with the
-            ! host context, and nested settings that provide nothing
+            ! callback function of the solver and with the host context, and nested
+            ! settings that provide nothing
             !
             solver_settings = default_solver_settings
             solver_settings%context => context
@@ -1367,6 +1429,7 @@ contains
             solver_settings%precond_pd => mock_precond_pd
             solver_settings%project => mock_host_project
             solver_settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+            solver_settings%conv_check => mock_host_conv_check
             solver_settings%stability_hess_x => mock_host_stability_hess_x
             solver_settings%logger => mock_host_logger
             context%log_message = ""

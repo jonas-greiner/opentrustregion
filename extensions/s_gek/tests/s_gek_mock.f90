@@ -131,6 +131,7 @@ contains
         obj_func_s_gek_funptr => null()
         if (error /= 0) return
         allocate(s_gek_type :: object)
+        object%n_param = n_param
         object%state => solver_state
         object%solver_level%extension => object
         solver_settings%context => object%solver_level

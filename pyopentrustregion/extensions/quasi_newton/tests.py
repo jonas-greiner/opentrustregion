@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_bool, c_size_t
+from ctypes import POINTER, c_bool, c_size_t
 from unittest.mock import patch
 
 import numpy as np
@@ -17,9 +17,14 @@ from pyopentrustregion.tests import (
     print_separator,
 )
 from pyopentrustregion.python_interface import (
+    c_real,
     SolverSettings,
     SolverState,
     logger_interface_type,
+)
+from pyopentrustregion.extensions.quasi_newton.python_interface import (
+    TransportInterface,
+    InitHessInterface,
 )
 from pyopentrustregion.extensions.quasi_newton import (
     QNSettings,
@@ -119,6 +124,47 @@ class QNPyInterfaceTests(unittest.TestCase):
         vector[:] = 2 * vector
 
         return
+
+    def test_callback_interfaces(self):
+        """
+        this function tests that the interfaces to the transport and initial Hessian functions report an exception
+        raised by the function as an error and keep it
+        """
+        test_passed = True
+        vector = np.zeros(n_param)
+        vector_ptr = vector.ctypes.data_as(POINTER(c_real))
+
+        def raising(*args):
+            raise ValueError("callback function failure")
+
+        for name, call in [
+            (
+                "transport function",
+                lambda exc: TransportInterface(raising, n_param, exc).call(
+                    vector_ptr, vector_ptr
+                ),
+            ),
+            (
+                "initial Hessian function",
+                lambda exc: InitHessInterface(raising, n_param, exc).call(vector_ptr),
+            ),
+        ]:
+            exception = {}
+            if call(exception) != 1:
+                print(
+                    f" test_callback_interfaces failed: Exception raised by {name} "
+                    "not reported as error."
+                )
+                test_passed = False
+            if not isinstance(exception.get("exc"), ValueError):
+                print(
+                    f" test_callback_interfaces failed: Exception raised by {name} "
+                    "not kept."
+                )
+                test_passed = False
+
+        self.assertTrue(test_passed, "test_callback_interfaces failed")
+        print(" test_callback_interfaces PASSED")
 
     # replace original library with mock library, also for the release of the
     # extensions the factory returns

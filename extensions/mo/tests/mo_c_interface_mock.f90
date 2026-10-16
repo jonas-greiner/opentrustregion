@@ -88,8 +88,9 @@ contains
                                          operator(/=)
         use otr_common_test_reference, only: &
             n_ao_c_ref => n_ao_c, check_evaluate_dm_c_funptr, ao_overlap_pattern
-        use otr_common_c_interface_mock, only: &
-            mock_level_obj_func, check_and_wire_solver_settings_c, mock_extension
+        use otr_common_c_interface_mock, only: mock_level_obj_func, &
+                                               check_and_wire_solver_settings_c, &
+                                               mock_extension, record_received_callbacks
 
         real(c_rp), intent(inout), target :: mo_coeff_c(*)
         real(c_rp), intent(in), target :: ao_overlap_c(*)
@@ -198,6 +199,7 @@ contains
             test_mo_factory_interface = .false.
         update_orbs_mo_c_funptr = c_funloc(mock_update_orbs_mo)
         obj_func_mo_c_funptr = c_funloc(mock_level_obj_func)
+        call record_received_callbacks([evaluate_dm_c_funptr])
         extension_c = mock_extension(solver_state_c)
 
         ! set return arguments

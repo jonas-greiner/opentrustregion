@@ -747,11 +747,16 @@ contains
         !
         use opentrustregion, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
-        use otr_common, only: precond_callback, project_callback, logger_callback, &
-                              conv_check_stability_callback
+        use otr_common, only: precond_callback, precond_pd_callback, project_callback, &
+                              get_extra_trial_vectors_callback, conv_check_callback, &
+                              stability_hess_x_callback, approx_hess_x_callback, &
+                              conv_check_stability_callback, logger_callback
         use otr_common_c_interface, only: &
             extension_holder_type, wire_solver_settings_c, precond_c_wrapper, &
-            project_c_wrapper, logger_c_wrapper, conv_check_stability_c_wrapper
+            precond_pd_c_wrapper, project_c_wrapper, &
+            get_extra_trial_vectors_c_wrapper, conv_check_c_wrapper, &
+            stability_hess_x_c_wrapper, approx_hess_x_c_wrapper, &
+            conv_check_stability_c_wrapper, logger_c_wrapper
         use otr_common_unit_tests, only: mock_extension_type
         use test_reference, only: get_reference_solver_values, unset_callbacks, &
                                   same_callbacks, ref_solver_settings, operator(/=)
@@ -761,8 +766,8 @@ contains
         type(solver_settings_type) :: solver_settings
         type(solver_settings_type_c) :: settings_c, expected_c
         integer(ip) :: i_case
-        character(len=40), parameter :: case_names(2) = &
-            [character(len=40) :: "with wired nested settings", &
+        character(len=48), parameter :: case_names(2) = &
+            [character(len=48) :: "with every role wired at both levels", &
              "with nested settings that were not wired"]
 
         ! assume tests pass
@@ -773,13 +778,13 @@ contains
         extension%solver_level%extension => extension
 
         ! write back solver settings with the reference values into which a factory
-        ! wired a preconditioner, a projection and a logging function, and whose nested
-        ! settings it wired with a preconditioner and a convergence check or left
-        ! untouched, into C settings that were not initialized and hold other callback
-        ! functions and contexts, which have to be replaced by the C wrappers of the
-        ! wired roles and the addresses of the levels of the holder, which has to hold
-        ! the levels of the extension object whose level of the solver the settings of
-        ! the holder hold as context
+        ! wired every role of both levels, or a preconditioner, a projection and a
+        ! logging function while leaving the nested settings untouched, into C settings
+        ! that were not initialized and hold other callback functions and contexts,
+        ! which have to be replaced by the C wrappers of the wired roles and the
+        ! addresses of the levels of the holder, while the roles that were not wired
+        ! stay unset, and the holder has to hold the levels of the extension object
+        ! whose level of the solver the settings of the holder hold as context
         do i_case = 1, size(case_names)
             solver_settings = ref_solver_settings
             solver_settings%context => extension%solver_level
@@ -791,13 +796,33 @@ contains
             expected_c%project = c_funloc(project_c_wrapper)
             expected_c%logger = c_funloc(logger_c_wrapper)
             if (i_case == 1) then
-                solver_settings%stability_settings%context => extension%stability_level
-                solver_settings%stability_settings%precond => precond_callback
-                solver_settings%stability_settings%conv_check => &
-                    conv_check_stability_callback
-                expected_c%stability_settings%precond = c_funloc(precond_c_wrapper)
-                expected_c%stability_settings%conv_check = &
-                    c_funloc(conv_check_stability_c_wrapper)
+                solver_settings%precond_pd => precond_pd_callback
+                solver_settings%get_extra_trial_vectors => &
+                    get_extra_trial_vectors_callback
+                solver_settings%conv_check => conv_check_callback
+                solver_settings%stability_hess_x => stability_hess_x_callback
+                expected_c%precond_pd = c_funloc(precond_pd_c_wrapper)
+                expected_c%get_extra_trial_vectors = &
+                    c_funloc(get_extra_trial_vectors_c_wrapper)
+                expected_c%conv_check = c_funloc(conv_check_c_wrapper)
+                expected_c%stability_hess_x = c_funloc(stability_hess_x_c_wrapper)
+                associate (nested => solver_settings%stability_settings, &
+                           nested_c => expected_c%stability_settings)
+                    nested%context => extension%stability_level
+                    nested%precond => precond_callback
+                    nested%project => project_callback
+                    nested%get_extra_trial_vectors => get_extra_trial_vectors_callback
+                    nested%approx_hess_x => approx_hess_x_callback
+                    nested%conv_check => conv_check_stability_callback
+                    nested%logger => logger_callback
+                    nested_c%precond = c_funloc(precond_c_wrapper)
+                    nested_c%project = c_funloc(project_c_wrapper)
+                    nested_c%get_extra_trial_vectors = &
+                        c_funloc(get_extra_trial_vectors_c_wrapper)
+                    nested_c%approx_hess_x = c_funloc(approx_hess_x_c_wrapper)
+                    nested_c%conv_check = c_funloc(conv_check_stability_c_wrapper)
+                    nested_c%logger = c_funloc(logger_c_wrapper)
+                end associate
             end if
             call get_reference_solver_values(settings_c)
             settings_c%initialized = .false.
@@ -1850,13 +1875,13 @@ contains
         ! a C function that fails has to have its error returned and neither return nor
         ! keep the response function it produced
         call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 1
+        host_context%mock_error = 3
         callbacks%get_response => null()
         dm = 0.0_rp
         call evaluate_dm_cs_f_wrapper(dm, energy, &
                                       get_response_cs_funptr=get_response_cs_funptr, &
                                       error=error, context=context)
-        if (error /= 1) then
+        if (error /= 3) then
             write(stderr, *) "test_evaluate_dm_cs_f_wrapper failed: Error of the C "// &
                 "function not returned."
             test_evaluate_dm_cs_f_wrapper = .false.
@@ -1924,13 +1949,13 @@ contains
         ! a C function that fails has to have its error returned and neither return nor
         ! keep the response function it produced
         call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 1
+        host_context%mock_error = 3
         callbacks%get_response => null()
         dm = 0.0_rp
         call evaluate_dm_os_f_wrapper(dm, energy, &
                                       get_response_funptr=get_response_os_funptr, &
                                       error=error, context=context)
-        if (error /= 1) then
+        if (error /= 3) then
             write(stderr, *) "test_evaluate_dm_os_f_wrapper failed: Error of the C "// &
                 "function not returned."
             test_evaluate_dm_os_f_wrapper = .false.
@@ -1994,10 +2019,10 @@ contains
 
         ! a C function that fails has to have its error returned
         call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 1
+        host_context%mock_error = 3
         dm = 0.0_rp
         call get_response_cs_f_wrapper(dm, response, error, context)
-        if (error /= 1) then
+        if (error /= 3) then
             write(stderr, *) "test_get_response_cs_f_wrapper failed: Error of the "// &
                 "C function not returned."
             test_get_response_cs_f_wrapper = .false.
@@ -2046,10 +2071,10 @@ contains
 
         ! a C function that fails has to have its error returned
         call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 1
+        host_context%mock_error = 3
         dm = 0.0_rp
         call get_response_os_f_wrapper(dm, response, error, context)
-        if (error /= 1) then
+        if (error /= 3) then
             write(stderr, *) "test_get_response_os_f_wrapper failed: Error of the "// &
                 "C function not returned."
             test_get_response_os_f_wrapper = .false.

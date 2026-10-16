@@ -439,10 +439,10 @@ contains
 
         ! a C function that fails has to have its error returned
         call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 1
+        host_context%mock_error = 3
         dm = 0.0_rp
         call arh_evaluate_dm_cs_f_wrapper(dm, energy, error=error, context=context)
-        if (error /= 1) then
+        if (error /= 3) then
             write(stderr, *) "test_arh_evaluate_dm_cs_f_wrapper failed: Error of "// &
                 "the C function not returned."
             test_arh_evaluate_dm_cs_f_wrapper = .false.
@@ -502,10 +502,10 @@ contains
 
         ! a C function that fails has to have its error returned
         call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 1
+        host_context%mock_error = 3
         dm = 0.0_rp
         call arh_evaluate_dm_os_f_wrapper(dm, energy, error=error, context=context)
-        if (error /= 1) then
+        if (error /= 3) then
             write(stderr, *) "test_arh_evaluate_dm_os_f_wrapper failed: Error of "// &
                 "the C function not returned."
             test_arh_evaluate_dm_os_f_wrapper = .false.

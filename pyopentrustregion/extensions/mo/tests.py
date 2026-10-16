@@ -291,6 +291,18 @@ class MOPyInterfaceTests(unittest.TestCase):
                 )
                 test_passed = False
 
+            # check that the settings and the density matrix evaluating function were
+            # passed
+            if not (
+                c_bool.in_dll(lib, "mo_settings_passed").value
+                and c_bool.in_dll(lib, "mo_evaluate_dm_passed").value
+            ):
+                print(
+                    " test_mo_factory_py_interface failed: Settings or density matrix "
+                    f"evaluating function not passed for the {case} case."
+                )
+                test_passed = False
+
             # check if logger was called correctly
             if "test" not in messages:
                 print(
