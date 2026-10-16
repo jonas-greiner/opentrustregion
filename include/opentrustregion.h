@@ -72,11 +72,6 @@ typedef c_int get_extra_trial_vectors_fn(c_real *trial_vectors,
                                          c_int n_extra_trial_vectors, void *context);
 typedef get_extra_trial_vectors_fn *get_extra_trial_vectors_fp;
 
-/* Stability check convergence check callback */
-typedef c_int conv_check_stability_fn(const c_real *residual, const c_real *eigval,
-                                      c_bool *converged, void *context);
-typedef conv_check_stability_fn *conv_check_stability_fp;
-
 /* Logger callback */
 typedef void logger_fn(const char *message, void *context);
 typedef logger_fn *logger_fp;
@@ -91,7 +86,7 @@ typedef struct {
   project_fp project;
   hess_x_fp approx_hess_x;
   get_extra_trial_vectors_fp get_extra_trial_vectors;
-  conv_check_stability_fp conv_check;
+  conv_check_fp conv_check;
   logger_fp logger;
 
   c_bool hess_symm;

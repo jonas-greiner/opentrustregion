@@ -6,7 +6,7 @@
 
 module opentrustregion_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr, solver_state_type
+    use opentrustregion, only: rp, ip, stderr, solver_state_type, stability_state_type
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, host_context_type
     use, intrinsic :: iso_c_binding, only: c_bool
@@ -69,9 +69,13 @@ module opentrustregion_unit_tests
         near_minimum
 
     ! define type for the host context handed to the mock callback functions, which
-    ! holds the messages passed to the mock logging function
+    ! holds the messages passed to the mock logging function and points at the state of
+    ! the stability check that the mock convergence check of the stability check reads,
+    ! with the RMS residual this convergence check saw last
     type, extends(host_context_type) :: test_context_type
         character(len=:), allocatable :: log_message
+        type(stability_state_type), pointer :: stability_state => null()
+        real(rp) :: seen_residual_rms = -1.0_rp
     end type
 
     ! define type for the host context handed to the mock callback functions of the
@@ -104,7 +108,7 @@ module opentrustregion_unit_tests
                               fault_conv_check = 6, fault_precond_pd = 7, &
                               fault_get_extra_trial_vectors = 8, &
                               fault_stability_hess_x = 9, fault_approx_hess_x = 10, &
-                              fault_conv_check_stability = 11, n_fault_callbacks = 11
+                              fault_stability_conv_check = 11, n_fault_callbacks = 11
     character(len=*), parameter :: fault_callback_names(n_fault_callbacks) = &
         [character(len=45) :: "orbital update", "objective function", "Hessian "// &
          "linear transformation", "preconditioner", "projection", "convergence check", &
@@ -545,16 +549,15 @@ contains
 
     end function mock_conv_check
 
-    function mock_conv_check_stability(residual, eigval, error, context) &
-        result(converged)
+    function mock_stability_conv_check(error, context) result(converged)
         !
         ! this function describes a convergence check of the stability check which
-        ! accepts a residual that vanishes relative to the eigenvalue
+        ! reads the state of the stability check the test context points at, records
+        ! the RMS residual it sees there and accepts a residual that vanishes relative
+        ! to the lowest eigenvalue
         !
         use test_reference, only: check_host_context
 
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: eigval
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
         logical :: converged
@@ -562,10 +565,22 @@ contains
         ! check host context
         call check_host_context(context)
 
-        error = 0
-        converged = norm2(residual) < tol * abs(eigval)
+        ! report a missing test context or state
+        converged = .false.
+        error = missing_context_error
+        if (.not. associated(context)) return
 
-    end function mock_conv_check_stability
+        ! check the lowest eigenpair in the state
+        select type (context)
+        class is (test_context_type)
+            if (.not. associated(context%stability_state)) return
+            context%seen_residual_rms = context%stability_state%residual_rms
+            converged = context%stability_state%residual_rms < &
+                        tol * abs(context%stability_state%min_eigval)
+            error = 0
+        end select
+
+    end function mock_stability_conv_check
 
     subroutine mock_get_extra_trial_vectors(trial_vectors, error, context)
         !
@@ -1319,27 +1334,24 @@ contains
 
     end subroutine faulty_approx_hess_x
 
-    function faulty_conv_check_stability(residual, eigval, error, context) &
-        result(converged)
+    function faulty_stability_conv_check(error, context) result(converged)
         !
         ! this function describes the convergence check of the stability check which
-        ! accepts a residual that vanishes relative to the eigenvalue into which a
-        ! fault can be injected
+        ! accepts a residual in the state of the stability check that vanishes relative
+        ! to the lowest eigenvalue into which a fault can be injected
         !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: eigval
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
         logical :: converged
 
-        ! check the residual
-        converged = mock_conv_check_stability(residual, eigval, error, context)
+        ! check the state
+        converged = mock_stability_conv_check(error, context)
         if (error /= 0) return
 
         ! inject fault
-        if (inject_fault(context, fault_conv_check_stability)) error = 1
+        if (inject_fault(context, fault_stability_conv_check)) error = 1
 
-    end function faulty_conv_check_stability
+    end function faulty_stability_conv_check
 
     function resolve_quadratic_context(context, error) result(state)
         !
@@ -3226,6 +3238,7 @@ contains
             fault_context%n_hess_x_calls = 0
             fault_context%fault_callback = fault_callback
             fault_context%fault_call = fault_call
+            fault_context%stability_state => state%stability_state
 
             ! set up settings with every optional callback function, the extra trial
             ! vectors of the nested settings only in the first case
@@ -3241,7 +3254,7 @@ contains
             settings%conv_check => faulty_conv_check
             settings%get_extra_trial_vectors => faulty_get_extra_trial_vectors
             settings%stability_hess_x => faulty_stability_hess_x
-            settings%stability_settings%conv_check => faulty_conv_check_stability
+            settings%stability_settings%conv_check => faulty_stability_conv_check
             settings%stability_settings%approx_hess_x => faulty_approx_hess_x
             if (i_config == 1) settings%stability_settings%get_extra_trial_vectors => &
                 faulty_get_extra_trial_vectors
@@ -3261,12 +3274,11 @@ contains
         ! this function tests the stability check subroutine
         !
         use opentrustregion, only: &
-            hess_x_type, stability_settings_type, stability_state_type, &
-            stability_check, error_stability_check, error_stability_check_max_iter, &
-            verbosity_warning, error_hess_x, error_precond, error_project, &
-            error_conv_check, error_get_extra_trial_vectors, diag_solver_options, &
-            unstable_warning_msg, settings_uninitialized_warning_msg, &
-            default_stability_settings
+            hess_x_type, stability_settings_type, stability_check, &
+            error_stability_check, error_stability_check_max_iter, verbosity_warning, &
+            error_hess_x, error_precond, error_project, error_conv_check, &
+            error_get_extra_trial_vectors, diag_solver_options, unstable_warning_msg, &
+            settings_uninitialized_warning_msg, default_stability_settings
         use test_reference, only: arm_host_context, host_context_reached, &
                                   n_extra_trial_vectors
 
@@ -3281,7 +3293,7 @@ contains
         integer(ip), parameter :: &
             fault_callbacks(6) = [fault_hess_x, fault_precond, fault_project, &
                                   fault_get_extra_trial_vectors, fault_approx_hess_x, &
-                                  fault_conv_check_stability], &
+                                  fault_stability_conv_check], &
             fault_origins(6) = [error_hess_x, error_precond, error_project, &
                                 error_get_extra_trial_vectors, error_hess_x, &
                                 error_conv_check]
@@ -3295,7 +3307,8 @@ contains
         character(len=20) :: call_number
         character(len=100) :: case_name
         type(stability_settings_type) :: settings, uninitialized_settings
-        type(stability_state_type) :: state, explicit_state
+        type(stability_state_type), target :: state
+        type(stability_state_type) :: explicit_state
         type(hartmann6d_fault_context_type), target :: fault_context
         type(hartmann6d_context_type), target :: context
 
@@ -3391,12 +3404,14 @@ contains
         ! projection, the extra trial vector function, the convergence check and the
         ! logging function receive the host context of the settings, and so does the
         ! approximate Hessian linear transformation, which the extra trial vectors take
-        ! precedence over, in a second call
+        ! precedence over, in a second call, and that the convergence check reads the
+        ! final state in the caller's record
+        context%stability_state => state
         do i_config = 1, 2
             call setup_settings(settings, context)
             settings%precond => identity_precond
             settings%project => identity_project
-            settings%conv_check => mock_conv_check_stability
+            settings%conv_check => mock_stability_conv_check
             if (i_config == 1) then
                 settings%n_extra_trial_vectors = n_extra_trial_vectors
                 settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
@@ -3404,8 +3419,9 @@ contains
                 settings%approx_hess_x => approx_hess_x_fun
             end if
             call arm_host_context(settings, context)
+            context%seen_residual_rms = -1.0_rp
             call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                                 kappa=direction)
+                                 state, direction)
             if (error /= 0) then
                 write(stderr, *) "test_stability_check failed: Produced error for "// &
                     "saddle point with every callback function."
@@ -3413,7 +3429,14 @@ contains
             end if
             if (.not. host_context_reached("stability_check", context)) &
                 test_stability_check = .false.
+            if (abs(context%seen_residual_rms - state%residual_rms) > tol * &
+                state%residual_rms .or. state%residual_rms <= 0.0_rp) then
+                write(stderr, *) "test_stability_check failed: Convergence check "// &
+                    "did not read the final state in the caller's record."
+                test_stability_check = .false.
+            end if
         end do
+        context%stability_state => null()
 
         ! check that the saddle point is found to be unstable without a returned
         ! direction and eigenvalue
@@ -3703,6 +3726,7 @@ contains
             fault_context%n_hess_x_calls = 0
             fault_context%fault_callback = fault_callback
             fault_context%fault_call = fault_call
+            fault_context%stability_state => state
 
             ! set up settings with every optional callback function, the extra trial
             ! vectors only in the first case
@@ -3712,7 +3736,7 @@ contains
             settings%jacobi_davidson_start = 0
             settings%precond => faulty_precond
             settings%project => faulty_project
-            settings%conv_check => faulty_conv_check_stability
+            settings%conv_check => faulty_stability_conv_check
             settings%approx_hess_x => faulty_approx_hess_x
             if (i_config == 1) then
                 settings%n_extra_trial_vectors = n_extra_trial_vectors
@@ -5574,8 +5598,8 @@ contains
         ! eigenpair and a larger block
         !
         use opentrustregion, only: hess_x_type, stability_settings_type, &
-                                   stability_state_type, block_davidson, &
-                                   stability_thresh, error_hess_x, error_conv_check
+                                   block_davidson, stability_thresh, error_hess_x, &
+                                   error_conv_check
 
         integer(ip), parameter :: n_block = 3
         character(len=*), parameter :: jacobi_davidson_case_names(5) = &
@@ -5593,7 +5617,7 @@ contains
         logical :: converged
         procedure(hess_x_type), pointer :: hess_x_funptr
         type(stability_settings_type) :: settings
-        type(stability_state_type) :: state
+        type(stability_state_type), target :: state
         type(quadratic_context_type), target :: context
         type(hartmann6d_fault_context_type), target :: fault_context
 
@@ -5619,7 +5643,11 @@ contains
         ! set Hessian linear transformation function pointer
         hess_x_funptr => quadratic_hess_x
 
-        ! check block of eigenpairs
+        ! check block of eigenpairs with a residual threshold, which takes precedence
+        ! over a convergence check, since the state only holds the lowest eigenpair
+        settings%conv_check => mock_stability_conv_check
+        context%stability_state => state
+        context%seen_residual_rms = -1.0_rp
         trial_space = unit_vectors(n_block)
         call block_davidson(hess_x_funptr, h_diag, trial_space, .true., n_block, &
                             200_ip, eigvals, eigvecs, converged, settings, state, &
@@ -5629,6 +5657,13 @@ contains
                 "of eigenpairs."
             test_block_davidson = .false.
         end if
+        if (context%seen_residual_rms >= 0.0_rp) then
+            write(stderr, *) "test_block_davidson failed: Convergence check called "// &
+                "despite a residual threshold."
+            test_block_davidson = .false.
+        end if
+        settings%conv_check => null()
+        context%stability_state => null()
         if (.not. converged) then
             write(stderr, *) "test_block_davidson failed: Block of eigenpairs did "// &
                 "not converge."
@@ -5702,10 +5737,13 @@ contains
 
         ! check that a convergence check takes the place of the convergence threshold,
         ! which every residual satisfies here, so that only the convergence check
-        ! demands further iterations until the eigenpair is converged
+        ! demands further iterations until the eigenpair is converged, and that it
+        ! reads the lowest eigenpair of the current iteration from the state
         call setup_settings(settings, context)
         settings%conv_tol = huge(1.0_rp)
-        settings%conv_check => mock_conv_check_stability
+        settings%conv_check => mock_stability_conv_check
+        context%stability_state => state
+        context%seen_residual_rms = -1.0_rp
         trial_space = unit_vectors(1_ip)
         call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
                             eigvals(:1), eigvecs(:, :1), converged, settings, state, &
@@ -5716,12 +5754,19 @@ contains
             test_block_davidson = .false.
         end if
         if (.not. converged .or. state%iteration < 2 .or. &
-            norm2(matmul(context%hess, eigvecs(:, 1)) - eigvals(1) * eigvecs(:, 1)) >= &
-            tol * abs(eigvals(1))) then
+            norm2(matmul(context%hess, eigvecs(:, 1)) - eigvals(1) * eigvecs(:, 1)) / &
+            sqrt(real(n_param, kind=rp)) >= tol * abs(eigvals(1))) then
             write(stderr, *) "test_block_davidson failed: Convergence check not "// &
                 "used instead of the convergence threshold."
             test_block_davidson = .false.
         end if
+        if (abs(context%seen_residual_rms - state%residual_rms) > tol * &
+            state%residual_rms .or. state%residual_rms <= 0.0_rp) then
+            write(stderr, *) "test_block_davidson failed: Convergence check did "// &
+                "not read the lowest eigenpair of the current iteration from the state."
+            test_block_davidson = .false.
+        end if
+        context%stability_state => null()
 
         ! check that a trial space which grows to span the full space with a
         ! convergence threshold that no residual satisfies converges, since its
@@ -5932,10 +5977,11 @@ contains
         hess_x_funptr => faulty_hess_x
         do i_case = 1, 2
             call setup_settings(settings, fault_context)
-            settings%conv_check => faulty_conv_check_stability
+            settings%conv_check => faulty_stability_conv_check
+            fault_context%stability_state => state
             fault_context%n_callback_calls = 0
             fault_context%fault_callback = &
-                merge(fault_hess_x, fault_conv_check_stability, i_case == 1)
+                merge(fault_hess_x, fault_stability_conv_check, i_case == 1)
             fault_context%fault_call = 1
             trial_space = unit_vectors(1_ip)
             call block_davidson(hess_x_funptr, &
@@ -9689,7 +9735,7 @@ contains
         ! all of these
         call setup_settings(settings, context)
         settings%verbose = verbosity_info
-        settings%stability_settings%conv_check => mock_conv_check_stability
+        settings%stability_settings%conv_check => mock_stability_conv_check
         settings%stability_settings%verbose = verbosity_debug
         settings%stability_settings%stop_on_instability = .false.
         settings%stability_settings%n_random_trial_vectors = 3
@@ -9727,10 +9773,12 @@ contains
         test_inherit_solver_callbacks = .true.
 
         ! nested settings without callback functions or a context of their own have to
-        ! inherit the solver's
+        ! inherit the solver's, but not its convergence check, which checks the
+        ! convergence of the solver
         call setup_settings(settings, context)
         settings%precond => identity_precond
         settings%project => identity_project
+        settings%conv_check => mock_conv_check
         call inherit_solver_callbacks(settings)
         if (.not. associated(settings%stability_settings%precond, &
                              identity_precond) .or. &
@@ -9744,6 +9792,11 @@ contains
         if (.not. associated(settings%stability_settings%context, context)) then
             write(stderr, *) "test_inherit_solver_callbacks failed: Nested "// &
                 "settings did not inherit the solver's context."
+            test_inherit_solver_callbacks = .false.
+        end if
+        if (associated(settings%stability_settings%conv_check)) then
+            write(stderr, *) "test_inherit_solver_callbacks failed: Nested "// &
+                "settings inherited the solver's convergence check."
             test_inherit_solver_callbacks = .false.
         end if
 

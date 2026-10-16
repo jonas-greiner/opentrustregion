@@ -7,11 +7,10 @@
 module otr_common_c_interface
 
     use opentrustregion, only: ip, rp, hess_x_type, solver_state_type
-    use c_interface, only: c_ip, c_rp, c_callbacks_type, solver_state_type_c, &
-                           update_orbs_c_type, obj_func_c_type, hess_x_c_type, &
-                           precond_c_type, precond_pd_c_type, project_c_type, &
-                           get_extra_trial_vectors_c_type, conv_check_c_type, &
-                           conv_check_stability_c_type, logger_c_type
+    use c_interface, only: &
+        c_ip, c_rp, c_callbacks_type, solver_state_type_c, update_orbs_c_type, &
+        obj_func_c_type, hess_x_c_type, precond_c_type, precond_pd_c_type, &
+        project_c_type, get_extra_trial_vectors_c_type, conv_check_c_type, logger_c_type
     use otr_common, only: extension_level_type, extension_solver_settings_type, &
                           extension_level, update_orbs_callback, obj_func_callback, &
                           hess_x_callback, precond_callback, precond_pd_callback, &
@@ -113,8 +112,6 @@ module otr_common_c_interface
         stability_hess_x_c_wrapper
     procedure(hess_x_c_type), pointer :: approx_hess_x_c_wrapper_ptr => &
         approx_hess_x_c_wrapper
-    procedure(conv_check_stability_c_type), pointer :: &
-        conv_check_stability_c_wrapper_ptr => conv_check_stability_c_wrapper
     procedure(logger_c_type), pointer :: logger_c_wrapper_ptr => logger_c_wrapper
     procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs_f_wrapper_ptr => &
         evaluate_dm_cs_f_wrapper
@@ -384,7 +381,7 @@ contains
                 if (associated(nested%approx_hess_x)) &
                     nested_c%approx_hess_x = c_funloc(approx_hess_x_c_wrapper)
                 if (associated(nested%conv_check)) &
-                    nested_c%conv_check = c_funloc(conv_check_stability_c_wrapper)
+                    nested_c%conv_check = c_funloc(conv_check_c_wrapper)
                 if (associated(nested%logger)) &
                     nested_c%logger = c_funloc(logger_c_wrapper)
             end associate
@@ -879,9 +876,10 @@ contains
     recursive function conv_check_c_wrapper(converged_c, context_c) result(error_c) &
         bind(C)
         !
-        ! this function forwards the convergence check of the solver for C hosts
-        ! straight to the host's C function in the bundle of the level of a holder at
-        ! the address it receives as context, with the host context of the level
+        ! this function forwards the convergence check of the solver or of its
+        ! stability check for C hosts straight to the host's C function in the bundle
+        ! of the level of a holder at the address it receives as context, with the host
+        ! context of the level
         !
         logical(c_bool), intent(out) :: converged_c
         type(c_ptr), intent(in), value :: context_c
@@ -963,40 +961,6 @@ contains
         error_c = host_approx_hess_x(x_c, hess_x_c, held%callbacks%host_context)
 
     end function approx_hess_x_c_wrapper
-
-    recursive function conv_check_stability_c_wrapper( &
-        residual_c, eigval_c, converged_c, context_c) result(error_c) bind(C)
-        !
-        ! this function forwards the convergence check of the stability check for C
-        ! hosts straight to the host's C function in the bundle of the level of a
-        ! holder at the address it receives as context, with the host context of the
-        ! level
-        !
-        real(c_rp), intent(in), target :: residual_c(*)
-        real(c_rp), intent(in) :: eigval_c
-        logical(c_bool), intent(out) :: converged_c
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error_c
-
-        type(holder_level_type), pointer :: held
-        procedure(conv_check_stability_c_type), pointer :: host_conv_check_stability
-
-        ! find the level of the holder, without which there is nothing to call
-        converged_c = .false._c_bool
-        held => holder_level(context_c)
-        if (.not. associated(held)) then
-            error_c = 1
-            return
-        end if
-
-        ! call the host's C function with the host context of the level, through a
-        ! local procedure pointer, since gfortran rejects assumed-size arrays as
-        ! arguments of a procedure pointer component
-        host_conv_check_stability => held%callbacks%conv_check_stability
-        error_c = host_conv_check_stability(residual_c, eigval_c, converged_c, &
-                                            held%callbacks%host_context)
-
-    end function conv_check_stability_c_wrapper
 
     recursive subroutine logger_c_wrapper(message_c, context_c) bind(C)
         !

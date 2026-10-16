@@ -185,10 +185,9 @@ contains
         ! interface
         !
         use opentrustregion, only: hess_x_type
-        use test_reference, only: check_hess_x_funptr, check_precond_funptr, &
-                                  check_project_funptr, &
-                                  check_get_extra_trial_vectors_funptr, &
-                                  check_conv_check_stability_funptr, n_param
+        use test_reference, only: &
+            check_hess_x_funptr, check_precond_funptr, check_project_funptr, &
+            check_get_extra_trial_vectors_funptr, check_conv_check_funptr, n_param
 
         real(rp), intent(in) :: h_diag(:)
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
@@ -253,7 +252,7 @@ contains
                 test_passed = .false.
         end if
         if (associated(settings%conv_check)) then
-            if (.not. check_conv_check_stability_funptr( &
+            if (.not. check_conv_check_funptr( &
                 settings%conv_check, "stability_check_c_wrapper", " by given "// &
                 "convergence check function", settings%context)) test_passed = .false.
         end if

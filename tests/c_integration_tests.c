@@ -65,7 +65,8 @@ typedef struct {
   int get_extra_trial_vectors_called;
   int stability_hess_x_called;
   int stability_get_extra_trial_vectors_called;
-  int conv_check_stability_called;
+  int stability_conv_check_called;
+  c_real stability_residual_rms_seen;
   int approx_hess_x_called;
   int nested_check_ran;
   int nested_check_error;
@@ -273,17 +274,21 @@ static c_int stability_hess_x(const c_real *x, c_real *hx, void *context);
 static c_int approx_hess_x(const c_real *x, c_real *hx, void *context);
 
 /* Convergence check of the stability check, which accepts a converged residual. */
-static c_int conv_check_stability(const c_real *residual, const c_real *eigval,
-                                  c_bool *converged, void *context) {
-  (void)eigval;
+/* Convergence check of the stability check, which reads the RMS residual of the lowest
+ * eigenpair from the state of a standalone stability check or from the nested state of
+ * the solver and records it, and fails without a state to read. */
+static c_int stability_conv_check(c_bool *converged, void *context) {
   hartmann_context *ctx = context;
   if (!ctx)
     return 1;
-  ctx->conv_check_stability_called = 1;
-  c_real norm_squared = 0.0;
-  for (int i = 0; i < N_PARAM; i++)
-    norm_squared += residual[i] * residual[i];
-  *converged = sqrt(norm_squared / N_PARAM) < 1e-9;
+  ctx->stability_conv_check_called = 1;
+  const stability_state_type *state = ctx->stability_state;
+  if (!state && ctx->solver_state)
+    state = &ctx->solver_state->stability_state;
+  if (!state)
+    return 1;
+  ctx->stability_residual_rms_seen = state->residual_rms;
+  *converged = state->residual_rms < 1e-9;
   return 0;
 }
 
@@ -708,7 +713,7 @@ bool test_solver_c(void) {
   settings.stability_settings.approx_hess_x = approx_hess_x;
   settings.stability_settings.get_extra_trial_vectors =
       stability_get_extra_trial_vectors;
-  settings.stability_settings.conv_check = conv_check_stability;
+  settings.stability_settings.conv_check = stability_conv_check;
   settings.stability_settings.logger = stability_logger;
   settings.verbose = 3; /* ensure the logger callbacks are exercised */
   logger_without_context = 0;
@@ -766,10 +771,12 @@ bool test_solver_c(void) {
                     "the internal stability check was not populated.\n");
     ok = false;
   }
-  /* every orbital update read the updates before it, and the last Hessian linear
-   * transformation of the internal stability check the ones before it */
+  /* every orbital update read the updates before it, the last Hessian linear
+   * transformation of the internal stability check the ones before it and its last
+   * convergence check the residual of its last iteration */
   if (ctx.state_not_current || ctx.n_update_orbs_calls != state.n_update_orbs ||
-      ctx.nested_n_hess_x_seen != state.stability_state.n_hess_x - 1) {
+      ctx.nested_n_hess_x_seen != state.stability_state.n_hess_x - 1 ||
+      ctx.stability_residual_rms_seen != state.stability_state.residual_rms) {
     fprintf(stderr, "test_solver_c failed: State was not current in the callbacks.\n");
     ok = false;
   }
@@ -805,7 +812,7 @@ bool test_solver_c(void) {
                     "stability check.\n");
     ok = false;
   }
-  if (!ctx.conv_check_stability_called) {
+  if (!ctx.stability_conv_check_called) {
     fprintf(stderr, "test_solver_c failed: Convergence check set on the nested "
                     "stability settings was not called by the internal stability "
                     "check.\n");
@@ -895,7 +902,7 @@ bool test_stability_check_c(void) {
   settings.project = project;
   settings.approx_hess_x = approx_hess_x;
   settings.get_extra_trial_vectors = get_extra_trial_vectors;
-  settings.conv_check = conv_check_stability;
+  settings.conv_check = stability_conv_check;
   settings.logger = logger;
   settings.verbose = 3; /* ensure the logger callback is exercised */
   logger_without_context = 0;
@@ -939,7 +946,7 @@ bool test_stability_check_c(void) {
                     "not called.\n");
     ok = false;
   }
-  if (!ctx.conv_check_stability_called) {
+  if (!ctx.stability_conv_check_called) {
     fprintf(stderr, "test_stability_check_c failed: Convergence check was not "
                     "called.\n");
     ok = false;
@@ -963,13 +970,14 @@ bool test_stability_check_c(void) {
     fprintf(stderr, "test_stability_check_c failed: State was not returned.\n");
     ok = false;
   }
-  /* the last Hessian linear transformation read the ones before it */
-  if (ctx.n_hess_x_seen != state.n_hess_x - 1) {
+  /* the last Hessian linear transformation read the ones before it and the last
+   * convergence check the residual of the last iteration */
+  if (ctx.n_hess_x_seen != state.n_hess_x - 1 ||
+      ctx.stability_residual_rms_seen != state.residual_rms) {
     fprintf(stderr, "test_stability_check_c failed: State was not current in the "
                     "callbacks.\n");
     ok = false;
   }
-  ctx.stability_state = NULL;
 
   /* at a saddle, expect unstable */
   hartmann_hess(saddle_point, ctx.hess);
@@ -1015,10 +1023,11 @@ bool test_stability_check_c(void) {
 
   /* also exercise the no-direction path, without extra trial vector function so that
    * the extra trial vectors are taken from the approximate Hessian linear
-   * transformation */
+   * transformation, with the state, which the convergence check reads */
   settings.get_extra_trial_vectors = NULL;
   stable = true;
-  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL, NULL);
+  error =
+      stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, &state, NULL);
   if (error != 0) {
     fprintf(stderr, "test_stability_check_c failed: Produced error when not passing "
                     "direction.\n");

@@ -1241,10 +1241,6 @@ contains
             (associated(callbacks%conv_check, expected%conv_check) .or. &
              .not. (associated(callbacks%conv_check) .or. &
                     associated(expected%conv_check))) .and. &
-            (associated(callbacks%conv_check_stability, &
-                        expected%conv_check_stability) .or. &
-             .not. (associated(callbacks%conv_check_stability) .or. &
-                    associated(expected%conv_check_stability))) .and. &
             (associated(callbacks%stability_hess_x, expected%stability_hess_x) .or. &
              .not. (associated(callbacks%stability_hess_x) .or. &
                     associated(expected%stability_hess_x))) .and. &
@@ -1287,10 +1283,9 @@ contains
         ! this function checks that every callback function of stability check
         ! settings converted from C is associated with its wrapper
         !
-        use c_interface, only: precond_f_wrapper, project_f_wrapper, &
-                               approx_hess_x_f_wrapper, &
-                               get_extra_trial_vectors_f_wrapper, &
-                               conv_check_stability_f_wrapper, logger_f_wrapper
+        use c_interface, only: &
+            precond_f_wrapper, project_f_wrapper, approx_hess_x_f_wrapper, &
+            get_extra_trial_vectors_f_wrapper, conv_check_f_wrapper, logger_f_wrapper
 
         type(stability_settings_type), intent(in) :: settings
 
@@ -1300,7 +1295,7 @@ contains
             associated(settings%approx_hess_x, approx_hess_x_f_wrapper) .and. &
             associated(settings%get_extra_trial_vectors, &
                        get_extra_trial_vectors_f_wrapper) .and. &
-            associated(settings%conv_check, conv_check_stability_f_wrapper) .and. &
+            associated(settings%conv_check, conv_check_f_wrapper) .and. &
             associated(settings%logger, logger_f_wrapper)
 
     end function stability_callbacks_wrapped
@@ -2264,121 +2259,5 @@ contains
         end if
 
     end function check_conv_check_c_funptr
-
-    function check_conv_check_stability_funptr(conv_check_funptr, test_name, message, &
-                                               context) result(test_passed)
-        !
-        ! this function tests a provided stability check convergence check function
-        ! pointer
-        !
-        use opentrustregion, only: conv_check_stability_type
-
-        procedure(conv_check_stability_type), intent(in), pointer :: conv_check_funptr
-        character(len=*), intent(in) :: test_name, message
-        class(*), intent(in), pointer :: context
-        logical :: test_passed
-
-        real(rp), allocatable :: residual(:)
-        real(rp) :: eigval
-        logical :: converged
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. associated(conv_check_funptr)) then
-            write(stderr, *) "test_"//test_name//" failed: Convergence check "// &
-                "function provided"//message//" not associated with value."
-            test_passed = .false.
-            return
-        end if
-
-        ! allocate arrays
-        allocate(residual(n_param))
-
-        ! initialize residual
-        residual = 1.0_rp
-
-        ! initialize eigenvalue
-        eigval = sum(residual)
-
-        ! call convergence check function
-        converged = conv_check_funptr(residual, eigval, error, context)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
-            test_passed = .false.
-        end if
-
-        ! check convergence logical
-        if (.not. converged) then
-            write(stderr, *) "test_"//test_name// &
-                " failed: Convergence logical returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-    end function check_conv_check_stability_funptr
-
-    function check_conv_check_stability_c_funptr(conv_check_c_funptr, test_name, &
-                                                 message, context_c) result(test_passed)
-        !
-        ! this function tests a provided stability check convergence check C function
-        ! pointer
-        !
-        use c_interface, only: conv_check_stability_c_type
-
-        type(c_funptr), intent(in) :: conv_check_c_funptr
-        character(len=*), intent(in) :: test_name, message
-        type(c_ptr), intent(in) :: context_c
-        logical :: test_passed
-
-        procedure(conv_check_stability_c_type), pointer :: conv_check_funptr
-        real(c_rp), allocatable :: residual(:)
-        real(c_rp) :: eigval
-        logical(c_bool) :: converged
-        integer(c_ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. c_associated(conv_check_c_funptr)) then
-            write(stderr, *) "test_"//test_name//" failed: Convergence check "// &
-                "function provided"//message//" not associated with value."
-            test_passed = .false.
-            return
-        end if
-
-        ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=conv_check_c_funptr, fptr=conv_check_funptr)
-
-        ! allocate arrays
-        allocate(residual(n_param))
-
-        ! initialize residual
-        residual = 1.0_c_rp
-
-        ! initialize eigenvalue
-        eigval = sum(residual)
-
-        ! call convergence check function
-        error = conv_check_funptr(residual, eigval, converged, context_c)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
-            test_passed = .false.
-        end if
-
-        ! check convergence logical
-        if (.not. converged) then
-            write(stderr, *) "test_"//test_name// &
-                " failed: Convergence logical returned"//message//" wrong."
-            test_passed = .false.
-        end if
-
-    end function check_conv_check_stability_c_funptr
 
 end module test_reference

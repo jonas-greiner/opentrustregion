@@ -10,7 +10,7 @@ module c_interface_unit_tests
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
                            obj_func_c_type, precond_c_type, precond_pd_c_type, &
                            project_c_type, get_extra_trial_vectors_c_type, &
-                           conv_check_c_type, conv_check_stability_c_type, logger_c_type
+                           conv_check_c_type, logger_c_type
     use test_reference, only: tol_c, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
                                            c_char, c_associated, c_null_ptr, &
@@ -39,8 +39,8 @@ module c_interface_unit_tests
     procedure(precond_pd_c_type), pointer :: mock_precond_pd_ptr => mock_precond_pd
     procedure(get_extra_trial_vectors_c_type), pointer :: &
         mock_get_extra_trial_vectors_ptr => mock_get_extra_trial_vectors
-    procedure(conv_check_stability_c_type), pointer :: &
-        mock_conv_check_stability_ptr => mock_conv_check_stability
+    procedure(conv_check_c_type), pointer :: mock_stability_conv_check_ptr => &
+        mock_stability_conv_check
     procedure(hess_x_c_type), pointer :: mock_stability_hess_x_ptr => &
         mock_stability_hess_x
     procedure(hess_x_c_type), pointer :: mock_approx_hess_x_ptr => mock_approx_hess_x
@@ -295,16 +295,13 @@ contains
 
     end function mock_get_extra_trial_vectors
 
-    function mock_conv_check_stability(residual, eigval, converged, context_c) &
-        result(error) bind(C)
+    function mock_stability_conv_check(converged, context_c) result(error) bind(C)
         !
         ! this function is a test function for the C convergence check function of the
-        ! stability check
+        ! stability check, which has to be a function distinct from the solver's
         !
         use test_reference, only: check_host_context_c, host_context_error
 
-        real(c_rp), intent(in), target :: residual(*)
-        real(c_rp), intent(in) :: eigval
         logical(c_bool), intent(out) :: converged
         type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
@@ -312,11 +309,11 @@ contains
         ! check host context
         call check_host_context_c(context_c)
 
-        converged = abs(sum(residual(:n_param)) - eigval) < tol_c
+        converged = .true.
 
         error = host_context_error(context_c)
 
-    end function mock_conv_check_stability
+    end function mock_stability_conv_check
 
     subroutine mock_logger(message_c, context_c) bind(C)
         !
@@ -466,7 +463,7 @@ contains
         settings%stability_settings%approx_hess_x = c_funloc(mock_approx_hess_x)
         settings%stability_settings%get_extra_trial_vectors = &
             c_funloc(mock_stability_get_extra_trial_vectors)
-        settings%stability_settings%conv_check = c_funloc(mock_conv_check_stability)
+        settings%stability_settings%conv_check = c_funloc(mock_stability_conv_check)
         settings%stability_settings%logger = c_funloc(mock_stability_logger)
         settings%stability_settings%context = c_loc(nested_host_context)
 
@@ -633,7 +630,7 @@ contains
             settings%project = c_funloc(mock_project)
             settings%approx_hess_x = c_funloc(mock_approx_hess_x)
             settings%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
-            settings%conv_check = c_funloc(mock_conv_check_stability)
+            settings%conv_check = c_funloc(mock_conv_check)
             settings%logger = c_funloc(mock_logger)
 
             ! set host context
@@ -854,7 +851,7 @@ contains
                 settings_c%stability_settings%get_extra_trial_vectors = &
                     c_funloc(mock_stability_get_extra_trial_vectors)
                 settings_c%stability_settings%conv_check = &
-                    c_funloc(mock_conv_check_stability)
+                    c_funloc(mock_stability_conv_check)
                 settings_c%stability_settings%logger = c_funloc(mock_stability_logger)
             end if
             if (i_case == 4) settings_c%stability_settings%initialized = .false.
@@ -868,8 +865,7 @@ contains
                 expected_stability_callbacks%get_extra_trial_vectors => &
                     mock_stability_get_extra_trial_vectors
                 expected_stability_callbacks%approx_hess_x => mock_approx_hess_x
-                expected_stability_callbacks%conv_check_stability => &
-                    mock_conv_check_stability
+                expected_stability_callbacks%conv_check => mock_stability_conv_check
                 expected_stability_callbacks%logger => mock_stability_logger
             end if
             if (i_case == 2 .or. i_case == 3) then
@@ -982,7 +978,7 @@ contains
         settings_c%stability_settings%approx_hess_x = c_funloc(mock_approx_hess_x)
         settings_c%stability_settings%get_extra_trial_vectors = &
             c_funloc(mock_stability_get_extra_trial_vectors)
-        settings_c%stability_settings%conv_check = c_funloc(mock_conv_check_stability)
+        settings_c%stability_settings%conv_check = c_funloc(mock_stability_conv_check)
         settings_c%stability_settings%logger = c_funloc(mock_stability_logger)
         settings_c%stability_settings%context = c_loc(nested_host_context)
         settings_c%initialized = .false.
@@ -1028,18 +1024,16 @@ contains
         stored = c_callbacks_type( &
             precond=mock_precond, precond_pd=mock_precond_pd, project=mock_project, &
             get_extra_trial_vectors=mock_get_extra_trial_vectors, &
-            conv_check=mock_conv_check, &
-            conv_check_stability=mock_conv_check_stability, &
-            stability_hess_x=mock_stability_hess_x, approx_hess_x=mock_approx_hess_x, &
-            logger=mock_logger)
+            conv_check=mock_conv_check, stability_hess_x=mock_stability_hess_x, &
+            approx_hess_x=mock_approx_hess_x, logger=mock_logger)
 
         ! store the callback functions and host context of initialized settings
         call store_optional_c_callbacks( &
             callbacks, .true._c_bool, c_funloc(mock_precond), &
             c_funloc(mock_precond_pd), c_funloc(mock_project), &
             c_funloc(mock_get_extra_trial_vectors), c_funloc(mock_conv_check), &
-            c_funloc(mock_conv_check_stability), c_funloc(mock_stability_hess_x), &
-            c_funloc(mock_approx_hess_x), c_funloc(mock_logger), c_loc(host_context))
+            c_funloc(mock_stability_hess_x), c_funloc(mock_approx_hess_x), &
+            c_funloc(mock_logger), c_loc(host_context))
         if (.not. same_callbacks(callbacks, stored)) then
             write(stderr, *) "test_store_optional_c_callbacks failed: Callback "// &
                 "functions of initialized settings not stored."
@@ -1056,7 +1050,7 @@ contains
         call store_optional_c_callbacks(callbacks, .true._c_bool, c_null_funptr, &
                                         c_null_funptr, c_null_funptr, c_null_funptr, &
                                         c_null_funptr, c_null_funptr, c_null_funptr, &
-                                        c_null_funptr, c_null_funptr, c_null_ptr)
+                                        c_null_funptr, c_null_ptr)
         if (.not. same_callbacks(callbacks, stored)) then
             write(stderr, *) "test_store_optional_c_callbacks failed: Callback "// &
                 "functions in the bundle replaced by ones that were not provided."
@@ -1075,8 +1069,8 @@ contains
             callbacks, .false._c_bool, c_funloc(mock_precond), &
             c_funloc(mock_precond_pd), c_funloc(mock_project), &
             c_funloc(mock_get_extra_trial_vectors), c_funloc(mock_conv_check), &
-            c_funloc(mock_conv_check_stability), c_funloc(mock_stability_hess_x), &
-            c_funloc(mock_approx_hess_x), c_funloc(mock_logger), c_loc(host_context))
+            c_funloc(mock_stability_hess_x), c_funloc(mock_approx_hess_x), &
+            c_funloc(mock_logger), c_loc(host_context))
         if (.not. same_callbacks(callbacks, c_callbacks_type())) then
             write(stderr, *) "test_store_optional_c_callbacks failed: Callback "// &
                 "functions of settings that were not initialized stored."
@@ -1835,69 +1829,6 @@ contains
         end if
 
     end function test_get_extra_trial_vectors_f_wrapper
-
-    logical(c_bool) function test_conv_check_stability_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the convergence check function of
-        ! the stability check
-        !
-        use opentrustregion, only: conv_check_stability_type
-        use c_interface, only: c_callbacks_type, conv_check_stability_f_wrapper
-        use test_reference, only: check_conv_check_stability_funptr, host_context, &
-                                  arm_host_context_c, arm_state_c, host_context_reached
-
-        procedure(conv_check_stability_type), pointer :: funptr
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context, foreign_context
-        real(rp), target :: foreign_context_target
-        real(rp) :: residual(n_param)
-        logical :: converged
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_conv_check_stability_f_wrapper = .true.
-
-        ! inject mock C function and hand the bundle to the wrapper as its context
-        callbacks%conv_check_stability => mock_conv_check_stability
-        call arm_host_context_c(callbacks%host_context)
-        call arm_state_c(callbacks)
-        context => callbacks
-
-        ! get pointer to subroutine
-        funptr => conv_check_stability_f_wrapper
-
-        ! test wrapper
-        if (.not. check_conv_check_stability_funptr( &
-            funptr, "conv_check_stability_f_wrapper", "", context)) &
-            test_conv_check_stability_f_wrapper = .false.
-
-        ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("conv_check_stability_f_wrapper")) &
-            test_conv_check_stability_f_wrapper = .false.
-
-        ! check that an error of the C function is passed on
-        host_context%mock_error = 2
-        residual = 1.0_rp
-        converged = conv_check_stability_f_wrapper(residual, 1.0_rp, error, context)
-        if (error /= 2) then
-            write(stderr, *) "test_conv_check_stability_f_wrapper failed: Did not "// &
-                "pass on the error of the C function."
-            test_conv_check_stability_f_wrapper = .false.
-        end if
-        host_context%mock_error = 0
-
-        ! a context this module did not create is reported rather than dereferenced
-        foreign_context => foreign_context_target
-        residual = 1.0_rp
-        converged = &
-            conv_check_stability_f_wrapper(residual, 1.0_rp, error, foreign_context)
-        if (error /= 1) then
-            write(stderr, *) "test_conv_check_stability_f_wrapper failed: Did not "// &
-                "report an invalid context."
-            test_conv_check_stability_f_wrapper = .false.
-        end if
-
-    end function test_conv_check_stability_f_wrapper
 
     logical(c_bool) function test_logger_f_wrapper() bind(C)
         !

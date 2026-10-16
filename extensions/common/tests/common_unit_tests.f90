@@ -202,24 +202,21 @@ contains
 
     end function mock_host_conv_check
 
-    function mock_host_conv_check_stability(residual, eigval, error, context) &
-        result(converged)
+    function mock_host_stability_conv_check(error, context) result(converged)
         !
         ! this function is a mock host convergence check of the stability check, which
-        ! reports convergence for a positive eigenvalue
+        ! behaves like the solver's but is a different function
         !
         use otr_common_mock, only: record_host_call
 
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: eigval
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
         logical :: converged
 
-        error = record_host_call("conv_check_stability", context)
-        converged = eigval > 0.0_rp .and. size(residual) > 0
+        error = record_host_call("stability_conv_check", context)
+        converged = .true.
 
-    end function mock_host_conv_check_stability
+    end function mock_host_stability_conv_check
 
     subroutine mock_host_stability_hess_x(x, hess_x, error, context)
         !
@@ -859,7 +856,6 @@ contains
             host%conv_check => mock_host_conv_check
             host%stability_hess_x => mock_host_stability_hess_x
             host%approx_hess_x => mock_host_approx_hess_x
-            host%conv_check_stability => mock_host_conv_check_stability
             host%logger => mock_host_logger
         end associate
         associate (host => extension%stability_level%host)
@@ -871,10 +867,9 @@ contains
             host%precond_pd => mock_precond_pd
             host%project => mock_host_stability_project
             host%get_extra_trial_vectors => mock_host_stability_get_extra_trial_vectors
-            host%conv_check => mock_host_conv_check
+            host%conv_check => mock_host_stability_conv_check
             host%stability_hess_x => mock_host_stability_hess_x
             host%approx_hess_x => mock_host_approx_hess_x
-            host%conv_check_stability => mock_host_conv_check_stability
             host%logger => mock_host_stability_logger
         end associate
 
@@ -1189,8 +1184,7 @@ contains
                               precond_pd_callback, project_callback, &
                               get_extra_trial_vectors_callback, conv_check_callback, &
                               stability_hess_x_callback, approx_hess_x_callback, &
-                              conv_check_stability_callback, logger_callback, &
-                              update_orbs_callback, obj_func_callback
+                              logger_callback, update_orbs_callback, obj_func_callback
         use otr_common_test_reference, only: same_callbacks
         use otr_common_mock, only: mock_update_orbs, mock_obj_func, mock_precond, &
                                    mock_precond_pd, mock_get_extra_trial_vectors
@@ -1251,7 +1245,7 @@ contains
                 solver_settings%stability_settings%get_extra_trial_vectors => &
                     mock_host_stability_get_extra_trial_vectors
                 solver_settings%stability_settings%conv_check => &
-                    mock_host_conv_check_stability
+                    mock_host_stability_conv_check
             end if
 
             ! the host record of the stability check has to hold the nested settings'
@@ -1275,15 +1269,14 @@ contains
                 expected_stability_host = host_record_type( &
                     precond=mock_host_stability_precond, project=mock_host_project, &
                     stability_hess_x=mock_host_stability_hess_x, &
-                    conv_check_stability=mock_host_conv_check_stability, &
-                    logger=mock_host_logger)
+                    conv_check=mock_host_stability_conv_check, logger=mock_host_logger)
                 expected_stability_host%get_extra_trial_vectors => &
                     mock_host_stability_get_extra_trial_vectors
                 associate (nested => expected_settings%stability_settings)
                     nested%precond => precond_callback
                     nested%project => project_callback
                     nested%get_extra_trial_vectors => get_extra_trial_vectors_callback
-                    nested%conv_check => conv_check_stability_callback
+                    nested%conv_check => conv_check_callback
                     nested%logger => logger_callback
                 end associate
             else
@@ -1434,9 +1427,8 @@ contains
                     nested%approx_hess_x => mock_host_approx_hess_x
                     expected_stability_settings%approx_hess_x => approx_hess_x_callback
                 case ("convergence check")
-                    nested%conv_check => mock_host_conv_check_stability
-                    expected_stability_settings%conv_check => &
-                        conv_check_stability_callback
+                    nested%conv_check => mock_host_stability_conv_check
+                    expected_stability_settings%conv_check => conv_check_callback
                 end select
                 call extension%wire_solver_settings(solver_settings, settings, error, &
                                                     update_orbs_funptr, obj_func_funptr)
@@ -2587,9 +2579,9 @@ contains
 
     logical(c_bool) function test_conv_check_callback() bind(C)
         !
-        ! this function tests the convergence check of the solver, which forwards to
-        ! the host's one saved in the level of an extension object it receives as
-        ! context
+        ! this function tests the convergence check of the solver or of its stability
+        ! check, which forwards to the host's one saved in the level of an extension
+        ! object it receives as context
         !
         use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: conv_check_callback
@@ -2600,7 +2592,7 @@ contains
         logical :: converged
         integer(ip) :: error, i_level
         character(len=*), parameter :: host_callbacks(2) = &
-            [character(len=10) :: "conv_check", "conv_check"]
+            [character(len=20) :: "conv_check", "stability_conv_check"]
 
         ! assume tests pass
         test_conv_check_callback = .true.
@@ -2763,67 +2755,6 @@ contains
         end if
 
     end function test_approx_hess_x_callback
-
-    logical(c_bool) function test_conv_check_stability_callback() bind(C)
-        !
-        ! this function tests the convergence check of the stability check, which
-        ! forwards to the host's one saved in the level of an extension object it
-        ! receives as context
-        !
-        use opentrustregion_unit_tests, only: test_context_type
-        use otr_common, only: conv_check_stability_callback
-        use test_reference, only: n_param
-
-        type(mock_extension_type), target :: extension
-        type(test_context_type), target :: contexts(2)
-        class(*), pointer :: context
-        real(rp) :: residual(n_param)
-        logical :: converged
-        integer(ip) :: error, i_level
-        character(len=*), parameter :: host_callbacks(2) = &
-            [character(len=20) :: "conv_check_stability", "conv_check_stability"]
-
-        ! assume tests pass
-        test_conv_check_stability_callback = .true.
-
-        ! set up a residual
-        call random_number(residual)
-
-        ! call the convergence check with the levels of the solver and of the stability
-        ! check as context and determine if it forwards to the host's one of the level
-        ! with its host context and returns its results and error
-        do i_level = 1, 2
-            call setup_mock_extension(extension, contexts(1), contexts(2))
-            contexts(i_level)%mock_error = 3
-            context => level_context(extension, i_level)
-            converged = conv_check_stability_callback(residual, 1.0_rp, error, context)
-            if (error /= 3) then
-                write(stderr, *) "test_conv_check_stability_callback failed: Error "// &
-                    "of the host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
-                test_conv_check_stability_callback = .false.
-            end if
-            if (.not. converged) then
-                write(stderr, *) "test_conv_check_stability_callback failed: "// &
-                    "Result of the host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
-                test_conv_check_stability_callback = .false.
-            end if
-            if (.not. check_forwarded("conv_check_stability_callback", i_level, &
-                                      trim(host_callbacks(i_level)), contexts)) &
-                test_conv_check_stability_callback = .false.
-        end do
-
-        ! call the convergence check without a level, which has to produce an error
-        context => null()
-        converged = conv_check_stability_callback(residual, 1.0_rp, error, context)
-        if (error /= 1) then
-            write(stderr, *) "test_conv_check_stability_callback failed: No error "// &
-                "produced without a level."
-            test_conv_check_stability_callback = .false.
-        end if
-
-    end function test_conv_check_stability_callback
 
     logical(c_bool) function test_logger_callback() bind(C)
         !

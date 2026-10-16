@@ -59,7 +59,6 @@ fortran_tests = {
         "check_evaluate_dm_orbital_basis",
         "compute_sqrt_and_inv_sqrt",
         "conv_check_callback",
-        "conv_check_stability_callback",
         "extension_level",
         "fill_extra_trial_vectors_orbital_basis",
         "get_extra_trial_vectors_callback",
@@ -95,7 +94,6 @@ fortran_tests = {
         "assign_stability_state_f_c",
         "bundle_settings_c",
         "conv_check_c_wrapper",
-        "conv_check_stability_c_wrapper",
         "evaluate_dm_cs_f_wrapper",
         "evaluate_dm_os_f_wrapper",
         "finish_extension_holder",
@@ -258,7 +256,7 @@ def setup_wired_solver_settings():
     solver_settings = SolverSettings()
     solver_settings.project = lambda vector: None
     solver_settings.logger = lambda message: None
-    solver_settings.stability_settings.conv_check = lambda residual, eigval: False
+    solver_settings.stability_settings.conv_check = lambda: False
     python_functions = (
         solver_settings.project,
         solver_settings.logger,

@@ -46,8 +46,7 @@ contains
             check_update_orbs_c_funptr, check_obj_func_c_funptr, &
             check_hess_x_c_funptr, check_precond_c_funptr, check_precond_pd_c_funptr, &
             check_project_c_funptr, check_get_extra_trial_vectors_c_funptr, &
-            check_conv_check_c_funptr, check_conv_check_stability_c_funptr, &
-            get_reference_solver_state_values, operator(/=)
+            check_conv_check_c_funptr, get_reference_solver_state_values, operator(/=)
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
@@ -154,7 +153,7 @@ contains
                 settings_c%stability_settings%get_extra_trial_vectors, &
                 "solver_py_interface", " by extra trial vector function of nested "// &
                 "settings", context)) test_solver_interface = .false.
-            if (.not. check_conv_check_stability_c_funptr( &
+            if (.not. check_conv_check_c_funptr( &
                 settings_c%stability_settings%conv_check, "solver_py_interface", &
                 " by convergence check function of nested settings", context)) &
                 test_solver_interface = .false.
@@ -193,7 +192,7 @@ contains
         use test_reference, only: tol_c, check_hess_x_c_funptr, &
                                   check_precond_c_funptr, check_project_c_funptr, &
                                   check_get_extra_trial_vectors_c_funptr, &
-                                  check_conv_check_stability_c_funptr, &
+                                  check_conv_check_c_funptr, &
                                   get_reference_stability_state_values, operator(/=)
 
         real(c_rp), intent(in), target :: h_diag_c(*)
@@ -280,7 +279,7 @@ contains
                 test_stability_check_interface = .false.
 
             ! test passed convergence check function
-            if (.not. check_conv_check_stability_c_funptr( &
+            if (.not. check_conv_check_c_funptr( &
                 settings_c%conv_check, "stability_check_py_interface", &
                 " by given convergence check function", context)) &
                 test_stability_check_interface = .false.

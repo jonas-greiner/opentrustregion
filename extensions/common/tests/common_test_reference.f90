@@ -705,9 +705,6 @@ contains
             (associated(host%approx_hess_x, expected%approx_hess_x) .or. &
              .not. (associated(host%approx_hess_x) .or. &
                     associated(expected%approx_hess_x))) .and. &
-            (associated(host%conv_check_stability, expected%conv_check_stability) .or. &
-             .not. (associated(host%conv_check_stability) .or. &
-                    associated(expected%conv_check_stability))) .and. &
             (associated(host%logger, expected%logger) .or. &
              .not. (associated(host%logger) .or. associated(expected%logger)))
 

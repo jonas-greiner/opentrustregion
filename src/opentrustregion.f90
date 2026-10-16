@@ -257,19 +257,6 @@ module opentrustregion
     end interface
 
     abstract interface
-        function conv_check_stability_type(residual, eigval, error, context) &
-            result(converged)
-            import :: rp, ip
-
-            real(rp), intent(in), target :: residual(:)
-            real(rp), intent(in) :: eigval
-            integer(ip), intent(out) :: error
-            class(*), intent(in), pointer :: context
-            logical :: converged
-        end function conv_check_stability_type
-    end interface
-
-    abstract interface
         subroutine logger_type(message, context)
             character(len=*), intent(in) :: message
             class(*), intent(in), pointer :: context
@@ -312,7 +299,7 @@ module opentrustregion
         integer(ip) :: n_iter
         character(len=kw_len) :: diag_solver
         procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
-        procedure(conv_check_stability_type), pointer, nopass :: conv_check => null()
+        procedure(conv_check_type), pointer, nopass :: conv_check => null()
     contains
         procedure :: init => init_stability_settings
     end type
@@ -2063,30 +2050,34 @@ contains
             eigvals(:n_target) = red_eigvals(:n_target)
             eigvecs(:, :n_target) = solution
 
-            ! check convergence
-            n_unconverged = 0
-            do i = 1, n_target
-                if (present(res_tol)) then
-                    pair_converged = dnrm2(n_param, residual(:, i), 1_ip) < res_tol
-                else if (associated(settings%conv_check)) then
-                    pair_converged = settings%conv_check( &
-                        residual(:, i), red_eigvals(i), error, settings%context)
-                    call add_error_origin(error, error_conv_check, settings)
-                    if (error /= 0) return
-                else
-                    ! a Ritz value is an upper bound on the true lowest eigenvalue, so
-                    ! once it has dropped below the instability threshold the sign is
-                    ! already certain and convergence can be declared regardless of
-                    ! the residual, when requested
-                    pair_converged = (settings%stop_on_instability .and. &
-                                      red_eigvals(i) < stability_thresh) .or. &
-                                     dnrm2(n_param, residual(:, i), 1_ip) / &
-                                     sqrt(real(n_param, kind=rp)) < settings%conv_tol
-                end if
-                if (.not. pair_converged) n_unconverged = n_unconverged + 1
-            end do
-            if (n_unconverged == 0) then
-                converged = .true.
+            ! check convergence once through the convergence check function, which
+            ! reads the lowest eigenpair from the state, unless a residual threshold is
+            ! given, and of every pair otherwise
+            if (.not. present(res_tol) .and. associated(settings%conv_check)) then
+                converged = settings%conv_check(error, settings%context)
+                call add_error_origin(error, error_conv_check, settings)
+                if (error /= 0) return
+            else
+                n_unconverged = 0
+                do i = 1, n_target
+                    if (present(res_tol)) then
+                        pair_converged = dnrm2(n_param, residual(:, i), 1_ip) < res_tol
+                    else
+                        ! a Ritz value is an upper bound on the true lowest eigenvalue,
+                        ! so once it has dropped below the instability threshold the
+                        ! sign is already certain and convergence can be declared
+                        ! regardless of the residual, when requested
+                        pair_converged = &
+                            (settings%stop_on_instability .and. &
+                             red_eigvals(i) < stability_thresh) .or. &
+                            dnrm2(n_param, residual(:, i), 1_ip) / &
+                            sqrt(real(n_param, kind=rp)) < settings%conv_tol
+                    end if
+                    if (.not. pair_converged) n_unconverged = n_unconverged + 1
+                end do
+                converged = n_unconverged == 0
+            end if
+            if (converged) then
                 deallocate(red_eigvals, red_eigvecs, solution, h_solution, residual)
                 exit
             end if

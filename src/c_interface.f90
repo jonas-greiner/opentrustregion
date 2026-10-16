@@ -6,13 +6,13 @@
 
 module c_interface
 
-    use opentrustregion, only: &
-        rp, ip, kw_len, standard_solver => solver, &
-        standard_stability_check => stability_check, default_solver_settings, &
-        default_stability_settings, update_orbs_type, hess_x_type, obj_func_type, &
-        precond_type, precond_pd_type, project_type, conv_check_type, &
-        get_extra_trial_vectors_type, conv_check_stability_type, logger_type, &
-        solver_state_type, stability_state_type
+    use opentrustregion, only: rp, ip, kw_len, standard_solver => solver, &
+                               standard_stability_check => stability_check, &
+                               default_solver_settings, default_stability_settings, &
+                               update_orbs_type, hess_x_type, obj_func_type, &
+                               precond_type, precond_pd_type, project_type, &
+                               conv_check_type, get_extra_trial_vectors_type, &
+                               logger_type, solver_state_type, stability_state_type
     use, intrinsic :: iso_c_binding, only: &
         c_double, c_int64_t, c_int32_t, c_bool, c_ptr, c_funptr, c_f_pointer, &
         c_f_procpointer, c_associated, c_char, c_null_char, c_null_ptr, c_null_funptr
@@ -126,19 +126,6 @@ module c_interface
     end interface
 
     abstract interface
-        function conv_check_stability_c_type(residual_c, eigval_c, converged, &
-                                             context_c) result(error) bind(C)
-            import :: c_bool, c_rp, c_ip, c_ptr
-
-            real(c_rp), intent(in), target :: residual_c(*)
-            real(c_rp), intent(in) :: eigval_c
-            logical(c_bool), intent(out) :: converged
-            type(c_ptr), intent(in), value :: context_c
-            integer(c_ip) :: error
-        end function conv_check_stability_c_type
-    end interface
-
-    abstract interface
         subroutine logger_c_type(message, context_c) bind(C)
             import :: c_char, c_ptr
 
@@ -177,8 +164,6 @@ module c_interface
         procedure(get_extra_trial_vectors_c_type), pointer, nopass :: &
             get_extra_trial_vectors => null()
         procedure(conv_check_c_type), pointer, nopass :: conv_check => null()
-        procedure(conv_check_stability_c_type), pointer, nopass :: &
-            conv_check_stability => null()
         procedure(hess_x_c_type), pointer, nopass :: stability_hess_x => null()
         procedure(hess_x_c_type), pointer, nopass :: approx_hess_x => null()
         procedure(logger_c_type), pointer, nopass :: logger => null()
@@ -238,8 +223,6 @@ module c_interface
         approx_hess_x_f_wrapper
     procedure(get_extra_trial_vectors_type), pointer :: &
         get_extra_trial_vectors_f_wrapper_ptr => get_extra_trial_vectors_f_wrapper
-    procedure(conv_check_stability_type), pointer :: &
-        conv_check_stability_f_wrapper_ptr => conv_check_stability_f_wrapper
     procedure(logger_type), pointer :: logger_f_wrapper_ptr => logger_f_wrapper
 
     ! interfaces for converting settings between C and Fortran and states from
@@ -359,9 +342,8 @@ contains
         call store_optional_c_callbacks( &
             callbacks, local_settings_c%initialized, local_settings_c%precond, &
             c_null_funptr, local_settings_c%project, &
-            local_settings_c%get_extra_trial_vectors, c_null_funptr, &
-            local_settings_c%conv_check, c_null_funptr, &
-            local_settings_c%approx_hess_x, local_settings_c%logger, &
+            local_settings_c%get_extra_trial_vectors, local_settings_c%conv_check, &
+            c_null_funptr, local_settings_c%approx_hess_x, local_settings_c%logger, &
             local_settings_c%context)
 
         ! let the bundle refer to the state and to the host's record, if one is given,
@@ -445,7 +427,7 @@ contains
         call store_optional_c_callbacks( &
             callbacks, settings_c%initialized, settings_c%precond, &
             settings_c%precond_pd, settings_c%project, &
-            settings_c%get_extra_trial_vectors, settings_c%conv_check, c_null_funptr, &
+            settings_c%get_extra_trial_vectors, settings_c%conv_check, &
             settings_c%stability_hess_x, c_null_funptr, settings_c%logger, &
             settings_c%context)
 
@@ -458,7 +440,7 @@ contains
             settings_c%initialized .and. settings_c%stability_settings%initialized, &
             settings_c%stability_settings%precond, c_null_funptr, &
             settings_c%stability_settings%project, &
-            settings_c%stability_settings%get_extra_trial_vectors, c_null_funptr, &
+            settings_c%stability_settings%get_extra_trial_vectors, &
             settings_c%stability_settings%conv_check, c_null_funptr, &
             settings_c%stability_settings%approx_hess_x, &
             settings_c%stability_settings%logger, settings_c%stability_settings%context)
@@ -488,8 +470,7 @@ contains
     subroutine store_optional_c_callbacks( &
         callbacks, initialized, precond_c_funptr, precond_pd_c_funptr, &
         project_c_funptr, get_extra_trial_vectors_c_funptr, conv_check_c_funptr, &
-        conv_check_stability_c_funptr, stability_hess_x_c_funptr, &
-        approx_hess_x_c_funptr, logger_c_funptr, context_c)
+        stability_hess_x_c_funptr, approx_hess_x_c_funptr, logger_c_funptr, context_c)
         !
         ! this subroutine stores the optional C callback functions and the host context
         ! of C settings in a callback bundle, skipping the ones that were not provided
@@ -500,8 +481,7 @@ contains
         type(c_funptr), intent(in) :: &
             precond_c_funptr, precond_pd_c_funptr, project_c_funptr, &
             get_extra_trial_vectors_c_funptr, conv_check_c_funptr, &
-            conv_check_stability_c_funptr, stability_hess_x_c_funptr, &
-            approx_hess_x_c_funptr, logger_c_funptr
+            stability_hess_x_c_funptr, approx_hess_x_c_funptr, logger_c_funptr
         type(c_ptr), intent(in) :: context_c
 
         ! settings that were not initialized are replaced by the default settings and
@@ -523,8 +503,6 @@ contains
                                  fptr=callbacks%get_extra_trial_vectors)
         if (c_associated(conv_check_c_funptr)) &
             call c_f_procpointer(cptr=conv_check_c_funptr, fptr=callbacks%conv_check)
-        if (c_associated(conv_check_stability_c_funptr)) call c_f_procpointer( &
-            cptr=conv_check_stability_c_funptr, fptr=callbacks%conv_check_stability)
         if (c_associated(stability_hess_x_c_funptr)) call c_f_procpointer( &
             cptr=stability_hess_x_c_funptr, fptr=callbacks%stability_hess_x)
         if (c_associated(approx_hess_x_c_funptr)) call c_f_procpointer( &
@@ -954,49 +932,6 @@ contains
 
     end subroutine get_extra_trial_vectors_f_wrapper
 
-    function conv_check_stability_f_wrapper(residual, eigval, error, context) &
-        result(converged)
-        !
-        ! this function exposes a C-implemented convergence check function to Fortran
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: eigval
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        logical :: converged
-
-        real(c_rp), pointer :: residual_c(:)
-        real(c_rp) :: eigval_c
-        logical(c_bool) :: converged_c
-        integer(c_ip) :: error_c
-
-        ! convert arguments to C kind
-        if (rp == c_rp) then
-            residual_c => residual
-        else
-            allocate(residual_c(size(residual)))
-            residual_c = real(residual, kind=c_rp)
-        end if
-        eigval_c = real(eigval, kind=c_rp)
-
-        ! call conv_check C function
-        converged_c = .false._c_bool
-        select type (callbacks => context)
-        class is (c_callbacks_type)
-            call copy_state_to_c(callbacks)
-            error_c = callbacks%conv_check_stability( &
-                residual_c, eigval_c, converged_c, callbacks%host_context)
-        class default
-            error_c = 1
-        end select
-
-        ! convert arguments to Fortran kind
-        converged = logical(converged_c)
-        error = int(error_c, kind=ip)
-        if (rp /= c_rp) deallocate(residual_c)
-
-    end function conv_check_stability_f_wrapper
-
     subroutine logger_f_wrapper(message, context)
         !
         ! this subroutine exposes a C-implemented logger function to Fortran
@@ -1171,7 +1106,7 @@ contains
                 settings%get_extra_trial_vectors => null()
             end if
             if (c_associated(settings_c%conv_check)) then
-                settings%conv_check => conv_check_stability_f_wrapper
+                settings%conv_check => conv_check_f_wrapper
             else
                 settings%conv_check => null()
             end if

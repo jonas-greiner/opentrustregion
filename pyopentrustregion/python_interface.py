@@ -137,9 +137,6 @@ precond_pd_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real
 project_interface_type = callback_type(c_int, POINTER(c_real))
 get_extra_trial_vectors_interface_type = callback_type(c_int, POINTER(c_real), c_int)
 conv_check_interface_type = callback_type(c_int, POINTER(c_bool))
-conv_check_stability_interface_type = callback_type(
-    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_bool)
-)
 logger_interface_type = callback_type(None, c_char_p)
 
 
@@ -416,26 +413,6 @@ class SettingsHessXInterface(SettingsCallbackInterface):
         return 0
 
 
-class ConvCheckStabilityInterface(SettingsCallbackInterface):
-    """
-    this class provides the interface to the stability check convergence check function
-    """
-
-    def call(self, residual_ptr, eigval_ptr, conv_ptr) -> int:
-        try:
-            # convert pointers to numpy arrays and float
-            residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
-            eigval = eigval_ptr[0]
-
-            # call convergence check
-            conv_ptr[0] = self.func(residual, eigval)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
-
-        return 0
-
-
 class LoggerInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the logging function
@@ -601,26 +578,6 @@ class ConvCheckPyInterface(CFunctionInterface):
     def __call__(self) -> bool:
         converged = c_bool()
         error = self.funptr(byref(converged), self.context)
-        raise_callback_error(
-            error, self._otr_exception, "Convergence check function raised error."
-        )
-        return converged.value
-
-
-class ConvCheckStabilityPyInterface(CFunctionInterface):
-    """
-    this class provides the Python interface to a stability check convergence check C
-    function
-    """
-
-    def __call__(self, residual: np.ndarray, eigval: float) -> bool:
-        converged = c_bool()
-        error = self.funptr(
-            c_buffer(residual).ctypes.data_as(POINTER(c_real)),
-            byref(c_real(eigval)),
-            byref(converged),
-            self.context,
-        )
         raise_callback_error(
             error, self._otr_exception, "Convergence check function raised error."
         )
@@ -859,9 +816,9 @@ class StabilitySettings(Settings):
             GetExtraTrialVectorsPyInterface,
         ),
         "conv_check": (
-            ConvCheckStabilityInterface,
-            conv_check_stability_interface_type,
-            ConvCheckStabilityPyInterface,
+            ConvCheckInterface,
+            conv_check_interface_type,
+            ConvCheckPyInterface,
         ),
         "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface),
     }
@@ -870,7 +827,7 @@ class StabilitySettings(Settings):
     project: Optional[Callable[[np.ndarray], None]]
     approx_hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]]
     get_extra_trial_vectors: Optional[Callable[[np.ndarray], None]]
-    conv_check: Optional[Callable[[np.ndarray, float], bool]]
+    conv_check: Optional[Callable[[], bool]]
     logger: Optional[Callable[[str], None]]
 
 

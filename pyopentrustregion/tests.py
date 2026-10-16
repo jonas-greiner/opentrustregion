@@ -66,7 +66,6 @@ from pyopentrustregion.python_interface import (
     project_interface_type,
     get_extra_trial_vectors_interface_type,
     conv_check_interface_type,
-    conv_check_stability_interface_type,
     logger_interface_type,
 )
 
@@ -193,7 +192,6 @@ fortran_tests = {
         "character_from_c",
         "character_to_c",
         "conv_check_f_wrapper",
-        "conv_check_stability_f_wrapper",
         "convert_solver_settings_c",
         "copy_state_to_c",
         "get_extra_trial_vectors_f_wrapper",
@@ -391,12 +389,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
         trial_vectors[:] = np.arange(1, len(trial_vectors) + 1).reshape(-1, 1)
 
     @staticmethod
-    def _mock_conv_check_stability(residual, eigval):
+    def _mock_conv_check():
         """
-        this function is a mock function for the stability check convergence check
-        function
+        this function is a mock function for the convergence check function
         """
-        return bool(np.isclose(np.sum(residual), eigval))
+        return True
 
     @staticmethod
     def _raising_logger(message):
@@ -428,12 +425,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
             return func, self._mock_hess_x
 
-        def mock_conv_check():
-            """
-            this function is a mock function for the convergence check function
-            """
-            return True
-
         # the callback functions record that they were called and the logging
         # functions record the messages, separately for the settings and the nested
         # settings so that their callback functions can be told apart
@@ -455,7 +446,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         settings.get_extra_trial_vectors = recording(
             "get_extra_trial_vectors", self._mock_get_extra_trial_vectors
         )
-        settings.conv_check = mock_conv_check
+        settings.conv_check = self._mock_conv_check
         settings.stability_hess_x = recording("stability_hess_x", self._mock_hess_x)
         settings.logger = messages.append
         settings.stability_settings.precond = recording(
@@ -471,7 +462,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
             "stability_get_extra_trial_vectors", self._mock_get_extra_trial_vectors
         )
         settings.stability_settings.conv_check = recording(
-            "stability_conv_check", self._mock_conv_check_stability
+            "stability_conv_check", self._mock_conv_check
         )
         settings.stability_settings.logger = stability_messages.append
         for field_info in settings.c_struct._fields_:
@@ -627,7 +618,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         settings.project = self._mock_project
         settings.approx_hess_x = mock_hess_x
         settings.get_extra_trial_vectors = self._mock_get_extra_trial_vectors
-        settings.conv_check = self._mock_conv_check_stability
+        settings.conv_check = self._mock_conv_check
         settings.logger = messages.append
         for field_info in settings.c_struct._fields_:
             field_name, field_type = field_info[:2]
@@ -952,16 +943,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
                     exc,
                 )(vector_ptr, vector_ptr, None),
             ),
-            (
-                "stability check convergence check",
-                lambda exc: settings_callback(
-                    StabilitySettings(),
-                    "conv_check",
-                    raising,
-                    conv_check_stability_interface_type,
-                    exc,
-                )(vector_ptr, pointer(c_real()), pointer(c_bool()), None),
-            ),
         ]:
             exception = {}
             if call(exception) != 1:
@@ -1040,29 +1021,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
             print(
                 " test_callback_interfaces failed: Result of convergence check not "
                 "passed on."
-            )
-            test_passed = False
-
-        # the stability check convergence check interface passes on that the
-        # eigenpair has not converged
-        converged = c_bool(True)
-        conv_check = settings_callback(
-            StabilitySettings(),
-            "conv_check",
-            lambda residual, eigval: False,
-            conv_check_stability_interface_type,
-            {},
-        )
-        if conv_check(vector_ptr, pointer(c_real()), pointer(converged), None) != 0:
-            print(
-                " test_callback_interfaces failed: Error reported for stability check "
-                "convergence check."
-            )
-            test_passed = False
-        if converged.value:
-            print(
-                " test_callback_interfaces failed: Result of stability check "
-                "convergence check not passed on."
             )
             test_passed = False
 
@@ -1328,11 +1286,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
         def conv_check_body(converged_ptr):
             converged_ptr[0] = True
 
-        def conv_check_stability_body(residual_ptr, eigval_ptr, converged_ptr):
-            converged_ptr[0] = np.allclose(as_vector(residual_ptr), x) and (
-                eigval_ptr[0] == 7.0
-            )
-
         def logger_body(message):
             received.append(string_at(message).decode("utf-8"))
 
@@ -1416,13 +1369,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 output_call(lambda func, out: func(out), (n_vectors, n_param)),
                 np.full((n_vectors, n_param), float(n_vectors)),
             ),
-            (
-                nested,
-                "conv_check",
-                conv_check_stability_body,
-                lambda func: func(x, 7.0),
-                True,
-            ),
+            (nested, "conv_check", conv_check_body, lambda func: func(), True),
             (nested, "logger", logger_body, lambda func: func("message"), None),
         ]
         c_functions = []
@@ -1800,6 +1747,7 @@ class PyIntegrationTests(unittest.TestCase):
             "n_update_orbs_calls": 0,
             "state_not_current": False,
             "nested_n_hess_x_seen": None,
+            "residual_rms_seen": None,
         }
 
         # the solver state record, which the callbacks read during the solve
@@ -1878,11 +1826,13 @@ class PyIntegrationTests(unittest.TestCase):
             state["called"].add("stability_approx_hess_x")
             hv[:] = state["hess"] @ v
 
-        # convergence check of the internal stability check, which accepts a converged
-        # residual
-        def conv_check_stability(residual, eigval):
+        # convergence check of the internal stability check, which reads the RMS
+        # residual of the lowest eigenpair from the nested state, records it and
+        # accepts a converged residual
+        def stability_conv_check():
             state["called"].add("stability_conv_check")
-            return np.sqrt(np.mean(residual**2)) < 1e-9
+            state["residual_rms_seen"] = solver_state.stability_state.residual_rms
+            return solver_state.stability_state.residual_rms < 1e-9
 
         settings = SolverSettings()
         settings.precond = recording_precond("precond")
@@ -1901,7 +1851,7 @@ class PyIntegrationTests(unittest.TestCase):
         settings.stability_settings.get_extra_trial_vectors = (
             recording_get_extra_trial_vectors("stability_get_extra_trial_vectors")
         )
-        settings.stability_settings.conv_check = conv_check_stability
+        settings.stability_settings.conv_check = stability_conv_check
         settings.stability_settings.logger = recording_callback("stability_logger")
         settings.verbose = 3  # ensure the loggers are exercised
 
@@ -1953,13 +1903,15 @@ class PyIntegrationTests(unittest.TestCase):
             )
             test_passed = False
 
-        # every orbital update read the updates before it, and the last Hessian linear
-        # transformation of the internal stability check the ones before it
+        # every orbital update read the updates before it, the last Hessian linear
+        # transformation of the internal stability check the ones before it and its
+        # last convergence check the residual of its last iteration
         if (
             state["state_not_current"]
             or state["n_update_orbs_calls"] != solver_state.n_update_orbs
             or state["nested_n_hess_x_seen"]
             != solver_state.stability_state.n_hess_x - 1
+            or state["residual_rms_seen"] != solver_state.stability_state.residual_rms
         ):
             print(" test_solver_py failed: State was not current in the callbacks.")
             test_passed = False
@@ -2022,14 +1974,18 @@ class PyIntegrationTests(unittest.TestCase):
             hv[:] = H @ v
 
         # an extra trial vector function that contributes no direction and a
-        # convergence check that accepts a converged residual
+        # convergence check that reads the RMS residual of the lowest eigenpair from the
+        # state, records it and accepts a converged residual
         def get_extra_trial_vectors(trial_vectors):
             called.add("get_extra_trial_vectors")
             trial_vectors[:] = 0.0
 
-        def conv_check(residual, eigval):
+        residual_rms_seen = []
+
+        def conv_check():
             called.add("conv_check")
-            return np.sqrt(np.mean(residual**2)) < 1e-9
+            residual_rms_seen.append(stability_state.residual_rms)
+            return stability_state.residual_rms < 1e-9
 
         settings = StabilitySettings()
         settings.precond = precond
@@ -2075,8 +2031,14 @@ class PyIntegrationTests(unittest.TestCase):
             print(" test_stability_check_py failed: State was not returned.")
             test_passed = False
 
-        # the last Hessian linear transformation read the ones before it
-        if not n_hess_x_seen or n_hess_x_seen[-1] != stability_state.n_hess_x - 1:
+        # the last Hessian linear transformation read the ones before it and the last
+        # convergence check the residual of the last iteration
+        if (
+            not n_hess_x_seen
+            or n_hess_x_seen[-1] != stability_state.n_hess_x - 1
+            or not residual_rms_seen
+            or residual_rms_seen[-1] != stability_state.residual_rms
+        ):
             print(
                 " test_stability_check_py failed: State was not current in the "
                 "callbacks."
@@ -2108,9 +2070,12 @@ class PyIntegrationTests(unittest.TestCase):
         # also exercise the call without a direction at the minimum, where the
         # stability flag differs from the False the wrapper starts from, without extra
         # trial vector function so that the extra trial vectors are taken from the
-        # approximate Hessian linear transformation
+        # approximate Hessian linear transformation, with the state, which the
+        # convergence check reads
         settings.get_extra_trial_vectors = None
-        stable = stability_check(h_diag, hess_x, self.n_param, settings)
+        stable = stability_check(
+            h_diag, hess_x, self.n_param, settings, state=stability_state
+        )
         if not stable:
             print(
                 " test_stability_check_py failed: Stability incorrectly classifies "

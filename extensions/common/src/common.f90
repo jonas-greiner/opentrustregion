@@ -10,7 +10,7 @@ module otr_common
         rp, ip, settings_type, solver_settings_type, stability_settings_type, &
         solver_state_type, update_orbs_type, obj_func_type, hess_x_type, precond_type, &
         precond_pd_type, project_type, get_extra_trial_vectors_type, conv_check_type, &
-        conv_check_stability_type, logger_type, add_error_origin
+        logger_type, add_error_origin
 
     implicit none
 
@@ -39,8 +39,6 @@ module otr_common
         procedure(get_extra_trial_vectors_type), pointer, nopass :: &
             get_extra_trial_vectors => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
-        procedure(conv_check_stability_type), pointer, nopass :: &
-            conv_check_stability => null()
         procedure(hess_x_type), pointer, nopass :: stability_hess_x => null()
         procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
         procedure(logger_type), pointer, nopass :: logger => null()
@@ -132,8 +130,6 @@ module otr_common
         stability_hess_x_callback
     procedure(hess_x_type), pointer :: approx_hess_x_callback_ptr => &
         approx_hess_x_callback
-    procedure(conv_check_stability_type), pointer :: &
-        conv_check_stability_callback_ptr => conv_check_stability_callback
     procedure(logger_type), pointer :: logger_callback_ptr => logger_callback
 
     ! density matrix evaluating functions and the response functions they return, with
@@ -387,7 +383,7 @@ contains
             host%get_extra_trial_vectors => stability%get_extra_trial_vectors
             host%stability_hess_x => solver_settings%stability_hess_x
             host%approx_hess_x => stability%approx_hess_x
-            host%conv_check_stability => stability%conv_check
+            host%conv_check => stability%conv_check
         end associate
 
         ! wire the role callback functions of the roles the host provided or the object
@@ -449,8 +445,7 @@ contains
             if (associated(host%approx_hess_x)) &
                 nested%approx_hess_x => approx_hess_x_callback
             nested%conv_check => null()
-            if (associated(host%conv_check_stability)) &
-                nested%conv_check => conv_check_stability_callback
+            if (associated(host%conv_check)) nested%conv_check => conv_check_callback
             nested%logger => null()
             if (associated(host%logger)) nested%logger => logger_callback
         end associate
@@ -858,9 +853,9 @@ contains
 
     recursive function conv_check_callback(error, context) result(converged)
         !
-        ! this function checks the convergence of the solver with the host's
-        ! convergence check saved in the level of an extension object it receives as
-        ! context, with the host context of the level
+        ! this function checks the convergence of the solver or of its stability check
+        ! with the host's convergence check saved in the level of an extension object
+        ! it receives as context, with the host context of the level
         !
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -921,32 +916,6 @@ contains
         call level%host%approx_hess_x(x, hess_x, error, level%host%context)
 
     end subroutine approx_hess_x_callback
-
-    recursive function conv_check_stability_callback(residual, eigval, error, context) &
-        result(converged)
-        !
-        ! this function checks the convergence of the stability check with the host's
-        ! convergence check saved in the level of an extension object it receives as
-        ! context, with the host context of the level
-        !
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: eigval
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        logical :: converged
-
-        type(extension_level_type), pointer :: level
-
-        level => extension_level(context)
-        if (.not. associated(level)) then
-            converged = .false.
-            error = 1
-            return
-        end if
-        converged = &
-            level%host%conv_check_stability(residual, eigval, error, level%host%context)
-
-    end function conv_check_stability_callback
 
     recursive subroutine logger_callback(message, context)
         !

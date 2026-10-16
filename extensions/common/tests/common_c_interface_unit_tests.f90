@@ -451,7 +451,7 @@ contains
             mock_logger, mock_update_orbs, mock_obj_func, mock_stability_precond, &
             mock_stability_project, mock_stability_logger, &
             mock_stability_get_extra_trial_vectors, mock_approx_hess_x, &
-            mock_conv_check_stability
+            mock_stability_conv_check
         use otr_common, only: orbital_settings_type
         use otr_common_c_interface, only: extension_holder_type, setup_extension_holder
         use otr_common_unit_tests, only: mock_extension_type
@@ -513,7 +513,7 @@ contains
                 case (7)
                     nested_c%approx_hess_x = c_funloc(mock_approx_hess_x)
                 case (8)
-                    nested_c%conv_check = c_funloc(mock_conv_check_stability)
+                    nested_c%conv_check = c_funloc(mock_stability_conv_check)
                 end select
                 if (i_case == 9) nested_c%initialized = .false.
             end associate
@@ -781,13 +781,12 @@ contains
         use otr_common, only: precond_callback, precond_pd_callback, project_callback, &
                               get_extra_trial_vectors_callback, conv_check_callback, &
                               stability_hess_x_callback, approx_hess_x_callback, &
-                              conv_check_stability_callback, logger_callback
+                              logger_callback
         use otr_common_c_interface, only: &
             extension_holder_type, wire_solver_settings_c, precond_c_wrapper, &
             precond_pd_c_wrapper, project_c_wrapper, &
             get_extra_trial_vectors_c_wrapper, conv_check_c_wrapper, &
-            stability_hess_x_c_wrapper, approx_hess_x_c_wrapper, &
-            conv_check_stability_c_wrapper, logger_c_wrapper
+            stability_hess_x_c_wrapper, approx_hess_x_c_wrapper, logger_c_wrapper
         use otr_common_unit_tests, only: mock_extension_type
         use test_reference, only: get_reference_solver_values, unset_callbacks, &
                                   same_callbacks, ref_solver_settings, operator(/=)
@@ -844,14 +843,14 @@ contains
                     nested%project => project_callback
                     nested%get_extra_trial_vectors => get_extra_trial_vectors_callback
                     nested%approx_hess_x => approx_hess_x_callback
-                    nested%conv_check => conv_check_stability_callback
+                    nested%conv_check => conv_check_callback
                     nested%logger => logger_callback
                     nested_c%precond = c_funloc(precond_c_wrapper)
                     nested_c%project = c_funloc(project_c_wrapper)
                     nested_c%get_extra_trial_vectors = &
                         c_funloc(get_extra_trial_vectors_c_wrapper)
                     nested_c%approx_hess_x = c_funloc(approx_hess_x_c_wrapper)
-                    nested_c%conv_check = c_funloc(conv_check_stability_c_wrapper)
+                    nested_c%conv_check = c_funloc(conv_check_c_wrapper)
                     nested_c%logger = c_funloc(logger_c_wrapper)
                 end associate
             end if
@@ -1563,9 +1562,9 @@ contains
 
     logical(c_bool) function test_conv_check_c_wrapper() bind(C)
         !
-        ! this function tests the C wrapper of the convergence check of the solver,
-        ! which forwards to the host's C function in the bundle of the level of a
-        ! holder at the address it receives as context
+        ! this function tests the C wrapper of the convergence check of the solver or
+        ! of its stability check, which forwards to the host's C function in the bundle
+        ! of the level of a holder at the address it receives as context
         !
         use c_interface_unit_tests, only: mock_conv_check
         use otr_common_c_interface, only: extension_holder_type, conv_check_c_wrapper
@@ -1742,73 +1741,6 @@ contains
         end if
 
     end function test_approx_hess_x_c_wrapper
-
-    logical(c_bool) function test_conv_check_stability_c_wrapper() bind(C)
-        !
-        ! this function tests the C wrapper of the convergence check of the stability
-        ! check, which forwards to the host's C function in the bundle of the level of
-        ! a holder at the address it receives as context
-        !
-        use c_interface_unit_tests, only: mock_conv_check_stability
-        use otr_common_c_interface, only: extension_holder_type, &
-                                          conv_check_stability_c_wrapper
-        use otr_common_unit_tests, only: level_names
-        use test_reference, only: host_context, host_context_reached
-
-        type(extension_holder_type), target :: holder
-        real(c_rp) :: residual_c(n_param)
-        logical(c_bool) :: converged_c
-        integer(c_ip) :: error_c
-        integer(ip) :: i_level
-
-        ! assume tests pass
-        test_conv_check_stability_c_wrapper = .true.
-
-        ! set up a residual, whose sum the host's convergence check compares to the
-        ! eigenvalue
-        call random_number(residual_c)
-
-        ! call the convergence check with the addresses of the levels of the solver and
-        ! of the stability check of a holder, whose bundles both hold the host's
-        ! convergence check but only the bundle of the level called holds the host
-        ! context, and determine if it forwards to the host's convergence check with
-        ! that host context and returns its results and error
-        do i_level = 1, 2
-            call arm_holder_level(holder, i_level)
-            holder%solver_level%callbacks%conv_check_stability => &
-                mock_conv_check_stability
-            holder%stability_level%callbacks%conv_check_stability => &
-                mock_conv_check_stability
-            host_context%mock_error = 3
-            error_c = conv_check_stability_c_wrapper( &
-                residual_c, sum(residual_c), converged_c, &
-                holder_level_context(holder, i_level))
-            if (error_c /= 3) then
-                write(stderr, *) "test_conv_check_stability_c_wrapper failed: "// &
-                    "Error of the host's callback function not passed on for the "// &
-                    trim(level_names(i_level))//"."
-                test_conv_check_stability_c_wrapper = .false.
-            end if
-            if (.not. converged_c) then
-                write(stderr, *) "test_conv_check_stability_c_wrapper failed: "// &
-                    "Result of the host's callback function not returned for the "// &
-                    trim(level_names(i_level))//"."
-                test_conv_check_stability_c_wrapper = .false.
-            end if
-            if (.not. host_context_reached("conv_check_stability_c_wrapper")) &
-                test_conv_check_stability_c_wrapper = .false.
-        end do
-
-        ! call the convergence check without a holder, which has to produce an error
-        error_c = conv_check_stability_c_wrapper(residual_c, sum(residual_c), &
-                                                 converged_c, c_null_ptr)
-        if (error_c /= 1) then
-            write(stderr, *) "test_conv_check_stability_c_wrapper failed: No error "// &
-                "produced without a holder."
-            test_conv_check_stability_c_wrapper = .false.
-        end if
-
-    end function test_conv_check_stability_c_wrapper
 
     logical(c_bool) function test_logger_c_wrapper() bind(C)
         !
