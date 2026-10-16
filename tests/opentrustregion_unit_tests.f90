@@ -362,28 +362,6 @@ contains
 
     end subroutine mock_precond_first_unit_vector
 
-    subroutine mock_precond_error(residual, mu, precond_residual, error, context)
-        !
-        ! this subroutine is a test subroutine for a preconditioner subroutine which
-        ! produces an error
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(in) :: mu
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        precond_residual = mu * residual
-
-        error = 1
-
-    end subroutine mock_precond_error
-
     subroutine mock_precond_pd(residual, precond_residual, error, context)
         !
         ! this subroutine is a test subroutine for the positive-definite preconditioner
@@ -505,26 +483,6 @@ contains
         error = 0
 
     end subroutine vanishing_project
-
-    subroutine mock_project_error(vector, error, context)
-        !
-        ! this subroutine is a test subroutine for a projection subroutine which
-        ! produces an error
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        vector = 2 * vector
-
-        error = 1
-
-    end subroutine mock_project_error
 
     subroutine mock_project_out_pair(vector, error, context)
         !
@@ -2515,7 +2473,8 @@ contains
             error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
             error_precond, error_project, error_conv_check, error_precond_pd, &
             error_get_extra_trial_vectors, subsystem_solver_options, &
-            settings_uninitialized_warning_msg
+            settings_uninitialized_warning_msg, &
+            stability_settings_uninitialized_warning_msg
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error
@@ -2597,10 +2556,17 @@ contains
         context%vars = saddle_point
         settings%stability_settings%initialized = .false.
         settings%logger => logger
+        context%log_message = ""
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_solver failed: Produced error when nested "// &
                 "stability check settings were not initialized."
+            test_solver = .false.
+        end if
+        if (index(context%log_message, &
+                  " "//stability_settings_uninitialized_warning_msg) == 0) then
+            write(stderr, *) "test_solver failed: Warning not printed for nested "// &
+                "stability check settings that were not initialized."
             test_solver = .false.
         end if
 
@@ -4856,22 +4822,24 @@ contains
         use opentrustregion, only: extend_matrix
 
         real(rp), allocatable :: matrix(:, :)
-        real(rp) :: expected(3, 3), vector1(3), vector2(3)
+        real(rp) :: initial_matrix(2, 2), expected(3, 3), vector1(3), vector2(3)
 
         ! assume tests pass
         test_extend_matrix = .true.
 
-        ! allocate and initialize symmetric matrix and vector to be added
-        allocate(matrix(2, 2))
-        matrix = reshape([1.0_rp, 2.0_rp, &
-                          2.0_rp, 3.0_rp], [2, 2])
-        vector1 = [4.0_rp, 5.0_rp, 6.0_rp]
-        vector2 = [7.0_rp, 8.0_rp, 6.0_rp]
+        ! generate a matrix and the vectors to be added, which share their last element
+        ! as those of the reduced-space Hessian do, so that the corner does not depend
+        ! on which of them fills it
+        call random_number(initial_matrix)
+        call random_number(vector1)
+        call random_number(vector2)
+        vector2(3) = vector1(3)
+        matrix = initial_matrix
 
-        ! initialize expected matrix
-        expected = reshape([1.0_rp, 2.0_rp, 7.0_rp, &
-                            2.0_rp, 3.0_rp, 8.0_rp, &
-                            4.0_rp, 5.0_rp, 6.0_rp], [3, 3])
+        ! the first vector becomes the new column and the second the new row
+        expected(:2, :2) = initial_matrix
+        expected(:, 3) = vector1
+        expected(3, :) = vector2
 
         ! call routine and determine if dimensions and values of resulting matrix match
         call extend_matrix(matrix, vector1, vector2)
@@ -4879,6 +4847,7 @@ contains
             write(stderr, *) "test_extend_matrix failed: Incorrect matrix "// &
                 "dimensions after extending."
             test_extend_matrix = .false.
+            return
         end if
         if (norm2(matrix - expected) > tol) then
             write(stderr, *) "test_extend_matrix failed: Incorrect matrix values "// &
@@ -5591,47 +5560,41 @@ contains
                                    stability_state_type, block_davidson, &
                                    stability_thresh, error_hess_x, error_conv_check
 
-        integer(ip), parameter :: n_block = 3, lwork = 3 * n_param
+        integer(ip), parameter :: n_block = 3
         character(len=*), parameter :: jacobi_davidson_case_names(5) = &
             [character(len=26) :: "for a single eigenpair", "for a block of two", &
              "with a residual tolerance", "by the Davidson method", &
              "before the requested start"]
         real(rp), parameter :: res_tol = 1e-8_rp, asymm_perturb = 0.1_rp
-        real(rp) :: ref_mat(n_param, n_param), ref_eigvals(n_param), work(lwork), &
+        real(rp) :: well_separated(n_param, n_param), ref_eigvals(n_param), &
                     eigvals(n_block), eigvecs(n_param, n_block), h_diag(n_param), &
-                    ref_eigvals_im(n_param), dummy_vecs(1, 1), swap
+                    ref_eigvecs(n_param, n_param), ref_eigvals_re(n_param), &
+                    ref_eigvals_im(n_param), left_eigvecs(n_param, n_param)
         real(rp), allocatable :: trial_space(:, :)
-        integer(ip) :: error, i, j, k, min_idx, info, i_case
+        integer(ip) :: error, i, j, min_idx, i_case
+        logical :: sorted(n_param)
         logical :: converged
         procedure(hess_x_type), pointer :: hess_x_funptr
         type(stability_settings_type) :: settings
         type(stability_state_type) :: state
         type(quadratic_context_type), target :: context
         type(hartmann6d_fault_context_type), target :: fault_context
-        external :: dsyev, dgeev
 
         ! assume tests pass
         test_block_davidson = .true.
 
         ! construct symmetric matrix with well separated eigenvalues
-        allocate(context%hess(n_param, n_param))
         do i = 1, n_param
             do j = 1, n_param
-                context%hess(i, j) = 1.0_rp / real(i + j, kind=rp)
+                well_separated(i, j) = 1.0_rp / real(i + j, kind=rp)
             end do
-            context%hess(i, i) = context%hess(i, i) + real(i, kind=rp)
+            well_separated(i, i) = well_separated(i, i) + real(i, kind=rp)
         end do
+        context%hess = well_separated
         h_diag = [(context%hess(i, i), i=1, n_param)]
 
         ! obtain reference eigenvalues
-        ref_mat = context%hess
-        call dsyev("N", "U", n_param, ref_mat, n_param, ref_eigvals, work, lwork, info)
-        if (info /= 0) then
-            write(stderr, *) "test_block_davidson failed: Reference "// &
-                "eigendecomposition failed."
-            test_block_davidson = .false.
-            return
-        end if
+        call ref_symm_mat_diag(context%hess, ref_eigvals, ref_eigvecs)
 
         ! setup settings object
         call setup_settings(settings, context)
@@ -5851,19 +5814,15 @@ contains
             end do
         end do
 
-        ! obtain reference eigenvalues which are then sorted by real part with a
-        ! selection sort since DGEEV returns them in no particular order
-        ref_mat = context%hess
-        call dgeev("N", "N", n_param, ref_mat, n_param, ref_eigvals, ref_eigvals_im, &
-                   dummy_vecs, 1_ip, dummy_vecs, 1_ip, work, lwork, info)
-        do i = 1, n_param - 1
-            min_idx = i
-            do k = i + 1, n_param
-                if (ref_eigvals(k) < ref_eigvals(min_idx)) min_idx = k
-            end do
-            swap = ref_eigvals(i)
-            ref_eigvals(i) = ref_eigvals(min_idx)
-            ref_eigvals(min_idx) = swap
+        ! obtain reference eigenvalues, which are sorted by their real parts since they
+        ! are returned in no particular order
+        call ref_general_mat_diag(context%hess, ref_eigvals_re, ref_eigvals_im, &
+                                  ref_eigvecs, left_eigvecs)
+        sorted = .false.
+        do i = 1, n_param
+            min_idx = minloc(ref_eigvals_re, dim=1, mask=.not. sorted)
+            ref_eigvals(i) = ref_eigvals_re(min_idx)
+            sorted(min_idx) = .true.
         end do
 
         ! check block of eigenpairs
@@ -5901,12 +5860,7 @@ contains
         ! symmetric matrix and forcing its first diagonal entry to be clearly unstable,
         ! letting a single iteration with a tight residual tolerance distinguish the
         ! two settings unambiguously
-        do i = 1, n_param
-            do j = 1, n_param
-                context%hess(i, j) = 1.0_rp / real(i + j, kind=rp)
-            end do
-            context%hess(i, i) = context%hess(i, i) + real(i, kind=rp)
-        end do
+        context%hess = well_separated
         context%hess(1, 1) = -1.0_rp
         h_diag = [(context%hess(i, i), i=1, n_param)]
         call setup_settings(settings, context)
@@ -6275,6 +6229,7 @@ contains
                     eigvecs(n_param, n_param), expected(n_param)
         integer(ip) :: error
         type(test_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
 
         ! assume tests pass
         test_gram_schmidt = .true.
@@ -6448,7 +6403,10 @@ contains
         end if
 
         ! check that the error of a failing projection is reported with its origin
-        settings%project => mock_project_error
+        call setup_settings(settings, fault_context)
+        settings%project => faulty_project
+        fault_context%fault_callback = fault_project
+        fault_context%fault_call = 1
         call gram_schmidt(vector, space, settings, error)
         if (error /= error_project + 1) then
             write(stderr, *) "test_gram_schmidt failed: Error of failing "// &
@@ -6612,8 +6570,9 @@ contains
 
         real(rp) :: vector(3), mu, h_diag(3), precond_vector(3)
         type(solver_settings_type) :: settings
-        integer(ip) :: error
+        integer(ip) :: error, i_case
         type(test_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
 
         ! assume tests pass
         test_level_shifted_diag_precond = .true.
@@ -6674,35 +6633,37 @@ contains
             test_level_shifted_diag_precond = .false.
         end if
 
-        ! check that the error of a failing custom preconditioner is reported with its
-        ! origin
-        settings%precond => mock_precond_error
-        call level_shifted_diag_precond(vector, mu, h_diag, precond_vector, settings, &
-                                        error)
-        if (error /= error_precond + 1) then
-            write(stderr, *) "test_level_shifted_diag_precond failed: Did not "// &
-                "report the error of a failing preconditioner with its origin."
-            test_level_shifted_diag_precond = .false.
-        end if
-
-        ! check that the error of a failing custom projection function is reported
-        ! with its origin
-        settings%precond => null()
-        settings%project => mock_project_error
-        call level_shifted_diag_precond(vector, mu, h_diag, precond_vector, settings, &
-                                        error)
-        if (error /= error_project + 1) then
-            write(stderr, *) "test_level_shifted_diag_precond failed: Did not "// &
-                "report the error of a failing projection function with its origin."
-            test_level_shifted_diag_precond = .false.
-        end if
+        ! check that the errors of a failing custom preconditioner and of a failing
+        ! projection of the default preconditioner are reported with their origins
+        call setup_settings(settings, fault_context)
+        do i_case = 1, 2
+            if (i_case == 1) then
+                settings%precond => faulty_precond
+            else
+                settings%precond => null()
+                settings%project => faulty_project
+            end if
+            fault_context%n_callback_calls = 0
+            fault_context%fault_callback = &
+                merge(fault_precond, fault_project, i_case == 1)
+            fault_context%fault_call = 1
+            call level_shifted_diag_precond(vector, mu, h_diag, precond_vector, &
+                                            settings, error)
+            if (error /= merge(error_precond, error_project, i_case == 1) + 1) then
+                write(stderr, *) "test_level_shifted_diag_precond failed: Error of "// &
+                    "failing "// &
+                    trim(fault_callback_names(fault_context%fault_callback))// &
+                    " not reported with its origin."
+                test_level_shifted_diag_precond = .false.
+            end if
+        end do
 
     end function test_level_shifted_diag_precond
 
     logical(c_bool) function test_rel_floor_diag_precond() bind(C)
         !
         ! this function tests the subroutine that constructs the relative-floor
-        ! absoulte diagonal preconditioner used to define the ellipsoidal trust-region
+        ! absolute diagonal preconditioner used to define the ellipsoidal trust-region
         ! metric for TCG/GLTR
         !
         use opentrustregion, only: solver_settings_type, rel_floor_diag_precond, &

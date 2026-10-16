@@ -24,6 +24,7 @@ from ctypes import (
     Structure,
     POINTER,
     cast,
+    string_at,
 )
 from unittest.mock import patch
 from pathlib import Path
@@ -1304,25 +1305,188 @@ class PyInterfaceUnitTests(unittest.TestCase):
             )
             test_passed = False
 
-        # a C function wired into the settings is read as a callable around it, which
-        # calls it with the context of the settings and keeps them alive
-        wired = []
-
-        def wired_precond(residual_ptr, mu_ptr, precond_residual_ptr, context):
-            wired.append((mu_ptr[0], context))
-            return 0
-
-        wired_c_funptr = precond_interface_type(wired_precond)
-        settings.settings_c.precond = cast(wired_c_funptr, c_void_p).value
+        # a C function wired into the settings or their nested settings is read as a
+        # callable around it, which hands it the arguments, calls it with the context
+        # of the settings it was read from, passes on its outputs, raises its error and
+        # keeps these settings alive
         settings.settings_c.context = 6789
-        read_precond = settings.precond
-        read_precond(vector, 3.0, vector)
-        if wired != [(3.0, 6789)] or read_precond._owner is not settings:
-            print(
-                " test_solver_settings failed: C function wired into the settings "
-                "not read correctly."
+        settings.settings_c.stability_settings.context = 4321
+        x = np.random.random(n_param)
+        n_vectors = 2
+        received = []
+        error_code = 0
+
+        def as_vector(ptr):
+            return np.ctypeslib.as_array(ptr, shape=(n_param,))
+
+        def scale_into(factor):
+            def body(x_ptr, out_ptr):
+                as_vector(out_ptr)[:] = factor * as_vector(x_ptr)
+
+            return body
+
+        def precond_body(residual_ptr, mu_ptr, precond_residual_ptr):
+            as_vector(precond_residual_ptr)[:] = mu_ptr[0] * as_vector(residual_ptr)
+
+        def project_body(vector_ptr):
+            as_vector(vector_ptr)[:] *= 5.0
+
+        def trial_vectors_body(trial_vectors_ptr, n):
+            trial_vectors = np.ctypeslib.as_array(trial_vectors_ptr, shape=(n, n_param))
+            trial_vectors[:] = n
+
+        def conv_check_body(converged_ptr):
+            converged_ptr[0] = True
+
+        def conv_check_stability_body(residual_ptr, eigval_ptr, converged_ptr):
+            converged_ptr[0] = np.allclose(as_vector(residual_ptr), x) and (
+                eigval_ptr[0] == 7.0
             )
-            test_passed = False
+
+        def logger_body(message):
+            received.append(string_at(message).decode("utf-8"))
+
+        def project_call(func):
+            vector = x.copy()
+            func(vector)
+            return vector
+
+        def output_call(call, shape=(n_param,)):
+            def read_and_call(func):
+                out = np.zeros(shape)
+                call(func, out)
+                return out
+
+            return read_and_call
+
+        nested = settings.stability_settings
+        cases = [
+            (
+                settings,
+                "precond",
+                precond_body,
+                output_call(lambda func, out: func(x, 3.0, out)),
+                3.0 * x,
+            ),
+            (
+                settings,
+                "precond_pd",
+                scale_into(2.0),
+                output_call(lambda func, out: func(x, out)),
+                2.0 * x,
+            ),
+            (
+                settings,
+                "project",
+                project_body,
+                project_call,
+                5.0 * x,
+            ),
+            (
+                settings,
+                "get_extra_trial_vectors",
+                trial_vectors_body,
+                output_call(lambda func, out: func(out), (n_vectors, n_param)),
+                np.full((n_vectors, n_param), float(n_vectors)),
+            ),
+            (settings, "conv_check", conv_check_body, lambda func: func(), True),
+            (
+                settings,
+                "stability_hess_x",
+                scale_into(4.0),
+                output_call(lambda func, out: func(x, out)),
+                4.0 * x,
+            ),
+            (settings, "logger", logger_body, lambda func: func("message"), None),
+            (
+                nested,
+                "precond",
+                precond_body,
+                output_call(lambda func, out: func(x, 3.0, out)),
+                3.0 * x,
+            ),
+            (
+                nested,
+                "project",
+                project_body,
+                project_call,
+                5.0 * x,
+            ),
+            (
+                nested,
+                "approx_hess_x",
+                scale_into(6.0),
+                output_call(lambda func, out: func(x, out)),
+                6.0 * x,
+            ),
+            (
+                nested,
+                "get_extra_trial_vectors",
+                trial_vectors_body,
+                output_call(lambda func, out: func(out), (n_vectors, n_param)),
+                np.full((n_vectors, n_param), float(n_vectors)),
+            ),
+            (
+                nested,
+                "conv_check",
+                conv_check_stability_body,
+                lambda func: func(x, 7.0),
+                True,
+            ),
+            (nested, "logger", logger_body, lambda func: func("message"), None),
+        ]
+        c_functions = []
+        for case_settings, name, body, read_and_call, expected in cases:
+            case = (
+                f"{name} of the "
+                f"{'nested ' if case_settings is nested else ''}settings"
+            )
+            interface_type = case_settings.callback_fields[name][1]
+
+            def c_function(*args, body=body, name=name):
+                received.append((name, args[-1]))
+                body(*args[:-1])
+                return None if name == "logger" else error_code
+
+            c_functions.append(interface_type(c_function))
+            setattr(
+                case_settings.settings_c, name, cast(c_functions[-1], c_void_p).value
+            )
+            received.clear()
+            error_code = 0
+            func = getattr(case_settings, name)
+            result = read_and_call(func)
+            if not received or received[0] != (name, case_settings.settings_c.context):
+                print(
+                    f" test_solver_settings failed: C function wired as {case} not "
+                    "called with the context of these settings."
+                )
+                test_passed = False
+            if name == "logger":
+                passed_on = received[1:] == ["message"]
+            else:
+                passed_on = np.allclose(result, expected)
+            if not passed_on or func._owner is not case_settings:
+                print(
+                    f" test_solver_settings failed: C function wired as {case} not "
+                    "read correctly."
+                )
+                test_passed = False
+
+            # the error of the C function is raised
+            if name != "logger":
+                error_code = 3
+                try:
+                    read_and_call(func)
+                except RuntimeError:
+                    pass
+                else:
+                    print(
+                        f" test_solver_settings failed: Error of the C function "
+                        f"wired as {case} not raised."
+                    )
+                    test_passed = False
+            setattr(case_settings.settings_c, name, None)
 
         # a keyword given as bytes, as read from a C struct, is stored as well
         settings.subsystem_solver = b"davidson"
@@ -1337,7 +1501,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         # extension objects wired into both, once nothing else refers to them
         stability_settings = settings.stability_settings
         settings_ref = weakref.ref(settings)
-        del settings, read_precond
+        del settings, func
         gc.collect()
         if settings_ref() is None or stability_settings._parent is not settings_ref():
             print(
@@ -1721,6 +1885,7 @@ class PyIntegrationTests(unittest.TestCase):
         # an approximate Hessian linear transformation, which the stability check only
         # uses for extra trial vectors when no extra trial vector function is provided
         def approx_hess_x(v, hv):
+            state["called"].add("stability_approx_hess_x")
             hv[:] = state["hess"] @ v
 
         # convergence check of the internal stability check, which accepts a converged
@@ -1821,6 +1986,21 @@ class PyIntegrationTests(unittest.TestCase):
                     "stability settings was not called by the internal stability check."
                 )
                 test_passed = False
+
+        # solve again without an extra trial vector function of the nested settings,
+        # which the internal stability check does not inherit, so that it reaches the
+        # approximate Hessian linear transformation of the nested settings instead
+        state["curr"] = self.near_minimum.copy()
+        state["called"].clear()
+        settings.stability_settings.get_extra_trial_vectors = None
+        solver(update_orbs, obj_func, self.n_param, settings)
+        if "stability_approx_hess_x" not in state["called"]:
+            print(
+                " test_solver_py failed: Approximate Hessian linear transformation set "
+                "on the nested stability settings was not called by the internal "
+                "stability check."
+            )
+            test_passed = False
         self.assertTrue(test_passed, "test_solver_py failed")
         print(" test_solver_py PASSED")
 

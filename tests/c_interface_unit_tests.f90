@@ -160,6 +160,28 @@ contains
 
     end function mock_precond
 
+    function mock_precond_pd(residual, precond_residual, context_c) result(error) &
+        bind(C)
+        !
+        ! this function is a test function for the C positive-definite preconditioner
+        ! function
+        !
+        use test_reference, only: check_host_context_c, host_context_error
+
+        real(c_rp), intent(in), target :: residual(*)
+        real(c_rp), intent(out), target :: precond_residual(*)
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        ! check host context
+        call check_host_context_c(context_c)
+
+        precond_residual(:n_param) = 3 * residual(:n_param)
+
+        error = host_context_error(context_c)
+
+    end function mock_precond_pd
+
     function mock_project(vector, context_c) result(error) bind(C)
         !
         ! this function is a test function for the C projection function
@@ -217,6 +239,84 @@ contains
         error = 0
 
     end function mock_conv_check_not_converged
+
+    function mock_stability_hess_x(x, hess_x, context_c) result(error) bind(C)
+        !
+        ! this function is a test function for the C Hessian linear transformation of
+        ! the stability check, which behaves like the one the orbital update returns
+        ! but is a different function
+        !
+        real(c_rp), intent(in), target :: x(*)
+        real(c_rp), intent(out), target :: hess_x(*)
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        error = mock_hess_x(x, hess_x, context_c)
+
+    end function mock_stability_hess_x
+
+    function mock_approx_hess_x(x, hess_x, context_c) result(error) bind(C)
+        !
+        ! this function is a test function for the C approximate Hessian linear
+        ! transformation, which behaves like the one the orbital update returns but is
+        ! a different function
+        !
+        real(c_rp), intent(in), target :: x(*)
+        real(c_rp), intent(out), target :: hess_x(*)
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        error = mock_hess_x(x, hess_x, context_c)
+
+    end function mock_approx_hess_x
+
+    function mock_get_extra_trial_vectors(trial_vectors, n_extra_trial_vectors_c, &
+                                          context_c) result(error) bind(C)
+        !
+        ! this function is a test function for the C extra trial vector function
+        !
+        use test_reference, only: check_host_context_c, host_context_error
+
+        real(c_rp), intent(out), target :: trial_vectors(*)
+        integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        integer(c_ip) :: i
+
+        ! check host context
+        call check_host_context_c(context_c)
+
+        do i = 1, n_extra_trial_vectors_c
+            trial_vectors((i - 1) * n_param + 1:i * n_param) = real(i, kind=c_rp)
+        end do
+
+        error = host_context_error(context_c)
+
+    end function mock_get_extra_trial_vectors
+
+    function mock_conv_check_stability(residual, eigval, converged, context_c) &
+        result(error) bind(C)
+        !
+        ! this function is a test function for the C convergence check function of the
+        ! stability check
+        !
+        use test_reference, only: check_host_context_c, host_context_error
+
+        real(c_rp), intent(in), target :: residual(*)
+        real(c_rp), intent(in) :: eigval
+        logical(c_bool), intent(out) :: converged
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        ! check host context
+        call check_host_context_c(context_c)
+
+        converged = abs(sum(residual(:n_param)) - eigval) < tol_c
+
+        error = host_context_error(context_c)
+
+    end function mock_conv_check_stability
 
     subroutine mock_logger(message_c, context_c) bind(C)
         !
@@ -286,119 +386,6 @@ contains
 
     end function mock_stability_project
 
-    subroutine mock_stability_logger(message_c, context_c) bind(C)
-        !
-        ! this subroutine is a test subroutine for a C logging function the nested
-        ! stability check settings provide of their own, which behaves like the
-        ! solver's but is a different function
-        !
-        character(kind=c_char), intent(in) :: message_c(*)
-        type(c_ptr), intent(in), value :: context_c
-
-        call mock_logger(message_c, context_c)
-
-    end subroutine mock_stability_logger
-
-    function mock_precond_pd(residual, precond_residual, context_c) result(error) &
-        bind(C)
-        !
-        ! this function is a test function for the C positive-definite preconditioner
-        ! function
-        !
-        use test_reference, only: check_host_context_c, host_context_error
-
-        real(c_rp), intent(in), target :: residual(*)
-        real(c_rp), intent(out), target :: precond_residual(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        ! check host context
-        call check_host_context_c(context_c)
-
-        precond_residual(:n_param) = 3 * residual(:n_param)
-
-        error = host_context_error(context_c)
-
-    end function mock_precond_pd
-
-    function mock_get_extra_trial_vectors(trial_vectors, n_extra_trial_vectors_c, &
-                                          context_c) result(error) bind(C)
-        !
-        ! this function is a test function for the C extra trial vector function
-        !
-        use test_reference, only: check_host_context_c, host_context_error
-
-        real(c_rp), intent(out), target :: trial_vectors(*)
-        integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        integer(c_ip) :: i
-
-        ! check host context
-        call check_host_context_c(context_c)
-
-        do i = 1, n_extra_trial_vectors_c
-            trial_vectors((i - 1) * n_param + 1:i * n_param) = real(i, kind=c_rp)
-        end do
-
-        error = host_context_error(context_c)
-
-    end function mock_get_extra_trial_vectors
-
-    function mock_conv_check_stability(residual, eigval, converged, context_c) &
-        result(error) bind(C)
-        !
-        ! this function is a test function for the C convergence check function of the
-        ! stability check
-        !
-        use test_reference, only: check_host_context_c, host_context_error
-
-        real(c_rp), intent(in), target :: residual(*)
-        real(c_rp), intent(in) :: eigval
-        logical(c_bool), intent(out) :: converged
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        ! check host context
-        call check_host_context_c(context_c)
-
-        converged = abs(sum(residual(:n_param)) - eigval) < tol_c
-
-        error = host_context_error(context_c)
-
-    end function mock_conv_check_stability
-
-    function mock_stability_hess_x(x, hess_x, context_c) result(error) bind(C)
-        !
-        ! this function is a test function for the C Hessian linear transformation of
-        ! the stability check, which behaves like the one the orbital update returns
-        ! but is a different function
-        !
-        real(c_rp), intent(in), target :: x(*)
-        real(c_rp), intent(out), target :: hess_x(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        error = mock_hess_x(x, hess_x, context_c)
-
-    end function mock_stability_hess_x
-
-    function mock_approx_hess_x(x, hess_x, context_c) result(error) bind(C)
-        !
-        ! this function is a test function for the C approximate Hessian linear
-        ! transformation, which behaves like the one the orbital update returns but is
-        ! a different function
-        !
-        real(c_rp), intent(in), target :: x(*)
-        real(c_rp), intent(out), target :: hess_x(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        error = mock_hess_x(x, hess_x, context_c)
-
-    end function mock_approx_hess_x
-
     function mock_stability_get_extra_trial_vectors( &
         trial_vectors, n_extra_trial_vectors_c, context_c) result(error) bind(C)
         !
@@ -415,6 +402,19 @@ contains
                                              context_c)
 
     end function mock_stability_get_extra_trial_vectors
+
+    subroutine mock_stability_logger(message_c, context_c) bind(C)
+        !
+        ! this subroutine is a test subroutine for a C logging function the nested
+        ! stability check settings provide of their own, which behaves like the
+        ! solver's but is a different function
+        !
+        character(kind=c_char), intent(in) :: message_c(*)
+        type(c_ptr), intent(in), value :: context_c
+
+        call mock_logger(message_c, context_c)
+
+    end subroutine mock_stability_logger
 
     logical(c_bool) function test_solver_c_wrapper() bind(C)
         !
@@ -1107,45 +1107,58 @@ contains
     logical(c_bool) function test_copy_state_to_c() bind(C)
         !
         ! this function tests the subroutine that copies the state of a call into the
-        ! host's record
+        ! host's records which were given
         !
         use opentrustregion, only: solver_state_type, stability_state_type
         use c_interface, only: c_callbacks_type, solver_state_type_c, &
                                stability_state_type_c, copy_state_to_c
         use opentrustregion_mock, only: mock_solver_state, mock_stability_state
         use test_reference, only: get_reference_solver_state_values, &
-                                  get_reference_stability_state_values, operator(/=)
+                                  get_reference_stability_state_values, &
+                                  ref_solver_state, ref_stability_state, operator(/=)
 
         type(c_callbacks_type) :: callbacks
         type(solver_state_type), target :: solver_state
         type(stability_state_type), target :: stability_state
         type(solver_state_type_c), target :: solver_state_c
         type(stability_state_type_c), target :: stability_state_c
+        integer(ip) :: i_case
+        character(len=40), parameter :: case_names(3) = &
+            [character(len=40) :: "with both records", &
+             "with only the solver's record", "with only the stability check's record"]
 
         ! assume tests pass
         test_copy_state_to_c = .true.
 
         ! copy a solver state and a stability check state whose values differ from the
         ! reference values the host's records start from, so that a field which is not
-        ! copied is detected
+        ! copied is detected, into both records, or into one, which has to leave the
+        ! other at its values
         solver_state = mock_solver_state
         stability_state = mock_stability_state
-        call get_reference_solver_state_values(solver_state_c)
-        call get_reference_stability_state_values(stability_state_c)
         callbacks%solver_state => solver_state
-        callbacks%solver_state_c => solver_state_c
         callbacks%stability_state => stability_state
-        callbacks%stability_state_c => stability_state_c
-        call copy_state_to_c(callbacks)
-        if (solver_state_c /= solver_state) then
-            write(stderr, *) "test_copy_state_to_c failed: Solver state not copied."
-            test_copy_state_to_c = .false.
-        end if
-        if (stability_state_c /= stability_state) then
-            write(stderr, *) "test_copy_state_to_c failed: Stability check state "// &
-                "not copied."
-            test_copy_state_to_c = .false.
-        end if
+        do i_case = 1, size(case_names)
+            call get_reference_solver_state_values(solver_state_c)
+            call get_reference_stability_state_values(stability_state_c)
+            callbacks%solver_state_c => null()
+            callbacks%stability_state_c => null()
+            if (i_case /= 3) callbacks%solver_state_c => solver_state_c
+            if (i_case /= 2) callbacks%stability_state_c => stability_state_c
+            call copy_state_to_c(callbacks)
+            if ((i_case /= 3 .and. solver_state_c /= solver_state) .or. &
+                (i_case == 3 .and. solver_state_c /= ref_solver_state)) then
+                write(stderr, *) "test_copy_state_to_c failed: Solver state copied "// &
+                    "wrong "//trim(case_names(i_case))//"."
+                test_copy_state_to_c = .false.
+            end if
+            if ((i_case /= 2 .and. stability_state_c /= stability_state) .or. &
+                (i_case == 2 .and. stability_state_c /= ref_stability_state)) then
+                write(stderr, *) "test_copy_state_to_c failed: Stability check "// &
+                    "state copied wrong "//trim(case_names(i_case))//"."
+                test_copy_state_to_c = .false.
+            end if
+        end do
 
     end function test_copy_state_to_c
 
@@ -1584,64 +1597,6 @@ contains
 
     end function test_project_f_wrapper
 
-    logical(c_bool) function test_get_extra_trial_vectors_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the extra trial vector function
-        !
-        use opentrustregion, only: get_extra_trial_vectors_type
-        use c_interface, only: c_callbacks_type, get_extra_trial_vectors_f_wrapper
-        use test_reference, only: check_get_extra_trial_vectors_funptr, host_context, &
-                                  arm_host_context_c, arm_state_c, host_context_reached
-
-        procedure(get_extra_trial_vectors_type), pointer :: funptr
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context, foreign_context
-        real(rp), target :: foreign_context_target
-        real(rp) :: trial_vectors(n_param, 1)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_get_extra_trial_vectors_f_wrapper = .true.
-
-        ! inject mock C function and hand the bundle to the wrapper as its context
-        callbacks%get_extra_trial_vectors => mock_get_extra_trial_vectors
-        call arm_host_context_c(callbacks%host_context)
-        call arm_state_c(callbacks)
-        context => callbacks
-
-        ! get pointer to subroutine
-        funptr => get_extra_trial_vectors_f_wrapper
-
-        ! test wrapper
-        if (.not. check_get_extra_trial_vectors_funptr( &
-            funptr, "get_extra_trial_vectors_f_wrapper", "", context)) &
-            test_get_extra_trial_vectors_f_wrapper = .false.
-
-        ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("get_extra_trial_vectors_f_wrapper")) &
-            test_get_extra_trial_vectors_f_wrapper = .false.
-
-        ! check that an error of the C function is passed on
-        host_context%mock_error = 2
-        call get_extra_trial_vectors_f_wrapper(trial_vectors, error, context)
-        if (error /= 2) then
-            write(stderr, *) "test_get_extra_trial_vectors_f_wrapper failed: Did "// &
-                "not pass on the error of the C function."
-            test_get_extra_trial_vectors_f_wrapper = .false.
-        end if
-        host_context%mock_error = 0
-
-        ! a context this module did not create is reported rather than dereferenced
-        foreign_context => foreign_context_target
-        call get_extra_trial_vectors_f_wrapper(trial_vectors, error, foreign_context)
-        if (error /= 1) then
-            write(stderr, *) "test_get_extra_trial_vectors_f_wrapper failed: Did "// &
-                "not report an invalid context."
-            test_get_extra_trial_vectors_f_wrapper = .false.
-        end if
-
-    end function test_get_extra_trial_vectors_f_wrapper
-
     logical(c_bool) function test_conv_check_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the convergence check function
@@ -1715,69 +1670,6 @@ contains
         end if
 
     end function test_conv_check_f_wrapper
-
-    logical(c_bool) function test_conv_check_stability_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the convergence check function of
-        ! the stability check
-        !
-        use opentrustregion, only: conv_check_stability_type
-        use c_interface, only: c_callbacks_type, conv_check_stability_f_wrapper
-        use test_reference, only: check_conv_check_stability_funptr, host_context, &
-                                  arm_host_context_c, arm_state_c, host_context_reached
-
-        procedure(conv_check_stability_type), pointer :: funptr
-        type(c_callbacks_type), target :: callbacks
-        class(*), pointer :: context, foreign_context
-        real(rp), target :: foreign_context_target
-        real(rp) :: residual(n_param)
-        logical :: converged
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_conv_check_stability_f_wrapper = .true.
-
-        ! inject mock C function and hand the bundle to the wrapper as its context
-        callbacks%conv_check_stability => mock_conv_check_stability
-        call arm_host_context_c(callbacks%host_context)
-        call arm_state_c(callbacks)
-        context => callbacks
-
-        ! get pointer to subroutine
-        funptr => conv_check_stability_f_wrapper
-
-        ! test wrapper
-        if (.not. check_conv_check_stability_funptr( &
-            funptr, "conv_check_stability_f_wrapper", "", context)) &
-            test_conv_check_stability_f_wrapper = .false.
-
-        ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("conv_check_stability_f_wrapper")) &
-            test_conv_check_stability_f_wrapper = .false.
-
-        ! check that an error of the C function is passed on
-        host_context%mock_error = 2
-        residual = 1.0_rp
-        converged = conv_check_stability_f_wrapper(residual, 1.0_rp, error, context)
-        if (error /= 2) then
-            write(stderr, *) "test_conv_check_stability_f_wrapper failed: Did not "// &
-                "pass on the error of the C function."
-            test_conv_check_stability_f_wrapper = .false.
-        end if
-        host_context%mock_error = 0
-
-        ! a context this module did not create is reported rather than dereferenced
-        foreign_context => foreign_context_target
-        residual = 1.0_rp
-        converged = &
-            conv_check_stability_f_wrapper(residual, 1.0_rp, error, foreign_context)
-        if (error /= 1) then
-            write(stderr, *) "test_conv_check_stability_f_wrapper failed: Did not "// &
-                "report an invalid context."
-            test_conv_check_stability_f_wrapper = .false.
-        end if
-
-    end function test_conv_check_stability_f_wrapper
 
     logical(c_bool) function test_stability_hess_x_f_wrapper() bind(C)
         !
@@ -1899,6 +1791,127 @@ contains
         end if
 
     end function test_approx_hess_x_f_wrapper
+
+    logical(c_bool) function test_get_extra_trial_vectors_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the extra trial vector function
+        !
+        use opentrustregion, only: get_extra_trial_vectors_type
+        use c_interface, only: c_callbacks_type, get_extra_trial_vectors_f_wrapper
+        use test_reference, only: check_get_extra_trial_vectors_funptr, host_context, &
+                                  arm_host_context_c, arm_state_c, host_context_reached
+
+        procedure(get_extra_trial_vectors_type), pointer :: funptr
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context, foreign_context
+        real(rp), target :: foreign_context_target
+        real(rp) :: trial_vectors(n_param, 1)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_get_extra_trial_vectors_f_wrapper = .true.
+
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        callbacks%get_extra_trial_vectors => mock_get_extra_trial_vectors
+        call arm_host_context_c(callbacks%host_context)
+        call arm_state_c(callbacks)
+        context => callbacks
+
+        ! get pointer to subroutine
+        funptr => get_extra_trial_vectors_f_wrapper
+
+        ! test wrapper
+        if (.not. check_get_extra_trial_vectors_funptr( &
+            funptr, "get_extra_trial_vectors_f_wrapper", "", context)) &
+            test_get_extra_trial_vectors_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("get_extra_trial_vectors_f_wrapper")) &
+            test_get_extra_trial_vectors_f_wrapper = .false.
+
+        ! check that an error of the C function is passed on
+        host_context%mock_error = 2
+        call get_extra_trial_vectors_f_wrapper(trial_vectors, error, context)
+        if (error /= 2) then
+            write(stderr, *) "test_get_extra_trial_vectors_f_wrapper failed: Did "// &
+                "not pass on the error of the C function."
+            test_get_extra_trial_vectors_f_wrapper = .false.
+        end if
+        host_context%mock_error = 0
+
+        ! a context this module did not create is reported rather than dereferenced
+        foreign_context => foreign_context_target
+        call get_extra_trial_vectors_f_wrapper(trial_vectors, error, foreign_context)
+        if (error /= 1) then
+            write(stderr, *) "test_get_extra_trial_vectors_f_wrapper failed: Did "// &
+                "not report an invalid context."
+            test_get_extra_trial_vectors_f_wrapper = .false.
+        end if
+
+    end function test_get_extra_trial_vectors_f_wrapper
+
+    logical(c_bool) function test_conv_check_stability_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the convergence check function of
+        ! the stability check
+        !
+        use opentrustregion, only: conv_check_stability_type
+        use c_interface, only: c_callbacks_type, conv_check_stability_f_wrapper
+        use test_reference, only: check_conv_check_stability_funptr, host_context, &
+                                  arm_host_context_c, arm_state_c, host_context_reached
+
+        procedure(conv_check_stability_type), pointer :: funptr
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context, foreign_context
+        real(rp), target :: foreign_context_target
+        real(rp) :: residual(n_param)
+        logical :: converged
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_conv_check_stability_f_wrapper = .true.
+
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        callbacks%conv_check_stability => mock_conv_check_stability
+        call arm_host_context_c(callbacks%host_context)
+        call arm_state_c(callbacks)
+        context => callbacks
+
+        ! get pointer to subroutine
+        funptr => conv_check_stability_f_wrapper
+
+        ! test wrapper
+        if (.not. check_conv_check_stability_funptr( &
+            funptr, "conv_check_stability_f_wrapper", "", context)) &
+            test_conv_check_stability_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("conv_check_stability_f_wrapper")) &
+            test_conv_check_stability_f_wrapper = .false.
+
+        ! check that an error of the C function is passed on
+        host_context%mock_error = 2
+        residual = 1.0_rp
+        converged = conv_check_stability_f_wrapper(residual, 1.0_rp, error, context)
+        if (error /= 2) then
+            write(stderr, *) "test_conv_check_stability_f_wrapper failed: Did not "// &
+                "pass on the error of the C function."
+            test_conv_check_stability_f_wrapper = .false.
+        end if
+        host_context%mock_error = 0
+
+        ! a context this module did not create is reported rather than dereferenced
+        foreign_context => foreign_context_target
+        residual = 1.0_rp
+        converged = &
+            conv_check_stability_f_wrapper(residual, 1.0_rp, error, foreign_context)
+        if (error /= 1) then
+            write(stderr, *) "test_conv_check_stability_f_wrapper failed: Did not "// &
+                "report an invalid context."
+            test_conv_check_stability_f_wrapper = .false.
+        end if
+
+    end function test_conv_check_stability_f_wrapper
 
     logical(c_bool) function test_logger_f_wrapper() bind(C)
         !
@@ -2415,6 +2428,43 @@ contains
 
     end function test_assign_stability_state_c_f
 
+    logical(c_bool) function test_character_from_c() bind(C)
+        !
+        ! this function tests conversion of a C null-terminated character array to a
+        ! Fortran character string
+        !
+        use c_interface, only: character_from_c
+
+        character(kind=c_char), parameter :: test_array(5) = &
+            ["t", "e", "s", "t", c_null_char]
+        character(len=:), allocatable :: char_f
+        integer(ip) :: i
+
+        ! assume tests pass
+        test_character_from_c = .true.
+
+        ! perform conversion
+        char_f = character_from_c(test_array)
+
+        ! check equality
+        if (len(char_f) /= size(test_array) - 1) then
+            write(stderr, *) "test_character_from_c failed: Converted string has "// &
+                "wrong length."
+            test_character_from_c = .false.
+            return
+        end if
+
+        ! check characters
+        do i = 1, len(char_f)
+            if (test_array(i) /= char_f(i:i)) then
+                write(stderr, *) "test_character_from_c failed: String mismatch at "// &
+                    "character ", i, "."
+                test_character_from_c = .false.
+            end if
+        end do
+
+    end function test_character_from_c
+
     logical(c_bool) function test_character_to_c() bind(C)
         !
         ! this function tests conversion of a Fortran character string to a C
@@ -2452,42 +2502,5 @@ contains
         end if
 
     end function test_character_to_c
-
-    logical(c_bool) function test_character_from_c() bind(C)
-        !
-        ! this function tests conversion of a C null-terminated character array to a
-        ! Fortran character string
-        !
-        use c_interface, only: character_from_c
-
-        character(kind=c_char), parameter :: test_array(5) = &
-            ["t", "e", "s", "t", c_null_char]
-        character(len=:), allocatable :: char_f
-        integer(ip) :: i
-
-        ! assume tests pass
-        test_character_from_c = .true.
-
-        ! perform conversion
-        char_f = character_from_c(test_array)
-
-        ! check equality
-        if (len(char_f) /= size(test_array) - 1) then
-            write(stderr, *) "test_character_from_c failed: Converted string has "// &
-                "wrong length."
-            test_character_from_c = .false.
-            return
-        end if
-
-        ! check characters
-        do i = 1, len(char_f)
-            if (test_array(i) /= char_f(i:i)) then
-                write(stderr, *) "test_character_from_c failed: String mismatch at "// &
-                    "character ", i, "."
-                test_character_from_c = .false.
-            end if
-        end do
-
-    end function test_character_from_c
 
 end module c_interface_unit_tests

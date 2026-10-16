@@ -708,9 +708,10 @@ contains
         ! this function returns the value of a field of the C solver state exported by
         ! get_reference_solver_state_values by its name, prefixed by
         ! "stability_state." for the nested state, which also describes a standalone
-        ! stability check state, a logical as 1 or 0, so that the C and Python tests
-        ! need no values of their own and compare what they read through their own
-        ! declarations with what the Fortran declaration reads
+        ! stability check state, a logical as 1 or 0 and an unknown name as a value no
+        ! field holds, so that the C and Python tests need no values of their own and
+        ! compare what they read through their own declarations with what the Fortran
+        ! declaration reads
         !
         use c_interface, only: solver_state_type_c
 
@@ -760,7 +761,8 @@ contains
         case ("stability_state.n_hess_x")
             reference_state_field = values%stability_state%n_hess_x
         case default
-            write(stderr, *) "reference_state_field: Unknown field "//name//"."
+            write(stderr, *) "reference_state_field: unknown field "//name//"."
+            reference_state_field = huge(1.0_c_rp)
         end select
 
     end function reference_state_field
@@ -2104,9 +2106,8 @@ contains
         end if
 
         ! check returned trial space
-        if (any(abs(trial_vectors - &
-                    spread([(real(i, kind=rp), i=1, n_extra_trial_vectors)], 1, &
-                           n_param)) > tol_c)) then
+        if (any(abs(trial_vectors - spread( &
+            [(real(i, kind=rp), i=1, n_extra_trial_vectors)], 1, n_param)) > tol)) then
             write(stderr, *) "test_"//test_name//" failed: Returned trial vectors"// &
                 message//" wrong."
             test_passed = .false.
@@ -2130,7 +2131,8 @@ contains
         procedure(get_extra_trial_vectors_c_type), pointer :: &
             get_extra_trial_vectors_funptr
         real(c_rp), allocatable :: trial_vectors(:, :)
-        integer(ip) :: error, i
+        integer(c_ip) :: error
+        integer(ip) :: i
 
         ! assume tests pass
         test_passed = .true.
@@ -2336,7 +2338,7 @@ contains
         real(c_rp), allocatable :: residual(:)
         real(c_rp) :: eigval
         logical(c_bool) :: converged
-        integer(ip) :: error
+        integer(c_ip) :: error
 
         ! assume tests pass
         test_passed = .true.

@@ -127,8 +127,8 @@ class QNPyInterfaceTests(unittest.TestCase):
 
     def test_callback_interfaces(self):
         """
-        this function tests that the interfaces to the transport and initial Hessian functions report an exception
-        raised by the function as an error and keep it
+        this function tests that the interfaces to the transport and initial Hessian
+        functions report an exception raised by the function as an error and keep it
         """
         test_passed = True
         vector = np.zeros(n_param)

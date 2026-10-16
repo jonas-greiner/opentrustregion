@@ -827,6 +827,25 @@ bool test_solver_c(void) {
     ok = false;
   }
 
+  /* solve again without an extra trial vector function of the nested settings, which
+   * the internal stability check does not inherit, so that it reaches the approximate
+   * Hessian linear transformation of the nested settings instead */
+  memcpy(ctx.curr_vars, hartmann6d_near_minimum, sizeof(ctx.curr_vars));
+  ctx.approx_hess_x_called = 0;
+  settings.stability_settings.get_extra_trial_vectors = NULL;
+  error = solver(update_orbs, obj_func, N_PARAM, &settings, &state);
+  if (error != 0) {
+    fprintf(stderr, "test_solver_c failed: Produced error without an extra trial "
+                    "vector function of the nested settings.\n");
+    ok = false;
+  }
+  if (!ctx.approx_hess_x_called) {
+    fprintf(stderr, "test_solver_c failed: Approximate Hessian linear transformation "
+                    "set on the nested stability settings was not called by the "
+                    "internal stability check.\n");
+    ok = false;
+  }
+
   /* settings or nested stability check settings that were not initialized are
    * replaced by the default settings with a warning on the standard error, since the
    * former provide no logger and the latter none here, while no settings stand for the
