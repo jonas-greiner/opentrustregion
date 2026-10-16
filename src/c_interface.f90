@@ -319,9 +319,9 @@ contains
 
     end function solver_c_wrapper
 
-    function stability_check_c_wrapper( &
-        h_diag_c, hess_x_c_funptr, n_param_c, stable_c, settings_c, state_c_ptr, &
-        kappa_c_ptr, min_eigval_c_ptr) result(error_c) bind(C, name="stability_check")
+    function stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, stable_c, &
+                                       settings_c, state_c_ptr, kappa_c_ptr) &
+        result(error_c) bind(C, name="stability_check")
         !
         ! this function exposes a Fortran-implemented stability check subroutine to C
         !
@@ -333,11 +333,11 @@ contains
         type(c_funptr), intent(in), value :: hess_x_c_funptr
         logical(c_bool), intent(out) :: stable_c
         type(stability_settings_type_c), intent(in), optional :: settings_c
-        type(c_ptr), intent(in), value :: state_c_ptr, kappa_c_ptr, min_eigval_c_ptr
+        type(c_ptr), intent(in), value :: state_c_ptr, kappa_c_ptr
         integer(c_ip) :: error_c
 
-        real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:), min_eigval_ptr
-        real(c_rp), pointer :: kappa_ptr_c(:), min_eigval_ptr_c
+        real(rp), pointer :: h_diag_ptr(:), kappa_ptr(:)
+        real(c_rp), pointer :: kappa_ptr_c(:)
         logical :: stable
         integer(ip) :: error
         procedure(hess_x_f_wrapper), pointer :: hess_x
@@ -381,21 +381,13 @@ contains
             allocate(h_diag_ptr(n_param_c))
             h_diag_ptr = real(h_diag_c(:n_param_c), kind=rp)
         end if
-        nullify(kappa_ptr, min_eigval_ptr)
+        nullify(kappa_ptr)
         if (c_associated(kappa_c_ptr)) then
             if (rp == c_rp) then
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr, shape=[n_param_c])
             else
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr_c, shape=[n_param_c])
                 allocate(kappa_ptr(n_param_c))
-            end if
-        end if
-        if (c_associated(min_eigval_c_ptr)) then
-            if (rp == c_rp) then
-                call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr)
-            else
-                call c_f_pointer(cptr=min_eigval_c_ptr, fptr=min_eigval_ptr_c)
-                allocate(min_eigval_ptr)
             end if
         end if
 
@@ -413,7 +405,7 @@ contains
 
         ! call stability check
         call stability_check(h_diag_ptr, hess_x, stable, error, settings, state, &
-                             kappa=kappa_ptr, min_eigval=min_eigval_ptr)
+                             kappa=kappa_ptr)
 
         ! copy the state into the host's record once more, also after an error
         call copy_state_to_c(callbacks)
@@ -423,10 +415,6 @@ contains
             if (associated(kappa_ptr)) then
                 kappa_ptr_c = real(kappa_ptr, kind=c_rp)
                 deallocate(kappa_ptr)
-            end if
-            if (associated(min_eigval_ptr)) then
-                min_eigval_ptr_c = real(min_eigval_ptr, kind=c_rp)
-                deallocate(min_eigval_ptr)
             end if
             deallocate(h_diag_ptr)
         end if

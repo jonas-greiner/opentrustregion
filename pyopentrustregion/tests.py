@@ -647,7 +647,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         interface_flag = c_bool.in_dll(lib, "test_stability_check_interface")
         interface_flag.value = False
         state = StabilityState()
-        stable, min_eigval = stability_check(
+        stable = stability_check(
             h_diag, mock_hess_x, n_param, settings, kappa=kappa, state=state
         )
         interface_passed = interface_flag.value
@@ -679,12 +679,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
             print(
                 " test_stability_check_py_interface failed: Returned direction wrong."
             )
-        wrong_min_eigval = not np.isclose(min_eigval, -1.0)
-        if wrong_min_eigval:
-            print(
-                " test_stability_check_py_interface failed: Returned minimum "
-                "eigenvalue wrong."
-            )
 
         # a logging function that raises must not be silent, the exception is reported
         # as the cause of a warning once the stability check has returned without an
@@ -695,7 +689,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             try:
-                stable_with_failed_logger, _ = stability_check(
+                stable_with_failed_logger = stability_check(
                     h_diag, mock_hess_x, n_param, settings, kappa=kappa
                 )
                 logger_error_reported = any(
@@ -718,7 +712,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         # call stability check python interface without a returned direction
         settings.logger = messages.append
-        stable_without_direction, _ = stability_check(
+        stable_without_direction = stability_check(
             h_diag, mock_hess_x, n_param, settings
         )
         if not stable_without_direction:
@@ -749,7 +743,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         settings_flag = c_bool.in_dll(lib, "stability_settings_passed")
         settings_flag.value = True
         interface_flag.value = False
-        stable_without_settings, _ = stability_check(h_diag, mock_hess_x, n_param)
+        stable_without_settings = stability_check(h_diag, mock_hess_x, n_param)
         no_settings_passed = (
             interface_flag.value and not settings_flag.value and stable_without_settings
         )
@@ -765,7 +759,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
             and test_logger
             and stable
             and not wrong_direction
-            and not wrong_min_eigval
             and logger_error_reported
             and stable_with_failed_logger
             and stable_without_direction
@@ -2064,7 +2057,7 @@ class PyIntegrationTests(unittest.TestCase):
             hess_x(v, hv)
 
         kappa = np.zeros(self.n_param)
-        stable, min_eigval = stability_check(
+        stable = stability_check(
             h_diag,
             watching_hess_x,
             self.n_param,
@@ -2078,7 +2071,7 @@ class PyIntegrationTests(unittest.TestCase):
                 "stability of minimum."
             )
             test_passed = False
-        if stability_state.iteration <= 0 or stability_state.min_eigval != min_eigval:
+        if stability_state.iteration <= 0:
             print(" test_stability_check_py failed: State was not returned.")
             test_passed = False
 
@@ -2105,10 +2098,10 @@ class PyIntegrationTests(unittest.TestCase):
                 "counter was not populated."
             )
             test_passed = False
-        if min_eigval <= 0.0:
+        if stability_state.min_eigval <= 0.0:
             print(
-                " test_stability_check_py failed: Stability check does not return a "
-                "positive lowest eigenvalue for minimum."
+                " test_stability_check_py failed: State does not hold a positive "
+                "lowest eigenvalue for minimum."
             )
             test_passed = False
 
@@ -2117,7 +2110,7 @@ class PyIntegrationTests(unittest.TestCase):
         # trial vector function so that the extra trial vectors are taken from the
         # approximate Hessian linear transformation
         settings.get_extra_trial_vectors = None
-        stable, _ = stability_check(h_diag, hess_x, self.n_param, settings)
+        stable = stability_check(h_diag, hess_x, self.n_param, settings)
         if not stable:
             print(
                 " test_stability_check_py failed: Stability incorrectly classifies "
@@ -2136,8 +2129,8 @@ class PyIntegrationTests(unittest.TestCase):
         # has to be a normalized direction of negative curvature
         H = self._hess(self.saddle_point)
         h_diag = np.diag(H).copy()
-        stable, min_eigval = stability_check(
-            h_diag, hess_x, self.n_param, settings, kappa=kappa
+        stable = stability_check(
+            h_diag, hess_x, self.n_param, settings, kappa=kappa, state=stability_state
         )
         if stable:
             print(
@@ -2145,10 +2138,10 @@ class PyIntegrationTests(unittest.TestCase):
                 "stability of saddle point."
             )
             test_passed = False
-        if min_eigval >= 0.0:
+        if stability_state.min_eigval >= 0.0:
             print(
-                " test_stability_check_py failed: Stability check does not return a "
-                "negative lowest eigenvalue for saddle point."
+                " test_stability_check_py failed: State does not hold a negative "
+                "lowest eigenvalue for saddle point."
             )
             test_passed = False
         if abs(np.linalg.norm(kappa) - 1.0) > 1e-6:

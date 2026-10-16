@@ -1117,7 +1117,7 @@ def stability_check(
     settings: Optional[StabilitySettings] = None,
     state: Optional[StabilityState] = None,
     kappa: Optional[np.ndarray] = None,
-) -> Tuple[bool, float]:
+) -> bool:
     # collector for exceptions raised inside the callback interfaces, adopted from a
     # factory-produced callback when there is one so its exceptions are chained too
     exception = adopt_collector(hess_x)
@@ -1140,12 +1140,10 @@ def stability_check(
         POINTER(StabilitySettingsC),
         POINTER(StabilityStateC),
         POINTER(c_real),
-        POINTER(c_real),
     ]
 
-    # initialize return variables
+    # initialize return variable
     stable = c_bool(False)
-    min_eigval = c_real(float("nan"))
 
     # call Fortran function
     error = lib.stability_check(
@@ -1156,9 +1154,8 @@ def stability_check(
         byref(settings.settings_c) if settings is not None else None,
         byref(state.state_c) if state is not None else None,
         kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
-        byref(min_eigval),
     )
 
     raise_on_failure(error, exception, "stability check")
 
-    return stable.value, min_eigval.value
+    return stable.value

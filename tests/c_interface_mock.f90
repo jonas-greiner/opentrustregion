@@ -182,10 +182,9 @@ contains
 
     end function mock_solver_c_wrapper
 
-    function mock_stability_check_c_wrapper(h_diag_c, hess_x_c_funptr, n_param_c, &
-                                            stable_c, settings_c, state_c_ptr, &
-                                            kappa_c_ptr, min_eigval_c_ptr) &
-        result(error_c) bind(C, name="mock_stability_check")
+    function mock_stability_check_c_wrapper( &
+        h_diag_c, hess_x_c_funptr, n_param_c, stable_c, settings_c, state_c_ptr, &
+        kappa_c_ptr) result(error_c) bind(C, name="mock_stability_check")
         !
         ! this function is a mock routine for the stability check C wrapper function
         !
@@ -202,11 +201,11 @@ contains
         integer(c_ip), intent(in), value :: n_param_c
         logical(c_bool), intent(out) :: stable_c
         type(stability_settings_type_c), intent(in), optional :: settings_c
-        type(c_ptr), intent(in), value :: state_c_ptr, kappa_c_ptr, min_eigval_c_ptr
+        type(c_ptr), intent(in), value :: state_c_ptr, kappa_c_ptr
         integer(c_ip) :: error_c
 
         type(c_ptr) :: context
-        real(c_rp), pointer :: kappa_ptr(:), min_eigval_ptr
+        real(c_rp), pointer :: kappa_ptr(:)
         type(stability_state_type_c), pointer :: state_c
         procedure(logger_c_type), pointer :: logger_funptr
         procedure(hess_x_c_type), pointer :: hess_x_funptr
@@ -311,10 +310,6 @@ contains
         if (c_associated(kappa_c_ptr)) then
             call c_f_pointer(kappa_c_ptr, kappa_ptr, [n_param])
             kappa_ptr = 1.0_c_rp
-        end if
-        if (c_associated(min_eigval_c_ptr)) then
-            call c_f_pointer(min_eigval_c_ptr, min_eigval_ptr)
-            min_eigval_ptr = -1.0_c_rp
         end if
         error_c = 0
 

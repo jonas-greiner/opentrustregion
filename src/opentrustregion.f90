@@ -636,7 +636,7 @@ contains
     end subroutine solver
 
     subroutine stability_check(h_diag, hess_x_funptr, stable, error, settings, state, &
-                               kappa, min_eigval)
+                               kappa)
         !
         ! this subroutine performs a stability check
         !
@@ -646,7 +646,7 @@ contains
         integer(ip), intent(out) :: error
         type(stability_settings_type), intent(in), optional :: settings
         type(stability_state_type), intent(out), target, optional :: state
-        real(rp), intent(out), optional :: kappa(:), min_eigval
+        real(rp), intent(out), optional :: kappa(:)
 
         integer(ip) :: n_param
         real(rp), allocatable :: red_space_basis(:, :), eigvals(:), eigvecs(:, :)
@@ -736,9 +736,8 @@ contains
             return
         end if
 
-        ! return lowest eigenvector and eigenvalue
+        ! return lowest eigenvector, whose eigenvalue the state holds
         if (present(kappa)) kappa = eigvecs(:, 1)
-        if (present(min_eigval)) min_eigval = eigval
 
         ! determine if saddle point
         stable = eigval > stability_thresh
@@ -774,7 +773,6 @@ contains
         integer(ip), intent(out) :: error
 
         procedure(hess_x_type), pointer :: stability_hess_x_funptr
-        real(rp) :: min_eigval
 
         ! initialize error flag
         error = 0
@@ -790,15 +788,16 @@ contains
         ! solver's
         call stability_check(h_diag, stability_hess_x_funptr, stable, error, &
                              settings%stability_settings, state=state%stability_state, &
-                             kappa=kappa, min_eigval=min_eigval)
+                             kappa=kappa)
         state%n_hess_x = state%n_hess_x + state%stability_state%n_hess_x
         if (error /= 0) return
         if (stable) return
 
-        ! move far enough along the unstable mode so that gradient is increased by one
-        ! order of magnitude
-        call saddle_point_step(grad, grad_rms, min_eigval, state%trust_radius, &
-                               settings, kappa, kappa_norm)
+        ! move far enough along the unstable mode, whose eigenvalue the state of the
+        ! stability check holds, so that gradient is increased by one order of
+        ! magnitude
+        call saddle_point_step(grad, grad_rms, state%stability_state%min_eigval, &
+                               state%trust_radius, settings, kappa, kappa_norm)
         if (imacro == 1) then
             call settings%log(started_at_saddle_point_warning_msg, verbosity_warning)
         else if (associated(settings%stability_hess_x)) then

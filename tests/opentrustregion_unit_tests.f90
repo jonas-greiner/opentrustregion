@@ -3285,8 +3285,8 @@ contains
             fault_origins(6) = [error_hess_x, error_precond, error_project, &
                                 error_get_extra_trial_vectors, error_hess_x, &
                                 error_conv_check]
-        real(rp) :: h_diag(n_param), direction(n_param), min_eigval, &
-                    hess_eigvals(n_param), hess_eigvecs(n_param, n_param)
+        real(rp) :: h_diag(n_param), direction(n_param), hess_eigvals(n_param), &
+                    hess_eigvecs(n_param, n_param)
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable, expected_calls(n_fault_callbacks)
         integer(ip) :: error, i, i_point, i_space, i_solver, i_config, callback, &
@@ -3333,7 +3333,7 @@ contains
                             trim(point_names(i_point))
                 context%n_hess_x_calls = 0
                 call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                                     state, direction, min_eigval)
+                                     state, direction)
                 if (error /= 0) then
                     write(stderr, *) "test_stability_check failed: Produced error "// &
                         "for "//trim(case_name)//"."
@@ -3344,9 +3344,9 @@ contains
                         "incorrectly classified for "//trim(case_name)//"."
                     test_stability_check = .false.
                 end if
-                if (abs(min_eigval - hess_eigvals(1)) > tol) then
+                if (abs(state%min_eigval - hess_eigvals(1)) > tol) then
                     write(stderr, *) "test_stability_check failed: Lowest "// &
-                        "eigenvalue not returned for "//trim(case_name)//"."
+                        "eigenvalue not held by the state for "//trim(case_name)//"."
                     test_stability_check = .false.
                 end if
                 if (abs(abs(dot_product(direction, hess_eigvecs(:, 1))) - 1.0_rp) > &
@@ -3355,11 +3355,10 @@ contains
                         "the lowest eigenvalue not returned for "//trim(case_name)//"."
                     test_stability_check = .false.
                 end if
-                if (state%iteration < 1 .or. &
-                    abs(state%min_eigval - min_eigval) > tol .or. &
-                    state%residual_rms >= settings%conv_tol) then
-                    write(stderr, *) "test_stability_check failed: Iteration, "// &
-                        "lowest eigenvalue or its residual not in the state for "// &
+                if (state%iteration < 1 .or. state%residual_rms >= settings%conv_tol) &
+                    then
+                    write(stderr, *) "test_stability_check failed: Iteration or "// &
+                        "residual of the lowest eigenvalue not in the state for "// &
                         trim(case_name)//"."
                     test_stability_check = .false.
                 end if
@@ -3766,8 +3765,8 @@ contains
         ! nested stability check settings and check that this context reaches the
         ! callback functions of the stability check, that its Hessian linear
         ! transformations are added to the solver's counter, that a step along the
-        ! unstable mode is returned with its norm and that the warning for starting at a
-        ! saddle point is printed
+        ! unstable mode is returned with its norm and the length its eigenvalue sets
+        ! and that the warning for starting at a saddle point is printed
         call setup_settings(settings, context)
         state%n_hess_x = 5
         context%vars = [0.0_rp, 0.0_rp]
@@ -3793,6 +3792,17 @@ contains
         if (abs(kappa_norm - norm2(kappa)) > tol) then
             write(stderr, *) "test_check_stationary_point failed: Norm of step "// &
                 "along unstable mode not returned."
+            test_check_stationary_point = .false.
+        end if
+
+        ! the step along the unstable mode, whose eigenvalue the stability check leaves
+        ! in its state, has to raise the linearized gradient RMS |lambda| |kappa| /
+        ! sqrt(n_param) from zero to ten times the convergence threshold for the
+        ! eigenvalue -2 of the double well at its saddle point
+        if (abs(2.0_rp * kappa_norm / sqrt(2.0_rp) - 10.0_rp * settings%conv_tol) > &
+            tol) then
+            write(stderr, *) "test_check_stationary_point failed: Step along "// &
+                "unstable mode not scaled by the lowest Hessian eigenvalue."
             test_check_stationary_point = .false.
         end if
         if (.not. host_context_reached("check_stationary_point", context)) &

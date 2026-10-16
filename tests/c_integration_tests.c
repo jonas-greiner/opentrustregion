@@ -339,8 +339,8 @@ static c_int conv_check_nested(c_bool *converged, void *context) {
     for (int i = 0; i < N_PARAM; i++)
       h_diag[i] = ctx->hess[i][i];
     ctx->in_nested = 1;
-    ctx->nested_check_error = stability_check(h_diag, inner_hess_x, N_PARAM, &stable,
-                                              &inner, NULL, NULL, NULL);
+    ctx->nested_check_error =
+        stability_check(h_diag, inner_hess_x, N_PARAM, &stable, &inner, NULL, NULL);
     ctx->in_nested = 0;
   }
   return 0;
@@ -905,14 +905,14 @@ bool test_stability_check_c(void) {
   c_real h_diag[N_PARAM];
   for (int i = 0; i < N_PARAM; i++)
     h_diag[i] = ctx.hess[i][i];
-  /* the lowest eigenvalue starts negative so that its write-back is detected */
+  /* the state starts from zero, so that a lowest eigenvalue that is not written back
+   * is detected */
   c_real direction[N_PARAM];
-  c_real min_eigval = -1.0;
   c_bool stable = false;
   stability_state_type state = {0};
   ctx.stability_state = &state;
   c_int error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, &state,
-                                direction, &min_eigval);
+                                direction);
   if (error != 0) {
     fprintf(stderr, "test_stability_check_c failed: Produced error.\n");
     ok = false;
@@ -954,12 +954,12 @@ bool test_stability_check_c(void) {
                     "counter was not populated.\n");
     ok = false;
   }
-  if (min_eigval <= 0.0) {
-    fprintf(stderr, "test_stability_check_c failed: Stability check does not return a "
-                    "positive lowest eigenvalue for minimum.\n");
+  if (state.min_eigval <= 0.0) {
+    fprintf(stderr, "test_stability_check_c failed: State does not hold a positive "
+                    "lowest eigenvalue for minimum.\n");
     ok = false;
   }
-  if (state.iteration <= 0 || state.min_eigval != min_eigval) {
+  if (state.iteration <= 0) {
     fprintf(stderr, "test_stability_check_c failed: State was not returned.\n");
     ok = false;
   }
@@ -977,8 +977,8 @@ bool test_stability_check_c(void) {
     h_diag[i] = ctx.hess[i][i];
 
   stable = true;
-  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL,
-                          direction, &min_eigval);
+  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, &state,
+                          direction);
   if (error != 0) {
     fprintf(stderr, "test_stability_check_c failed: Produced error near saddle.\n");
     ok = false;
@@ -989,9 +989,9 @@ bool test_stability_check_c(void) {
     ok = false;
   }
 
-  if (min_eigval >= 0.0) {
-    fprintf(stderr, "test_stability_check_c failed: Stability check does not return a "
-                    "negative lowest eigenvalue for saddle point.\n");
+  if (state.min_eigval >= 0.0) {
+    fprintf(stderr, "test_stability_check_c failed: State does not hold a negative "
+                    "lowest eigenvalue for saddle point.\n");
     ok = false;
   }
 
@@ -1018,8 +1018,7 @@ bool test_stability_check_c(void) {
    * transformation */
   settings.get_extra_trial_vectors = NULL;
   stable = true;
-  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL, NULL,
-                          NULL);
+  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL, NULL);
   if (error != 0) {
     fprintf(stderr, "test_stability_check_c failed: Produced error when not passing "
                     "direction.\n");
@@ -1049,7 +1048,7 @@ bool test_stability_check_c(void) {
   for (int i_case = 0; i_case < 2; i_case++) {
     start_stderr_capture();
     error = stability_check(h_diag, settingless_hess_x, N_PARAM, &stable,
-                            case_settings[i_case], NULL, NULL, NULL);
+                            case_settings[i_case], NULL, NULL);
     if (!stop_stderr_capture(case_warnings[i_case])) {
       fprintf(
           stderr,

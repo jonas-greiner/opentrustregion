@@ -34,9 +34,6 @@ module opentrustregion_mock
     ! stability the mock stability check returns, which a test sets
     logical :: mock_stable = .true.
 
-    ! minimum eigenvalue the mock stability check returns
-    real(rp), parameter :: mock_min_eigval = -1.0_rp
-
     ! settings and callback bundles the mock solver and stability check received,
     ! the bundle of the settings and that of the nested settings, so that a test can
     ! check what the C wrapper handed over
@@ -44,10 +41,10 @@ module opentrustregion_mock
     type(stability_settings_type) :: received_stability_settings
     type(c_callbacks_type) :: received_callbacks, received_stability_callbacks
 
-    ! whether the mock stability check received the optional direction and minimum
-    ! eigenvalue, so that a test can check that the C wrapper passes these on only
-    ! where the caller provides memory for them
-    logical :: kappa_received, min_eigval_received
+    ! whether the mock stability check received the optional direction, so that a test
+    ! can check that the C wrapper passes it on only where the caller provides memory
+    ! for it
+    logical :: kappa_received
 
     ! whether the callback bundles the mock solver and stability check received refer
     ! to the state record they were given, so that a test can check that the C
@@ -182,7 +179,7 @@ contains
     end subroutine mock_solver
 
     subroutine mock_stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                                    state, kappa, min_eigval)
+                                    state, kappa)
         !
         ! this subroutine is a mock routine for the stability check to test the C
         ! interface
@@ -199,7 +196,7 @@ contains
         integer(ip), intent(out) :: error
         type(stability_settings_type), intent(in), optional :: settings
         type(stability_state_type), intent(out), target, optional :: state
-        real(rp), intent(out), optional :: kappa(:), min_eigval
+        real(rp), intent(out), optional :: kappa(:)
 
         ! assume tests pass
         test_passed = .true.
@@ -271,7 +268,6 @@ contains
             received_callbacks = callbacks
         end select
         kappa_received = present(kappa)
-        min_eigval_received = present(min_eigval)
 
         ! record whether the callback bundle refers to the state record
         stability_state_bundled = .false.
@@ -284,7 +280,6 @@ contains
 
         ! set optional output quantities and state
         if (present(kappa)) kappa = 1.0_rp
-        if (present(min_eigval)) min_eigval = mock_min_eigval
         if (present(state)) state = mock_stability_state
 
     end subroutine mock_stability_check

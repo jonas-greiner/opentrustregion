@@ -589,11 +589,10 @@ contains
                                    default_stability_settings
         use c_interface, only: stability_settings_type_c, stability_state_type_c, &
                                stability_check, stability_check_c_wrapper
-        use opentrustregion_mock, only: mock_stability_check, test_passed, mock_error, &
-                                        mock_stability_state, mock_stable, &
-                                        mock_min_eigval, received_stability_settings, &
-                                        received_callbacks, kappa_received, &
-                                        min_eigval_received, stability_state_bundled
+        use opentrustregion_mock, only: &
+            mock_stability_check, test_passed, mock_error, mock_stability_state, &
+            mock_stable, received_stability_settings, received_callbacks, &
+            kappa_received, stability_state_bundled
         use test_reference, only: get_reference_stability_values, &
                                   get_reference_stability_state_values, host_context, &
                                   arm_host_context_c, host_context_reached, &
@@ -601,16 +600,16 @@ contains
 
         type(c_funptr) :: hess_x_c_funptr
         real(c_rp) :: h_diag(n_param)
-        real(c_rp), target :: kappa(n_param), min_eigval
+        real(c_rp), target :: kappa(n_param)
         type(stability_settings_type_c) :: settings
         type(stability_state_type_c), target :: state
         logical(c_bool) :: stable
-        type(c_ptr) :: kappa_c_ptr, min_eigval_c_ptr
+        type(c_ptr) :: kappa_c_ptr
         integer(c_ip) :: error
         integer(ip) :: i_case
         character(len=45), parameter :: case_names(2) = &
-            [character(len=45) :: "without returned direction and eigenvalue", &
-             "with returned direction and eigenvalue"]
+            [character(len=45) :: "without returned direction", &
+             "with returned direction"]
 
         ! assume tests pass
         test_stability_check_c_wrapper = .true.
@@ -640,15 +639,12 @@ contains
             ! set host context
             call arm_host_context_c(settings%context)
 
-            ! associate returned direction and eigenvalue pointers
+            ! associate returned direction pointer
             kappa = 0.0_c_rp
-            min_eigval = 0.0_c_rp
             if (i_case == 1) then
                 kappa_c_ptr = c_null_ptr
-                min_eigval_c_ptr = c_null_ptr
             else
                 kappa_c_ptr = c_loc(kappa)
-                min_eigval_c_ptr = c_loc(min_eigval)
             end if
 
             ! clear the result of the mock so that a missing call is detected, and
@@ -663,7 +659,7 @@ contains
             stable = .not. mock_stable
             error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, &
                                               stable, settings, c_loc(state), &
-                                              kappa_c_ptr, min_eigval_c_ptr)
+                                              kappa_c_ptr)
 
             ! check if logging subroutine was correctly called
             if (.not. host_context%logger_called) then
@@ -697,22 +693,12 @@ contains
                     "direction wrong "//trim(case_names(i_case))//"."
                 test_stability_check_c_wrapper = .false.
             end if
-            if (i_case == 2 .and. abs(min_eigval - mock_min_eigval) > tol_c) then
-                write(stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
-                    "minimum eigenvalue wrong "//trim(case_names(i_case))//"."
-                test_stability_check_c_wrapper = .false.
-            end if
 
-            ! check that the direction and the minimum eigenvalue are only requested
-            ! from the stability check where the caller provides memory for them
+            ! check that the direction is only requested from the stability check where
+            ! the caller provides memory for it
             if (kappa_received .neqv. c_associated(kappa_c_ptr)) then
                 write(stderr, *) "test_stability_check_c_wrapper failed: Direction "// &
                     "requested wrongly "//trim(case_names(i_case))//"."
-                test_stability_check_c_wrapper = .false.
-            end if
-            if (min_eigval_received .neqv. c_associated(min_eigval_c_ptr)) then
-                write(stderr, *) "test_stability_check_c_wrapper failed: Minimum "// &
-                    "eigenvalue requested wrongly "//trim(case_names(i_case))//"."
                 test_stability_check_c_wrapper = .false.
             end if
 
@@ -753,7 +739,7 @@ contains
         settings%initialized = .false.
         test_passed = .false.
         error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
-                                          settings, c_null_ptr, c_null_ptr, c_null_ptr)
+                                          settings, c_null_ptr, c_null_ptr)
         if (c_associated(received_callbacks%host_context)) then
             write(stderr, *) "test_stability_check_c_wrapper failed: Host context "// &
                 "passed for settings that were not initialized."
@@ -771,9 +757,9 @@ contains
         ! receive the default settings and a callback bundle that holds the given
         ! callback function but neither optional callback functions nor a host context
         test_passed = .false.
-        error = stability_check_c_wrapper( &
-            h_diag, hess_x_c_funptr, n_param_c, stable, state_c_ptr=c_null_ptr, &
-            kappa_c_ptr=c_null_ptr, min_eigval_c_ptr=c_null_ptr)
+        error = stability_check_c_wrapper(h_diag, hess_x_c_funptr, n_param_c, stable, &
+                                          state_c_ptr=c_null_ptr, &
+                                          kappa_c_ptr=c_null_ptr)
         if (received_stability_settings /= default_stability_settings) then
             write(stderr, *) "test_stability_check_c_wrapper failed: Default "// &
                 "settings not passed without settings."

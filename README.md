@@ -297,7 +297,6 @@ A separate `stability_check` subroutine is available to verify whether the curre
 - **`settings`** (settings_type, optional): Settings object which controls optional arguments as described below. The stability check only reads it. Without it, the default settings are used.
 - **`state`** (stability_state_type, optional): Record that the stability check keeps up to date during its iterations and that holds its final state once it returns, as described below.
 - **`kappa`** (real array, optional): If provided, receives the normalized eigenvector of the lowest Hessian eigenvalue, written in-place, whether the current point is stable or not. At an unstable point (as can be checked from `stable`), this is the descent direction along the unstable mode.
-- **`min_eigval`** (real, optional): If provided, receives the lowest Hessian eigenvalue.
 
 ---
 
@@ -308,7 +307,6 @@ use opentrustregion, only: ip, rp, stability_settings_type, stability_state_type
                            hess_x_type, stability_check
 
 real(rp), allocatable :: h_diag(:), kappa(:)
-real(rp) :: min_eigval
 procedure(hess_x_type), pointer :: hess_x_funptr
 integer(ip) :: n_param, error
 logical :: stable
@@ -331,9 +329,10 @@ settings%context => host_data
 
 ! run stability check
 call stability_check(h_diag, hess_x_funptr, stable, error, settings, state, &
-                     kappa=kappa, min_eigval=min_eigval)
+                     kappa=kappa)
 
 ! read the final state
+print *, "Lowest Hessian eigenvalue:", state%min_eigval
 print *, "Number of Hessian linear transformations:", state%n_hess_x
 ```
 
@@ -342,8 +341,8 @@ print *, "Number of Hessian linear transformations:", state%n_hess_x
 - Stability settings are initialized via the `init()` method of the derived type and can be overridden (here, `conv_tol` and `n_iter`).
 - `host_data` is a variable of any type declared with the `target` attribute. Every callback function receives it as its last argument, declared as `class(*), intent(in), pointer :: context`, and recovers its own type with `select type`. The `intent(in)` applies to the pointer rather than the data, so a callback function may modify `host_data` but not point `context` elsewhere. Leaving `settings%context` unset is fine; the callback functions then receive an unassociated pointer.
 - The `stable` logical output receives the result of the stability check.
-- The settings, the state and the lowest eigenvector `kappa` and eigenvalue `min_eigval` are optional: without settings, the default settings are used, and the others are only returned if provided.
-- After the call, `state` holds the final state of the stability check (here, `n_hess_x`), see [Output](#output-1). The settings are left unchanged.
+- The settings, the state and the lowest eigenvector `kappa` are optional: without settings, the default settings are used, and the others are only returned if provided.
+- After the call, `state` holds the final state of the stability check (here, the lowest eigenvalue `min_eigval` and `n_hess_x`), see [Output](#output-1). The settings are left unchanged.
 
 ---
 
@@ -372,16 +371,16 @@ strcpy(settings.diag_solver, "jacobi-davidson");
 // hand the callback functions whatever the host needs to reach its own data
 settings.context = &host_data;
 
-// pointers to Hessian diagonal and lowest eigenvector, and lowest eigenvalue
+// pointers to Hessian diagonal and lowest eigenvector
 c_real* h_diag;
 c_real* kappa;
-c_real min_eigval;
 
 // run stability check
 c_int error = stability_check(h_diag, hess_x_funptr, n_param, &stable, &settings,
-                              &state, kappa, &min_eigval);
+                              &state, kappa);
 
 // read the final state
+printf("Lowest Hessian eigenvalue: %f\n", state.min_eigval);
 printf("Number of Hessian linear transformations: %lld\n", (long long)state.n_hess_x);
 ```
 
@@ -390,8 +389,8 @@ printf("Number of Hessian linear transformations: %lld\n", (long long)state.n_he
 - `host_data` is any host object. Every callback function receives `&host_data` as its `void *context` argument and casts it back. Leaving `settings.context` as `NULL` is fine; the callback functions then receive `NULL`.
 - Stability settings are initialized via a small helper function `stability_settings_init()`, which returns a struct with default values; individual settings (here, `conv_tol` and `n_iter`) can then be overridden.
 - The `stable` output receives the result of the stability check which directly returns an error code in typical C fashion.
-- `kappa` and `min_eigval` receive the lowest eigenvector and eigenvalue; either can be `NULL` to skip it. So can `state`, and `settings` can be `NULL` to use the default settings.
-- After the call, `state` holds the final state of the stability check (here, `n_hess_x`), also after an error, see [Output](#output-1). The state struct needs no initialization, and the settings are left unchanged.
+- `kappa` receives the lowest eigenvector and can be `NULL` to skip it. So can `state`, and `settings` can be `NULL` to use the default settings.
+- After the call, `state` holds the final state of the stability check (here, the lowest eigenvalue `min_eigval` and `n_hess_x`), also after an error, see [Output](#output-1). The state struct needs no initialization, and the settings are left unchanged.
 
 ---
 
@@ -414,11 +413,10 @@ h_diag = np.asarray(h_diag, dtype=np.float64)
 kappa = np.empty(n_param, dtype=np.float64)
 
 # run stability check
-stable, min_eigval = stability_check(
-    h_diag, hess_x, n_param, settings, state, kappa=kappa
-)
+stable = stability_check(h_diag, hess_x, n_param, settings, state, kappa=kappa)
 
 # read the final state
+print(f"Lowest Hessian eigenvalue: {state.min_eigval}")
 print(f"Number of Hessian linear transformations: {state.n_hess_x}")
 ```
 
@@ -427,10 +425,9 @@ print(f"Number of Hessian linear transformations: {state.n_hess_x}")
 - Stability settings are initialized via the `StabilitySettings` class, which returns an object with default values; individual settings (here, `conv_tol`) can then be overridden.
 - There is no `context` setting in Python. Any callable works as a callback function, so a closure, a bound method or a `functools.partial` already carries whatever host data the callback function needs.
 - The `stable` output receives the result of the stability check and errors can be caught in pythonic fashion in the form of a `RuntimeError`.
-- `stability_check` always returns the stability and the lowest eigenvalue `min_eigval`.
 - The lowest eigenvector is written into `kappa` if it is provided.
 - The settings and the state are optional: without settings, the default settings are used, and the state is only needed to read it.
-- After the call, `state` holds the final state of the stability check (here, `n_hess_x`), see [Output](#output-1), whose fields are read-only attributes. The settings are left unchanged.
+- After the call, `state` holds the final state of the stability check (here, the lowest eigenvalue `min_eigval` and `n_hess_x`), see [Output](#output-1), whose fields are read-only attributes. The settings are left unchanged.
 
 ### Optional Settings
 The stability check can be fine-tuned using the following settings:
@@ -459,7 +456,7 @@ The stability check can be fine-tuned using the following settings:
 The stability check keeps the state it is given up to date during its iterations, starting from the default values on every call, and leaves its final state in it when it returns, also after an error. As for the solver, a callback function can therefore read the current state. The state holds the following fields:
 
 - **`iteration`** (integer): Current iteration of the diagonalization.
-- **`min_eigval`** (real): Current estimate of the lowest Hessian eigenvalue.
+- **`min_eigval`** (real): Current estimate of the lowest Hessian eigenvalue, once the check has converged the lowest eigenvalue.
 - **`residual_rms`** (real): RMS of the residual of this estimate.
 - **`n_hess_x`** (integer): Number of Hessian linear transformations (`hess_x`). The approximate Hessian linear transformations of `approx_hess_x` are not counted.
 
