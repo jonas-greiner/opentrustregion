@@ -44,7 +44,7 @@ module opentrustregion
         numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
         hess_symm_thres = 1e-12_rp, residual_norm_floor = 1e-12_rp, &
         level_shift_local_thres = 1e-12_rp, newton_eigval_thresh = -1e-5_rp, &
-        stability_thresh = -1e-2_rp, precond_rel_floor_factor = 1e-2_rp
+        stability_thresh = -1e-3_rp, precond_rel_floor_factor = 1e-2_rp
 
     ! define verbosity levels
     integer(ip), parameter :: verbosity_silent = 0, verbosity_error = 1, &

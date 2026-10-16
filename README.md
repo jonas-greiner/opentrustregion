@@ -292,7 +292,7 @@ A separate `stability_check` subroutine is available to verify whether the curre
   - Accepts a trial vector and writes the result of the Hessian transformation into an output array (real array, written in-place)
   - Returns an integer error code (0 for success, positive integers < 100 for errors)
   - Receives the host context as its last argument.
-- **`stable`** (boolean): Returns whether the current point is stable.
+- **`stable`** (boolean): Returns whether the current point is stable, i.e. whether the lowest Hessian eigenvalue is above -1e-3; a less negative eigenvalue is not distinguished from numerical noise, such as that of the integration grid of a density functional.
 - **`error`** (integer): An integer code indicating the success or failure of the stability check. The error code structure is explained below.
 - **`settings`** (settings_type, optional): Settings object which controls optional arguments as described below. The stability check only reads it. Without it, the default settings are used.
 - **`state`** (stability_state_type, optional): Record that the stability check keeps up to date during its iterations and that holds its final state once it returns, as described below.
