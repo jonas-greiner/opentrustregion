@@ -654,11 +654,12 @@ contains
         ! multisecant and symmetrized ARH only in the closed-shell case, where its
         ! potential differences lie in the span of the density matrix differences,
         ! while every ARH type in the OAO basis has to keep the whole history in the
-        ! linear system, drop the entries beyond the step-length cutoff and those whose
-        ! response is noise from the non-linear system and cache every quantity in the
-        ! basis of its own system, without evaluating the density matrix or changing
-        ! the history
+        ! linear system, drop the entries beyond the window of the trust radius from
+        ! the non-linear system, keep them without a state, leave the non-linear system
+        ! out without a non-linear response and cache every quantity in the basis of
+        ! its own system, without evaluating the density matrix or changing the history
         !
+        use opentrustregion, only: solver_state_type
         use otr_arh, only: arh_type, arh_types, arh_oao_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
@@ -678,13 +679,15 @@ contains
         type(oao_type), allocatable, target :: oao
         type(mo_type), allocatable, target :: mo
         class(arh_type), allocatable, target :: arh
+        type(solver_state_type), target :: state
         integer(ip), intent(in) :: n_particle
         character(len=*), intent(in) :: test_name
         logical :: passed
 
-        integer(ip), parameter :: n_hist = 3, n_noisy = 3
-        real(rp), parameter :: noisy_scales(n_noisy) = [1e-3_rp, 3e-3_rp, 1e-2_rp], &
-                               duplicate_offset = 1e-3_rp
+        ! trust radius of every case of the OAO basis, of which the third has no state
+        integer(ip), parameter :: n_hist = 3, n_cases = 4
+        real(rp), parameter :: case_trust_radii(n_cases) = &
+            [1.0_rp, 1e-4_rp, 0.0_rp, 1.0_rp]
 
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), step_mo(n_mo, n_mo, n_particle), &
@@ -694,7 +697,7 @@ contains
                                  dm_list(:, :, :, :), current(:, :, :, :), &
                                  lists(:, :, :, :, :)
         integer(ip) :: n_pot, n_list, n_linear, n_nonlinear, n_systems, n_terms, i, j, &
-                       k, i_case, i_type, i_noisy, error
+                       k, i_case, i_type, error
         logical :: built
         character(len=:), allocatable :: case_arh_type, case_name
 
@@ -840,52 +843,43 @@ contains
         end do
         dm_hist = oao%dm_oao
 
-        ! build the model from a history of independent points, one spanning very
-        ! different step lengths and one whose non-linear response is noise in one
-        ! channel at a time
-        do i_case = 1, 2 + n_particle
-            i_noisy = i_case - 2
-            n_list = merge(n_noisy, 2_ip, i_noisy > 0)
+        ! build the model from a history of independent points within the window of
+        ! the trust radius, from one spanning very different step lengths for a trust
+        ! radius whose window only holds the short step and without a state, and from
+        ! a history of independent points without a non-linear response
+        n_list = 2
+        do i_case = 1, n_cases
             allocate(dm_list(n_ao, n_ao, n_particle, n_list), &
                      current(n_ao, n_ao, n_particle, n_pot), &
                      lists(n_ao, n_ao, n_particle, n_list, n_pot))
+            select case (i_case)
+            case (1)
+                case_name = "a history of independent points"
+            case (2)
+                case_name = "a history spanning very different step lengths"
+            case (3)
+                case_name = &
+                    "a history spanning very different step lengths without a state"
+            case default
+                case_name = "a history without a non-linear response"
+            end select
             do j = 1, n_particle
-                if (i_case == 1) then
-                    case_name = "a history of independent points"
-                    do k = 1, n_list
-                        call random_number(perturbation)
-                        dm_list(:, :, j, k) = oao%dm_oao(:, :, j) + 1e-2_rp * &
-                                              (perturbation + transpose(perturbation))
-                    end do
-                else if (i_case == 2) then
-                    case_name = "a history spanning very different step lengths"
+                if (i_case == 2 .or. i_case == 3) then
                     call random_number(perturbation)
                     dm_list(:, :, j, 1) = oao%dm_oao(:, :, j) + 1e-6_rp * &
                                           (perturbation + transpose(perturbation))
                     dm_list(:, :, j, 2) = generate_random_density_matrix(n_ao, n_occ(j))
                 else
-                    case_name = "a history whose non-linear response is noise in "// &
-                                "channel "//achar(iachar("0") + i_noisy)
                     do k = 1, n_list
                         call random_number(perturbation)
-                        dm_list(:, :, j, k) = oao%dm_oao(:, :, j) + noisy_scales(k) * &
+                        dm_list(:, :, j, k) = oao%dm_oao(:, :, j) + 1e-2_rp * &
                                               (perturbation + transpose(perturbation))
                     end do
-
-                    ! the last entry barely departs from the direction of the one
-                    ! before it, so that it stays linearly independent but contributes
-                    ! a residual far below the noise of the response, while still being
-                    ! admitted by the step-length screen
-                    call random_number(perturbation)
-                    dm_list(:, :, j, n_list) = &
-                        dm_list(:, :, j, n_list - 1) + &
-                        duplicate_offset * noisy_scales(n_list - 1) * &
-                        (perturbation + transpose(perturbation))
                 end if
             end do
 
-            ! potentials which are functions of the density, except for the non-linear
-            ! response of the channel under test, which is noise
+            ! potentials which are functions of the density, except for a non-linear
+            ! potential which does not change with the density
             do i = 1, n_pot
                 current(:, :, :, i) = mock_potential(mock_potential_factors(i), &
                                                      oao%dm_oao)
@@ -894,7 +888,8 @@ contains
                                                           dm_list(:, :, :, k))
                 end do
             end do
-            if (i_noisy > 0) call random_number(lists(:, :, i_noisy, :, n_pot))
+            if (i_case == 4) &
+                lists(:, :, :, :, n_pot) = spread(current(:, :, :, n_pot), 4, n_list)
 
             ! build the model for every ARH type on a newly set up ARH object
             do i_type = 1, size(arh_types)
@@ -902,6 +897,10 @@ contains
                 allocate(arh, source=arh_oao_type(oao))
                 call setup_settings(arh%settings, context)
                 arh%settings%arh_type = case_arh_type
+                if (i_case /= 3) then
+                    arh%state => state
+                    state%trust_radius = case_trust_radii(i_case)
+                end if
                 call build_from_history()
 
                 ! determine if the model is assembled from the history without
@@ -974,8 +973,9 @@ contains
                 ! determine if the linear system keeps the entire history, for
                 ! multisecant SR1 in both its Coulomb and its exact-exchange term,
                 ! while the non-linear system, which multisecant SR1 factorizes for
-                ! both channels together and the ARH family per channel, drops the far
-                ! and the noisy entries
+                ! both channels together and the ARH family per channel, drops the
+                ! entries beyond the window of the trust radius and is left out without
+                ! a non-linear response
                 n_systems = merge(1_ip, n_particle, case_arh_type == "ms_sr1")
                 n_terms = merge(2_ip, 1_ip, case_arh_type == "ms_sr1")
                 if (n_linear /= n_terms * n_particle * n_list) then
@@ -984,20 +984,20 @@ contains
                         case_name//"."
                     passed = .false.
                 end if
-                if (i_case == 1 .and. n_nonlinear /= n_systems * n_list) then
+                if ((i_case == 1 .or. i_case == 3) .and. &
+                    n_nonlinear /= n_systems * n_list) then
                     write(stderr, *) test_name//" failed: The non-linear system "// &
                         "does not keep every independent entry for "//case_arh_type// &
                         " and "//case_name//"."
                     passed = .false.
                 else if (i_case == 2 .and. n_nonlinear /= n_systems) then
                     write(stderr, *) test_name//" failed: The non-linear system "// &
-                        "does not drop the history entry beyond the step-length "// &
-                        "cutoff for "//case_arh_type//" and "//case_name//"."
+                        "does not drop the history entry beyond the window of the "// &
+                        "trust radius for "//case_arh_type//" and "//case_name//"."
                     passed = .false.
-                else if (i_noisy > 0 .and. n_nonlinear >= n_systems * n_list) then
-                    write(stderr, *) test_name//" failed: The non-linear system "// &
-                        "does not drop a history entry whose response is noise for "// &
-                        case_arh_type//" and "//case_name//"."
+                else if (i_case == 4 .and. n_nonlinear /= 0) then
+                    write(stderr, *) test_name//" failed: The non-linear system is "// &
+                        "not left out for "//case_arh_type//" and "//case_name//"."
                     passed = .false.
                 end if
 
@@ -1917,11 +1917,12 @@ contains
             ! this function checks the energy, gradient and Hessian diagonal evaluation
             ! for the closed- or open-shell case for orbitals parameterized in the OAO
             ! basis, which passes the Fock matrix in the history basis on to the
-            ! orbital basis and adds the point the orbitals are rotated away from to
-            ! the history
+            ! orbital basis, adds the point the orbitals are rotated away from to the
+            ! history and relates the step to its size in the trust-region metric the
+            ! state holds
             !
             use test_reference, only: arm_host_context, host_context_reached
-            use opentrustregion, only: hess_x_type
+            use opentrustregion, only: hess_x_type, solver_state_type
             use otr_common, only: hess_x_callback
             use otr_arh, only: arh_type
             use otr_oao, only: oao_type
@@ -1933,11 +1934,12 @@ contains
             type(test_context_type), target :: context
             type(oao_type), allocatable, target :: oao
             class(arh_type), allocatable, target :: arh
+            type(solver_state_type), target :: state
             integer(ip), intent(in) :: n_particle
             character(len=*), intent(in) :: test_name
             logical :: passed
 
-            real(rp), parameter :: basis_scale = 0.5_rp
+            real(rp), parameter :: basis_scale = 0.5_rp, metric_ratio = 4.0_rp
 
             real(rp), target :: dm_ao(n_ao, n_ao, n_particle)
             real(rp) :: dm_oao(n_ao, n_ao, n_particle), fock(n_ao, n_ao, n_particle), &
@@ -2040,6 +2042,15 @@ contains
                     passed = .false.
                 end if
 
+                ! determine if a call without an orbital rotation, which takes no step,
+                ! leaves the ratio of the step to its size in the trust-region metric
+                ! unchanged
+                if (abs(arh%step_norm_ratio - 1.0_rp) > tol) then
+                    write(stderr, *) test_name//" failed: Ratio of the step to its "// &
+                        "size in the trust-region metric changed without a step."
+                    passed = .false.
+                end if
+
                 ! call routine again without an orbital rotation and determine if the
                 ! quantities of the already initialized object are reused, even for a
                 ! vanishing energy, without rebuilding the static part of the Hessian
@@ -2070,8 +2081,11 @@ contains
 
                 ! rotate twice in a row, the second time for a model marked stale, and
                 ! save the quantities at the points the orbitals are rotated away from,
-                ! which the history has to retain with the latest first
+                ! which the history has to retain with the latest first, by steps whose
+                ! size in the trust-region metric the state holds
                 kappa = 0.1_rp
+                arh%state => state
+                state%step_size = norm2(kappa) / metric_ratio
                 do k = 2, 1, -1
                     dm_saved(:, :, :, k) = oao%dm_oao
                     potentials_saved(:, :, :, :, k) = stacked_potentials(arh, 0_ip)
@@ -2105,6 +2119,14 @@ contains
                         passed = .false.
                     end if
                 end do
+
+                ! determine if the ratio of the step to its size in the trust-region
+                ! metric is recorded
+                if (abs(arh%step_norm_ratio - metric_ratio) > tol) then
+                    write(stderr, *) test_name//" failed: Ratio of the step to its "// &
+                        "size in the trust-region metric not recorded."
+                    passed = .false.
+                end if
 
                 ! determine if the approximate Hessian model is assembled from the
                 ! history extended by the point the orbitals were rotated away from
@@ -4479,31 +4501,100 @@ contains
 
     end function test_truncated_eigval_inv
 
+    logical(c_bool) function test_history_window() bind(C)
+        !
+        ! this function tests the function which returns the longest step the
+        ! non-linear system of an ARH object may use, from the trust radius the record
+        ! of the solver state holds
+        !
+        use opentrustregion, only: solver_state_type
+        use otr_arh, only: arh_type, history_window_factor
+        use otr_oao, only: oao_type
+        use otr_common_test_reference, only: n_ao
+        use opentrustregion_unit_tests, only: test_context_type
+
+        real(rp), parameter :: trust_radius = 0.3_rp, metric_ratio = 0.5_rp
+
+        type(test_context_type), target :: context
+        type(oao_type), allocatable, target :: oao
+        class(arh_type), allocatable, target :: arh
+        type(solver_state_type), target :: state
+        real(rp), target :: dm_ao(n_ao, n_ao, 1)
+        real(rp) :: dm_oao(n_ao, n_ao, 1)
+
+        ! assume tests pass
+        test_history_window = .true.
+
+        ! set up the OAO and ARH objects
+        call setup_arh_and_scaled_oao_objects(arh, oao, 1.0_rp, dm_ao, dm_oao, context)
+
+        ! without a state, the whole history is used
+        if (arh%history_window() < huge(1.0_rp)) then
+            write(stderr, *) "test_history_window failed: The history is "// &
+                "restricted without a state."
+            test_history_window = .false.
+        end if
+
+        ! before the solver sets a trust radius, the whole history is used
+        arh%state => state
+        if (arh%history_window() < huge(1.0_rp)) then
+            write(stderr, *) "test_history_window failed: The history is "// &
+                "restricted before the solver set a trust radius."
+            test_history_window = .false.
+        end if
+
+        ! the trust radius is converted into a distance between density matrices
+        state%trust_radius = trust_radius
+        if (abs(arh%history_window() - &
+                history_window_factor * sqrt(2.0_rp) * trust_radius) > tol) then
+            write(stderr, *) "test_history_window failed: Incorrect window for a "// &
+                "spherical trust region."
+            test_history_window = .false.
+        end if
+
+        ! and into a step length with the ratio of the last step to its size in the
+        ! trust-region metric
+        arh%step_norm_ratio = metric_ratio
+        if (abs(arh%history_window() - history_window_factor * sqrt(2.0_rp) * &
+                metric_ratio * trust_radius) > tol) then
+            write(stderr, *) "test_history_window failed: Incorrect window for a "// &
+                "trust region in another metric."
+            test_history_window = .false.
+        end if
+
+        ! deallocate ARH and OAO objects
+        deallocate(arh, oao)
+
+    end function test_history_window
+
     logical(c_bool) function test_history_step_mask() bind(C)
         !
-        ! this function tests the function which decides, from step length alone, which
+        ! this function tests the function which decides, from step length, which
         ! history entries the non-linear multisecant system is allowed to use
         !
         use otr_arh, only: history_step_mask
 
         integer(ip), parameter :: n_rows = 4, n_diff = 3, n_rows_os = 8, n_diff_os = 2
+        real(rp), parameter :: max_step = 5.0_rp
 
-        real(rp) :: dm_cols(n_rows, n_diff), dm_cols_os(n_rows_os, n_diff_os), &
-                    dm_cols_single(n_rows, 1)
+        real(rp) :: dm_cols(n_rows, n_diff), v_cols(n_rows, n_diff), &
+                    dm_cols_os(n_rows_os, n_diff_os), v_cols_os(n_rows_os, n_diff_os)
         logical, allocatable :: keep(:)
 
         ! assume tests pass
         test_history_step_mask = .true.
 
-        ! initialize a history whose third step is far longer than the shortest one,
-        ! and whose second is comfortably within reach of it
+        ! initialize a history whose second step is exactly as long as the longest step
+        ! the window admits and whose third is far longer, with random non-linear
+        ! responses
         dm_cols = 0.0_rp
         dm_cols(1, 1) = 1.0_rp
-        dm_cols(3, 2) = 5.0_rp
+        dm_cols(3, 2) = max_step
         dm_cols(2, 3) = 1e4_rp
+        call random_number(v_cols)
 
-        ! call routine and determine that only the entry beyond the cutoff is dropped
-        keep = history_step_mask(dm_cols)
+        ! call routine and determine that only the entry beyond the window is dropped
+        keep = history_step_mask(dm_cols, v_cols, max_step)
         if (size(keep) /= n_diff) then
             write(stderr, *) "test_history_step_mask failed: Incorrect number of "// &
                 "entries."
@@ -4512,36 +4603,29 @@ contains
         end if
         if (.not. (keep(1) .and. keep(2))) then
             write(stderr, *) "test_history_step_mask failed: An entry within the "// &
-                "cutoff was not kept."
+                "window was not kept."
             test_history_step_mask = .false.
         end if
         if (keep(3)) then
             write(stderr, *) "test_history_step_mask failed: An entry beyond the "// &
-                "cutoff was not dropped."
+                "window was not dropped."
             test_history_step_mask = .false.
         end if
-        deallocate(keep)
 
-        ! scaling the whole history leaves the decision unchanged, since the cutoff is
-        ! a ratio to the shortest step rather than an absolute length
-        dm_cols = 1e-6_rp * dm_cols
-        keep = history_step_mask(dm_cols)
-        if (.not. (keep(1) .and. keep(2)) .or. keep(3)) then
-            write(stderr, *) "test_history_step_mask failed: The decision is not "// &
-                "invariant under an overall scaling of the history."
+        ! a window shorter than every step drops the entire history, which an
+        ! unbounded window keeps
+        keep = history_step_mask(dm_cols, v_cols, 0.5_rp)
+        if (any(keep)) then
+            write(stderr, *) "test_history_step_mask failed: An entry beyond a "// &
+                "window shorter than every step was kept."
             test_history_step_mask = .false.
         end if
-        deallocate(keep)
-
-        ! bringing the long step within the cutoff keeps the entire history
-        dm_cols(2, 3) = dm_cols(1, 1)
-        keep = history_step_mask(dm_cols)
+        keep = history_step_mask(dm_cols, v_cols, huge(1.0_rp))
         if (.not. all(keep)) then
-            write(stderr, *) "test_history_step_mask failed: A history whose steps "// &
-                "are all comparable was not kept in full."
+            write(stderr, *) "test_history_step_mask failed: The history was not "// &
+                "kept in full for an unbounded window."
             test_history_step_mask = .false.
         end if
-        deallocate(keep)
 
         ! the open-shell step length spans both spin channels, so an entry that is long
         ! only in the rows of the second one still has to be dropped
@@ -4549,188 +4633,32 @@ contains
         dm_cols_os(1, 1) = 1.0_rp
         dm_cols_os(1, 2) = 1.0_rp
         dm_cols_os(6, 2) = 1e4_rp
-        keep = history_step_mask(dm_cols_os)
+        call random_number(v_cols_os)
+        keep = history_step_mask(dm_cols_os, v_cols_os, max_step)
         if (.not. keep(1) .or. keep(2)) then
             write(stderr, *) "test_history_step_mask failed: An entry beyond the "// &
-                "cutoff only through its second spin channel was not dropped."
+                "window only through its second spin channel was not dropped."
             test_history_step_mask = .false.
         end if
-        deallocate(keep)
 
-        ! a single entry has nothing to be judged against and is always kept
-        dm_cols_single = 0.0_rp
-        dm_cols_single(1, 1) = 1.0_rp
-        keep = history_step_mask(dm_cols_single)
-        if (size(keep) /= 1 .or. .not. keep(1)) then
-            write(stderr, *) "test_history_step_mask failed: A single history "// &
-                "entry was not kept."
+        ! without non-linear responses, every entry is dropped, also within the window,
+        ! while a single non-vanishing response keeps the decision to the window
+        v_cols = 0.0_rp
+        keep = history_step_mask(dm_cols, v_cols, huge(1.0_rp))
+        if (any(keep)) then
+            write(stderr, *) "test_history_step_mask failed: An entry was kept "// &
+                "without non-linear responses."
             test_history_step_mask = .false.
         end if
-        deallocate(keep)
+        v_cols(4, 3) = 1.0_rp
+        keep = history_step_mask(dm_cols, v_cols, max_step)
+        if (.not. (keep(1) .and. keep(2)) .or. keep(3)) then
+            write(stderr, *) "test_history_step_mask failed: The window does not "// &
+                "decide for a single non-vanishing non-linear response."
+            test_history_step_mask = .false.
+        end if
 
     end function test_history_step_mask
-
-    logical(c_bool) function test_median() bind(C)
-        !
-        ! this function tests the function which returns the median of an array, for an
-        ! odd and an even number of entries and for an empty array
-        !
-        use otr_arh, only: median
-
-        integer(ip), parameter :: n_odd = 5, n_even = 6
-        real(rp) :: odd(n_odd), even(n_even)
-
-        ! assume tests pass
-        test_median = .true.
-
-        ! an unordered odd number of entries has a single central one, which is not the
-        ! mean of the array
-        odd = [3.0_rp, -1.0_rp, 10.0_rp, 0.5_rp, 2.0_rp]
-        if (abs(median(odd) - 2.0_rp) > tol) then
-            write(stderr, *) "test_median failed: Incorrect median for an odd "// &
-                "number of entries."
-            test_median = .false.
-        end if
-
-        ! an even number of entries averages the two central ones, which a single large
-        ! outlier must not move
-        even = [3.0_rp, -1.0_rp, 10.0_rp, 0.5_rp, 2.0_rp, 100.0_rp]
-        if (abs(median(even) - 2.5_rp) > tol) then
-            write(stderr, *) "test_median failed: Incorrect median for an even "// &
-                "number of entries."
-            test_median = .false.
-        end if
-
-        ! an empty array has no entries to take a median of
-        if (abs(median([real(rp) :: ])) > tol) then
-            write(stderr, *) "test_median failed: Median of an empty array does "// &
-                "not vanish."
-            test_median = .false.
-        end if
-
-    end function test_median
-
-    logical(c_bool) function test_resolvable_residual() bind(C)
-        !
-        ! this function tests the function which returns the shortest residual norm a
-        ! history direction has to contribute for its response to describe curvature
-        ! rather than the error in it
-        !
-        use otr_arh, only: resolvable_residual
-
-        integer(ip), parameter :: flat_len = 4, n_diff = 4
-        real(rp), parameter :: lengths(n_diff) = [1.0_rp, 2.0_rp, 0.5_rp, 4.0_rp]
-
-        real(rp) :: basis(flat_len, n_diff), steps(flat_len, n_diff), &
-                    responses(flat_len, n_diff), q(flat_len, n_diff), &
-                    z(flat_len, n_diff), a(n_diff, n_diff), asymmetries(n_diff), &
-                    curvatures(n_diff), expected
-        logical :: keep(n_diff)
-        integer(ip) :: i, k
-
-        ! assume tests pass
-        test_resolvable_residual = .true.
-
-        ! orthogonal steps of different lengths, so that the orthonormalization the
-        ! routine performs internally is a scaling by those lengths regardless of the
-        ! order it accepts them in, while every quantity below is a median over
-        ! directions and therefore independent of that order
-        basis = 0.5_rp * reshape([1.0_rp, 1.0_rp, 1.0_rp, 1.0_rp, &
-                                  1.0_rp, -1.0_rp, 1.0_rp, -1.0_rp, &
-                                  1.0_rp, 1.0_rp, -1.0_rp, -1.0_rp, &
-                                  1.0_rp, -1.0_rp, -1.0_rp, 1.0_rp], [flat_len, n_diff])
-        do i = 1, n_diff
-            steps(:, i) = lengths(i) * basis(:, i)
-        end do
-
-        ! random responses, so that the transformed response matrix is generically
-        ! asymmetric and its asymmetry is a genuine error estimate
-        call random_number(responses)
-        responses = responses - 0.5_rp
-
-        ! the transformed response matrix follows from the same scaling
-        q = basis
-        do i = 1, n_diff
-            z(:, i) = responses(:, i) / lengths(i)
-        end do
-        a = matmul(transpose(q), z)
-
-        ! the error of a direction is the typical asymmetry of its own column, and
-        ! undoing the amplification of every column recovers the error of the response
-        ! itself, which the typical curvature turns into a length
-        do k = 1, n_diff
-            asymmetries(k) = ref_median(pack(abs(a(:, k) - a(k, :)), &
-                                             [(i /= k, i=1, n_diff)]))
-            curvatures(k) = abs(a(k, k))
-        end do
-        expected = ref_median(asymmetries * lengths) / ref_median(curvatures)
-
-        ! call routine and determine if the threshold matches
-        keep = .true.
-        if (abs(resolvable_residual(steps, responses, keep) - expected) > tol) then
-            write(stderr, *) "test_resolvable_residual failed: Incorrect shortest "// &
-                "resolvable residual norm."
-            test_resolvable_residual = .false.
-        end if
-
-        ! a direction needs at least two partners for the asymmetry of its column to be
-        ! a typical value, so a shorter history yields no threshold at all
-        keep = [.true., .true., .false., .false.]
-        if (abs(resolvable_residual(steps, responses, keep)) > tol) then
-            write(stderr, *) "test_resolvable_residual failed: Threshold does not "// &
-                "vanish for a history too short to estimate an error scale from."
-            test_resolvable_residual = .false.
-        end if
-
-    contains
-
-        function ref_order_statistic(x, rank) result(val)
-            !
-            ! this function independently reproduces the entry of a given rank, counted
-            ! from the smallest, of an array by counting, for every entry, how many
-            ! entries lie below and alongside it
-            !
-            real(rp), intent(in) :: x(:)
-            integer(ip), intent(in) :: rank
-            real(rp) :: val
-
-            integer(ip) :: j, n_below, n_at_most
-
-            val = 0.0_rp
-            do j = 1, size(x)
-                n_below = count(x < x(j))
-                n_at_most = count(x <= x(j))
-                if (n_below < rank .and. rank <= n_at_most) then
-                    val = x(j)
-                    return
-                end if
-            end do
-
-        end function ref_order_statistic
-
-        function ref_median(x) result(med)
-            !
-            ! this function independently reproduces the median of an array from its
-            ! order statistics
-            !
-            real(rp), intent(in) :: x(:)
-            real(rp) :: med
-
-            integer(ip) :: n
-
-            n = size(x)
-            if (n == 0) then
-                med = 0.0_rp
-            else if (mod(n, 2_ip) == 1) then
-                med = ref_order_statistic(x, (n + 1) / 2)
-            else
-                med = 0.5_rp * (ref_order_statistic(x, n / 2) + &
-                                ref_order_statistic(x, n / 2 + 1))
-            end if
-
-        end function ref_median
-
-    end function test_resolvable_residual
 
     logical(c_bool) function test_factorize_history() bind(C)
         !
@@ -4739,8 +4667,7 @@ contains
         ! vectors
         !
         integer(ip), parameter :: n_rows = 4, n_diff = 3
-        real(rp), parameter :: small_norm = 1e-8_rp, large_norm = 1e6_rp, &
-                               resolvable_norm = 1e-3_rp
+        real(rp), parameter :: small_norm = 1e-8_rp, large_norm = 1e6_rp
 
         real(rp) :: cols(n_rows, n_diff)
 
@@ -4813,28 +4740,6 @@ contains
                                       [1_ip, 2_ip, 3_ip], spread(.true., 1, n_diff))) &
             test_factorize_history = .false.
 
-        ! a column repeating the direction of the first one but contributing a new
-        ! component of resolvable norm is rejected when more than that norm is demanded
-        ! and accepted when less is demanded, while the pivoting then ranks the columns
-        ! by length; without a demand or with a vanishing one, which demands nothing, it
-        ! is accepted as independent, so that it is the demand rather than linear
-        ! dependence that rejects it
-        cols(:, 3) = [0.5_rp, 0.0_rp, resolvable_norm, 0.0_rp]
-        if (.not. check_factorization( &
-            "a column contributing less than the demanded residual", cols, &
-            [2_ip, 1_ip], min_residual=1e2_rp * resolvable_norm)) &
-            test_factorize_history = .false.
-        if (.not. check_factorization( &
-            "a column contributing more than the demanded residual", cols, &
-            [2_ip, 1_ip, 3_ip], min_residual=1e-2_rp * resolvable_norm)) &
-            test_factorize_history = .false.
-        if (.not. check_factorization("an omitted demanded residual", cols, &
-                                      [1_ip, 2_ip, 3_ip])) &
-            test_factorize_history = .false.
-        if (.not. check_factorization("a vanishing demanded residual", cols, &
-                                      [1_ip, 2_ip, 3_ip], min_residual=0.0_rp)) &
-            test_factorize_history = .false.
-
         ! an empty history returns an empty factorization
         if (.not. check_factorization("an empty history", cols(:, :0), &
                                       [integer(ip) :: ])) &
@@ -4842,8 +4747,8 @@ contains
 
     contains
 
-        function check_factorization(case_name, history_cols, expected_map, keep, &
-                                     min_residual) result(passed)
+        function check_factorization(case_name, history_cols, expected_map, keep) &
+            result(passed)
             !
             ! this function checks the pivoted Cholesky factorization of the Gram matrix
             ! of a set of history columns for one case: the accepted columns have to
@@ -4857,7 +4762,6 @@ contains
             real(rp), intent(in) :: history_cols(:, :)
             integer(ip), intent(in) :: expected_map(:)
             logical, intent(in), optional :: keep(:)
-            real(rp), intent(in), optional :: min_residual
             logical :: passed
 
             real(rp), allocatable :: chol(:, :), gram(:, :)
@@ -4868,8 +4772,7 @@ contains
             passed = .true.
 
             ! call routine and determine if the accepted columns and the factor match
-            call factorize_history(history_cols, chol, map, n_accepted, keep, &
-                                   min_residual)
+            call factorize_history(history_cols, chol, map, n_accepted, keep)
             gram = matmul(transpose(history_cols), history_cols)
             if (n_accepted /= size(expected_map) .or. &
                 size(map) /= size(expected_map) .or. &

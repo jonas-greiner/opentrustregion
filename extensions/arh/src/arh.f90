@@ -18,8 +18,8 @@ module otr_arh
     implicit none
 
     ! define useful parameters
-    real(rp), parameter :: history_step_ratio = 1e2_rp, ms_sr1_skip_thresh = 0.05_rp, &
-                           eig_val_noise_factor = 10.0_rp
+    real(rp), parameter :: history_window_factor = 2.0_rp, &
+                           ms_sr1_skip_thresh = 0.05_rp, eig_val_noise_factor = 10.0_rp
 
     type, extends(orbital_settings_type) :: arh_settings_type
         character(len=kw_len) :: arh_type
@@ -87,6 +87,7 @@ module otr_arh
             dm_dirs(:, :), dm_dirs_nonlinear(:, :), expansion_dirs(:, :), &
             projection_dirs(:, :), coupling_matrix(:, :), &
             rotated_expansion_dirs(:, :), rotated_projection_dirs(:, :)
+        real(rp) :: step_norm_ratio = 1.0_rp
         procedure(arh_evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
         procedure(arh_evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
     contains
@@ -101,6 +102,7 @@ module otr_arh
         procedure :: build_hess_model_os
         procedure :: rebuild_stale_hess_model
         procedure :: get_low_rank_hess_factors
+        procedure :: history_window
         procedure :: density_in_history
         procedure(rotate_trial_arh_type), deferred :: rotate_trial
         procedure(history_dm_arh_type), deferred :: history_dm
@@ -507,9 +509,17 @@ contains
         integer(ip) :: n_ao, n_particle
         real(rp), allocatable :: fock_ao(:, :, :), v_coulomb_ao(:, :, :), &
                                  v_exchange_ao(:, :, :), v_nonlinear_ao(:, :, :)
+        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
+
+        ! the step the solver took to the rotated orbitals relates the trust radius,
+        ! which bounds the step in the trust-region metric, to a step length
+        if (sum(abs(kappa)) > 0.0_rp .and. associated(self%state)) then
+            if (self%state%step_size > 0.0_rp) self%step_norm_ratio = &
+                dnrm2(size(kappa, kind=ip), kappa, 1_ip) / self%state%step_size
+        end if
 
         ! evaluate at the rotated orbitals, or at the current ones if these have not
         ! been evaluated yet
@@ -607,7 +617,6 @@ contains
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc, n_acc_nonlinear
-        real(rp) :: min_residual
         real(rp), allocatable :: &
             dm_diff(:, :, :, :), v_coulomb_diff(:, :, :, :), &
             v_exchange_diff(:, :, :, :), v_nonlinear_diff(:, :, :, :), dm_cols(:, :), &
@@ -665,13 +674,13 @@ contains
         ! resulting orthonormalized basis via a single triangular solve
         call factorize_history(dm_cols, chol, map, n_acc)
 
-        ! factorize the same history for the non-linear part, which can only be done
-        ! once its response is known since the error in that response sets the shortest
-        ! residual a direction has to contribute
-        keep_nonlinear = history_step_mask(dm_cols)
-        min_residual = resolvable_residual(dm_cols, v_nonlinear_cols, keep_nonlinear)
+        ! factorize the same history for the non-linear part, restricted to the
+        ! entries within the window of the trust radius, since its response is a secant
+        ! whose error grows with the step length
+        keep_nonlinear = history_step_mask(dm_cols, v_nonlinear_cols, &
+                                           self%history_window())
         call factorize_history(dm_cols, chol_nonlinear, map_nonlinear, &
-                               n_acc_nonlinear, keep_nonlinear, min_residual)
+                               n_acc_nonlinear, keep_nonlinear)
 
         ! MS-SR1
         if (self%settings%arh_type == "ms_sr1") then
@@ -741,7 +750,6 @@ contains
 
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc1, n_acc2, n_acc_nl, &
                        n_acc1_nl, n_acc2_nl
-        real(rp) :: min_residual
         integer(ip), allocatable :: map1(:), map2(:), map_comb(:), map_nl(:), &
                                     map1_nl(:), map2_nl(:), map_comb_nl(:), &
                                     history_rows(:, :), packed_rows(:, :)
@@ -753,8 +761,7 @@ contains
             v_same_spin_diff(:, :, :, :), v_opposite_spin_diff(:, :, :, :), &
             dm_cols(:, :), v_coulomb_alpha_cols(:, :), v_coulomb_beta_cols(:, :), &
             v_exchange_cols(:, :), v_same_spin_cols(:, :), v_opposite_spin_cols(:, :), &
-            v_nonlinear_cols(:, :), dm_cols1(:, :), dm_cols2(:, :), &
-            v_nonlinear_cols1(:, :), v_nonlinear_cols2(:, :), dm_packed(:, :), &
+            v_nonlinear_cols(:, :), dm_cols1(:, :), dm_cols2(:, :), dm_packed(:, :), &
             v_coulomb_alpha_packed(:, :), v_coulomb_beta_packed(:, :), &
             v_exchange_packed(:, :), v_same_spin_packed(:, :), &
             v_opposite_spin_packed(:, :), v_nonlinear_packed(:, :), chol1(:, :), &
@@ -862,12 +869,11 @@ contains
             if (error /= 0) return
             ! non-linear part: get spin-combined multisecant SR1 matrix; the non-linear
             ! response mixes both channels at once, so this needs its own, separate
-            ! combined-flat factorization of the same history
-            keep_nonlinear = history_step_mask(dm_cols)
-            min_residual = &
-                resolvable_residual(dm_cols, v_nonlinear_cols, keep_nonlinear)
-            call factorize_history(dm_cols, chol_nl, map_nl, n_acc_nl, keep_nonlinear, &
-                                   min_residual)
+            ! combined-flat factorization of the history within the window of the
+            ! trust radius
+            keep_nonlinear = history_step_mask(dm_cols, v_nonlinear_cols, &
+                                               self%history_window())
+            call factorize_history(dm_cols, chol_nl, map_nl, n_acc_nl, keep_nonlinear)
             call get_ms_a_inv(dm_cols, v_nonlinear_cols, map_nl, chol_nl, &
                               self%a_inv_comb, self%settings, error)
             call add_error_origin(error, self%error_origin, self%settings)
@@ -879,24 +885,17 @@ contains
                 rebase_dirs(v_nonlinear_packed, map_nl, chol_nl)
         ! ARH and related methods
         else
-            ! screened per-channel factorization for the non-linear system; both
-            ! channels are screened on the step length of the whole density matrix
-            ! rather than on their own channel's, since the non-linear potential of
-            ! either channel is a functional of both spin densities and its staleness
-            ! is therefore set by the total step
-            v_nonlinear_cols1 = &
-                v_nonlinear_cols(history_rows(1, 1):history_rows(2, 1), :)
-            v_nonlinear_cols2 = &
-                v_nonlinear_cols(history_rows(1, 2):history_rows(2, 2), :)
-            keep_nonlinear = history_step_mask(dm_cols)
-            min_residual = &
-                resolvable_residual(dm_cols1, v_nonlinear_cols1, keep_nonlinear)
+            ! per-channel factorization of the history within the window of the trust
+            ! radius for the non-linear system; both channels are screened on the step
+            ! length of the whole density matrix rather than on their own channel's,
+            ! since the non-linear potential of either channel is a functional of both
+            ! spin densities and its staleness is therefore set by the total step
+            keep_nonlinear = history_step_mask(dm_cols, v_nonlinear_cols, &
+                                               self%history_window())
             call factorize_history(dm_cols1, chol1_nl, map1_nl, n_acc1_nl, &
-                                   keep_nonlinear, min_residual)
-            min_residual = &
-                resolvable_residual(dm_cols2, v_nonlinear_cols2, keep_nonlinear)
+                                   keep_nonlinear)
             call factorize_history(dm_cols2, chol2_nl, map2_nl, n_acc2_nl, &
-                                   keep_nonlinear, min_residual)
+                                   keep_nonlinear)
             call combine_channels(chol1_nl, map1_nl, chol2_nl, map2_nl, n_list, &
                                   chol_comb_nl, map_comb_nl)
 
@@ -1986,155 +1985,57 @@ contains
 
     end function truncated_eigval_inv
 
-    function history_step_mask(dm_cols) result(keep)
+    function history_window(self) result(max_step)
+        !
+        ! this function returns the longest step, as the norm of a history column, that
+        ! the non-linear system of the object may use: history_window_factor times the
+        ! trust radius the record of the solver state holds, converted into a step
+        ! length with the ratio of the Euclidean norm of the last step to its norm in
+        ! the trust-region metric, which is 1 for a spherical trust region, and into a
+        ! distance between density matrices with the factor sqrt(2), the change of a
+        ! density matrix whose orbitals rotate by a small step being sqrt(2) times the
+        ! norm of the step; without a state or before the solver set a trust radius,
+        ! the whole history is used
+        !
+        class(arh_type), intent(in) :: self
+        real(rp) :: max_step
+
+        max_step = huge(1.0_rp)
+        if (.not. associated(self%state)) return
+        if (self%state%trust_radius <= 0.0_rp) return
+        max_step = history_window_factor * sqrt(2.0_rp) * self%step_norm_ratio * &
+                   self%state%trust_radius
+
+    end function history_window
+
+    function history_step_mask(dm_cols, v_cols, max_step) result(keep)
         !
         ! this function returns, for every history column, whether the non-linear
-        ! multisecant system may use it, depending on step length
+        ! multisecant system may use it: the non-linear response is a secant whose
+        ! error grows with the step length, so only the columns within the given step
+        ! length are used, and none if the non-linear responses vanish, as for
+        ! Hartree-Fock, so that the system is omitted like the exact-exchange term of a
+        ! functional without exact exchange
         !
-        use opentrustregion, only: numerical_zero
-
-        real(rp), intent(in) :: dm_cols(:, :)
+        real(rp), intent(in) :: dm_cols(:, :), v_cols(:, :), max_step
         logical, allocatable :: keep(:)
 
-        integer(ip) :: n_list, flat_len, i
-        real(rp) :: shortest, cutoff
-        real(rp), allocatable :: steps(:)
+        integer(ip) :: n_list, i
         real(rp), external :: dnrm2
 
         n_list = size(dm_cols, 2, kind=ip)
-        allocate(keep(n_list), steps(n_list))
-        keep = .true.
-        if (n_list < 2) return
-
-        ! get step lengths
-        flat_len = size(dm_cols, 1, kind=ip)
+        allocate(keep(n_list))
+        if (all(v_cols == 0.0_rp)) then
+            keep = .false.
+            return
+        end if
         do i = 1, n_list
-            steps(i) = dnrm2(flat_len, dm_cols(:, i), 1_ip)
+            keep(i) = dnrm2(size(dm_cols, 1, kind=ip), dm_cols(:, i), 1_ip) <= max_step
         end do
-
-        ! get shortest numerically relevant step
-        shortest = huge(1.0_rp)
-        do i = 1, n_list
-            if (steps(i) > numerical_zero * maxval(steps)) &
-                shortest = min(shortest, steps(i))
-        end do
-        if (shortest >= huge(1.0_rp)) return
-
-        ! define cut off and decide on steps to keep
-        cutoff = history_step_ratio * shortest
-        keep = steps <= cutoff
-        deallocate(steps)
 
     end function history_step_mask
 
-    function median(x) result(med)
-        !
-        ! this function returns the median of an array
-        !
-        real(rp), intent(in) :: x(:)
-        real(rp) :: med
-
-        integer(ip) :: i, j, n
-        real(rp) :: val
-        real(rp), allocatable :: sorted(:)
-
-        n = size(x)
-        if (n == 0) then
-            med = 0.0_rp
-            return
-        end if
-
-        ! sort a copy by insertion, which is short and fast enough for the few hundred
-        ! history directions this is called with at most
-        sorted = x
-        do i = 2, n
-            val = sorted(i)
-            j = i - 1
-            do while (j >= 1)
-                if (sorted(j) <= val) exit
-                sorted(j + 1) = sorted(j)
-                j = j - 1
-            end do
-            sorted(j + 1) = val
-        end do
-
-        ! average the two central entries if there is no single one
-        if (mod(n, 2_ip) == 1) then
-            med = sorted((n + 1) / 2)
-        else
-            med = 0.5_rp * (sorted(n / 2) + sorted(n / 2 + 1))
-        end if
-        deallocate(sorted)
-
-    end function median
-
-    function resolvable_residual(steps, responses, keep) result(min_residual)
-        !
-        ! this function returns the shortest residual norm a history direction has to
-        ! contribute for its response to describe curvature rather than the error in
-        ! it: the response is an exactly symmetric function of the step only for a
-        ! vanishing step, so the antisymmetric part of the transformed response matrix
-        ! Q^T Z collects both the numerical noise of the response and the finite-step
-        ! error of a curvature that changes along the step, neither of which a
-        ! symmetric fit can use; every column of Z is divided by the residual norm of
-        ! its own direction, so multiplying the typical size of column k of that part
-        ! by that residual norm undoes the division, and the median over the directions
-        ! makes a single error scale of it; a direction shorter than that scale divided
-        ! by the typical curvature contributes more amplified error than curvature
-        !
-        real(rp), intent(in) :: steps(:, :), responses(:, :)
-        logical, intent(in) :: keep(:)
-        real(rp) :: min_residual
-
-        integer(ip) :: n_accepted, i, k, m
-        integer(ip), allocatable :: map(:)
-        real(rp), allocatable :: chol(:, :), q(:, :), z(:, :), a(:, :), &
-                                 pair_asymmetries(:), asymmetries(:), residuals(:), &
-                                 curvatures(:)
-        real(rp) :: response_error, curvature
-        external :: dgemm
-
-        ! a direction needs at least two partners for a typical asymmetry of its own
-        ! column to mean anything
-        min_residual = 0.0_rp
-        call factorize_history(steps, chol, map, n_accepted, keep)
-        if (n_accepted < 3) return
-
-        ! transformed response matrix Q^T Z in the orthonormalized step basis
-        q = rebase_dirs(steps, map, chol)
-        z = rebase_dirs(responses, map, chol)
-        allocate(a(n_accepted, n_accepted))
-        call dgemm("T", "N", n_accepted, n_accepted, size(q, 1, kind=ip), 1.0_rp, q, &
-                   size(q, 1, kind=ip), z, size(z, 1, kind=ip), 0.0_rp, a, n_accepted)
-
-        ! per-direction asymmetry, residual norm and curvature
-        allocate(pair_asymmetries(n_accepted - 1), asymmetries(n_accepted), &
-                 residuals(n_accepted), curvatures(n_accepted))
-        do k = 1, n_accepted
-            m = 0
-            do i = 1, n_accepted
-                if (i == k) cycle
-                m = m + 1
-                pair_asymmetries(m) = abs(a(i, k) - a(k, i))
-            end do
-            asymmetries(k) = median(pair_asymmetries)
-            residuals(k) = abs(chol(k, k))
-            curvatures(k) = abs(a(k, k))
-        end do
-
-        ! undo the amplification of every column to get the error of the response
-        ! itself, and take the curvature the matrix describes at its typical size
-        response_error = median(asymmetries * residuals)
-        curvature = median(curvatures)
-
-        ! residual norm at which the amplified error reaches the curvature scale
-        if (curvature > 0.0_rp) min_residual = response_error / curvature
-        deallocate(chol, map, q, z, a, pair_asymmetries, asymmetries, residuals, &
-                   curvatures)
-
-    end function resolvable_residual
-
-    subroutine factorize_history(vecs, chol, map, n_accepted, keep, min_residual)
+    subroutine factorize_history(vecs, chol, map, n_accepted, keep)
         !
         ! this subroutine performs a pivoted, rank-revealing Cholesky factorization of
         ! the Gram matrix of a set of history vectors, taken on the Gram normalized to
@@ -2150,15 +2051,6 @@ contains
         ! keep optionally restricts which columns a caller trusts; omitting it uses the
         ! whole history, which is right for a response that is exact at any distance
         !
-        ! min_residual optionally demands a shortest residual norm a column has to
-        ! contribute to be accepted, which is right for a response whose own error
-        ! limits how short a direction can be and still be resolved; the Gram is then
-        ! left unnormalized so that its pivots are comparable to that absolute length,
-        ! which also makes the pivoting rank the columns by the length they contribute
-        ! rather than by independence, since that length is what the tolerance bounds,
-        ! and leaves the returned factor already carrying the norms; a non-positive
-        ! value demands nothing
-        !
         use opentrustregion, only: numerical_zero
 
         real(rp), intent(in) :: vecs(:, :)
@@ -2166,10 +2058,8 @@ contains
         integer(ip), intent(out), allocatable :: map(:)
         integer(ip), intent(out) :: n_accepted
         logical, intent(in), optional :: keep(:)
-        real(rp), intent(in), optional :: min_residual
 
         integer(ip) :: vec_len, n_vecs, i, j, info
-        logical :: normalize
         real(rp) :: tol
         real(rp), allocatable :: metric(:, :), work(:), col_norm(:)
         logical, allocatable :: usable(:)
@@ -2184,11 +2074,6 @@ contains
             allocate(chol(0, 0), map(0))
             return
         end if
-
-        ! decide whether the pivoting ranks the columns by independence or by the
-        ! length they contribute
-        normalize = .true.
-        if (present(min_residual)) normalize = min_residual <= 0.0_rp
 
         ! generate the Gram matrix
         allocate(metric(n_vecs, n_vecs))
@@ -2206,46 +2091,38 @@ contains
         usable = col_norm > numerical_zero * maxval(col_norm)
         if (present(keep)) usable = usable .and. keep
 
-        ! normalize the usable steps to a unit diagonal,when requested, so that the
-        ! pivoting ranks them by independence rather than by magnitude, and zero out
-        ! the rest so that they are rejected rather than admitted with a zero pivot
+        ! normalize the usable steps to a unit diagonal, so that the pivoting ranks
+        ! them by independence rather than by magnitude, and zero out the rest so that
+        ! they are rejected rather than admitted with a zero pivot
         do j = 1, n_vecs
             do i = 1, j - 1
                 if (.not. (usable(i) .and. usable(j))) then
                     metric(i, j) = 0.0_rp
-                else if (normalize) then
+                else
                     metric(i, j) = metric(i, j) / (col_norm(i) * col_norm(j))
                 end if
             end do
             if (.not. usable(j)) then
                 metric(j, j) = 0.0_rp
-            else if (normalize) then
+            else
                 metric(j, j) = 1.0_rp
             end if
         end do
 
-        ! tolerance for linear dependencies, relative to the unit diagonal, or the
-        ! squared shortest resolvable residual on the unnormalized Gram
-        if (normalize) then
-            tol = n_vecs * numerical_zero
-        else
-            tol = max(min_residual**2, n_vecs * numerical_zero * maxval(col_norm)**2)
-        end if
+        ! tolerance for linear dependencies, relative to the unit diagonal
+        tol = n_vecs * numerical_zero
 
         ! perform pivoted rank-revealing Cholesky
         allocate(piv(n_vecs), work(2 * n_vecs))
         call dpstrf("U", n_vecs, metric, n_vecs, piv, n_accepted, tol, work, info)
 
-        ! shrink to the accepted block only and undo the normalization by scaling,
-        ! where it was applied
+        ! shrink to the accepted block only and undo the normalization by scaling
         allocate(chol(n_accepted, n_accepted), map(n_accepted))
         chol = metric(1:n_accepted, 1:n_accepted)
         map = piv(1:n_accepted)
-        if (normalize) then
-            do j = 1, n_accepted
-                chol(:, j) = chol(:, j) * col_norm(map(j))
-            end do
-        end if
+        do j = 1, n_accepted
+            chol(:, j) = chol(:, j) * col_norm(map(j))
+        end do
         deallocate(metric, piv, work, col_norm, usable)
 
     end subroutine factorize_history
