@@ -45,6 +45,32 @@ module otr_oao_test_reference
 
 contains
 
+    function density_pattern(n_rows, n_channels, offset) result(pattern)
+        !
+        ! this function returns density matrices of the given numbers of AOs and
+        ! particle channels whose values encode their particle channel and the pair of
+        ! their AO indices regardless of their order (all counted from one) together
+        ! with an offset, so that they are symmetric, as the Python interface expects
+        ! of density matrices it passes without transposition, while their values
+        ! reveal matrices of the wrong shape or channel
+        !
+        integer(c_ip), intent(in) :: n_rows, n_channels
+        real(c_rp), intent(in) :: offset
+        real(c_rp) :: pattern(n_rows, n_rows, n_channels)
+
+        integer(c_ip) :: i, j, k
+
+        do k = 1, n_channels
+            do j = 1, n_rows
+                do i = 1, n_rows
+                    pattern(i, j, k) = &
+                        offset + real(100 * k + 10 * max(i, j) + min(i, j), kind=c_rp)
+                end do
+            end do
+        end do
+
+    end function density_pattern
+
     subroutine get_reference_oao_values(values_out) bind(C)
         !
         ! this subroutine exports the reference OAO settings as C settings whose fields

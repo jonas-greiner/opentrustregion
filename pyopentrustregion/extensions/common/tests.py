@@ -161,6 +161,34 @@ class ExtensionCallbackMocks:
         return np.sum(kappa)
 
 
+# multiples of the density matrix the mock density matrix evaluating function returns
+# for the Fock matrix and the response
+evaluate_dm_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_factors"))
+
+
+class OrbitalCallbackMocks:
+    """
+    this class collects the mock exact-evaluation callback functions the Python
+    interface tests of the orbital bases share
+    """
+
+    def mock_evaluate_dm(self, dm_ao, fock, get_response):
+        """
+        this function is a mock function for the density matrix evaluating function,
+        which builds only what it is asked for
+        """
+        if fock is not None:
+            fock[:] = evaluate_dm_factors[0] * dm_ao
+
+        return np.sum(dm_ao), (self.mock_get_response if get_response else None)
+
+    def mock_get_response(self, dm_ao, response):
+        """
+        this function is a mock function for the response function
+        """
+        response[:] = evaluate_dm_factors[1] * dm_ao
+
+
 def ao_overlap_pattern():
     """
     this function returns an AO overlap matrix whose values encode the pair of its AO
@@ -172,19 +200,6 @@ def ao_overlap_pattern():
     return (
         10 * np.maximum.outer(ao_index, ao_index) + np.minimum.outer(ao_index, ao_index)
     ).astype(np.float64)
-
-
-def density_pattern(n_particle, offset=0.0):
-    """
-    this function returns density matrices of the given number of particle channels
-    whose values encode their channel and the pair of their AO indices regardless of
-    their order together with an offset, as density_pattern of the Fortran test
-    reference does, so that they are symmetric while their values reveal matrices of
-    the wrong shape or channel
-    """
-    return offset + np.stack(
-        [100 * k + ao_overlap_pattern() for k in range(1, n_particle + 1)]
-    )
 
 
 def release_mock_extension(extension):
@@ -270,7 +285,7 @@ def check_wired_solver_settings(
         solver_settings.logger,
         solver_settings.stability_settings.conv_check,
     ) != python_functions:
-        print(f" test_{test_name} failed: Python functions of the settings not kept.")
+        print(f" {test_name} failed: Python functions of the settings not kept.")
         test_passed = False
 
     residual = np.full(n_param, 1.0, dtype=np.float64)
@@ -284,14 +299,14 @@ def check_wired_solver_settings(
             settings.precond(residual, 2.0, precond_residual)
         except RuntimeError:
             print(
-                f" test_{test_name} failed: Wired preconditioner of the {level} "
+                f" {test_name} failed: Wired preconditioner of the {level} "
                 "raises error."
             )
             test_passed = False
             continue
         if not np.allclose(precond_residual, 2.0):
             print(
-                f" test_{test_name} failed: Wired preconditioner of the {level} "
+                f" {test_name} failed: Wired preconditioner of the {level} "
                 "returns wrong result."
             )
             test_passed = False
@@ -315,7 +330,7 @@ def check_wired_solver_settings(
     )
     if error != 0 or not np.allclose(hess_x, 4.0):
         print(
-            f" test_{test_name} failed: Python function assigned after the wiring "
+            f" {test_name} failed: Python function assigned after the wiring "
             "not called."
         )
         test_passed = False
@@ -334,7 +349,7 @@ def check_wired_solver_settings(
             or kept_settings is not extension_settings
         ):
             print(
-                f" test_{test_name} failed: Returned function does not keep the "
+                f" {test_name} failed: Returned function does not keep the "
                 "settings alive."
             )
             test_passed = False
@@ -420,7 +435,7 @@ def check_extension_owner(call_factory, test_name):
     # the factory received the record of the state, and the solver settings keep the
     # owner of the extension it returned, which keeps the state alive
     if received_solver_state.value != addressof(solver_state.state_c):
-        print(f" test_{test_name} failed: Record of the solver state not passed.")
+        print(f" {test_name} failed: Record of the solver state not passed.")
         test_passed = False
     owner = getattr(solver_settings, "_extension_owner", None)
     if (
@@ -428,7 +443,7 @@ def check_extension_owner(call_factory, test_name):
         or owner.extension != returned_extension.value
         or owner.saved_objects.get("solver_state") is not solver_state
     ):
-        print(f" test_{test_name} failed: Returned extension not owned.")
+        print(f" {test_name} failed: Returned extension not owned.")
         test_passed = False
     elif {
         cast(interface, c_void_p).value
@@ -436,7 +451,7 @@ def check_extension_owner(call_factory, test_name):
         if key.endswith("_interface") and interface is not None
     } != {callback for callback in received_callbacks if callback}:
         print(
-            f" test_{test_name} failed: Callback interfaces whose C functions the "
+            f" {test_name} failed: Callback interfaces whose C functions the "
             "factory received not kept alive."
         )
         test_passed = False
@@ -950,6 +965,15 @@ class CommonPyInterfaceTests(unittest.TestCase):
             print(
                 " test_extension_functions failed: Orbitals not copied back after the "
                 "orbital update."
+            )
+            test_passed = False
+
+        # the returned Hessian linear transformation keeps the orbital updating function
+        # alive, which keeps what the object of the factory calls alive
+        if hess_x._owner is not update_orbs:
+            print(
+                " test_extension_functions failed: Returned Hessian linear "
+                "transformation does not keep the orbital updating function alive."
             )
             test_passed = False
         hess_x_out = np.zeros(n_param, dtype=np.float32)

@@ -2167,24 +2167,6 @@ contains
 
     end subroutine setup_hartmann6d_point
 
-    function hartmann6d_ratio(context, step) result(ratio)
-        !
-        ! this function returns the ratio of the actual to the predicted change of the
-        ! Hartmann 6D function for a step from the point of a Hartmann 6D context
-        !
-        class(hartmann6d_context_type), intent(in) :: context
-        real(rp), intent(in) :: step(:)
-        real(rp) :: ratio
-
-        real(rp) :: grad(n_param)
-
-        call hartmann6d_gradient(context%vars, grad)
-        ratio = &
-            (hartmann6d_func(context%vars + step) - hartmann6d_func(context%vars)) / &
-            dot_product(step, grad + 0.5_rp * matmul(context%hess, step))
-
-    end function hartmann6d_ratio
-
     subroutine setup_double_well_state_context(context, state, func, grad, h_diag)
         !
         ! this subroutine moves a double well context, whose callback functions read
@@ -2370,6 +2352,25 @@ contains
         end do
 
     end subroutine ref_general_mat_diag
+
+    function ref_hartmann6d_ratio(context, step) result(ratio)
+        !
+        ! this function reimplements the ratio of the actual to the predicted change of
+        ! the Hartmann 6D function for a step from the point of a Hartmann 6D context,
+        ! which the trust-region solvers hand the step acceptance
+        !
+        class(hartmann6d_context_type), intent(in) :: context
+        real(rp), intent(in) :: step(:)
+        real(rp) :: ratio
+
+        real(rp) :: grad(n_param)
+
+        call hartmann6d_gradient(context%vars, grad)
+        ratio = &
+            (hartmann6d_func(context%vars + step) - hartmann6d_func(context%vars)) / &
+            dot_product(step, grad + 0.5_rp * matmul(context%hess, step))
+
+    end function ref_hartmann6d_ratio
 
     function ref_step_trust_radius(trust_radius, ratio, step_norm)
         !
@@ -8385,7 +8386,7 @@ contains
 
             ! the step stays within the trust region near the minimum and lies at its
             ! boundary near the saddle point
-            ratio = hartmann6d_ratio(context, solution)
+            ratio = ref_hartmann6d_ratio(context, solution)
             if (region == "near minimum" .and. &
                 norm2(solution) > ref_step_trust_radius(state%trust_radius, ratio, &
                                                         norm2(solution)) + tol) then
@@ -8476,7 +8477,7 @@ contains
                 "number of micro iterations wrong near minimum."
             test_truncated_conjugate_gradient = .false.
         end if
-        ratio = hartmann6d_ratio(context, solution)
+        ratio = ref_hartmann6d_ratio(context, solution)
         if (ratio <= 0.0_rp .or. &
             metric_norm(solution, metric) > ref_step_trust_radius( &
                 state%trust_radius, ratio, metric_norm(solution, metric)) + tol) then
@@ -8499,7 +8500,7 @@ contains
                 "error near minimum with trust radius shorter than step."
             test_truncated_conjugate_gradient = .false.
         end if
-        ratio = hartmann6d_ratio(context, solution)
+        ratio = ref_hartmann6d_ratio(context, solution)
         if (ratio <= 0.0_rp .or. &
             abs(metric_norm(solution, metric) - ref_step_trust_radius( &
                 state%trust_radius, ratio, metric_norm(solution, metric))) > tol) then
@@ -8612,7 +8613,7 @@ contains
                     trim(trust_region_shape_options(i_case))//" trust region."
                 test_truncated_conjugate_gradient = .false.
             end if
-            ratio = hartmann6d_ratio(context, solution)
+            ratio = ref_hartmann6d_ratio(context, solution)
             if (ratio <= 0.0_rp .or. abs(solution_norm - ref_step_trust_radius( &
                 state%trust_radius, ratio, solution_norm)) > tol) then
                 write(stderr, *) "test_truncated_conjugate_gradient failed: "// &
@@ -8932,7 +8933,7 @@ contains
                 "Multiplier does not vanish near minimum."
             test_generalized_lanczos_trust_region = .false.
         end if
-        ratio = hartmann6d_ratio(context, solution)
+        ratio = ref_hartmann6d_ratio(context, solution)
         if (abs(solution_norm - metric_norm(solution, metric)) > tol .or. &
             ratio <= 0.0_rp .or. solution_norm > &
             ref_step_trust_radius(state%trust_radius, ratio, solution_norm) + tol) then
@@ -8972,7 +8973,7 @@ contains
                 "than step."
             test_generalized_lanczos_trust_region = .false.
         end if
-        ratio = hartmann6d_ratio(context, solution)
+        ratio = ref_hartmann6d_ratio(context, solution)
         if (abs(solution_norm - metric_norm(solution, metric)) > tol .or. &
             ratio <= 0.0_rp .or. abs(solution_norm - ref_step_trust_radius( &
                 state%trust_radius, ratio, solution_norm)) > tol) then
@@ -9060,7 +9061,7 @@ contains
                     trim(trust_region_shape_options(i_case))//" trust region."
                 test_generalized_lanczos_trust_region = .false.
             end if
-            ratio = hartmann6d_ratio(context, solution)
+            ratio = ref_hartmann6d_ratio(context, solution)
             if (abs(solution_norm - metric_norm(solution, metric)) > tol .or. &
                 ratio <= 0.0_rp .or. abs(solution_norm - ref_step_trust_radius( &
                     state%trust_radius, ratio, solution_norm)) > tol) then
@@ -9153,7 +9154,7 @@ contains
                         "from the stored Lanczos process and evaluated once more."
                     test_generalized_lanczos_trust_region = .false.
                 end if
-                ratio = hartmann6d_ratio(fault_context, solution)
+                ratio = ref_hartmann6d_ratio(fault_context, solution)
                 if ((i_restart == 1 .and. &
                      any(abs(solution - accepted_solution) > tol)) .or. &
                     (i_restart > 1 .and. &

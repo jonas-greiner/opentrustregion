@@ -17,13 +17,13 @@ from pyopentrustregion.tests import (
     print_separator,
 )
 from pyopentrustregion.python_interface import (
-    c_real,
     SolverSettings,
     SolverState,
     logger_interface_type,
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
+    OrbitalCallbackMocks,
     ToyRun,
     check_released,
     evaluate_dm_missing_warning,
@@ -37,7 +37,6 @@ from pyopentrustregion.extensions.common.tests import (
     assign_reference_settings,
     settings_hold_reference,
     ao_overlap_pattern,
-    density_pattern,
 )
 from pyopentrustregion.extensions.oao import OAOSettings, oao_factory
 
@@ -82,9 +81,18 @@ fortran_tests = {
     ],
 }
 
-# multiples of the density matrix the mock density matrix evaluating function returns
-# for the Fock matrix and the response
-evaluate_dm_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_factors"))
+
+def density_pattern(n_particle, offset=0.0):
+    """
+    this function returns density matrices of the given number of particle channels
+    whose values encode their channel and the pair of their AO indices regardless of
+    their order together with an offset, as density_pattern of the Fortran test
+    reference does, so that they are symmetric while their values reveal matrices of
+    the wrong shape or channel
+    """
+    return offset + np.stack(
+        [100 * k + ao_overlap_pattern() for k in range(1, n_particle + 1)]
+    )
 
 
 def setup_oao_toy_run(n_particle):
@@ -145,23 +153,8 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    def mock_evaluate_dm(self, dm_ao, fock, get_response):
-        """
-        this function is a mock function for the density matrix evaluating function,
-        which builds only what it is asked for
-        """
-        if fock is not None:
-            fock[:] = evaluate_dm_factors[0] * dm_ao
-
-        return np.sum(dm_ao), (self.mock_get_response if get_response else None)
-
-    def mock_get_response(self, dm_ao, response):
-        """
-        this function is a mock function for the response function
-        """
-        response[:] = evaluate_dm_factors[1] * dm_ao
-
-        return
+    mock_evaluate_dm = OrbitalCallbackMocks.mock_evaluate_dm
+    mock_get_response = OrbitalCallbackMocks.mock_get_response
 
     # replace original library with mock library, also for the release of the
     # extensions the factory returns
@@ -233,7 +226,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
         if not check_wired_solver_settings(
             solver_settings,
             python_functions,
-            "oao_factory_py_interface",
+            "test_oao_factory_py_interface",
             (update_orbs_oao, obj_func_oao),
             settings,
         ):
@@ -423,7 +416,7 @@ class OAOPyInterfaceTests(unittest.TestCase):
                 solver_state,
                 settings,
             ),
-            "oao_factory_py_interface",
+            "test_oao_factory_py_interface",
         ):
             test_passed = False
 

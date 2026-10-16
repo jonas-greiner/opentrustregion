@@ -142,7 +142,8 @@ contains
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type
         use otr_oao, only: oao_settings_type
         use otr_common_test_reference, only: check_evaluate_dm_cs_funptr, &
-                                             n_ao_ref => n_ao, density_pattern
+                                             n_ao_ref => n_ao
+        use otr_oao_test_reference, only: density_pattern
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -212,7 +213,8 @@ contains
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type
         use otr_oao, only: oao_settings_type
         use otr_common_test_reference, only: check_evaluate_dm_os_funptr, &
-                                             n_ao_ref => n_ao, density_pattern
+                                             n_ao_ref => n_ao
+        use otr_oao_test_reference, only: density_pattern
 
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)

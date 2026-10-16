@@ -19,7 +19,6 @@ from pyopentrustregion.tests import (
     print_separator,
 )
 from pyopentrustregion.python_interface import (
-    c_real,
     c_int,
     update_orbs_interface_type,
     SolverSettings,
@@ -28,6 +27,7 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import OrbitalOwner
 from pyopentrustregion.extensions.common.tests import (
+    OrbitalCallbackMocks,
     ToyRun,
     check_released,
     evaluate_dm_missing_warning,
@@ -92,10 +92,6 @@ n_occ = list((c_int * 2).in_dll(lib, "test_n_occ"))
 # closed-shell case
 orbsym = [list(irreps) for irreps in ((c_int * n_mo) * 2).in_dll(lib, "test_orbsym")]
 
-# multiples of the density matrix the mock density matrix evaluating function returns
-# for the Fock matrix and the response
-evaluate_dm_factors = list((c_real * 2).in_dll(lib, "test_evaluate_dm_factors"))
-
 
 def setup_mo_toy_run(n_particle):
     """
@@ -157,23 +153,8 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         return super().setUpClass()
 
-    def mock_evaluate_dm(self, dm_ao, fock, get_response):
-        """
-        this function is a mock function for the density matrix evaluating function,
-        which builds only what it is asked for
-        """
-        if fock is not None:
-            fock[:] = evaluate_dm_factors[0] * dm_ao
-
-        return np.sum(dm_ao), (self.mock_get_response if get_response else None)
-
-    def mock_get_response(self, dm_ao, response):
-        """
-        this function is a mock function for the response function
-        """
-        response[:] = evaluate_dm_factors[1] * dm_ao
-
-        return
+    mock_evaluate_dm = OrbitalCallbackMocks.mock_evaluate_dm
+    mock_get_response = OrbitalCallbackMocks.mock_get_response
 
     # replace original library with mock library, also for the release of the
     # extensions the factory returns
@@ -277,7 +258,7 @@ class MOPyInterfaceTests(unittest.TestCase):
             if not check_wired_solver_settings(
                 solver_settings,
                 python_functions,
-                "mo_factory_py_interface",
+                "test_mo_factory_py_interface",
                 (update_orbs_mo, obj_func_mo),
                 settings,
             ):
@@ -441,7 +422,7 @@ class MOPyInterfaceTests(unittest.TestCase):
                 solver_state,
                 settings,
             ),
-            "mo_factory_py_interface",
+            "test_mo_factory_py_interface",
         ):
             test_passed = False
 

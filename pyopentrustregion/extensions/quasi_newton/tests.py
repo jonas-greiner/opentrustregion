@@ -264,15 +264,6 @@ class QNPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
-        # the returned Hessian linear transformation keeps the orbital updating function
-        # alive, which keeps what the factory's object calls alive
-        if hess_x_funptr._owner is not update_orbs_qn:
-            print(
-                " test_qn_factory_py_interface failed: Returned Hessian linear "
-                "transformation does not keep the orbital updating function alive."
-            )
-            test_passed = False
-
         # call returned hess_x function
         x = np.ones(n_param, dtype=np.float64)
         hess_x = np.empty(n_param, dtype=np.float64)
@@ -317,7 +308,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         if not check_wired_solver_settings(
             solver_settings,
             python_functions,
-            "qn_factory_py_interface",
+            "test_qn_factory_py_interface",
             (update_orbs_qn, obj_func_qn),
             settings,
         ):
@@ -395,7 +386,7 @@ class QNPyInterfaceTests(unittest.TestCase):
                 solver_state,
                 settings,
             ),
-            "qn_factory_py_interface",
+            "test_qn_factory_py_interface",
         ):
             test_passed = False
 

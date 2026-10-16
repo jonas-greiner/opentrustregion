@@ -324,26 +324,21 @@ contains
 
     end subroutine generate_random_fock_partition
 
-    function generate_random_upper_triangular(n) result(matrix)
+    function generate_random_cholesky_factor(n) result(matrix)
         !
         ! this function generates a random upper triangular matrix whose diagonal is
         ! bounded away from zero, so that it is invertible and well enough conditioned
         ! to stand in for the Cholesky factor a history factorization would produce
         !
+        use opentrustregion_unit_tests, only: identity_matrix, &
+                                              generate_random_upper_triangular_matrix
+
         integer(ip), intent(in) :: n
         real(rp) :: matrix(n, n)
 
-        integer(ip) :: i, j
+        matrix = generate_random_upper_triangular_matrix(n) + identity_matrix(n)
 
-        call random_number(matrix)
-        do j = 1, n
-            do i = j + 1, n
-                matrix(i, j) = 0.0_rp
-            end do
-            matrix(j, j) = matrix(j, j) + 1.0_rp
-        end do
-
-    end function generate_random_upper_triangular
+    end function generate_random_cholesky_factor
 
     function generate_random_psd_matrix(n, rank) result(matrix)
         !
@@ -410,34 +405,6 @@ contains
         call setup_settings(arh%settings, context)
 
     end subroutine setup_arh_and_mo_objects
-
-    subroutine setup_identity_mo_eigenbasis(mo, occ_eigval, virt_eigval)
-        !
-        ! this subroutine sets up an up-to-date eigendecomposition of the static part
-        ! of the Hessian in the MO basis itself for the particle channels of the MO
-        ! object, with the given eigenvalues of the occupied-occupied and the
-        ! virtual-virtual blocks of the Fock matrix, so that all eigenvalue pairs are
-        ! the same and routines using the eigendecomposition reduce to a scaling
-        !
-        use otr_mo, only: mo_type
-        use opentrustregion_unit_tests, only: identity_matrix
-
-        type(mo_type), intent(inout) :: mo
-        real(rp), intent(in) :: occ_eigval, virt_eigval
-
-        integer(ip) :: k
-
-        do k = 1, mo%n_particle
-            associate (channel => mo%mo_channels(k))
-                channel%occ_eigvecs = identity_matrix(channel%n_occ)
-                channel%occ_eigvals = spread(occ_eigval, 1, channel%n_occ)
-                channel%virt_eigvecs = identity_matrix(channel%n_virt)
-                channel%virt_eigvals = spread(virt_eigval, 1, channel%n_virt)
-            end associate
-        end do
-        mo%hess_eigen_stale = .false.
-
-    end subroutine setup_identity_mo_eigenbasis
 
     subroutine setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
                                                 context)
@@ -2393,7 +2360,8 @@ contains
         use otr_arh, only: arh_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
-        use opentrustregion_unit_tests, only: test_context_type, setup_error_logging
+        use opentrustregion_unit_tests, only: test_context_type, setup_error_logging, &
+                                              identity_matrix
 
         type(test_context_type), target :: context
         class(arh_type), allocatable, target :: arh
@@ -2402,7 +2370,7 @@ contains
         real(rp), target :: bracket_mo_coeff(n_ao, n_mo, n_particle_ref)
         real(rp) :: bracket_overlap(n_ao, n_ao)
         real(rp), allocatable :: x(:), inv_x(:)
-        integer(ip) :: i_basis, n_particle, inv_error
+        integer(ip) :: i_basis, n_particle, inv_error, i_channel
 
         ! assume tests pass
         test_inv_hess_x_arh = .true.
@@ -2417,17 +2385,26 @@ contains
             end do
         end do
 
-        ! set up the ARH object in the MO basis with an eigendecomposition whose
-        ! eigenvalue pairs, the open-shell differences 2 (e_v - e_o), are all 2 and a
-        ! low-rank part along the first parameter with a coupling of -2, for which the
-        ! matrix I + C P^T D^-1 E of the Woodbury identity vanishes, and determine if
-        ! the inverse returns an error with an error message
+        ! set up the ARH object in the MO basis with an up-to-date eigendecomposition
+        ! in the MO basis itself, whose eigenvalue pairs, the open-shell differences 2
+        ! (e_v - e_o), are all 2, and a low-rank part along the first parameter with a
+        ! coupling of -2, for which the matrix I + C P^T D^-1 E of the Woodbury
+        ! identity vanishes, and determine if the inverse returns an error with an
+        ! error message
         bracket_overlap = generate_random_ao_overlap(n_ao)
         bracket_mo_coeff = &
             generate_random_mo_coeff(bracket_overlap, n_mo, n_particle_ref)
         call setup_arh_and_mo_objects(arh, mo, bracket_mo_coeff, bracket_overlap, &
                                       n_occ, context)
-        call setup_identity_mo_eigenbasis(mo, 0.0_rp, 1.0_rp)
+        do i_channel = 1, mo%n_particle
+            associate (channel => mo%mo_channels(i_channel))
+                channel%occ_eigvecs = identity_matrix(channel%n_occ)
+                channel%occ_eigvals = spread(0.0_rp, 1, channel%n_occ)
+                channel%virt_eigvecs = identity_matrix(channel%n_virt)
+                channel%virt_eigvals = spread(1.0_rp, 1, channel%n_virt)
+            end associate
+        end do
+        mo%hess_eigen_stale = .false.
         call setup_error_logging(arh%settings, context)
         allocate(arh%expansion_dirs(mo%n_param, 1), arh%coupling_matrix(1, 1))
         arh%expansion_dirs = 0.0_rp
@@ -2672,8 +2649,8 @@ contains
         ! it returns
         !
         use otr_common_unit_tests, only: level_context
+        use otr_mo_test_reference, only: n_param
 
-        integer(ip), parameter :: n_param = 4
         real(rp), parameter :: mu = 0.3_rp
 
         type(recording_arh_type), target :: arh
@@ -2727,8 +2704,7 @@ contains
         ! the context to the one of the orbital basis and passes on what it returns
         !
         use otr_common_unit_tests, only: level_context
-
-        integer(ip), parameter :: n_param = 4
+        use otr_mo_test_reference, only: n_param
 
         type(recording_arh_type), target :: arh
         type(recording_basis_type), target :: basis
@@ -2786,8 +2762,9 @@ contains
         ! context to the orbital basis and passes on what it returns
         !
         use otr_common_unit_tests, only: level_context
+        use otr_mo_test_reference, only: n_param
 
-        integer(ip), parameter :: n_param = 4, n_extra = 2
+        integer(ip), parameter :: n_extra = 2
 
         type(recording_arh_type), target :: arh
         type(recording_basis_type), target :: basis
@@ -2834,8 +2811,7 @@ contains
         !
         use otr_arh, only: arh_oao_type
         use otr_common_unit_tests, only: level_context
-
-        integer(ip), parameter :: n_param = 4
+        use otr_oao_test_reference, only: n_param
 
         type(arh_oao_type), target :: arh
         type(recording_basis_type), target :: basis
@@ -3599,7 +3575,7 @@ contains
             write(stderr, *) "test_history_columns_arh_oao failed: Incorrect "// &
                 "dimensions of packed columns."
             test_history_columns_arh_oao = .false.
-        else if (norm2(packed - ref_cache_dirs(diff)) > tol) then
+        else if (norm2(packed - ref_packed_columns(diff)) > tol) then
             write(stderr, *) "test_history_columns_arh_oao failed: Packed columns "// &
                 "are not the projected and packed difference matrices."
             test_history_columns_arh_oao = .false.
@@ -3610,7 +3586,7 @@ contains
 
     contains
 
-        function ref_cache_dirs(v_diff) result(dirs)
+        function ref_packed_columns(v_diff) result(dirs)
             !
             ! this function independently projects and packs every column of a
             ! history-difference array into the non-redundant subspace of the current
@@ -3628,7 +3604,7 @@ contains
                     ref_project_asymm(v_diff(:, :, :, col), dm_oao), n_param)
             end do
 
-        end function ref_cache_dirs
+        end function ref_packed_columns
 
     end function test_history_columns_arh_oao
 
@@ -3946,7 +3922,7 @@ contains
 
         ! reorder and rebase into an arbitrary orthonormalized basis
         map = [3, 1, 4, 2]
-        chol = generate_random_upper_triangular(n_col)
+        chol = generate_random_cholesky_factor(n_col)
 
         ! call routine and determine if dimensions are correct and undoing the rebasing
         ! reproduces the gathered, reordered raw split columns
@@ -4003,7 +3979,7 @@ contains
 
         ! reorder and rebase into an arbitrary orthonormalized basis
         map = [3, 1, 4, 2]
-        chol = generate_random_upper_triangular(n_col)
+        chol = generate_random_cholesky_factor(n_col)
 
         ! call routine and determine if dimensions are correct and undoing the rebasing
         ! reproduces the gathered, reordered raw combined columns
@@ -4273,7 +4249,7 @@ contains
 
         ! reorder and congruence-transform into an arbitrary orthonormalized basis
         map = [2, 3, 1]
-        chol = generate_random_upper_triangular(n_diff)
+        chol = generate_random_cholesky_factor(n_diff)
 
         a_t = build_a_transformed(dm_cols, v_cols, map, chol)
         if (size(a_t, 1) /= n_diff .or. size(a_t, 2) /= n_diff) then
@@ -4343,7 +4319,7 @@ contains
 
         ! reorder and congruence-transform into an arbitrary orthonormalized basis
         map = [4, 1, 6, 2, 5, 3]
-        chol = generate_random_upper_triangular(n_col)
+        chol = generate_random_cholesky_factor(n_col)
 
         ! generate A matrix and verify
         a_block = &
@@ -4413,7 +4389,7 @@ contains
 
         ! reorder and congruence-transform into an arbitrary orthonormalized basis
         map = [4, 1, 6, 2, 5, 3]
-        chol = generate_random_upper_triangular(n_col)
+        chol = generate_random_cholesky_factor(n_col)
 
         ! generate A matrix and verify
         a_block = build_a_block_nonlinear_os(dm_cols, v_nonlinear_cols, rows, map, chol)
@@ -4939,7 +4915,7 @@ contains
         test_rebase_dirs = .true.
 
         call random_number(dirs)
-        chol = generate_random_upper_triangular(n_accepted)
+        chol = generate_random_cholesky_factor(n_accepted)
         map = [3, 1]
 
         rebased = rebase_dirs(dirs, map, chol)
@@ -4979,7 +4955,7 @@ contains
         test_congruence_transform = .true.
 
         a = generate_random_symm_matrix(n_dm)
-        chol = generate_random_upper_triangular(n_accepted)
+        chol = generate_random_cholesky_factor(n_accepted)
         map = [3, 1]
         a_gathered = a(map, map)
 
@@ -5023,8 +4999,8 @@ contains
 
         ! initialize random upper triangular factors of both channels and maps into
         ! their histories
-        chol1 = generate_random_upper_triangular(n1)
-        chol2 = generate_random_upper_triangular(n2)
+        chol1 = generate_random_cholesky_factor(n1)
+        chol2 = generate_random_cholesky_factor(n2)
         map1 = [2, 4]
         map2 = [1]
 
@@ -5078,7 +5054,7 @@ contains
         ! reorder and rebase into an arbitrary orthonormalized basis that also drops
         ! one history entry
         map = [3, 1]
-        chol = generate_random_upper_triangular(n_accepted)
+        chol = generate_random_cholesky_factor(n_accepted)
 
         ! initialize random history and response; the entries are centered on zero so
         ! that a history direction can end up poorly aligned with its own response and
@@ -5168,7 +5144,7 @@ contains
         ! metric, positive semidefinite kernels of a lower rank than the history space
         ! and their responses, which also serve as packed columns
         orth = generate_random_orthogonal_matrix(n_rows)
-        chol = generate_random_upper_triangular(n_diff)
+        chol = generate_random_cholesky_factor(n_diff)
         dm_cols = matmul(orth(:, :n_diff), chol)
         map = [(i, i=1, n_diff)]
         coulomb = generate_random_psd_matrix(n_rows, 4_ip)
@@ -5261,11 +5237,11 @@ contains
         chol = 0.0_rp
         dm_cols = 0.0_rp
         orth = generate_random_orthogonal_matrix(n_rows(1))
-        chol(:n_diff, :n_diff) = generate_random_upper_triangular(n_diff)
+        chol(:n_diff, :n_diff) = generate_random_cholesky_factor(n_diff)
         dm_cols(rows(1, 1):rows(2, 1), :) = matmul(orth(:, :n_diff), &
                                                    chol(:n_diff, :n_diff))
         orth = generate_random_orthogonal_matrix(n_rows(2))
-        chol(n_diff + 1:, n_diff + 1:) = generate_random_upper_triangular(n_diff)
+        chol(n_diff + 1:, n_diff + 1:) = generate_random_cholesky_factor(n_diff)
         dm_cols(rows(1, 2):rows(2, 2), :) = matmul(orth(:, :n_diff), &
                                                    chol(n_diff + 1:, n_diff + 1:))
         map = [(i, i=1, 2 * n_diff)]
@@ -5373,7 +5349,7 @@ contains
         ! reorder and rebase into an arbitrary orthonormalized basis that also drops
         ! one history entry, and random directions of both terms
         map = [3, 1]
-        chol = generate_random_upper_triangular(n_accepted)
+        chol = generate_random_cholesky_factor(n_accepted)
         a_coulomb = generate_random_psd_matrix(n_diff, n_diff)
         a_exchange = generate_random_psd_matrix(n_diff, n_diff)
         call random_number(dirs_coulomb)
@@ -5510,7 +5486,7 @@ contains
         ! non-trivial map that both selects a subset and reorders it
         call random_number(v_cols)
         map = [3_ip, 1_ip]
-        chol = generate_random_upper_triangular(n_accepted)
+        chol = generate_random_cholesky_factor(n_accepted)
 
         ! build the expected Gram matrix independently from the history columns
         gram = matmul(transpose(v_cols), v_cols)

@@ -36,9 +36,9 @@ contains
         use otr_oao_mock, only: mock_oao_factory_cs, mock_oao_factory_os, &
                                 mock_oao_factory_error, mock_oao_factory_defaults, &
                                 mock_oao_factory_no_evaluate_dm, test_passed
-        use otr_oao_test_reference, only: get_reference_oao_values
+        use otr_oao_test_reference, only: get_reference_oao_values, density_pattern
         use otr_common_test_reference, only: n_particle, n_ao_c, shell_names, &
-                                             ao_overlap_pattern, density_pattern
+                                             ao_overlap_pattern
         use otr_common_c_interface_unit_tests, only: &
             mock_evaluate_dm_cs, mock_evaluate_dm_os, check_c_factory_wiring
         use c_interface_unit_tests, only: mock_logger, mock_update_orbs, mock_obj_func

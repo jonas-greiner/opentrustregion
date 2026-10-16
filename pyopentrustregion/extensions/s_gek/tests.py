@@ -293,7 +293,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         if not check_wired_solver_settings(
             solver_settings,
             python_functions,
-            "s_gek_factory_py_interface",
+            "test_s_gek_factory_py_interface",
             (update_orbs_s_gek, obj_func_s_gek),
             settings,
         ):
@@ -368,7 +368,7 @@ class SGEKPyInterfaceTests(unittest.TestCase):
                 solver_state,
                 settings,
             ),
-            "s_gek_factory_py_interface",
+            "test_s_gek_factory_py_interface",
         ):
             test_passed = False
 

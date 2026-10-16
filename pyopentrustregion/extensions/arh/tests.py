@@ -274,7 +274,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             if not check_wired_solver_settings(
                 solver_settings,
                 python_functions,
-                "arh_factory_py_interface",
+                "test_arh_factory_py_interface",
                 (update_orbs_arh, obj_func_arh),
                 settings,
             ):
@@ -372,7 +372,7 @@ class ARHPyInterfaceTests(unittest.TestCase):
             )
 
         mock_passed.value = False
-        if not check_extension_owner(call_factory, "arh_factory_py_interface"):
+        if not check_extension_owner(call_factory, "test_arh_factory_py_interface"):
             test_passed = False
 
         # check if the mock factory received the correct input

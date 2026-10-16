@@ -10,7 +10,6 @@ module otr_oao_c_interface_mock
     use c_interface, only: c_rp, c_ip
     use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c
     use otr_oao_test_reference, only: ref_oao_settings
-    use otr_common_test_reference, only: n_particle, n_ao
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_null_funptr, &
                                            c_null_ptr, c_associated
@@ -45,9 +44,9 @@ contains
         use otr_oao_c_interface, only: oao_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: tol_c
-        use otr_oao_test_reference, only: operator(/=)
+        use otr_oao_test_reference, only: operator(/=), density_pattern
         use otr_common_test_reference, only: check_evaluate_dm_c_funptr, &
-                                             density_pattern, ao_overlap_pattern
+                                             ao_overlap_pattern, n_particle, n_ao
         use otr_common_c_interface_mock, only: &
             record_received_callbacks, mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension
