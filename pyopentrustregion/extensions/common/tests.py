@@ -33,6 +33,8 @@ from pyopentrustregion.python_interface import (
     c_real,
     c_int,
     hess_x_interface_type,
+    update_orbs_interface_type,
+    obj_func_interface_type,
     SolverSettings,
     SolverState,
     solver,
@@ -44,6 +46,7 @@ from pyopentrustregion.extensions.common.python_interface import (
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
     check_wrapped_functions,
+    extension_functions,
 )
 
 # define all tests in alphabetical order
@@ -878,6 +881,81 @@ class CommonPyInterfaceTests(unittest.TestCase):
 
         self.assertTrue(test_passed, "test_evaluate_dm_py_interface failed")
         print(" test_evaluate_dm_py_interface PASSED")
+
+    def test_extension_functions(self):
+        """
+        this function tests the orbital updating function and the objective function a
+        factory returns around the C functions the C factory returned, which have to
+        call them with the context of the solver settings, keep these alive, share the
+        collector of the factory call, copy the orbitals back after every orbital update
+        and hand over and receive arrays of any layout and kind
+        """
+        test_passed = True
+        solver_settings = SolverSettings()
+        exception = {}
+        copies = []
+        update_orbs, obj_func = extension_functions(
+            update_orbs_interface_type(lib.mock_update_orbs),
+            obj_func_interface_type(lib.mock_obj_func),
+            solver_settings,
+            exception,
+            lambda: copies.append(True),
+        )
+
+        for function in (update_orbs, obj_func):
+            if (
+                function.saved_objects["solver_settings"] is not solver_settings
+                or function._otr_exception is not exception
+                or function.context != solver_settings.settings_c.context
+            ):
+                print(
+                    " test_extension_functions failed: Returned function does not "
+                    "keep the solver settings alive, share the collector or call with "
+                    "their context."
+                )
+                test_passed = False
+
+        # the mock orbital update returns the sum, twice and three times the parameters
+        # and a Hessian linear transformation applying four times the identity, the
+        # mock objective function the sum, for a non-contiguous view of the parameters,
+        # a float32 gradient and a non-contiguous Hessian diagonal
+        kappa = np.random.random((n_param, 2))[:, 1]
+        grad = np.zeros(n_param, dtype=np.float32)
+        h_diag = np.zeros((n_param, 2))[:, 0]
+        func, hess_x = update_orbs(kappa, grad, h_diag)
+        if not (
+            np.isclose(func, kappa.sum())
+            and np.allclose(grad, 2.0 * kappa, rtol=1e-6)
+            and np.allclose(h_diag, 3.0 * kappa)
+        ):
+            print(
+                " test_extension_functions failed: Arrays of the orbital update not "
+                "handed over or received."
+            )
+            test_passed = False
+        if copies != [True]:
+            print(
+                " test_extension_functions failed: Orbitals not copied back after the "
+                "orbital update."
+            )
+            test_passed = False
+        hess_x_out = np.zeros(n_param, dtype=np.float32)
+        hess_x(kappa, hess_x_out)
+        if not np.allclose(hess_x_out, 4.0 * kappa, rtol=1e-6):
+            print(
+                " test_extension_functions failed: Arrays of the Hessian linear "
+                "transformation not handed over or received."
+            )
+            test_passed = False
+        if not np.isclose(obj_func(kappa), kappa.sum()):
+            print(
+                " test_extension_functions failed: Parameters of the objective "
+                "function not handed over."
+            )
+            test_passed = False
+
+        self.assertTrue(test_passed, "test_extension_functions failed")
+        print(" test_extension_functions PASSED")
 
     @patch(
         "pyopentrustregion.python_interface.lib.release_extension",

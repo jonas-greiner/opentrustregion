@@ -19,7 +19,7 @@ from pyopentrustregion.python_interface import (
     logger_interface_type,
     LoggerInterface,
     LoggerPyInterface,
-    adopt_collector,
+    raise_on_failure,
     Settings,
     SolverSettings,
     SolverSettingsC,
@@ -31,10 +31,9 @@ from pyopentrustregion.python_interface import (
 from pyopentrustregion.extensions.common.python_interface import (
     evaluate_dm_interface_type,
     EvaluateDMInterface,
-    ObjFuncPyInterface,
     OrbitalOwner,
-    UpdateOrbsPyInterface,
     check_callback_arguments,
+    extension_functions,
 )
 
 if TYPE_CHECKING:
@@ -188,10 +187,9 @@ def mo_factory(
     mo_coeff_ptr = mo_coeff_buffer.ctypes.data_as(POINTER(c_real))
     ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
 
-    # collector for exceptions raised inside the wrapped user callbacks; adopted from
-    # evaluate_dm when it is itself factory-produced so a whole chain of factories
-    # shares one, and handed to solver through the returned object
-    exception = adopt_collector(evaluate_dm)
+    # collector for exceptions raised inside the callback functions the object calls,
+    # which the solver adopts from the returned functions and the ARH factory shares
+    exception = {}
 
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check, without a density matrix evaluating function for an object only the ARH
@@ -208,12 +206,6 @@ def mo_factory(
     # hand the logging function of the settings the exception collector of the call
     if settings is not None:
         settings.prepare_call(None, exception)
-
-    if not hasattr(lib, "mo_factory"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_MO=ON' pip install ."
-        )
 
     # define result and argument types
     lib.mo_factory.restype = c_int
@@ -255,15 +247,7 @@ def mo_factory(
         orbsym_c,
     )
 
-    if error:
-        if "exc" in exception:
-            raise RuntimeError(
-                f"OpenTrustRegion MO factory produced error (code {error})."
-            ) from exception["exc"]
-        else:
-            raise RuntimeError(
-                f"OpenTrustRegion MO factory produced error (code {error})."
-            )
+    raise_on_failure(error, exception, "MO factory")
 
     # the owner of the MO object, which the solver settings keep alive, keeps alive
     # what the object calls and the MO coefficients it rotates and holds the dimensions
@@ -282,25 +266,17 @@ def mo_factory(
         },
         n_ao,
         n_particle,
+        exception,
         (
             None
             if in_place
             else lambda: np.copyto(mo_coeff, mo_coeff_buffer.swapaxes(-1, -2))
         ),
     )
-    saved_objects = {"solver_settings": solver_settings}
-    return (
-        UpdateOrbsPyInterface(
-            update_orbs_funptr=update_orbs_mo_funptr,
-            saved_objects=saved_objects,
-            _otr_exception=exception,
-            context=solver_settings.settings_c.context,
-            copy_back=owner.copy_back,
-        ),
-        ObjFuncPyInterface(
-            obj_func_funptr=obj_func_mo_funptr,
-            saved_objects=saved_objects,
-            _otr_exception=exception,
-            context=solver_settings.settings_c.context,
-        ),
+    return extension_functions(
+        update_orbs_mo_funptr,
+        obj_func_mo_funptr,
+        solver_settings,
+        exception,
+        owner.copy_back,
     )

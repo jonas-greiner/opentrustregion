@@ -22,7 +22,7 @@ from pyopentrustregion.python_interface import (
     logger_interface_type,
     LoggerInterface,
     LoggerPyInterface,
-    adopt_collector,
+    raise_on_failure,
     Settings,
     SolverSettings,
     SolverSettingsC,
@@ -33,10 +33,9 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import (
     ExtensionOwner,
-    ObjFuncPyInterface,
     OrbitalOwner,
-    UpdateOrbsPyInterface,
     check_callback_arguments,
+    extension_functions,
 )
 
 if TYPE_CHECKING:
@@ -182,10 +181,10 @@ def arh_factory(
         )
     n_ao, n_particle = orbitals.n_ao, orbitals.n_particle
 
-    # collector for exceptions raised inside the wrapped user callbacks; adopted from
-    # evaluate_dm when it is itself factory-produced so a whole chain of factories
-    # shares one, and handed to solver through the returned object
-    exception = adopt_collector(evaluate_dm)
+    # collector for exceptions raised inside the callback functions the object calls,
+    # shared with the orbital basis object, whose functions the ARH object calls, which
+    # the solver adopts from the returned functions
+    exception = orbitals.exception
 
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
@@ -203,12 +202,6 @@ def arh_factory(
     # hand the logging function of the settings the exception collector of the call
     if settings is not None:
         settings.prepare_call(None, exception)
-
-    if not hasattr(lib, "arh_factory"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
-        )
 
     # define result and argument types
     lib.arh_factory.restype = c_int
@@ -236,15 +229,7 @@ def arh_factory(
         None if settings is None else byref(settings.settings_c),
     )
 
-    if error:
-        if "exc" in exception:
-            raise RuntimeError(
-                f"OpenTrustRegion ARH factory produced error (code {error})."
-            ) from exception["exc"]
-        else:
-            raise RuntimeError(
-                f"OpenTrustRegion ARH factory produced error (code {error})."
-            )
+    raise_on_failure(error, exception, "ARH factory")
 
     # the owner of the ARH object, which the solver settings keep alive, keeps alive
     # what the object calls and the owner of the orbital basis object, which the
@@ -261,19 +246,10 @@ def arh_factory(
             "evaluate_dm_interface": evaluate_dm_interface,
         },
     )
-    saved_objects = {"solver_settings": solver_settings}
-    return (
-        UpdateOrbsPyInterface(
-            update_orbs_funptr=update_orbs_arh_funptr,
-            saved_objects=saved_objects,
-            _otr_exception=exception,
-            context=solver_settings.settings_c.context,
-            copy_back=orbitals.copy_back,
-        ),
-        ObjFuncPyInterface(
-            obj_func_funptr=obj_func_arh_funptr,
-            saved_objects=saved_objects,
-            _otr_exception=exception,
-            context=solver_settings.settings_c.context,
-        ),
+    return extension_functions(
+        update_orbs_arh_funptr,
+        obj_func_arh_funptr,
+        solver_settings,
+        exception,
+        orbitals.copy_back,
     )

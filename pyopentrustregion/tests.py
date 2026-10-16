@@ -56,6 +56,8 @@ except ImportError:
     )
 from pyopentrustregion.python_interface import (
     UpdateOrbsInterface,
+    c_buffer,
+    write_back,
     raise_on_failure,
     hess_x_interface_type,
     precond_interface_type,
@@ -1094,6 +1096,81 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")
         print(" test_callback_interfaces PASSED")
+
+    def test_c_buffer(self):
+        """
+        this function tests that an array a C function can read and write in place is
+        handed over itself and every other array as a writeable, C-contiguous float64
+        copy of its values
+        """
+        test_passed = True
+        read_only = np.random.random(n_param)
+        read_only.flags.writeable = False
+
+        for array, in_place, case in [
+            (
+                np.random.random(n_param),
+                True,
+                "a writeable, C-contiguous float64 array",
+            ),
+            (np.random.random((n_param, 2))[:, 1], False, "a non-contiguous view"),
+            (np.random.random(n_param).astype(np.float32), False, "a float32 array"),
+            (read_only, False, "a read-only array"),
+        ]:
+            buffer = c_buffer(array)
+            if (buffer is array) is not in_place:
+                print(
+                    f" test_c_buffer failed: Array {'not ' if in_place else ''}handed "
+                    f"over itself for {case}."
+                )
+                test_passed = False
+            if not (
+                buffer.dtype == np.float64
+                and buffer.flags.c_contiguous
+                and buffer.flags.writeable
+                and np.allclose(buffer, array)
+            ):
+                print(
+                    f" test_c_buffer failed: Buffer not a writeable, C-contiguous "
+                    f"float64 array of the values for {case}."
+                )
+                test_passed = False
+
+        self.assertTrue(test_passed, "test_c_buffer failed")
+        print(" test_c_buffer PASSED")
+
+    def test_write_back(self):
+        """
+        this function tests that the values a C function wrote into the buffer of an
+        output are written back into an array whose buffer is a copy, also of another
+        kind, and that a read-only array refuses them
+        """
+        test_passed = True
+
+        for array, case in [
+            (np.random.random((n_param, 2))[:, 1], "a non-contiguous view"),
+            (np.random.random(n_param).astype(np.float32), "a float32 array"),
+            (np.random.random(n_param), "an array handed over itself"),
+        ]:
+            buffer = c_buffer(array)
+            buffer[:] = np.arange(n_param)
+            write_back(array, buffer)
+            if not np.allclose(array, np.arange(n_param)):
+                print(f" test_write_back failed: Values not written back for {case}.")
+                test_passed = False
+
+        read_only = np.random.random(n_param)
+        read_only.flags.writeable = False
+        try:
+            write_back(read_only, c_buffer(read_only))
+        except ValueError:
+            pass
+        else:
+            print(" test_write_back failed: Values written into a read-only array.")
+            test_passed = False
+
+        self.assertTrue(test_passed, "test_write_back failed")
+        print(" test_write_back PASSED")
 
     def test_raise_on_failure(self):
         """

@@ -25,6 +25,7 @@ from pyopentrustregion.python_interface import (
     LoggerInterface,
     LoggerPyInterface,
     adopt_collector,
+    raise_on_failure,
     Settings,
     SolverSettings,
     SolverSettingsC,
@@ -35,9 +36,8 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import (
     ExtensionOwner,
-    ObjFuncPyInterface,
-    UpdateOrbsPyInterface,
     check_callback_arguments,
+    extension_functions,
     check_wrapped_functions,
 )
 
@@ -193,12 +193,6 @@ def qn_factory(
     if settings is not None:
         settings.prepare_call(None, exception)
 
-    if not hasattr(lib, "qn_factory"):
-        raise RuntimeError(
-            "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install ."
-        )
-
     # define result and argument types
     lib.qn_factory.restype = c_int
     lib.qn_factory.argtypes = [
@@ -233,15 +227,7 @@ def qn_factory(
         None if settings is None else byref(settings.settings_c),
     )
 
-    if error:
-        if "exc" in exception:
-            raise RuntimeError(
-                f"OpenTrustRegion quasi-Newton factory produced error (code {error})."
-            ) from exception["exc"]
-        else:
-            raise RuntimeError(
-                f"OpenTrustRegion quasi-Newton factory produced error (code {error})."
-            )
+    raise_on_failure(error, exception, "quasi-Newton factory")
 
     # the owner of the quasi-Newton object, which the solver settings keep alive, keeps
     # alive what the object calls, and the returned functions are called with the
@@ -259,18 +245,6 @@ def qn_factory(
             "init_hess_interface": init_hess_interface,
         },
     )
-    saved_objects = {"solver_settings": solver_settings}
-    return (
-        UpdateOrbsPyInterface(
-            update_orbs_funptr=update_orbs_qn_funptr,
-            saved_objects=saved_objects,
-            _otr_exception=exception,
-            context=solver_settings.settings_c.context,
-        ),
-        ObjFuncPyInterface(
-            obj_func_funptr=obj_func_qn_funptr,
-            saved_objects=saved_objects,
-            _otr_exception=exception,
-            context=solver_settings.settings_c.context,
-        ),
+    return extension_functions(
+        update_orbs_qn_funptr, obj_func_qn_funptr, solver_settings, exception
     )

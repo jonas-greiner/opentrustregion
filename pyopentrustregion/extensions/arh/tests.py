@@ -133,6 +133,7 @@ def setup_orbital_owner(solver_settings, n_particle, copy_back=None):
     owner = OrbitalOwner.__new__(OrbitalOwner)
     owner.n_ao = n_ao
     owner.n_particle = n_particle
+    owner.exception = {}
     owner.copy_back = copy_back
     solver_settings._extension_owner = owner
     return owner
@@ -252,6 +253,18 @@ class ARHPyInterfaceTests(unittest.TestCase):
                 print(
                     " test_arh_factory_py_interface failed: Called logging function "
                     "wrong."
+                )
+                test_passed = False
+
+            # the returned functions share the collector of the orbital basis factory,
+            # whose functions the object calls
+            if not (
+                update_orbs_arh._otr_exception is orbitals.exception
+                and obj_func_arh._otr_exception is orbitals.exception
+            ):
+                print(
+                    " test_arh_factory_py_interface failed: Collector of the orbital "
+                    "basis factory not shared."
                 )
                 test_passed = False
 

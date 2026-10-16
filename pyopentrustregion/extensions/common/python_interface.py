@@ -20,6 +20,9 @@ from pyopentrustregion.python_interface import (
     CallbackInterface,
     hess_x_interface_type,
     HessXPyInterface,
+    c_buffer,
+    write_back,
+    raise_callback_error,
 )
 
 if TYPE_CHECKING:
@@ -141,11 +144,9 @@ class EvaluateDMInterface(CallbackInterface):
 @dataclass
 class ObjFuncPyInterface:
     """
-    this class provides the Python interface to the objective function, which is
-    called with the context the factory has written into the solver settings, the
-    callback interfaces and the settings whose callback functions the factory's object
-    calls are stored to ensure that they are not garbage collected when the factory
-    completes
+    this class provides the Python interface to the objective function a factory
+    returns, which is called with the context the factory has written into the solver
+    settings and keeps these alive, which keep the owner of the factory's object alive
     """
 
     obj_func_funptr: Any
@@ -158,18 +159,48 @@ class ObjFuncPyInterface:
         func = c_real()
 
         # get pointers to arrays
-        kappa_ptr = kappa.ctypes.data_as(POINTER(c_real))
+        kappa_ptr = c_buffer(kappa).ctypes.data_as(POINTER(c_real))
 
         # objective function
         error = self.obj_func_funptr(kappa_ptr, byref(func), self.context)
-        if error != 0:
-            if self._otr_exception is not None and "exc" in self._otr_exception:
-                raise RuntimeError(
-                    "Objective function raised error."
-                ) from self._otr_exception["exc"]
-            raise RuntimeError("Objective function raised error.")
+        raise_callback_error(
+            error, self._otr_exception, "Objective function raised error."
+        )
 
         return func.value
+
+
+def extension_functions(
+    update_orbs_funptr: Any,
+    obj_func_funptr: Any,
+    solver_settings: SolverSettings,
+    exception: Dict[str, Exception],
+    copy_back: Optional[Callable[[], None]] = None,
+) -> Tuple[UpdateOrbsPyInterface, ObjFuncPyInterface]:
+    """
+    this function returns the orbital updating function and the objective function a
+    factory returns, the Python interfaces to the C functions the C factory returned,
+    which are called with the context the factory has written into the solver settings
+    and keep these alive, and the orbital update of which copies the orbitals back if
+    the library moves a copy of them
+    """
+    saved_objects = {"solver_settings": solver_settings}
+    context = solver_settings.settings_c.context
+    return (
+        UpdateOrbsPyInterface(
+            update_orbs_funptr=update_orbs_funptr,
+            saved_objects=saved_objects,
+            _otr_exception=exception,
+            context=context,
+            copy_back=copy_back,
+        ),
+        ObjFuncPyInterface(
+            obj_func_funptr=obj_func_funptr,
+            saved_objects=saved_objects,
+            _otr_exception=exception,
+            context=context,
+        ),
+    )
 
 
 def release_extension(extension: Optional[int]) -> None:
@@ -211,10 +242,11 @@ class ExtensionOwner:
 class OrbitalOwner(ExtensionOwner):
     """
     this class owns the orbital basis object an MO or OAO factory created for a Python
-    host like ExtensionOwner and also holds the dimensions of its orbitals and, if the
-    library moves a copy of the orbitals of the caller, the function that copies them
-    back, which the ARH factory, which builds on the object, needs for its own callback
-    interfaces and orbital updating function
+    host like ExtensionOwner and also holds the dimensions of its orbitals, the
+    collector of the exceptions of the factory call and, if the library moves a copy of
+    the orbitals of the caller, the function that copies them back, which the ARH
+    factory, which builds on the object, needs for its own callback interfaces and
+    orbital updating function and shares with them
     """
 
     def __init__(
@@ -224,11 +256,13 @@ class OrbitalOwner(ExtensionOwner):
         saved_objects: Dict[str, Any],
         n_ao: int,
         n_particle: int,
+        exception: Dict[str, Exception],
         copy_back: Optional[Callable[[], None]] = None,
     ):
         super().__init__(extension, solver_settings, saved_objects)
         self.n_ao = n_ao
         self.n_particle = n_particle
+        self.exception = exception
         self.copy_back = copy_back
 
 
@@ -281,19 +315,16 @@ def check_wrapped_functions(
 @dataclass
 class UpdateOrbsPyInterface:
     """
-    this class provides the Python interface to the orbital updating function, which is
-    called with the context the factory has written into the solver settings, the
-    callback interfaces and the settings whose callback functions the factory's object
-    calls are stored to ensure that they are not garbage collected when the factory
-    completes
+    this class provides the Python interface to the orbital updating function a factory
+    returns, which is called with the context the factory has written into the solver
+    settings and keeps these alive, which keep the owner of the factory's object alive
     """
 
     update_orbs_funptr: Any
     saved_objects: Dict[str, Any]
     hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]] = None
-    # collector shared with the wrapped user callback, so that solver can adopt it and
-    # chain exceptions raised inside that callback; None when this object does not wrap
-    # a user callback of its own
+    # collector of the exceptions of the factory call, which the solver adopts, so that
+    # it chains the exceptions raised inside the callback functions the object calls
     _otr_exception: Optional[Dict[str, Exception]] = None
     context: Optional[int] = None
     # function copying the orbitals back to the array of the caller after every update
@@ -307,9 +338,10 @@ class UpdateOrbsPyInterface:
         func = c_real()
 
         # get pointers to arrays
-        kappa_ptr = kappa.ctypes.data_as(POINTER(c_real))
-        grad_ptr = grad.ctypes.data_as(POINTER(c_real))
-        h_diag_ptr = h_diag.ctypes.data_as(POINTER(c_real))
+        grad_buffer, h_diag_buffer = c_buffer(grad), c_buffer(h_diag)
+        kappa_ptr = c_buffer(kappa).ctypes.data_as(POINTER(c_real))
+        grad_ptr = grad_buffer.ctypes.data_as(POINTER(c_real))
+        h_diag_ptr = h_diag_buffer.ctypes.data_as(POINTER(c_real))
 
         # initialize Hessian linear transformation function pointer
         hess_x_funptr = hess_x_interface_type()
@@ -328,15 +360,14 @@ class UpdateOrbsPyInterface:
         finally:
             if self.copy_back is not None:
                 self.copy_back()
-        if error != 0:
-            msg = "Orbital updating function raised error."
-            if self._otr_exception is not None and "exc" in self._otr_exception:
-                raise RuntimeError(msg) from self._otr_exception["exc"]
-            raise RuntimeError(msg)
+        write_back(grad, grad_buffer)
+        write_back(h_diag, h_diag_buffer)
+        raise_callback_error(
+            error, self._otr_exception, "Orbital updating function raised error."
+        )
 
-        # attach the Hessian linear transformation interface to the object so that it
-        # persists in Python to ensure that it is not garbage collected when the
-        # factory completes, and let it keep this object alive
+        # keep the interface of the Hessian linear transformation available as an
+        # attribute and let it keep this object alive
         self.hess_x = HessXPyInterface(
             hess_x_funptr, self._otr_exception, self.context, _owner=self
         )

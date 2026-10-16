@@ -463,6 +463,26 @@ def raise_callback_error(error: int, exception: Optional[Dict[str, Exception]], 
         raise RuntimeError(msg)
 
 
+def c_buffer(array: np.ndarray) -> np.ndarray:
+    """
+    this function returns an array a C function can read and write in place, the given
+    array itself if it is a writeable, C-contiguous float64 array, and a C-contiguous
+    float64 copy otherwise, into which the values of an output have to be written back
+    """
+    if array.flags.writeable:
+        return np.ascontiguousarray(array, dtype=np.float64)
+    return np.array(array, dtype=np.float64, order="C")
+
+
+def write_back(array: np.ndarray, buffer: np.ndarray):
+    """
+    this function writes the values a C function wrote into the buffer of an output
+    back into the given array, if the buffer is a copy
+    """
+    if buffer is not array:
+        array[...] = buffer
+
+
 @dataclass
 class CFunctionInterface:
     """
@@ -484,11 +504,13 @@ class HessXPyInterface(CFunctionInterface):
     """
 
     def __call__(self, x: np.ndarray, hess_x: np.ndarray):
+        x_buffer, hess_x_buffer = c_buffer(x), c_buffer(hess_x)
         error = self.funptr(
-            x.ctypes.data_as(POINTER(c_real)),
-            hess_x.ctypes.data_as(POINTER(c_real)),
+            x_buffer.ctypes.data_as(POINTER(c_real)),
+            hess_x_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
         )
+        write_back(hess_x, hess_x_buffer)
         raise_callback_error(
             error,
             self._otr_exception,
@@ -503,12 +525,15 @@ class PrecondPyInterface(CFunctionInterface):
     """
 
     def __call__(self, residual: np.ndarray, mu: float, precond_residual: np.ndarray):
+        residual_buffer = c_buffer(residual)
+        precond_residual_buffer = c_buffer(precond_residual)
         error = self.funptr(
-            residual.ctypes.data_as(POINTER(c_real)),
+            residual_buffer.ctypes.data_as(POINTER(c_real)),
             c_real(mu),
-            precond_residual.ctypes.data_as(POINTER(c_real)),
+            precond_residual_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
         )
+        write_back(precond_residual, precond_residual_buffer)
         raise_callback_error(
             error, self._otr_exception, "Preconditioner function raised error."
         )
@@ -521,11 +546,14 @@ class PrecondPDPyInterface(CFunctionInterface):
     """
 
     def __call__(self, residual: np.ndarray, precond_residual: np.ndarray):
+        residual_buffer = c_buffer(residual)
+        precond_residual_buffer = c_buffer(precond_residual)
         error = self.funptr(
-            residual.ctypes.data_as(POINTER(c_real)),
-            precond_residual.ctypes.data_as(POINTER(c_real)),
+            residual_buffer.ctypes.data_as(POINTER(c_real)),
+            precond_residual_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
         )
+        write_back(precond_residual, precond_residual_buffer)
         raise_callback_error(
             error,
             self._otr_exception,
@@ -539,7 +567,9 @@ class ProjectPyInterface(CFunctionInterface):
     """
 
     def __call__(self, vector: np.ndarray):
-        error = self.funptr(vector.ctypes.data_as(POINTER(c_real)), self.context)
+        vector_buffer = c_buffer(vector)
+        error = self.funptr(vector_buffer.ctypes.data_as(POINTER(c_real)), self.context)
+        write_back(vector, vector_buffer)
         raise_callback_error(
             error, self._otr_exception, "Projection function raised error."
         )
@@ -551,11 +581,13 @@ class GetExtraTrialVectorsPyInterface(CFunctionInterface):
     """
 
     def __call__(self, trial_vectors: np.ndarray):
+        trial_vectors_buffer = c_buffer(trial_vectors)
         error = self.funptr(
-            trial_vectors.ctypes.data_as(POINTER(c_real)),
+            trial_vectors_buffer.ctypes.data_as(POINTER(c_real)),
             trial_vectors.shape[0],
             self.context,
         )
+        write_back(trial_vectors, trial_vectors_buffer)
         raise_callback_error(
             error, self._otr_exception, "Extra trial vector function raised error."
         )
@@ -584,7 +616,7 @@ class ConvCheckStabilityPyInterface(CFunctionInterface):
     def __call__(self, residual: np.ndarray, eigval: float) -> bool:
         converged = c_bool()
         error = self.funptr(
-            residual.ctypes.data_as(POINTER(c_real)),
+            c_buffer(residual).ctypes.data_as(POINTER(c_real)),
             byref(c_real(eigval)),
             byref(converged),
             self.context,
