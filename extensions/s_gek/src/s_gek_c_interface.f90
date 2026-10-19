@@ -75,11 +75,10 @@ contains
         ! into the C solver settings
         !
         use opentrustregion, only: warn_uninitialized_settings, add_error_origin
-        use otr_common, only: error_s_gek
         use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
                                obj_func_f_wrapper
         use otr_s_gek, only: s_gek_settings_type, default_s_gek_settings, &
-                             s_gek_settings_uninitialized_warning_msg
+                             s_gek_settings_uninitialized_warning_msg, error_s_gek
         use otr_common_c_interface, only: extension_holder_type, bundle_settings_c, &
                                           setup_extension_holder, &
                                           finish_extension_holder

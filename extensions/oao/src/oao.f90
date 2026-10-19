@@ -10,7 +10,7 @@ module otr_oao
                                hess_x_type, solver_state_type, add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, &
                           evaluate_dm_cs_type, evaluate_dm_os_type, &
-                          extension_solver_settings_type, error_oao
+                          extension_solver_settings_type
 
     implicit none
 
@@ -22,6 +22,10 @@ module otr_oao
     ! warning for settings that were not initialized
     character(len=*), parameter :: oao_settings_uninitialized_warning_msg = &
         "OAO settings were not initialized. All OAO settings are set to default values"
+
+    ! error origin of the OAO extension, with which its factory and object tag the
+    ! errors they detect themselves
+    integer(ip), parameter :: error_oao = 5200
 
     ! orbitals parameterized in the OAO basis, which points to the density matrix of
     ! the caller, which it updates in place

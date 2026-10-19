@@ -65,9 +65,9 @@ contains
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
-        use otr_common, only: error_rotation_qn
         use otr_common_c_interface, only: extension_holder_type
-        use otr_rotation_qn, only: standard_rotation_qn_factory => rotation_qn_factory
+        use otr_rotation_qn, only: &
+            standard_rotation_qn_factory => rotation_qn_factory, error_rotation_qn
         use otr_rotation_qn_c_interface, only: &
             rotation_qn_settings_type_c, rotation_qn_c_callbacks_type, &
             rotation_qn_factory, rotation_qn_factory_c_wrapper

@@ -10,7 +10,7 @@ module otr_density_qn
                                hess_x_type, solver_settings_type, solver_state_type, &
                                add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, extension_type, &
-                          extension_solver_settings_type, channel_rows, error_density_qn
+                          extension_solver_settings_type, channel_rows
     use otr_oao, only: oao_type
     use otr_mo, only: mo_channel_type, mo_type
 
@@ -31,6 +31,10 @@ module otr_density_qn
     character(len=*), parameter :: density_qn_settings_uninitialized_warning_msg = &
         "Density QN settings were not initialized. All density QN settings are set "// &
         "to default values"
+
+    ! error origin of the density QN extension, with which its factory and object tag
+    ! the errors they detect themselves
+    integer(ip), parameter :: error_density_qn = 5300
 
     ! define setting options
     character(len=kw_len), parameter :: qn_methods(5) = &

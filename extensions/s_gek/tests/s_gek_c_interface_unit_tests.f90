@@ -60,9 +60,8 @@ contains
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
-        use otr_common, only: error_s_gek
         use otr_common_c_interface, only: extension_holder_type
-        use otr_s_gek, only: standard_s_gek_factory => s_gek_factory
+        use otr_s_gek, only: standard_s_gek_factory => s_gek_factory, error_s_gek
         use otr_s_gek_c_interface, only: s_gek_settings_type_c, &
                                          s_gek_c_callbacks_type, s_gek_factory, &
                                          s_gek_factory_c_wrapper

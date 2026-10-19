@@ -83,10 +83,10 @@ contains
         !
         use opentrustregion, only: warn_uninitialized_settings, add_error_origin
         use c_interface, only: solver_settings_type_c
-        use otr_density_qn, only: density_qn_settings_type, &
-                                  default_density_qn_settings, &
-                                  density_qn_settings_uninitialized_warning_msg
-        use otr_common, only: extension_level_type, orbital_basis_type, error_density_qn
+        use otr_density_qn, only: &
+            density_qn_settings_type, default_density_qn_settings, &
+            density_qn_settings_uninitialized_warning_msg, error_density_qn
+        use otr_common, only: extension_level_type, orbital_basis_type
         use otr_common_c_interface, only: &
             extension_holder_type, holder_level_type, holder_level, bundle_settings_c, &
             setup_extension_holder, finish_extension_holder

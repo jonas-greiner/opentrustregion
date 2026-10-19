@@ -318,10 +318,10 @@ contains
         ! density matrix evaluating function to the common setup
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_oao, only: oao_factory_cs, oao_type, oao_settings_type
+        use otr_oao, only: oao_factory_cs, oao_type, oao_settings_type, error_oao
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback, error_oao
+                              obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix
         use otr_common_test_reference, only: n_ao, n_occ, operator(==)
@@ -445,10 +445,10 @@ contains
         ! function to the common setup
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_oao, only: oao_factory_os, oao_type, oao_settings_type
+        use otr_oao, only: oao_factory_os, oao_type, oao_settings_type, error_oao
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback, error_oao
+                              obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, operator(==)
@@ -563,9 +563,9 @@ contains
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
-                              evaluate_dm_missing_warning_msg, error_oao
+                              evaluate_dm_missing_warning_msg
         use otr_oao, only: oao_factory_common, oao_type, oao_settings_type, &
-                           default_oao_settings
+                           default_oao_settings, error_oao
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, &
                                              operator(==), same_logger_and_context
@@ -950,12 +950,11 @@ contains
         ! OAO basis
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_oao
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
             level_context, generate_random_density_matrix, mock_requests, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
-        use otr_oao, only: oao_type
+        use otr_oao, only: oao_type, error_oao
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
                                               generate_random_symm_matrix
@@ -1139,8 +1138,8 @@ contains
             level_context, generate_random_density_matrix, mock_fock_factor, &
             mock_requests, mock_get_response_cs, mock_get_response_os, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
-        use otr_oao, only: oao_type
-        use otr_common, only: hess_x_callback, error_oao
+        use otr_oao, only: oao_type, error_oao
+        use otr_common, only: hess_x_callback
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -1434,7 +1433,6 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the OAO basis
         !
-        use otr_common, only: error_oao
         use test_reference, only: arm_host_context, host_context_reached
         use otr_common_unit_tests, only: &
             level_context, generate_random_density_matrix, mock_requests, &
@@ -1442,7 +1440,7 @@ contains
             mock_get_response_cs, mock_get_coupled_response_os, &
             mock_get_stale_response_os, model_response_cs, model_response_os, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
-        use otr_oao, only: oao_type
+        use otr_oao, only: oao_type, error_oao
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
                                               generate_random_symm_matrix
@@ -1775,8 +1773,7 @@ contains
         !
         use otr_common_unit_tests, only: generate_random_density_matrix
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_oao
-        use otr_oao, only: oao_type
+        use otr_oao, only: oao_type, error_oao
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
                                               generate_random_symm_matrix

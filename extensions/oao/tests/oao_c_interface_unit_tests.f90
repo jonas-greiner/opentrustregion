@@ -25,11 +25,10 @@ contains
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
-        use otr_common, only: error_oao
         use otr_common_c_interface, only: extension_holder_type, &
                                           orbital_c_callbacks_type
         use otr_oao, only: standard_oao_factory_cs => oao_factory_cs, &
-                           standard_oao_factory_os => oao_factory_os
+                           standard_oao_factory_os => oao_factory_os, error_oao
         use otr_oao_c_interface, only: oao_settings_type_c, oao_factory_cs, &
                                        oao_factory_os, oao_factory_c_wrapper
         use otr_oao_mock, only: mock_oao_factory_cs, mock_oao_factory_os, &

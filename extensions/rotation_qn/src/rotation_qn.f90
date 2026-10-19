@@ -8,7 +8,7 @@ module otr_rotation_qn
 
     use opentrustregion, only: rp, ip, kw_len, settings_type, update_orbs_type, &
                                hess_x_type, add_error_origin
-    use otr_common, only: extension_type, provided_roles_type, error_rotation_qn
+    use otr_common, only: extension_type, provided_roles_type
 
     implicit none
 
@@ -53,6 +53,10 @@ module otr_rotation_qn
     character(len=*), parameter :: rotation_qn_settings_uninitialized_warning_msg = &
         "Rotation QN settings were not initialized. All rotation QN settings are "// &
         "set to default values"
+
+    ! error origin of the rotation QN extension, with which its factory and object tag
+    ! the errors they detect themselves
+    integer(ip), parameter :: error_rotation_qn = 5400
 
     ! rotation QN object, holding the history of steps and gradient differences, the
     ! settings and the host's transport and initial Hessian functions, whose updating

@@ -8,7 +8,7 @@ module otr_s_gek
 
     use opentrustregion, only: rp, ip, pi, settings_type, update_orbs_type, &
                                hess_x_type, add_error_origin
-    use otr_common, only: extension_type, provided_roles_type, error_s_gek
+    use otr_common, only: extension_type, provided_roles_type
 
     implicit none
 
@@ -38,6 +38,10 @@ module otr_s_gek
     character(len=*), parameter :: s_gek_settings_uninitialized_warning_msg = &
         "S-GEK settings were not initialized. All S-GEK settings are set to "// &
         "default values"
+
+    ! error origin of the S-GEK extension, with which its factory and object tag the
+    ! errors they detect themselves
+    integer(ip), parameter :: error_s_gek = 5500
 
     ! S-GEK object, holding the sample points, the surrogate model, the settings and
     ! the host's change of reference function

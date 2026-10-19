@@ -364,8 +364,7 @@ contains
         ! parameterized in the MO basis the way the MO and density QN factories would,
         ! pointing to the test-local MO coefficients
         !
-        use otr_common, only: error_density_qn
-        use otr_density_qn, only: density_qn_type, density_qn_mo_type
+        use otr_density_qn, only: density_qn_type, density_qn_mo_type, error_density_qn
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_unit_tests, only: setup_mo_object
@@ -395,9 +394,8 @@ contains
         ! transformation to the OAO basis scales by c^2, and the given density QN
         ! object pointing to it the way the density QN factory would
         !
-        use otr_common, only: error_oao, error_density_qn
-        use otr_density_qn, only: density_qn_type, density_qn_oao_type
-        use otr_oao, only: oao_type
+        use otr_density_qn, only: density_qn_type, density_qn_oao_type, error_density_qn
+        use otr_oao, only: oao_type, error_oao
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix
         use otr_common_unit_tests, only: generate_random_density_matrix
@@ -1073,10 +1071,10 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_density_qn, only: density_qn_factory_cs, density_qn_type, &
                                   density_qn_settings_type, &
-                                  density_qn_evaluate_dm_cs_type
+                                  density_qn_evaluate_dm_cs_type, error_density_qn
         use otr_mo, only: mo_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
-                              update_orbs_callback, obj_func_callback, error_density_qn
+                              update_orbs_callback, obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: setup_owning_solver_settings
         use otr_density_qn_test_reference, only: operator(==)
@@ -1187,10 +1185,10 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_density_qn, only: density_qn_factory_os, density_qn_type, &
                                   density_qn_settings_type, &
-                                  density_qn_evaluate_dm_os_type
+                                  density_qn_evaluate_dm_os_type, error_density_qn
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
-                              update_orbs_callback, obj_func_callback, error_density_qn
+                              update_orbs_callback, obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: setup_owning_solver_settings
         use otr_density_qn_test_reference, only: operator(==)
@@ -1300,16 +1298,17 @@ contains
         ! function and objective function
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_density_qn, only: &
-            density_qn_factory_common, density_qn_type, density_qn_mo_type, &
-            density_qn_oao_type, density_qn_settings_type, &
-            default_density_qn_settings, density_qn_n_micro, &
-            density_qn_evaluate_dm_cs_type, density_qn_evaluate_dm_os_type
+        use otr_density_qn, only: density_qn_factory_common, density_qn_type, &
+                                  density_qn_mo_type, density_qn_oao_type, &
+                                  density_qn_settings_type, &
+                                  default_density_qn_settings, density_qn_n_micro, &
+                                  density_qn_evaluate_dm_cs_type, &
+                                  density_qn_evaluate_dm_os_type, error_density_qn
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_level_type, &
                               extension_solver_settings_type, orbital_basis_type, &
-                              update_orbs_callback, obj_func_callback, error_density_qn
+                              update_orbs_callback, obj_func_callback
         use otr_common_unit_tests, only: mock_extension_type, &
                                          setup_owning_solver_settings
         use otr_common_test_reference, only: same_logger_and_context
@@ -2379,13 +2378,12 @@ contains
         ! approximate Hessian in both the closed- and the open-shell case and for both
         ! orbital bases
         !
-        use otr_common, only: error_density_qn
         use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
         use otr_mo_test_reference, only: n_mo
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, &
                                      setup_random_mo_channels, ref_hess_x_static_mo
-        use otr_density_qn, only: density_qn_type
+        use otr_density_qn, only: density_qn_type, error_density_qn
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_error_logging, &
@@ -3058,8 +3056,7 @@ contains
         ! the MO basis without moving the current orbitals
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_density_qn
-        use otr_density_qn, only: density_qn_mo_type
+        use otr_density_qn, only: density_qn_mo_type, error_density_qn
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_param
@@ -3145,8 +3142,7 @@ contains
         ! orbitals
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_density_qn
-        use otr_density_qn, only: density_qn_oao_type
+        use otr_density_qn, only: density_qn_oao_type, error_density_qn
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ
         use otr_common_unit_tests, only: generate_random_density_matrix

@@ -81,11 +81,11 @@ contains
         use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
         use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
-                              update_orbs_callback, obj_func_callback, error_s_gek
+                              update_orbs_callback, obj_func_callback
         use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_s_gek, only: s_gek_factory, s_gek_settings_type, s_gek_type, &
-                             default_s_gek_settings
+                             default_s_gek_settings, error_s_gek
         use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
@@ -374,9 +374,9 @@ contains
         !
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
-        use otr_common, only: hess_x_callback, error_s_gek
+        use otr_common, only: hess_x_callback
         use otr_common_mock, only: mock_update_orbs
-        use otr_s_gek, only: default_s_gek_settings
+        use otr_s_gek, only: default_s_gek_settings, error_s_gek
         use test_reference, only: arm_host_context, host_context_reached
 
         type(recording_s_gek_type), target :: object
@@ -475,8 +475,7 @@ contains
         !
         ! this function tests the subroutine which initializes an S-GEK object
         !
-        use otr_common, only: error_s_gek
-        use otr_s_gek, only: s_gek_settings_type, s_gek_type
+        use otr_s_gek, only: s_gek_settings_type, s_gek_type, error_s_gek
         use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
         use otr_common_test_reference, only: same_logger_and_context
         use opentrustregion_unit_tests, only: test_context_type, logger
@@ -544,8 +543,7 @@ contains
         ! context of its settings and passes on its error, while its numerics are left
         ! to later tests
         !
-        use otr_common, only: error_s_gek
-        use otr_s_gek, only: s_gek_type, default_s_gek_settings
+        use otr_s_gek, only: s_gek_type, default_s_gek_settings, error_s_gek
         use test_reference, only: arm_host_context, host_context, host_context_reached
 
         type(s_gek_type) :: objects(2)

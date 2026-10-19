@@ -86,8 +86,8 @@ contains
         ! that they have positive curvature along them, and a random last gradient, so
         ! that every loop over the history calls the host's functions more than once
         !
-        use otr_common, only: error_rotation_qn
-        use otr_rotation_qn, only: updating_type, default_rotation_qn_settings
+        use otr_rotation_qn, only: updating_type, default_rotation_qn_settings, &
+                                   error_rotation_qn
         use test_reference, only: arm_host_context
 
         class(updating_type), intent(out) :: object
@@ -121,12 +121,13 @@ contains
         use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
         use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
-                              update_orbs_callback, obj_func_callback, error_rotation_qn
+                              update_orbs_callback, obj_func_callback
         use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_rotation_qn, only: rotation_qn_factory, rotation_qn_settings_type, &
                                    updating_type, sr1_updating_type, &
-                                   bfgs_updating_type, default_rotation_qn_settings
+                                   bfgs_updating_type, default_rotation_qn_settings, &
+                                   error_rotation_qn
         use otr_rotation_qn_test_reference, only: ref_rotation_qn_settings, operator(/=)
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
@@ -451,9 +452,9 @@ contains
         !
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
-        use otr_common, only: hess_x_callback, error_rotation_qn
+        use otr_common, only: hess_x_callback
         use otr_common_mock, only: mock_update_orbs
-        use otr_rotation_qn, only: default_rotation_qn_settings
+        use otr_rotation_qn, only: default_rotation_qn_settings, error_rotation_qn
         use test_reference, only: tol, arm_host_context, host_context_reached
 
         type(recording_rotation_qn_type), target :: object
@@ -552,8 +553,8 @@ contains
         !
         ! this function tests the subroutine which initializes a rotation QN object
         !
-        use otr_common, only: error_rotation_qn
-        use otr_rotation_qn, only: rotation_qn_settings_type, sr1_updating_type
+        use otr_rotation_qn, only: rotation_qn_settings_type, sr1_updating_type, &
+                                   error_rotation_qn
         use otr_rotation_qn_test_reference, only: ref_rotation_qn_settings, operator(/=)
         use otr_common_test_reference, only: same_logger_and_context
         use opentrustregion_unit_tests, only: test_context_type, logger

@@ -115,12 +115,13 @@ contains
         use opentrustregion, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
-        use otr_common, only: extension_type, orbital_basis_type, error_density_qn
+        use otr_common, only: extension_type, orbital_basis_type
         use otr_common_c_interface, only: extension_holder_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use otr_density_qn, only: &
-            standard_density_qn_factory_common => density_qn_factory_common
+            standard_density_qn_factory_common => density_qn_factory_common, &
+            error_density_qn
         use otr_density_qn_c_interface, only: &
             density_qn_settings_type_c, density_qn_c_callbacks_type, &
             density_qn_factory_common, density_qn_factory_c_wrapper

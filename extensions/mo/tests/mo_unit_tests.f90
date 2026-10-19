@@ -130,8 +130,7 @@ contains
         ! this subroutine sets up the given MO object the way the MO factory would,
         ! pointing to the test-local MO coefficients
         !
-        use otr_common, only: error_mo
-        use otr_mo, only: mo_type
+        use otr_mo, only: mo_type, error_mo
 
         type(mo_type), allocatable, intent(out), target :: mo
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
@@ -605,10 +604,10 @@ contains
         ! evaluating function to the common setup
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_mo, only: mo_factory_cs, mo_type, mo_settings_type
+        use otr_mo, only: mo_factory_cs, mo_type, mo_settings_type, error_mo
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback, error_mo
+                              obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, operator(==)
@@ -749,10 +748,10 @@ contains
         ! open-shell density matrix evaluating function to the common setup
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_mo, only: mo_factory_os, mo_type, mo_settings_type
+        use otr_mo, only: mo_factory_os, mo_type, mo_settings_type, error_mo
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
-                              obj_func_callback, error_mo
+                              obj_func_callback
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, operator(==)
@@ -886,9 +885,9 @@ contains
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
-                              evaluate_dm_missing_warning_msg, error_mo
+                              evaluate_dm_missing_warning_msg
         use otr_mo, only: mo_factory_common, mo_type, mo_settings_type, &
-                          default_mo_settings
+                          default_mo_settings, error_mo
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, &
@@ -1422,9 +1421,8 @@ contains
         ! MO basis
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_mo
         use test_reference, only: arm_host_context, host_context_reached
-        use otr_mo, only: mo_type
+        use otr_mo, only: mo_type, error_mo
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, &
@@ -1590,8 +1588,8 @@ contains
         ! open-shell case
         !
         use test_reference, only: arm_host_context, host_context_reached
-        use otr_mo, only: mo_type
-        use otr_common, only: hess_x_callback, error_mo
+        use otr_mo, only: mo_type, error_mo
+        use otr_common, only: hess_x_callback
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
@@ -1862,9 +1860,8 @@ contains
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation in the MO basis
         !
-        use otr_common, only: error_mo
         use test_reference, only: arm_host_context, host_context_reached
-        use otr_mo, only: mo_type
+        use otr_mo, only: mo_type, error_mo
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               generate_random_symm_matrix
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
@@ -2106,8 +2103,7 @@ contains
         ! orbital rotation in the MO basis
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_mo
-        use otr_mo, only: mo_type
+        use otr_mo, only: mo_type, error_mo
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_param
         use otr_common_test_reference, only: n_ao, n_occ, n_particle

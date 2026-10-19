@@ -51,8 +51,8 @@ contains
         use opentrustregion, only: warn_uninitialized_settings, add_error_origin
         use c_interface, only: solver_settings_type_c
         use otr_oao, only: oao_settings_type, default_oao_settings, &
-                           oao_settings_uninitialized_warning_msg
-        use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, error_oao
+                           oao_settings_uninitialized_warning_msg, error_oao
+        use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type
         use otr_common_c_interface, only: &
             orbital_c_callbacks_type, extension_holder_type, bundle_settings_c, &
             setup_extension_holder, finish_extension_holder, evaluate_dm_cs_f_wrapper, &

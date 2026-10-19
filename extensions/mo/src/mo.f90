@@ -10,7 +10,7 @@ module otr_mo
                                hess_x_type, solver_state_type, add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, channel_rows, &
                           evaluate_dm_cs_type, evaluate_dm_os_type, &
-                          extension_solver_settings_type, error_mo
+                          extension_solver_settings_type
 
     implicit none
 
@@ -22,6 +22,10 @@ module otr_mo
     ! warning for settings that were not initialized
     character(len=*), parameter :: mo_settings_uninitialized_warning_msg = &
         "MO settings were not initialized. All MO settings are set to default values"
+
+    ! error origin of the MO extension, with which its factory and object tag the
+    ! errors they detect themselves
+    integer(ip), parameter :: error_mo = 5100
 
     ! occupations and orbital irreps of a particle channel in the MO basis, the mask of
     ! its occupied-virtual pairs of the same irrep, which are its parameters, and the
