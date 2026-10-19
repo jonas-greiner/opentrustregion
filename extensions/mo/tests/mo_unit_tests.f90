@@ -604,8 +604,7 @@ contains
         ! MOs, if given, as those of that channel and the closed-shell density matrix
         ! evaluating function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type, &
-                                   default_solver_settings
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_mo, only: mo_factory_cs, mo_type, mo_settings_type
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
@@ -634,7 +633,6 @@ contains
 
         ! setup settings objects
         call setup_settings(settings, context)
-        solver_settings%solver_settings_type = default_solver_settings
 
         ! initialize random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -750,8 +748,7 @@ contains
         ! coefficients of the caller, the irreps of their MOs, if given, and the
         ! open-shell density matrix evaluating function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type, &
-                                   default_solver_settings
+        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_mo, only: mo_factory_os, mo_type, mo_settings_type
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
@@ -778,7 +775,6 @@ contains
 
         ! setup settings objects
         call setup_settings(settings, context)
-        solver_settings%solver_settings_type = default_solver_settings
 
         ! initialize random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -886,13 +882,13 @@ contains
         ! function
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type, &
-                                   default_solver_settings, verbosity_warning
+                                   verbosity_warning
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
                               evaluate_dm_missing_warning_msg, error_mo
         use otr_mo, only: mo_factory_common, mo_type, mo_settings_type, &
-                          default_mo_settings, mo_settings_uninitialized_warning_msg
+                          default_mo_settings
         use otr_mo_test_reference, only: n_mo, case_irreps, case_names
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, &
@@ -917,10 +913,10 @@ contains
         integer(ip) :: irreps(n_mo, n_particle_ref)
         logical :: owned, stored
         logical, allocatable :: same_irrep(:, :)
-        character(len=45), parameter :: case_names_factory(5) = &
-            [character(len=45) :: "for the closed-shell case", "for the open-shell "// &
-             "case with symmetry", "without settings", "for settings that were not "// &
-             "initialized", "without a density matrix evaluating function"]
+        character(len=45), parameter :: case_names_factory(4) = &
+            [character(len=45) :: "for the closed-shell case", &
+             "for the open-shell case with symmetry", "without settings", &
+             "without a density matrix evaluating function"]
         character(len=59), parameter :: case_names_rejected(2) = &
             [character(len=59) :: "mismatching dimensions", &
              "irreps without occupied-virtual pairs of the same irrep"]
@@ -933,10 +929,9 @@ contains
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle_ref)
 
         ! create objects for the closed shell without irreps, for the open shell with
-        ! the irreps of the symmetric open-shell occupation case, for no settings, for
-        ! settings that were not initialized, which are initialized after a warning
-        ! through their logging function, and without a density matrix evaluating
-        ! function, which prints a warning at the verbosity of warnings, each of which
+        ! the irreps of the symmetric open-shell occupation case, for no settings and
+        ! without a density matrix evaluating function, which prints a warning at the
+        ! verbosity of warnings, each of which
         ! has to be an MO object set up for the MO coefficients of the caller and the
         ! irreps of their MOs with the settings and the density matrix evaluating
         ! function and to wire the solver settings, which own it, with the record of
@@ -944,22 +939,16 @@ contains
         i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
         do i_case = 1, size(case_names_factory)
             allocate(solver_settings)
-            solver_settings%solver_settings_type = default_solver_settings
             n_particle = merge(2_ip, 1_ip, i_case == 2)
             call setup_settings(settings, context)
-            if (i_case == 5) settings%verbose = verbosity_warning
+            if (i_case == 4) settings%verbose = verbosity_warning
             expected_settings = settings
-            if (i_case == 3) then
-                expected_settings = default_mo_settings
-            else if (i_case == 4) then
-                settings%initialized = .false.
-                expected_settings = default_mo_settings
-            end if
+            if (i_case == 3) expected_settings = default_mo_settings
             evaluate_dm_cs_funptr => null()
             evaluate_dm_os_funptr => null()
             if (i_case == 2) then
                 evaluate_dm_os_funptr => mock_evaluate_dm_os
-            else if (i_case /= 5) then
+            else if (i_case /= 4) then
                 evaluate_dm_cs_funptr => mock_evaluate_dm_cs
             end if
             irreps = 0
@@ -1129,7 +1118,7 @@ contains
                 if (i_case == 2) then
                     stored = associated(mo%evaluate_dm_os, mock_evaluate_dm_os) .and. &
                              .not. associated(mo%evaluate_dm_cs)
-                else if (i_case == 5) then
+                else if (i_case == 4) then
                     stored = .not. (associated(mo%evaluate_dm_cs) .or. &
                                     associated(mo%evaluate_dm_os))
                 else
@@ -1148,14 +1137,7 @@ contains
                     "."
                 test_mo_factory_common = .false.
             end select
-            if (i_case == 4 .and. index( &
-                context%log_message, " "//mo_settings_uninitialized_warning_msg) == 0) &
-                then
-                write(stderr, *) "test_mo_factory_common failed: Warning not "// &
-                    "printed for settings that were not initialized."
-                test_mo_factory_common = .false.
-            end if
-            if ((i_case == 5) .neqv. (index( &
+            if ((i_case == 4) .neqv. (index( &
                 context%log_message, " "//evaluate_dm_missing_warning_msg) /= 0)) then
                 write(stderr, *) "test_mo_factory_common failed: Warning for a "// &
                     "missing density matrix evaluating function printed wrongly "// &
@@ -1175,7 +1157,6 @@ contains
         irreps(n_occ(1) + 1:, 1) = 1
         do i_case = 1, size(case_names_rejected)
             allocate(solver_settings)
-            solver_settings%solver_settings_type = default_solver_settings
             call setup_settings(settings, context)
             update_orbs_mo_funptr => update_orbs_callback
             obj_func_mo_funptr => obj_func_callback
@@ -1216,8 +1197,6 @@ contains
         ! objects reading their own record of the state, so that calculations with
         ! separate settings can be used alternately
         allocate(solver_settings, other_settings)
-        solver_settings%solver_settings_type = default_solver_settings
-        other_settings%solver_settings_type = default_solver_settings
         call mo_factory_common(mo_coeff(:, :, :1), ao_overlap, n_occ(:1), 1_ip, n_ao, &
                                n_mo, evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
                                update_orbs_mo_funptr, obj_func_mo_funptr, &
@@ -2120,50 +2099,6 @@ contains
         end function model_energy
 
     end function test_hess_x_mo
-
-    logical(c_bool) function test_init_mo_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the MO settings
-        !
-        use otr_mo, only: mo_settings_type, default_settings => default_mo_settings
-        use otr_mo_test_reference, only: operator(==)
-
-        type, extends(mo_settings_type) :: extended_settings_type
-        end type
-
-        type(mo_settings_type) :: settings
-        type(extended_settings_type) :: extended_settings
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_mo_settings = .true.
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_init_mo_settings failed: Function raised error."
-            test_init_mo_settings = .false.
-        end if
-
-        ! check settings
-        if (.not. (settings == default_settings)) then
-            write(stderr, *) "test_init_mo_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_mo_settings = .false.
-        end if
-
-        ! initialize settings of a type extending these settings, which cannot be set
-        ! to the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_mo_settings failed: No error returned for "// &
-                "extended settings type."
-            test_init_mo_settings = .false.
-        end if
-
-    end function test_init_mo_settings
 
     logical(c_bool) function test_rotate_orbitals_mo() bind(C)
         !

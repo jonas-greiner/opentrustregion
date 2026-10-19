@@ -17,12 +17,7 @@ module otr_common
     ! settings shared by the extensions parameterizing the orbitals in an orbital
     ! basis, which the orbital objects hold
     type, extends(settings_type) :: orbital_settings_type
-    contains
-        procedure :: init => init_orbital_settings
     end type
-
-    type(orbital_settings_type), parameter :: default_orbital_settings = &
-        orbital_settings_type(logger=null(), initialized=.true., verbose=0)
 
     ! callback functions and host context a factory found at one level of the solver
     ! settings before it wired its own, to which the callback functions it wired
@@ -98,7 +93,6 @@ module otr_common
     type, extends(solver_settings_type) :: extension_solver_settings_type
         type(owned_extension_type), allocatable :: extensions(:)
     contains
-        procedure :: init => init_extension_solver_settings
         procedure :: wire => wire_extension_solver_settings
     end type
 
@@ -263,33 +257,6 @@ module otr_common
 
 contains
 
-    subroutine init_orbital_settings(self, error)
-        !
-        ! this subroutine initializes the settings shared by the extensions
-        ! parameterizing the orbitals in an orbital basis
-        !
-        use opentrustregion, only: verbosity_error
-
-        class(orbital_settings_type), intent(out) :: self
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        select type (settings => self)
-        type is (orbital_settings_type)
-            settings = default_orbital_settings
-        class default
-            call settings%log("Orbital settings could not be initialized because "// &
-                              "initialization routine received the wrong type. The "// &
-                              "type orbital_settings_type was likely subclassed "// &
-                              "without providing an initialization routine.", &
-                              verbosity_error, .true.)
-            error = 1
-        end select
-
-    end subroutine init_orbital_settings
-
     subroutine wire_solver_settings_extension(self, solver_settings, settings, error, &
                                               update_orbs, obj_func)
         !
@@ -298,14 +265,11 @@ contains
         ! host's, the host's orbital update and objective function in the host records
         ! of the levels of the object, and wires the role callback function of every
         ! role the host provided or the object performs into the settings, with the
-        ! level as their context, after initializing settings that were not initialized
-        ! with the warning the solver would print, which it can no longer detect once
-        ! the callback functions are wired into them, and after refusing an orbital
-        ! update or objective function of the host for settings a factory wired, or one
-        ! a factory returned for settings no factory wired
+        ! level as their context, after refusing an orbital update or objective
+        ! function of the host for settings a factory wired, or one a factory returned
+        ! for settings no factory wired
         !
-        use opentrustregion, only: init_uninitialized_settings, &
-                                   inherit_solver_callbacks, verbosity_error
+        use opentrustregion, only: inherit_solver_callbacks, verbosity_error
 
         class(extension_type), intent(inout), target :: self
         type(solver_settings_type), intent(inout), target :: solver_settings
@@ -341,12 +305,6 @@ contains
                               .true.)
             return
         end if
-
-        ! initialize the settings or their stability check settings if they were not
-        ! initialized, as the solver would, which can no longer detect these once the
-        ! callback functions are wired into them
-        call init_uninitialized_settings(solver_settings, error)
-        if (error /= 0) return
 
         ! save the host's callback functions and context of the solver in the level of
         ! the solver
@@ -451,36 +409,6 @@ contains
         end associate
 
     end subroutine wire_solver_settings_extension
-
-    subroutine init_extension_solver_settings(self, error)
-        !
-        ! this subroutine sets the solver settings owning extension objects to the
-        ! default values, which frees the objects together with the callback functions
-        ! and context wired with them
-        !
-        use opentrustregion, only: default_solver_settings, verbosity_error
-
-        class(extension_solver_settings_type), intent(out) :: self
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! ensure that class is actually extension_solver_settings_type and not a
-        ! subclass
-        select type (settings => self)
-        type is (extension_solver_settings_type)
-            settings%solver_settings_type = default_solver_settings
-        class default
-            call settings%log("Solver settings could not be initialized because "// &
-                              "initialization routine received the wrong type. The "// &
-                              "type extension_solver_settings_type was likely "// &
-                              "subclassed without providing an initialization "// &
-                              "routine.", verbosity_error, .true.)
-            error = 1
-        end select
-
-    end subroutine init_extension_solver_settings
 
     subroutine wire_extension_solver_settings(self, object, solver_state, settings, &
                                               error, update_orbs, obj_func)

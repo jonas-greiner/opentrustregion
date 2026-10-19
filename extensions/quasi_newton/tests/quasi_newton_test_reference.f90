@@ -16,12 +16,10 @@ module otr_qn_test_reference
 
     implicit none
 
-    ! reference quasi-Newton settings, every field but the logical, the logging
-    ! function and the host context differing from its default and every integer from
-    ! the other
-    type(qn_settings_type), parameter :: ref_qn_settings = &
-        qn_settings_type(logger=null(), initialized=.true., verbose=3, max_points=100, &
-                         hess_update_scheme="bfgs")
+    ! reference quasi-Newton settings, every field but the logging function and the
+    ! host context differing from its default and every integer from the other
+    type(qn_settings_type), parameter :: ref_qn_settings = qn_settings_type( &
+        logger=null(), verbose=3, max_points=100, hess_update_scheme="bfgs")
 
     interface operator(==)
         module procedure equal_qn
@@ -277,7 +275,7 @@ contains
         values_out%context = transfer(2_c_intptr_t, c_null_ptr)
 
         ! set logical, integers and keyword
-        values_out%initialized = ref_qn_settings%initialized
+        values_out%initialized = .true.
         values_out%verbose = int(ref_qn_settings%verbose, kind=c_ip)
         values_out%max_points = int(ref_qn_settings%max_points, kind=c_ip)
         values_out%hess_update_scheme = &
@@ -360,8 +358,7 @@ contains
         !
         type(qn_settings_type), intent(in) :: lhs, rhs
 
-        equal_qn = (lhs%initialized .eqv. rhs%initialized) .and. &
-                   lhs%verbose == rhs%verbose .and. &
+        equal_qn = lhs%verbose == rhs%verbose .and. &
                    lhs%max_points == rhs%max_points .and. &
                    lhs%hess_update_scheme == rhs%hess_update_scheme
 
@@ -390,12 +387,10 @@ contains
         type(qn_settings_type_c), intent(in) :: lhs_c
         type(qn_settings_type), intent(in) :: rhs
 
-        equal_qn_c = &
-            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
-            lhs_c%verbose == rhs%verbose .and. &
-            lhs_c%max_points == rhs%max_points .and. &
-            ref_character_from_c(lhs_c%hess_update_scheme) == &
-            trim(rhs%hess_update_scheme)
+        equal_qn_c = lhs_c%initialized .and. lhs_c%verbose == rhs%verbose .and. &
+                     lhs_c%max_points == rhs%max_points .and. &
+                     ref_character_from_c(lhs_c%hess_update_scheme) == &
+                     trim(rhs%hess_update_scheme)
 
     end function equal_qn_c
 

@@ -417,7 +417,7 @@ contains
         ! Fortran correctly perform this conversion
         !
         use otr_s_gek_c_interface, only: s_gek_settings_type_c, assignment(=)
-        use otr_s_gek, only: s_gek_settings_type
+        use otr_s_gek, only: s_gek_settings_type, default_s_gek_settings
         use otr_s_gek_test_reference, only: get_reference_s_gek_values, &
                                             ref_s_gek_settings, operator(/=)
         use c_interface, only: c_callbacks_type
@@ -465,21 +465,14 @@ contains
             test_assign_s_gek_f_c = .false.
         end if
 
-        ! check initialization flag
-        if (.not. settings%initialized) then
-            write(stderr, *) "test_assign_s_gek_f_c failed: Settings not marked as "// &
-                "initialized."
-            test_assign_s_gek_f_c = .false.
-        end if
-
-        ! convert C settings that were not initialized and check that they are left
-        ! uninitialized without a logging function, so that the C factory initializes
-        ! them after its warning
+        ! convert C settings with a logging function that were not initialized, the
+        ! custom values and logging function they still carry have to be replaced by the
+        ! default settings
         settings_c%initialized = .false.
         settings = settings_c
-        if (settings%initialized .or. associated(settings%logger)) then
+        if (associated(settings%logger) .or. settings /= default_s_gek_settings) then
             write(stderr, *) "test_assign_s_gek_f_c failed: Settings that were not "// &
-                "initialized converted."
+                "initialized not converted to default values."
             test_assign_s_gek_f_c = .false.
         end if
 

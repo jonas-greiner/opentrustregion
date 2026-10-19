@@ -56,7 +56,6 @@ fortran_tests = {
         "hess_x_bfgs",
         "hess_x_sr1",
         "init_qn",
-        "init_qn_settings",
         "qn_factory",
         "qn_sanity_check",
         "sr1_skip_add",

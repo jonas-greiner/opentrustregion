@@ -271,34 +271,6 @@ contains
 
     end function constant_obj_func
 
-    subroutine stationary_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                      error, context)
-        !
-        ! this subroutine describes an orbital update at the minimum of a quadratic
-        ! function with identity Hessian which needs no test context, since the
-        ! gradient vanishes for every displacement passed to it here
-        !
-        use opentrustregion, only: hess_x_type
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        error = 0
-        func = 0.5_rp * dot_product(delta_vars, delta_vars)
-        grad = 0.0_rp
-        h_diag = 1.0_rp
-        hess_x_funptr => identity_hess_x
-
-    end subroutine stationary_update_orbs
-
     subroutine mock_precond(residual, mu, precond_residual, error, context)
         !
         ! this subroutine is a test subroutine for the preconditioner subroutine
@@ -2103,12 +2075,9 @@ contains
         !
         use opentrustregion, only: settings_type, verbosity_info
 
-        class(settings_type), intent(inout) :: settings
+        class(settings_type), intent(out) :: settings
         class(test_context_type), intent(inout), target :: context
 
-        integer(ip) :: error
-
-        call settings%init(error)
         settings%verbose = verbosity_info
         settings%logger => logger
         settings%context => context
@@ -2485,16 +2454,14 @@ contains
             default_settings => default_solver_settings, error_solver, &
             error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
             error_precond, error_project, error_conv_check, error_precond_pd, &
-            error_get_extra_trial_vectors, subsystem_solver_options, &
-            settings_uninitialized_warning_msg, &
-            stability_settings_uninitialized_warning_msg
+            error_get_extra_trial_vectors, subsystem_solver_options
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error
         real(rp) :: final_grad(n_param), start_vars(2), final_vars(n_param)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
-        type(solver_settings_type) :: settings, uninitialized_settings
+        type(solver_settings_type) :: settings
         type(hartmann6d_recording_context_type), target :: context
         type(half_step_context_type), target :: half_step_context
         type(double_well_state_context_type), target :: state_context
@@ -2515,9 +2482,6 @@ contains
 
         ! assume tests pass
         test_solver = .true.
-
-        ! initialize settings
-        call settings%init(error)
 
         ! start at saddle point
         context%vars = saddle_point
@@ -2561,28 +2525,6 @@ contains
             test_solver = .false.
         end if
 
-        ! start at saddle point again with nested stability check settings that were
-        ! not initialized, the solver initializes them before handing down its context,
-        ! so the internal stability check still calls the Hessian linear transformation
-        ! with the solver's context, the warning is printed through the logging
-        ! function
-        context%vars = saddle_point
-        settings%stability_settings%initialized = .false.
-        settings%logger => logger
-        context%log_message = ""
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
-        if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error when nested "// &
-                "stability check settings were not initialized."
-            test_solver = .false.
-        end if
-        if (index(context%log_message, &
-                  " "//stability_settings_uninitialized_warning_msg) == 0) then
-            write(stderr, *) "test_solver failed: Warning not printed for nested "// &
-                "stability check settings that were not initialized."
-            test_solver = .false.
-        end if
-
         ! start at saddle point but allow only a single macro iteration, the internal
         ! stability check finds the saddle point unstable and the solver stops before
         ! solving a trust region subproblem, so that all Hessian linear transformations
@@ -2590,7 +2532,7 @@ contains
         ! test_check_stationary_point covers, and check that a stale counter in the
         ! state record is reset so that it equals the internal stability check's
         context%vars = saddle_point
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%n_macro = 1
         state%n_hess_x = 1000
         call setup_error_logging(settings, context)
@@ -2610,7 +2552,7 @@ contains
         ! run solver with settings which the sanity check rejects and check that its
         ! error is returned with the solver's origin before the orbitals are updated
         context%vars = near_minimum
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%n_micro = 0
         call setup_error_logging(settings, context)
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
@@ -2630,7 +2572,7 @@ contains
         ! specific maximum iteration error code is returned and that the step taken
         ! after the first macro iteration stays within the start trust radius
         context%vars = distant_point
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%n_macro = 2
         settings%start_trust_radius = 0.1_rp
 
@@ -2667,7 +2609,7 @@ contains
         ! the line search, which has to be skipped for the step that is not taken once
         ! maximum precision is reached
         context%vars = near_minimum
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%context => context
         settings%conv_tol = 0.0_rp
         settings%subsystem_solver = "tcg"
@@ -2734,7 +2676,7 @@ contains
         ! convergence check pass in that same macro iteration, convergence then takes
         ! precedence and maximum precision is not flagged
         context%vars = near_minimum
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%context => context
         settings%conv_tol = 0.0_rp
         settings%subsystem_solver = "tcg"
@@ -2755,7 +2697,7 @@ contains
         ! run solver with a convergence check which always passes, the solver stops at
         ! the first check without taking a step
         context%vars = near_minimum
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%context => context
         settings%conv_check => mock_conv_check
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
@@ -2778,7 +2720,7 @@ contains
         context%vars = distant_point
         context%n_update_orbs_calls = 0
         update_orbs_funptr => update_orbs_hess_x_once
-        call settings%init(error)
+        settings = solver_settings_type()
         call setup_error_logging(settings, context)
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
         if (error /= error_solver + 1) then
@@ -2794,35 +2736,6 @@ contains
         if (context%n_update_orbs_calls /= 2) then
             write(stderr, *) "test_solver failed: Missing Hessian linear "// &
                 "transformation not reported in the second macro iteration."
-            test_solver = .false.
-        end if
-
-        ! run solver with settings that were not initialized but carry a logging
-        ! function and check that a warning is printed through the logging function and
-        ! that the solver initializes a copy of them, which leaves the caller's settings
-        ! as they are, the initialization also resets the host context of the copy, so
-        ! the callback functions are ones that need no test context
-        update_orbs_funptr => stationary_update_orbs
-        obj_func_funptr => constant_obj_func
-        uninitialized_settings%logger => logger
-        uninitialized_settings%context => context
-        context%log_message = ""
-        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, &
-                    uninitialized_settings)
-        if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error for settings that "// &
-                "were not initialized."
-            test_solver = .false.
-        end if
-        if (uninitialized_settings%initialized .or. &
-            .not. associated(uninitialized_settings%logger, logger)) then
-            write(stderr, *) "test_solver failed: Settings of the caller changed."
-            test_solver = .false.
-        end if
-        if (index(context%log_message, " "//settings_uninitialized_warning_msg) == 0) &
-            then
-            write(stderr, *) "test_solver failed: Warning not printed for settings "// &
-                "that were not initialized."
             test_solver = .false.
         end if
 
@@ -2862,7 +2775,7 @@ contains
 
         ! check that the line search brackets the step starting from a vanishing step
         context%vars = near_minimum
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%context => context
         settings%line_search = .true.
         context%obj_func_zero_step = .false.
@@ -2898,7 +2811,7 @@ contains
         ! Davidson solvers, whose first trial vector is the normalized gradient, which
         ! the gradient perturbation would hide
         context%vars = near_minimum
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%context => context
         settings%subsystem_solver = "tcg"
         settings%grad_noise = .false.
@@ -2956,7 +2869,7 @@ contains
         obj_func_funptr => double_well_obj_func
         state_context%state => state
         do i_solver = 1, size(subsystem_solver_options)
-            call settings%init(error)
+            settings = solver_settings_type()
             settings%subsystem_solver = subsystem_solver_options(i_solver)
             settings%stability = .true.
             settings%grad_noise = .false.
@@ -3099,7 +3012,7 @@ contains
         ! then continues along the unstable mode with the flag reset and finally stops
         ! at a minimum, which can not pass the convergence check either
         update_orbs_funptr => double_well_update_orbs
-        call settings%init(error)
+        settings = solver_settings_type()
         settings%grad_noise = .false.
         settings%n_random_trial_vectors = 0
         settings%n_extra_trial_vectors = 0
@@ -3228,7 +3141,7 @@ contains
 
             ! set up settings with every optional callback function, the extra trial
             ! vectors of the nested settings only in the first case
-            call settings%init(error)
+            settings = solver_settings_type()
             settings%context => fault_context
             settings%subsystem_solver = subsystem_solver_options(i_solver)
             settings%jacobi_davidson_start = 0
@@ -3264,7 +3177,7 @@ contains
             error_stability_check, error_stability_check_max_iter, verbosity_warning, &
             error_hess_x, error_precond, error_project, error_conv_check, &
             error_get_extra_trial_vectors, diag_solver_options, unstable_warning_msg, &
-            settings_uninitialized_warning_msg, default_stability_settings
+            default_stability_settings
         use test_reference, only: arm_host_context, host_context_reached, &
                                   n_extra_trial_vectors
 
@@ -3292,7 +3205,7 @@ contains
         character(len=300) :: msg
         character(len=20) :: call_number
         character(len=100) :: case_name
-        type(stability_settings_type) :: settings, uninitialized_settings
+        type(stability_settings_type) :: settings
         type(stability_state_type), target :: state
         type(stability_state_type) :: explicit_state
         type(hartmann6d_fault_context_type), target :: fault_context
@@ -3316,7 +3229,7 @@ contains
             call ref_symm_mat_diag(context%hess, hess_eigvals, hess_eigvecs)
             h_diag = [(context%hess(i, i), i=1, size(h_diag))]
             do i_space = 1, size(trial_space_names)
-                call settings%init(error)
+                settings = stability_settings_type()
                 settings%context => context
                 select case (i_space)
                 case (2)
@@ -3368,7 +3281,7 @@ contains
         end do
 
         ! check that a warning with the lowest eigenvalue is printed at the saddle point
-        call settings%init(error)
+        settings = stability_settings_type()
         settings%context => context
         settings%logger => logger
         settings%verbose = verbosity_warning
@@ -3442,7 +3355,7 @@ contains
 
         ! run stability check with settings which the sanity check rejects and check
         ! that its error is returned with the stability check's origin
-        call settings%init(error)
+        settings = stability_settings_type()
         settings%diag_solver = "unknown"
         call setup_error_logging(settings, context)
         call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
@@ -3456,7 +3369,7 @@ contains
         ! force non-convergence by allowing only a single iteration and check that the
         ! specific maximum iteration error code is returned and that the state holds
         ! this iteration and its unconverged residual after the error
-        call settings%init(error)
+        settings = stability_settings_type()
         settings%n_iter = 1
         call setup_error_logging(settings, context)
         call stability_check(h_diag, hess_x_funptr, stable, error, settings, state)
@@ -3479,7 +3392,7 @@ contains
         ! force the reduced space to grow until it spans the full parameter space by
         ! setting an unreachable convergence tolerance and check that its exact
         ! eigenpair is returned without error
-        call settings%init(error)
+        settings = stability_settings_type()
         settings%context => context
         settings%conv_tol = 0.0_rp
         call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
@@ -3508,7 +3421,7 @@ contains
         ! are counted as well, the antisymmetric contribution leaves a residual of its
         ! own size, so the convergence threshold has to lie above it
         hess_x_funptr => hess_x_fun_asymmetric
-        call settings%init(error)
+        settings = stability_settings_type()
         settings%context => context
         settings%diag_solver = "jacobi-davidson"
         settings%jacobi_davidson_start = 1
@@ -3531,36 +3444,6 @@ contains
             context, "stability_check", "with asymmetric Hessian linear "// &
             "transformation", n_hess_x=state%n_hess_x)) test_stability_check = .false.
         hess_x_funptr => hess_x_fun
-
-        ! run stability check with settings that were not initialized but carry a
-        ! logging function and check that a warning is printed through the logging
-        ! function and that the stability check initializes a copy of them, which leaves
-        ! the caller's settings as they are, the initialization also resets the host
-        ! context of the copy, so the Hessian linear transformation is one that needs no
-        ! test context
-        hess_x_funptr => identity_hess_x
-        uninitialized_settings%logger => logger
-        uninitialized_settings%context => context
-        context%log_message = ""
-        call stability_check(h_diag, hess_x_funptr, stable, error, &
-                             uninitialized_settings)
-        if (error /= 0) then
-            write(stderr, *) "test_stability_check failed: Produced error for "// &
-                "settings that were not initialized."
-            test_stability_check = .false.
-        end if
-        if (uninitialized_settings%initialized .or. &
-            .not. associated(uninitialized_settings%logger, logger)) then
-            write(stderr, *) "test_stability_check failed: Settings of the caller "// &
-                "changed."
-            test_stability_check = .false.
-        end if
-        if (index(context%log_message, " "//settings_uninitialized_warning_msg) == 0) &
-            then
-            write(stderr, *) "test_stability_check failed: Warning not printed for "// &
-                "settings that were not initialized."
-            test_stability_check = .false.
-        end if
 
         ! run stability check at the saddle point, whose iterations depend on the
         ! settings, with the default settings and without settings and check that both
@@ -3600,7 +3483,7 @@ contains
         h_diag = 1.0_rp
         h_diag(1) = 0.0_rp
         hess_x_funptr => hess_x_fun
-        call settings%init(error)
+        settings = stability_settings_type()
         settings%precond => mock_precond_first_unit_vector
         call setup_error_logging(settings, context)
         call stability_check(h_diag, hess_x_funptr, stable, error, settings, state)
@@ -3716,7 +3599,7 @@ contains
 
             ! set up settings with every optional callback function, the extra trial
             ! vectors only in the first case
-            call settings%init(error)
+            settings = stability_settings_type()
             settings%context => fault_context
             settings%diag_solver = diag_solver_options(i_solver)
             settings%jacobi_davidson_start = 0
@@ -3986,7 +3869,7 @@ contains
         real(rp) :: grad_dir(n_param), kappa_dir(n_param), unstable_dir(n_param), &
                     grad(n_param), kappa(n_param), kappa_norm, min_eigval, grad_rms, &
                     target_grad_rms, predicted_grad_rms, trust_radius
-        integer(ip) :: error, i
+        integer(ip) :: i
         type(solver_settings_type) :: settings
 
         ! assume tests pass
@@ -3996,8 +3879,7 @@ contains
         call random_number(trust_radius)
         trust_radius = trust_radius + 0.1_rp
 
-        ! initialize settings and set convergence threshold
-        call settings%init(error)
+        ! set convergence threshold
         settings%conv_tol = 1e-6_rp
 
         ! generate a random gradient direction and a random direction of negative
@@ -4730,9 +4612,6 @@ contains
 
         ! assume tests pass
         test_bracket = .true.
-
-        ! initialize settings, the cases set up error logging
-        call settings%init(error)
 
         ! define procedure pointer
         obj_func_funptr => bracket_obj_func
@@ -6465,150 +6344,6 @@ contains
 
     end function test_gram_schmidt
 
-    logical(c_bool) function test_init_solver_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the solver settings
-        !
-        use opentrustregion, only: solver_settings_type, &
-                                   default_settings => default_solver_settings
-        use test_reference, only: operator(/=), same_callbacks
-
-        type, extends(solver_settings_type) :: extended_solver_settings_type
-        end type
-
-        type(solver_settings_type) :: settings
-        type(extended_solver_settings_type) :: extended_settings
-        type(test_context_type), target :: context
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_solver_settings = .true.
-
-        ! set callback functions, host contexts, including those of the nested stability
-        ! check settings, and a non-default value which the initialization has to
-        ! discard
-        settings%precond => mock_precond
-        settings%project => mock_project
-        settings%conv_check => mock_conv_check
-        settings%logger => logger
-        settings%context => context
-        settings%stability_settings%precond => mock_precond
-        settings%stability_settings%project => mock_project
-        settings%stability_settings%logger => logger
-        settings%stability_settings%context => context
-        settings%conv_tol = 1.0_rp
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_init_solver_settings failed: Produced error."
-            test_init_solver_settings = .false.
-        end if
-
-        ! check function pointers and host context
-        if (.not. same_callbacks(settings, default_settings)) then
-            write(stderr, *) "test_init_solver_settings failed: Function pointers "// &
-                "not discarded."
-            test_init_solver_settings = .false.
-        end if
-        if (associated(settings%context)) then
-            write(stderr, *) "test_init_solver_settings failed: Host context not "// &
-                "discarded."
-            test_init_solver_settings = .false.
-        end if
-        if (associated(settings%stability_settings%context)) then
-            write(stderr, *) "test_init_solver_settings failed: Host context of "// &
-                "nested stability check settings not discarded."
-            test_init_solver_settings = .false.
-        end if
-
-        ! check settings
-        if (settings /= default_settings) then
-            write(stderr, *) "test_init_solver_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_solver_settings = .false.
-        end if
-
-        ! initialize settings of a type extending the solver settings, which cannot be
-        ! set to the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_solver_settings failed: No error returned "// &
-                "for extended settings type."
-            test_init_solver_settings = .false.
-        end if
-
-    end function test_init_solver_settings
-
-    logical(c_bool) function test_init_stability_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the stability check
-        ! settings
-        !
-        use opentrustregion, only: stability_settings_type, &
-                                   default_settings => default_stability_settings
-        use test_reference, only: operator(/=), same_callbacks
-
-        type, extends(stability_settings_type) :: extended_stability_settings_type
-        end type
-
-        type(stability_settings_type) :: settings
-        type(extended_stability_settings_type) :: extended_settings
-        type(test_context_type), target :: context
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_stability_settings = .true.
-
-        ! set callback functions, host context and a non-default value which the
-        ! initialization has to discard
-        settings%precond => mock_precond
-        settings%project => mock_project
-        settings%logger => logger
-        settings%context => context
-        settings%conv_tol = 1.0_rp
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_init_stability_settings failed: Produced error."
-            test_init_stability_settings = .false.
-        end if
-
-        ! check function pointers and host context
-        if (.not. same_callbacks(settings, default_settings)) then
-            write(stderr, *) "test_init_stability_settings failed: Function "// &
-                "pointers not discarded."
-            test_init_stability_settings = .false.
-        end if
-        if (associated(settings%context)) then
-            write(stderr, *) "test_init_stability_settings failed: Host context "// &
-                "not discarded."
-            test_init_stability_settings = .false.
-        end if
-
-        ! check settings
-        if (settings /= default_settings) then
-            write(stderr, *) "test_init_stability_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_stability_settings = .false.
-        end if
-
-        ! initialize settings of a type extending the stability settings, which cannot
-        ! be set to the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_stability_settings failed: No error "// &
-                "returned for extended settings type."
-            test_init_stability_settings = .false.
-        end if
-
-    end function test_init_stability_settings
-
     logical(c_bool) function test_level_shifted_diag_precond() bind(C)
         !
         ! this function tests the subroutine that constructs the level-shifted diagonal
@@ -7634,98 +7369,6 @@ contains
         end if
 
     end function test_warn_uninitialized_settings
-
-    logical(c_bool) function test_init_uninitialized_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes solver settings or their
-        ! nested stability check settings that were not initialized
-        !
-        use opentrustregion, only: &
-            solver_settings_type, default_solver_settings, default_stability_settings, &
-            init_uninitialized_settings, settings_uninitialized_warning_msg, &
-            stability_settings_uninitialized_warning_msg
-        use test_reference, only: same_callbacks, operator(/=)
-
-        type(solver_settings_type) :: settings
-        type(test_context_type), target :: context
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_uninitialized_settings = .true.
-
-        ! settings that were not initialized have to be replaced by the default
-        ! settings after the warning was printed through their logging function
-        call setup_settings(settings, context)
-        settings%precond => identity_precond
-        settings%conv_tol = 1.0_rp
-        settings%initialized = .false.
-        call init_uninitialized_settings(settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_init_uninitialized_settings failed: Produced "// &
-                "error for settings that were not initialized."
-            test_init_uninitialized_settings = .false.
-        end if
-        if (context%log_message /= " "//settings_uninitialized_warning_msg) then
-            write(stderr, *) "test_init_uninitialized_settings failed: Warning not "// &
-                "printed for settings that were not initialized."
-            test_init_uninitialized_settings = .false.
-        end if
-        if (settings /= default_solver_settings .or. &
-            .not. same_callbacks(settings, default_solver_settings)) then
-            write(stderr, *) "test_init_uninitialized_settings failed: Settings "// &
-                "that were not initialized not replaced by the default settings."
-            test_init_uninitialized_settings = .false.
-        end if
-
-        ! nested settings that were not initialized have to be replaced by the default
-        ! settings after the warning was printed through the logging function of the
-        ! solver settings, which have to be kept
-        call setup_settings(settings, context)
-        settings%precond => identity_precond
-        settings%stability_settings%project => identity_project
-        settings%stability_settings%initialized = .false.
-        call init_uninitialized_settings(settings, error)
-        if (error /= 0) then
-            write(stderr, *) "test_init_uninitialized_settings failed: Produced "// &
-                "error for nested settings that were not initialized."
-            test_init_uninitialized_settings = .false.
-        end if
-        if (context%log_message /= " "//stability_settings_uninitialized_warning_msg) &
-            then
-            write(stderr, *) "test_init_uninitialized_settings failed: Warning not "// &
-                "printed for nested settings that were not initialized."
-            test_init_uninitialized_settings = .false.
-        end if
-        if (settings%stability_settings /= default_stability_settings .or. &
-            .not. same_callbacks(settings%stability_settings, &
-                                 default_stability_settings)) then
-            write(stderr, *) "test_init_uninitialized_settings failed: Nested "// &
-                "settings that were not initialized not replaced by the default "// &
-                "settings."
-            test_init_uninitialized_settings = .false.
-        end if
-        if (.not. associated(settings%precond, identity_precond)) then
-            write(stderr, *) "test_init_uninitialized_settings failed: Solver "// &
-                "settings changed for nested settings that were not initialized."
-            test_init_uninitialized_settings = .false.
-        end if
-
-        ! initialized settings have to be kept without a warning
-        call setup_settings(settings, context)
-        settings%precond => identity_precond
-        call init_uninitialized_settings(settings, error)
-        if (context%log_message /= "") then
-            write(stderr, *) "test_init_uninitialized_settings failed: Warning "// &
-                "printed for initialized settings."
-            test_init_uninitialized_settings = .false.
-        end if
-        if (.not. associated(settings%precond, identity_precond)) then
-            write(stderr, *) "test_init_uninitialized_settings failed: Initialized "// &
-                "settings changed."
-            test_init_uninitialized_settings = .false.
-        end if
-
-    end function test_init_uninitialized_settings
 
     logical(c_bool) function test_print_message() bind(C)
         !
@@ -10893,16 +10536,13 @@ contains
         use opentrustregion, only: solver_settings_type, noise_level
 
         type(solver_settings_type) :: settings
-        integer(ip) :: error
 
         ! assume tests pass
         test_noise_level = .true.
 
-        ! initialize settings, whose local and global reduction factors differ
-        call settings%init(error)
-
         ! check that the perturbation is the reduction factor of the region with the
-        ! gradient perturbation and vanishes without it
+        ! gradient perturbation, which differ between the regions for the default
+        ! settings, and vanishes without it
         settings%grad_noise = .true.
         if (abs(noise_level(settings, .true.) - settings%local_red_factor) > &
             0.0_rp .or. &
@@ -10944,18 +10584,15 @@ contains
             case_residual_norms(5) = [2.0_rp, 2.0_rp, 2.0_rp, 2.0_rp, 1e-20_rp]
         type(solver_settings_type) :: settings
         real(rp) :: ref_conv_tols(5)
-        integer(ip) :: error, i
+        integer(ip) :: i
 
         ! assume tests pass
         test_micro_conv_tol = .true.
 
-        ! initialize settings, whose local and global reduction factors differ
-        call settings%init(error)
-
         ! the stopping tolerance is the reduction factor of the local region inside
-        ! the threshold of the level shift and that of the global region outside, the
-        ! gradient perturbation where it is larger, relative to the initial residual
-        ! norm and never below the residual norm floor
+        ! the threshold of the level shift and that of the global region outside, which
+        ! differ for the default settings, the gradient perturbation where it is larger,
+        ! relative to the initial residual norm and never below the residual norm floor
         ref_conv_tols = [ &
             2.0_rp * settings%local_red_factor, 2.0_rp * settings%global_red_factor, &
             2.0_rp * settings%global_red_factor, 1.0_rp, residual_norm_floor]

@@ -38,15 +38,11 @@ module otr_qn
 
     ! derived type for settings
     type, extends(settings_type) :: qn_settings_type
-        character(len=kw_len) :: hess_update_scheme
-        integer(ip) :: max_points
-    contains
-        procedure :: init => init_qn_settings
+        character(len=kw_len) :: hess_update_scheme = "sr1"
+        integer(ip) :: max_points = 10
     end type
 
-    type(qn_settings_type), parameter :: default_qn_settings = &
-        qn_settings_type(logger=null(), initialized=.true., verbose=0, max_points=10, &
-                         hess_update_scheme="sr1")
+    type(qn_settings_type), parameter :: default_qn_settings = qn_settings_type()
 
     ! updating schemes
     character(len=kw_len), parameter :: hess_update_schemes(2) = &
@@ -109,8 +105,7 @@ contains
         ! callback functions keep receiving the host context, and which reads the state
         ! of the solver from the record the host also passes to the solver
         !
-        use opentrustregion, only: obj_func_type, solver_state_type, &
-                                   warn_uninitialized_settings
+        use opentrustregion, only: obj_func_type, solver_state_type
         use otr_common, only: extension_solver_settings_type, update_orbs_callback, &
                               obj_func_callback
 
@@ -134,16 +129,9 @@ contains
         update_orbs_qn_funptr => null()
         obj_func_qn_funptr => null()
 
-        ! work on a copy of the given settings, which is initialized if they were not,
-        ! after printing a warning regardless of the verbosity, since the default
-        ! settings would silence it, or, without any, of the default settings
+        ! work on a copy of the given settings or, without any, of the default settings
         if (present(settings)) then
             local_settings = settings
-            if (.not. local_settings%initialized) then
-                call warn_uninitialized_settings(local_settings, &
-                                                 qn_settings_uninitialized_warning_msg)
-                call local_settings%init(error)
-            end if
         else
             local_settings = default_qn_settings
         end if
@@ -266,32 +254,6 @@ contains
         end if
 
     end subroutine update_orbs_qn
-
-    subroutine init_qn_settings(self, error)
-        !
-        ! this subroutine initializes the quasi-Newton settings
-        !
-        use opentrustregion, only: verbosity_error
-
-        class(qn_settings_type), intent(out) :: self
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        select type (settings => self)
-        type is (qn_settings_type)
-            settings = default_qn_settings
-        class default
-            call settings%log("Quasi-Newton settings could not be initialized "// &
-                              "because initialization routine received the wrong "// &
-                              "type. The type qn_settings_type was likely "// &
-                              "subclassed without providing an initialization "// &
-                              "routine.", verbosity_error, .true.)
-            error = 1
-        end select
-
-    end subroutine init_qn_settings
 
     subroutine add_qn(self, kappa, grad, error)
         !

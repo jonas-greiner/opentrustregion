@@ -263,31 +263,21 @@ module opentrustregion
         end subroutine logger_type
     end interface
 
-    ! derived type for solver settings
+    ! derived types for the settings, whose components are initialized to the default
+    ! values, so that a declared settings object holds the default settings, with the
+    ! settings the solver and the stability check share in optimizer_settings_type
+    ! wherever their default values agree
     type, abstract :: settings_type
-        logical :: initialized = .false.
-        integer(ip) :: verbose = verbosity_error
+        integer(ip) :: verbose = 0
         class(*), pointer :: context => null()
         procedure(logger_type), pointer, nopass :: logger => null()
     contains
         procedure :: log => print_message
-        procedure(init_type), deferred :: init
     end type
 
-    abstract interface
-        subroutine init_type(self, error)
-            import :: settings_type, ip
-
-            class(settings_type), intent(out) :: self
-            integer(ip), intent(out) :: error
-        end subroutine init_type
-    end interface
-
     type, abstract, extends(settings_type) :: optimizer_settings_type
-        logical :: hess_symm
-        real(rp) :: conv_tol
-        integer(ip) :: n_random_trial_vectors, n_extra_trial_vectors, &
-                       jacobi_davidson_start, seed
+        logical :: hess_symm = .true.
+        integer(ip) :: n_extra_trial_vectors = 1, seed = 42
         procedure(precond_type), pointer, nopass :: precond => null()
         procedure(project_type), pointer, nopass :: project => null()
         procedure(get_extra_trial_vectors_type), pointer, nopass :: &
@@ -295,49 +285,37 @@ module opentrustregion
     end type
 
     type, extends(optimizer_settings_type) :: stability_settings_type
-        logical :: stop_on_instability
-        integer(ip) :: n_iter
-        character(len=kw_len) :: diag_solver
+        logical :: stop_on_instability = .false.
+        real(rp) :: conv_tol = 1e-9_rp
+        integer(ip) :: n_random_trial_vectors = -1, n_iter = 100, &
+                       jacobi_davidson_start = 50
+        character(len=kw_len) :: diag_solver = "davidson"
         procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
-    contains
-        procedure :: init => init_stability_settings
     end type
 
     type, extends(optimizer_settings_type) :: solver_settings_type
-        logical :: stability, line_search, refresh_hess, grad_noise
-        real(rp) :: start_trust_radius, global_red_factor, local_red_factor
-        integer(ip) :: n_macro, n_micro
-        character(len=kw_len) :: subsystem_solver, trust_region_shape
+        logical :: stability = .false., line_search = .false., refresh_hess = .false., &
+                   grad_noise = .true.
+        real(rp) :: conv_tol = 1e-5_rp, start_trust_radius = -1.0_rp, &
+                    global_red_factor = 1e-3_rp, local_red_factor = 1e-4_rp
+        integer(ip) :: n_random_trial_vectors = 0, n_macro = 150, n_micro = 50, &
+                       jacobi_davidson_start = 30
+        character(len=kw_len) :: subsystem_solver = "davidson_ls", &
+                                 trust_region_shape = "none"
         type(stability_settings_type) :: stability_settings
         procedure(precond_pd_type), pointer, nopass :: precond_pd => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
         procedure(hess_x_type), pointer, nopass :: stability_hess_x => null()
     contains
-        procedure :: init => init_solver_settings, print_results
+        procedure :: print_results
     end type
 
-    ! default settings
+    ! default settings, which the components of the settings types hold
     type(stability_settings_type), parameter :: default_stability_settings = &
-        stability_settings_type(precond=null(), project=null(), approx_hess_x=null(), &
-                                get_extra_trial_vectors=null(), conv_check=null(), &
-                                logger=null(), hess_symm=.true., initialized=.true., &
-                                stop_on_instability=.false., conv_tol=1e-9_rp, &
-                                n_random_trial_vectors=-1, n_extra_trial_vectors=1, &
-                                n_iter=100, jacobi_davidson_start=50, seed=42, &
-                                verbose=0, diag_solver="davidson")
+        stability_settings_type()
     type(solver_settings_type), parameter :: default_solver_settings = &
-        solver_settings_type( &
-            precond=null(), precond_pd=null(), project=null(), conv_check=null(), &
-            get_extra_trial_vectors=null(), stability_hess_x=null(), logger=null(), &
-            stability=.false., line_search=.false., refresh_hess=.false., &
-            grad_noise=.true., hess_symm=.true., initialized=.true., conv_tol=1e-5_rp, &
-            start_trust_radius=-1.0_rp, global_red_factor=1e-3_rp, &
-            local_red_factor=1e-4_rp, n_random_trial_vectors=0, &
-            n_extra_trial_vectors=1, n_macro=150, n_micro=50, &
-            jacobi_davidson_start=30, seed=42, verbose=0, &
-            subsystem_solver="davidson_ls", trust_region_shape="none", &
-            stability_settings=default_stability_settings)
+        solver_settings_type()
     integer(ip), parameter :: standalone_n_random_trial_vectors = 20
 
 contains
@@ -381,18 +359,12 @@ contains
 
         ! work on a copy of the settings, or of the default settings if none are
         ! passed, which leaves the caller's settings as they are while the copy is
-        ! initialized if they were not and completed by the defaults that depend on
-        ! other settings
+        ! completed by the defaults that depend on other settings
         if (present(settings)) then
             local_settings = settings
         else
             local_settings = default_solver_settings
         end if
-
-        ! initialize settings or their nested settings that were not initialized
-        call init_uninitialized_settings(local_settings, error)
-        call add_error_origin(error, error_solver, local_settings)
-        if (error /= 0) return
 
         ! initialize macroiteration convergence
         macro_converged = .false.
@@ -658,24 +630,11 @@ contains
         end if
 
         ! work on a copy of the settings, or of the default settings if none are
-        ! passed, which leaves the caller's settings as they are while the copy is
-        ! initialized if they were not
+        ! passed, which leaves the caller's settings as they are
         if (present(settings)) then
             local_settings = settings
         else
             local_settings = default_stability_settings
-        end if
-
-        ! initialize settings, settings that were not initialized are replaced by the
-        ! default settings, which would silence the warning, so it is printed
-        ! beforehand through the caller's logging function or on stderr regardless of
-        ! the verbosity
-        if (.not. local_settings%initialized) then
-            call warn_uninitialized_settings(local_settings, &
-                                             settings_uninitialized_warning_msg)
-            call local_settings%init(error)
-            call add_error_origin(error, error_stability_check, local_settings)
-            if (error /= 0) return
         end if
 
         ! initialize random number generator
@@ -2387,56 +2346,6 @@ contains
 
     end subroutine gram_schmidt
 
-    subroutine init_solver_settings(self, error)
-        !
-        ! this subroutine sets the optional settings to their default values
-        !
-        class(solver_settings_type), intent(out) :: self
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! ensure that class is actually solver_settings_type and not a subclass
-        select type (settings => self)
-        type is (solver_settings_type)
-            settings = default_solver_settings
-        class default
-            call settings%log("Solver settings could not be initialized because "// &
-                              "initialization routine received the wrong type. The "// &
-                              "type solver_settings_type was likely subclassed "// &
-                              "without providing an initialization routine.", &
-                              verbosity_error, .true.)
-            error = 1
-        end select
-
-    end subroutine init_solver_settings
-
-    subroutine init_stability_settings(self, error)
-        !
-        ! this subroutine sets the optional settings to their default values
-        !
-        class(stability_settings_type), intent(out) :: self
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        ! ensure that class is actually stability_settings_type and not a subclass
-        select type (settings => self)
-        type is (stability_settings_type)
-            settings = default_stability_settings
-        class default
-            call settings%log("Stability settings could not be initialized because "// &
-                              "initialization routine received the wrong type. The "// &
-                              "type stability_settings_type was likely subclassed "// &
-                              "without providing an initialization routine.", &
-                              verbosity_error, .true.)
-            error = 1
-        end select
-
-    end subroutine init_stability_settings
-
     subroutine level_shifted_diag_precond(vector, mu, h_diag, precond_vector, &
                                           settings, error)
         !
@@ -2943,32 +2852,6 @@ contains
         end if
 
     end subroutine warn_uninitialized_settings
-
-    subroutine init_uninitialized_settings(settings, error)
-        !
-        ! this subroutine initializes solver settings that were not initialized, or
-        ! otherwise their nested stability check settings if these were not, after
-        ! printing the warning through the logging function of the settings or on
-        ! stderr regardless of the verbosity, since the default settings which replace
-        ! them would silence it
-        !
-        type(solver_settings_type), intent(inout) :: settings
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        if (.not. settings%initialized) then
-            call warn_uninitialized_settings(settings, &
-                                             settings_uninitialized_warning_msg)
-            call settings%init(error)
-        else if (.not. settings%stability_settings%initialized) then
-            call warn_uninitialized_settings( &
-                settings, stability_settings_uninitialized_warning_msg)
-            call settings%stability_settings%init(error)
-        end if
-
-    end subroutine init_uninitialized_settings
 
     subroutine print_message(self, message, level, error)
         !

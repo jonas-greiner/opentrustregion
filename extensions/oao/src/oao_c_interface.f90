@@ -96,16 +96,12 @@ contains
             local_settings_c = default_oao_settings
         end if
 
-        ! convert the settings and initialize them if they were not, after printing a
-        ! warning, as the factory would, which would otherwise discard the context
-        ! through which the wrappers of the host's callback functions find them; the
-        ! initialization cannot fail for settings of this type
+        ! convert the settings, which replaces settings that were not initialized by the
+        ! default settings, and print the warning for these on stderr, since they
+        ! provide no logging function
         settings = local_settings_c
-        if (.not. settings%initialized) then
-            call warn_uninitialized_settings(settings, &
-                                             oao_settings_uninitialized_warning_msg)
-            call settings%init(error)
-        end if
+        if (.not. local_settings_c%initialized) call warn_uninitialized_settings( &
+            settings, oao_settings_uninitialized_warning_msg)
 
         ! the object updates the host's density matrix in place or, if the real kind
         ! differs from C's, a copy of it, which the orbital update copies back
@@ -201,7 +197,7 @@ contains
         !
         ! this subroutine converts OAO settings from C to Fortran
         !
-        use otr_oao, only: oao_settings_type
+        use otr_oao, only: oao_settings_type, default_oao_settings
         use c_interface, only: logger_f_wrapper
 
         type(oao_settings_type), intent(out) :: settings
@@ -217,9 +213,10 @@ contains
 
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
-
-            ! set settings to initialized
-            settings%initialized = .true.
+        else
+            ! C settings that were not initialized hold no values and are converted
+            ! as the default settings
+            settings = default_oao_settings
         end if
 
     end subroutine assign_oao_f_c
@@ -233,19 +230,17 @@ contains
         type(oao_settings_type_c), intent(out) :: settings_c
         type(oao_settings_type), intent(in) :: settings
 
-        if (settings%initialized) then
-            ! callback functions cannot be converted
-            settings_c%logger = c_null_funptr
+        ! callback functions cannot be converted
+        settings_c%logger = c_null_funptr
 
-            ! convert integers
-            settings_c%verbose = int(settings%verbose, kind=c_ip)
+        ! convert integers
+        settings_c%verbose = int(settings%verbose, kind=c_ip)
 
-            ! the host context cannot be converted
-            settings_c%context = c_null_ptr
+        ! the host context cannot be converted
+        settings_c%context = c_null_ptr
 
-            ! set settings to initialized
-            settings_c%initialized = .true._c_bool
-        end if
+        ! Fortran settings are always initialized
+        settings_c%initialized = .true._c_bool
 
     end subroutine assign_oao_c_f
 

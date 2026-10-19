@@ -1121,62 +1121,15 @@ contains
 
     end function check_mock_factory_ao_overlap
 
-    logical(c_bool) function test_init_orbital_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the settings shared by
-        ! the extensions parameterizing the orbitals in an orbital basis
-        !
-        use otr_common, only: orbital_settings_type, &
-                              default_settings => default_orbital_settings
-        use otr_common_test_reference, only: operator(==)
-
-        type, extends(orbital_settings_type) :: extended_settings_type
-        end type
-
-        type(orbital_settings_type) :: settings
-        type(extended_settings_type) :: extended_settings
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_orbital_settings = .true.
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_init_orbital_settings failed: Function raised error."
-            test_init_orbital_settings = .false.
-        end if
-
-        ! check settings
-        if (.not. (settings == default_settings)) then
-            write(stderr, *) "test_init_orbital_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_orbital_settings = .false.
-        end if
-
-        ! initialize settings of a type extending these settings, which cannot be set to
-        ! the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_orbital_settings failed: No error returned "// &
-                "for extended settings type."
-            test_init_orbital_settings = .false.
-        end if
-
-    end function test_init_orbital_settings
-
     logical(c_bool) function test_wire_solver_settings_extension() bind(C)
         !
         ! this function tests the subroutine which saves the host's callback functions
         ! and host contexts of solver settings in the host records of the levels of an
         ! extension and wires the role callback functions into the settings
         !
-        use opentrustregion, only: &
-            solver_settings_type, stability_settings_type, update_orbs_type, &
-            obj_func_type, default_solver_settings, default_stability_settings, &
-            settings_uninitialized_warning_msg
+        use opentrustregion, only: solver_settings_type, stability_settings_type, &
+                                   update_orbs_type, obj_func_type, &
+                                   default_solver_settings, default_stability_settings
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
         use otr_common, only: orbital_settings_type, host_record_type, &
@@ -1336,31 +1289,6 @@ contains
             end if
         end do
 
-        ! wire solver settings that were not initialized, which are initialized after a
-        ! warning through their logging function, so that none of their callback
-        ! functions or context is saved and no role is wired
-        call setup_host_solver_settings()
-        solver_settings%initialized = .false.
-        call extension%wire_solver_settings(solver_settings, settings, error, &
-                                            update_orbs_funptr, obj_func_funptr)
-        if (index(context%log_message, " "//settings_uninitialized_warning_msg) == 0) &
-            then
-            write(stderr, *) "test_wire_solver_settings_extension failed: No "// &
-                "warning printed for solver settings that were not initialized."
-            test_wire_solver_settings_extension = .false.
-        end if
-        if (.not. solver_settings%initialized .or. &
-            .not. same_callbacks(solver_settings, default_solver_settings) .or. &
-            .not. associated(solver_settings%context, extension%solver_level) .or. &
-            associated(solver_settings%stability_settings%context) .or. &
-            .not. same_callbacks(extension%solver_level%host, host_record_type( &
-                update_orbs=mock_update_orbs, obj_func=mock_obj_func)) .or. &
-            associated(extension%solver_level%host%context)) then
-            write(stderr, *) "test_wire_solver_settings_extension failed: Solver "// &
-                "settings that were not initialized wired wrong."
-            test_wire_solver_settings_extension = .false.
-        end if
-
         ! wire solver settings without callback functions or context for an object
         ! which performs the preconditioners, the projection and the extra trial
         ! vectors itself and wraps no orbital update or objective function of the host,
@@ -1512,73 +1440,6 @@ contains
 
     end function test_wire_solver_settings_extension
 
-    logical(c_bool) function test_init_extension_solver_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the solver settings
-        ! owning extension objects, which also frees the objects
-        !
-        use opentrustregion, only: default_solver_settings
-        use otr_common, only: extension_solver_settings_type
-        use otr_common_mock, only: mock_precond
-        use test_reference, only: operator(/=), same_callbacks
-
-        type, extends(extension_solver_settings_type) :: extended_settings_type
-        end type
-
-        type(extension_solver_settings_type), target :: settings
-        type(extended_settings_type) :: extended_settings
-        class(extension_type), allocatable, target :: object
-        integer, target :: host_data
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_extension_solver_settings = .true.
-
-        ! let the settings own an object and set a callback function, a host context and
-        ! a non-default value, which the initialization has to discard
-        call setup_owned_mock_extension(object, 1_ip)
-        allocate(settings%extensions(1))
-        call move_alloc(object, settings%extensions(1)%object)
-        settings%precond => mock_precond
-        settings%context => host_data
-        settings%conv_tol = 1.0_rp
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_init_extension_solver_settings failed: Produced "// &
-                "error."
-            test_init_extension_solver_settings = .false.
-        end if
-
-        ! check that the settings were set to the default values and the object freed
-        if (settings%solver_settings_type /= default_solver_settings .or. &
-            .not. same_callbacks(settings%solver_settings_type, &
-                                 default_solver_settings) .or. &
-            associated(settings%context)) then
-            write(stderr, *) "test_init_extension_solver_settings failed: Settings "// &
-                "not initialized correctly."
-            test_init_extension_solver_settings = .false.
-        end if
-        if (size(freed_extension_ids) /= 1) then
-            write(stderr, *) "test_init_extension_solver_settings failed: Owned "// &
-                "object not freed."
-            test_init_extension_solver_settings = .false.
-        end if
-
-        ! initialize settings of a type extending these settings, which cannot be set to
-        ! the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_extension_solver_settings failed: No error "// &
-                "returned for extended settings type."
-            test_init_extension_solver_settings = .false.
-        end if
-
-    end function test_init_extension_solver_settings
-
     logical(c_bool) function test_wire_extension_solver_settings() bind(C)
         !
         ! this function tests the subroutine which points a new extension object at the
@@ -1586,7 +1447,7 @@ contains
         ! take it over
         !
         use opentrustregion, only: solver_settings_type, solver_state_type, &
-                                   update_orbs_type, default_solver_settings
+                                   update_orbs_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
@@ -1606,10 +1467,9 @@ contains
         ! assume tests pass
         test_wire_extension_solver_settings = .true.
 
-        ! set up the settings of the objects and initialized solver settings
+        ! set up the settings of the objects and the solver settings
         call setup_settings(settings, log_context)
         allocate(solver_settings)
-        solver_settings%solver_settings_type = default_solver_settings
 
         ! wire the settings with two objects one after the other, each of which has to
         ! be taken over

@@ -23,10 +23,10 @@ module otr_common_test_reference
     integer(c_ip), protected, bind(C, name="test_n_ao") :: n_ao_c = int(n_ao, kind=c_ip)
 
     ! reference values of the settings shared by the extensions parameterizing the
-    ! orbitals in an orbital basis, every field but the logical, the logging function
-    ! and the host context differing from its default
+    ! orbitals in an orbital basis, every field but the logging function and the host
+    ! context differing from its default
     type(orbital_settings_type), parameter :: ref_orbital_settings = &
-        orbital_settings_type(logger=null(), initialized=.true., verbose=3)
+        orbital_settings_type(logger=null(), verbose=3)
 
     ! names of the closed-shell and the open-shell case, indexed by the number of
     ! particle channels, for the failure messages of tests covering both
@@ -661,8 +661,7 @@ contains
         !
         type(orbital_settings_type), intent(in) :: lhs, rhs
 
-        equal_orbital = (lhs%initialized .eqv. rhs%initialized) .and. &
-                        lhs%verbose == rhs%verbose
+        equal_orbital = lhs%verbose == rhs%verbose
 
     end function equal_orbital
 

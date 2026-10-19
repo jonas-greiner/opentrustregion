@@ -350,7 +350,7 @@ contains
         values_out%context = transfer(2_c_intptr_t, c_null_ptr)
 
         ! set logical, integer and keyword
-        values_out%initialized = ref_arh_settings%initialized
+        values_out%initialized = .true.
         values_out%verbose = int(ref_arh_settings%verbose, kind=c_ip)
         values_out%arh_type = ref_character_to_c(ref_arh_settings%arh_type)
 
@@ -459,10 +459,8 @@ contains
         type(arh_settings_type_c), intent(in) :: lhs_c
         type(arh_settings_type), intent(in) :: rhs
 
-        equal_arh_c = &
-            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
-            lhs_c%verbose == rhs%verbose .and. &
-            ref_character_from_c(lhs_c%arh_type) == trim(rhs%arh_type)
+        equal_arh_c = lhs_c%initialized .and. lhs_c%verbose == rhs%verbose .and. &
+                      ref_character_from_c(lhs_c%arh_type) == trim(rhs%arh_type)
 
     end function equal_arh_c
 

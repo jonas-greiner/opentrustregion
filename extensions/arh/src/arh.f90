@@ -9,8 +9,7 @@ module otr_arh
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
                                hess_x_type, solver_settings_type, solver_state_type, &
                                add_error_origin
-    use otr_common, only: orbital_settings_type, default_orbital_settings, &
-                          orbital_basis_type, extension_type, &
+    use otr_common, only: orbital_settings_type, orbital_basis_type, extension_type, &
                           extension_solver_settings_type, channel_rows, error_arh
     use otr_oao, only: oao_type
     use otr_mo, only: mo_channel_type, mo_type
@@ -22,13 +21,10 @@ module otr_arh
                            ms_sr1_skip_thresh = 0.05_rp, eig_val_noise_factor = 10.0_rp
 
     type, extends(orbital_settings_type) :: arh_settings_type
-        character(len=kw_len) :: arh_type
-    contains
-        procedure :: init => init_arh_settings
+        character(len=kw_len) :: arh_type = "ms_sr1"
     end type
 
-    type(arh_settings_type), parameter :: default_arh_settings = arh_settings_type( &
-        orbital_settings_type=default_orbital_settings, arh_type="ms_sr1")
+    type(arh_settings_type), parameter :: default_arh_settings = arh_settings_type()
 
     ! warning for settings that were not initialized
     character(len=*), parameter :: arh_settings_uninitialized_warning_msg = &
@@ -283,7 +279,7 @@ contains
         ! subsystem solver after rejected steps and told whether the approximate
         ! Hessian is symmetric
         !
-        use opentrustregion, only: warn_uninitialized_settings, verbosity_error
+        use opentrustregion, only: verbosity_error
         use otr_common, only: extension_level_type, update_orbs_callback, &
                               obj_func_callback
 
@@ -305,16 +301,9 @@ contains
         update_orbs_arh_funptr => null()
         obj_func_arh_funptr => null()
 
-        ! work on a copy of the given settings, which is initialized if they were not,
-        ! after printing a warning regardless of the verbosity, since the default
-        ! settings would silence it, or, without any, of the default settings
+        ! work on a copy of the given settings or, without any, of the default settings
         if (present(settings)) then
             local_settings = settings
-            if (.not. local_settings%initialized) then
-                call warn_uninitialized_settings(local_settings, &
-                                                 arh_settings_uninitialized_warning_msg)
-                call local_settings%init(error)
-            end if
         else
             local_settings = default_arh_settings
         end if
@@ -1191,32 +1180,6 @@ contains
         call self%orbitals%project(vector, error, context)
 
     end subroutine project_arh_oao
-
-    subroutine init_arh_settings(self, error)
-        !
-        ! this subroutine initializes the ARH settings
-        !
-        use opentrustregion, only: verbosity_error
-
-        class(arh_settings_type), intent(out) :: self
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        select type (settings => self)
-        type is (arh_settings_type)
-            settings = default_arh_settings
-        class default
-            call settings%log("Augmented Roothaan-Hall settings could not be "// &
-                              "initialized because initialization routine received "// &
-                              "the wrong type. The type arh_settings_type was "// &
-                              "likely subclassed without providing an "// &
-                              "initialization routine.", verbosity_error, .true.)
-            error = 1
-        end select
-
-    end subroutine init_arh_settings
 
     function construct_arh_mo(mo) result(arh)
         !

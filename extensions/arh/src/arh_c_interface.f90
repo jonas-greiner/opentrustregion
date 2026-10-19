@@ -119,16 +119,12 @@ contains
             local_settings_c = default_arh_settings
         end if
 
-        ! convert the settings and initialize them if they were not, after printing a
-        ! warning, as the factory would, which would otherwise discard the context
-        ! through which the wrappers of the host's callback functions find them; the
-        ! initialization cannot fail for settings of this type
+        ! convert the settings, which replaces settings that were not initialized by the
+        ! default settings, and print the warning for these on stderr, since they
+        ! provide no logging function
         settings = local_settings_c
-        if (.not. settings%initialized) then
-            call warn_uninitialized_settings(settings, &
-                                             arh_settings_uninitialized_warning_msg)
-            call settings%init(error)
-        end if
+        if (.not. local_settings_c%initialized) call warn_uninitialized_settings( &
+            settings, arh_settings_uninitialized_warning_msg)
 
         ! the context of the C solver settings is trusted to be the level of the holder
         ! of an extension object, whose object the Fortran factory checks to be an
@@ -324,7 +320,7 @@ contains
         !
         ! this subroutine converts ARH settings from C to Fortran
         !
-        use otr_arh, only: arh_settings_type
+        use otr_arh, only: arh_settings_type, default_arh_settings
         use c_interface, only: character_from_c, logger_f_wrapper
 
         type(arh_settings_type), intent(out) :: settings
@@ -343,9 +339,10 @@ contains
 
             ! convert characters
             settings%arh_type = character_from_c(settings_c%arh_type)
-
-            ! set settings to initialized
-            settings%initialized = .true.
+        else
+            ! C settings that were not initialized hold no values and are converted
+            ! as the default settings
+            settings = default_arh_settings
         end if
 
     end subroutine assign_arh_f_c
@@ -360,22 +357,20 @@ contains
         type(arh_settings_type_c), intent(out) :: settings_c
         type(arh_settings_type), intent(in) :: settings
 
-        if (settings%initialized) then
-            ! callback functions cannot be converted
-            settings_c%logger = c_null_funptr
+        ! callback functions cannot be converted
+        settings_c%logger = c_null_funptr
 
-            ! convert integers
-            settings_c%verbose = int(settings%verbose, kind=c_ip)
+        ! convert integers
+        settings_c%verbose = int(settings%verbose, kind=c_ip)
 
-            ! convert characters
-            settings_c%arh_type = character_to_c(settings%arh_type)
+        ! convert characters
+        settings_c%arh_type = character_to_c(settings%arh_type)
 
-            ! the host context cannot be converted
-            settings_c%context = c_null_ptr
+        ! the host context cannot be converted
+        settings_c%context = c_null_ptr
 
-            ! set settings to initialized
-            settings_c%initialized = .true._c_bool
-        end if
+        ! Fortran settings are always initialized
+        settings_c%initialized = .true._c_bool
 
     end subroutine assign_arh_c_f
 

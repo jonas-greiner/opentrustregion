@@ -8,19 +8,16 @@ module otr_mo
 
     use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
                                hess_x_type, solver_state_type, add_error_origin
-    use otr_common, only: orbital_settings_type, default_orbital_settings, &
-                          orbital_basis_type, channel_rows, evaluate_dm_cs_type, &
-                          evaluate_dm_os_type, extension_solver_settings_type, error_mo
+    use otr_common, only: orbital_settings_type, orbital_basis_type, channel_rows, &
+                          evaluate_dm_cs_type, evaluate_dm_os_type, &
+                          extension_solver_settings_type, error_mo
 
     implicit none
 
     type, extends(orbital_settings_type) :: mo_settings_type
-    contains
-        procedure :: init => init_mo_settings
     end type
 
-    type(mo_settings_type), parameter :: default_mo_settings = &
-        mo_settings_type(orbital_settings_type=default_orbital_settings)
+    type(mo_settings_type), parameter :: default_mo_settings = mo_settings_type()
 
     ! warning for settings that were not initialized
     character(len=*), parameter :: mo_settings_uninitialized_warning_msg = &
@@ -161,7 +158,7 @@ contains
         ! function of either shell, if one is given, wires the solver settings with it
         ! and returns its orbital updating function and objective function
         !
-        use opentrustregion, only: warn_uninitialized_settings, verbosity_warning
+        use opentrustregion, only: verbosity_warning
         use otr_common, only: extension_type, provided_roles_type, &
                               update_orbs_callback, obj_func_callback, &
                               evaluate_dm_missing_warning_msg
@@ -190,16 +187,9 @@ contains
         update_orbs_mo_funptr => null()
         obj_func_mo_funptr => null()
 
-        ! work on a copy of the given settings, which is initialized if they were not,
-        ! after printing a warning regardless of the verbosity, since the default
-        ! settings would silence it, or, without any, of the default settings
+        ! work on a copy of the given settings or, without any, of the default settings
         if (present(settings)) then
             local_settings = settings
-            if (.not. local_settings%initialized) then
-                call warn_uninitialized_settings(local_settings, &
-                                                 mo_settings_uninitialized_warning_msg)
-                call local_settings%init(error)
-            end if
         else
             local_settings = default_mo_settings
         end if
@@ -604,32 +594,6 @@ contains
         deallocate(fock_response)
 
     end subroutine hess_x_mo
-
-    subroutine init_mo_settings(self, error)
-        !
-        ! this subroutine initializes the MO settings
-        !
-        use opentrustregion, only: verbosity_error
-
-        class(mo_settings_type), intent(out) :: self
-        integer(ip), intent(out) :: error
-
-        ! initialize error flag
-        error = 0
-
-        select type (settings => self)
-        type is (mo_settings_type)
-            settings = default_mo_settings
-        class default
-            call settings%log("Molecular orbital settings could not be initialized "// &
-                              "because initialization routine received the wrong "// &
-                              "type. The type mo_settings_type was likely "// &
-                              "subclassed without providing an initialization "// &
-                              "routine.", verbosity_error, .true.)
-            error = 1
-        end select
-
-    end subroutine init_mo_settings
 
     subroutine rotate_orbitals_mo(self, kappa, error)
         !

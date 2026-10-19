@@ -129,9 +129,6 @@ type(solver_state_type) :: state
 update_orbs_funptr => update_orbs
 obj_func_funptr => obj_func
 
-! initialize settings
-call settings%init(error)
-
 ! override default settings
 settings%conv_tol = 1e-6_rp
 settings%n_macro = 100
@@ -149,7 +146,7 @@ print *, "Number of orbital updates:", state%n_update_orbs
 
 - Callback function pointers (`update_orbs_funptr`, `obj_func_funptr`) point to existing implementations elsewhere in the program.
 - `n_param` is also assumed to be defined elsewhere.
-- Solver settings are initialized using the `init()` method of the derived type, and default settings can be overridden (here, `conv_tol` and `n_macro`).
+- A declared settings object holds the default settings, which can be overridden (here, `conv_tol` and `n_macro`); assigning `solver_settings_type()` resets an object to them.
 - `host_data` is a variable of any type declared with the `target` attribute. Every callback function receives it as its last argument, declared as `class(*), intent(in), pointer :: context`, and recovers its own type with `select type`. The `intent(in)` applies to the pointer rather than the data, so a callback function may modify `host_data` but not point `context` elsewhere. Leaving `settings%context` unset is fine; the callback functions then receive an unassociated pointer.
 - Finally, the `solver` is called with the callback functions, the settings and a state record. Both of these are optional: without settings, the default settings are used, and the state is only needed to read it.
 - After the call, `state` holds the final state of the optimization (here, the number of orbital updates `n_update_orbs`), see [Output](#output). The settings are left unchanged.
@@ -316,9 +313,6 @@ type(stability_state_type) :: state
 ! set callback function pointer to existing implementation
 hess_x_funptr => hess_x
 
-! initialize settings
-call settings%init(error)
-
 ! override default settings
 settings%conv_tol = 1e-6_rp
 settings%n_iter = 100
@@ -338,7 +332,7 @@ print *, "Number of Hessian linear transformations:", state%n_hess_x
 
 - `hess_x_funptr` points to an existing Hessian-vector product implementation elsewhere in the program.
 - `n_param` is also assumed to be defined elsewhere.
-- Stability settings are initialized via the `init()` method of the derived type and can be overridden (here, `conv_tol` and `n_iter`).
+- A declared settings object holds the default settings, which can be overridden (here, `conv_tol` and `n_iter`); assigning `stability_settings_type()` resets an object to them.
 - `host_data` is a variable of any type declared with the `target` attribute. Every callback function receives it as its last argument, declared as `class(*), intent(in), pointer :: context`, and recovers its own type with `select type`. The `intent(in)` applies to the pointer rather than the data, so a callback function may modify `host_data` but not point `context` elsewhere. Leaving `settings%context` unset is fine; the callback functions then receive an unassociated pointer.
 - The `stable` logical output receives the result of the stability check.
 - The settings, the state and the lowest eigenvector `kappa` are optional: without settings, the default settings are used, and the others are only returned if provided.
@@ -565,7 +559,7 @@ The routine `mo_factory` constructs and returns MO versions of the orbital updat
 - **`update_orbs_mo`** (subroutine): Returned MO orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_mo`** (function): Returned MO objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new MO object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it, such as that of ARH. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new MO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `arh_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The MO object provides the following routines:
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new MO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `arh_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The MO object provides the following routines:
   - **`precond`**: MO level-shifted preconditioner, based on the exact eigendecomposition of the static part of the Hessian, also for the stability check.
   - **`precond_pd`**: MO positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`get_extra_trial_vectors`**: MO extra trial vectors, the rotations between the pseudo-canonical occupied and virtual orbitals with the most negative orbital energy differences, also for the stability check.
@@ -597,14 +591,8 @@ real(rp), allocatable :: ao_overlap(:, :)
 ! set callback function pointers to existing implementations
 evaluate_dm_funptr => evaluate_dm
 
-! initialize MO settings
-call mo_settings%init(error)
-
 ! override default settings
 mo_settings%verbose = 1
-
-! initialize settings
-call settings%init(error)
 
 ! get MO routines and wire the settings with a new MO object
 call mo_factory(mo_coeff, ao_overlap, n_occ, n_particle, n_ao, n_mo, &
@@ -762,7 +750,7 @@ The routine `oao_factory` constructs and returns OAO versions of the orbital upd
 - **`update_orbs_oao`** (subroutine): Returned OAO orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_oao`** (function): Returned OAO objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new OAO object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it, such as that of ARH. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new OAO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `arh_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The OAO object provides the following routines:
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new OAO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `arh_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The OAO object provides the following routines:
   - **`precond`**: OAO level-shifted preconditioner, based on the exact eigendecomposition of the static part of the Hessian, also for the stability check.
   - **`precond_pd`**: OAO positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`project`**: OAO projection onto the non-redundant orbital rotations, also for the stability check.
@@ -794,14 +782,8 @@ real(rp), allocatable :: ao_overlap(:, :)
 ! set callback function pointers to existing implementations
 evaluate_dm_funptr => evaluate_dm
 
-! initialize OAO settings
-call oao_settings%init(error)
-
 ! override default settings
 oao_settings%verbose = 1
-
-! initialize settings
-call settings%init(error)
 
 ! get OAO routines and wire the settings with a new OAO object
 call oao_factory(dm_ao, ao_overlap, n_particle, n_ao, evaluate_dm_funptr, &
@@ -947,7 +929,7 @@ This allows the solver to automatically update the Hessian using a quasi-Newton 
 - **`update_orbs_qn`** (subroutine): Returned quasi-Newton orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_qn`** (function): Returned objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new quasi-Newton object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Settings a factory wired can be passed to `qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`qn_settings`** (qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
@@ -977,15 +959,9 @@ obj_func_funptr => obj_func
 transport_funptr => transport
 init_hess_funptr => init_hess
 
-! initialize quasi-Newton settings
-call qn_settings%init(error)
-
 ! override default settings
 qn_settings%verbose = 1
 qn_settings%hess_update_scheme = "sr1"
-
-! initialize settings
-call settings%init(error)
 
 ! get quasi-Newton routines and wire the settings with a new quasi-Newton object
 call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
@@ -1174,14 +1150,10 @@ real(rp), allocatable :: ao_overlap(:, :), kappa(:), grad(:), h_diag(:)
 evaluate_dm_mo_funptr => evaluate_dm_mo
 evaluate_dm_funptr => evaluate_dm
 
-! initialize ARH settings
-call arh_settings%init(error)
-
 ! override default settings
 arh_settings%verbose = 1
 
-! initialize settings and request a stability check of the converged solution
-call settings%init(error)
+! request a stability check of the converged solution
 settings%stability = .true.
 
 ! wire the settings with a new MO object
@@ -1385,7 +1357,7 @@ This allows the solver to automatically update the Hessian by building and evalu
 - **`update_orbs_s_gek`** (subroutine): Returned S-GEK orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_s_gek`** (function): Returned objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new S-GEK object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are initialized with a warning if they are not initialized yet. The factory wires them with the new S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are re-initialized or go out of scope. Settings a factory wired can be passed to `s_gek_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Settings a factory wired can be passed to `s_gek_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
 - **`s_gek_settings`** (s_gek_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
@@ -1413,15 +1385,9 @@ update_orbs_funptr => update_orbs
 obj_func_funptr => obj_func
 change_reference_funptr => change_reference
 
-! initialize S-GEK settings
-call s_gek_settings%init(error)
-
 ! override default settings
 s_gek_settings%verbose = 1
 s_gek_settings%max_points = 30
-
-! initialize settings
-call settings%init(error)
 
 ! get S-GEK routines and wire the settings with a new S-GEK object
 call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &

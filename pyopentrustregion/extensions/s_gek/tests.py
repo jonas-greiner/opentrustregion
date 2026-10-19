@@ -52,7 +52,6 @@ fortran_tests = {
     "s_gek_tests": [
         "add_s_gek",
         "init_s_gek",
-        "init_s_gek_settings",
         "s_gek_factory",
         "s_gek_sanity_check",
         "update_orbs_s_gek",

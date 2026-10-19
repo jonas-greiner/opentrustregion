@@ -321,9 +321,8 @@ contains
         ! settings, with the C wrappers of the role callback functions in their place
         ! and the addresses of the levels of the holder as the contexts of the levels
         ! the factory wired, which also initializes C settings that were not
-        ! initialized, as the conversion and the factory did, and holds the levels of
-        ! the object, whose level of the solver the factory made the context of the
-        ! settings
+        ! initialized, as the conversion did, and holds the levels of the object, whose
+        ! level of the solver the factory made the context of the settings
         !
         use c_interface, only: solver_settings_type_c, assignment(=)
 

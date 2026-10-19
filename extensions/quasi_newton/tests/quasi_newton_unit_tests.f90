@@ -117,8 +117,7 @@ contains
         ! with the settings and the host's transport and initial Hessian functions and
         ! wires the solver settings with it and the record of the state
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type, &
-                                   default_solver_settings
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
         use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
         use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
@@ -126,8 +125,7 @@ contains
         use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_qn, only: qn_factory, qn_settings_type, updating_type, &
-                          sr1_updating_type, bfgs_updating_type, default_qn_settings, &
-                          qn_settings_uninitialized_warning_msg
+                          sr1_updating_type, bfgs_updating_type, default_qn_settings
         use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
@@ -143,10 +141,9 @@ contains
         type(extension_level_type), pointer :: level, other_level
         integer(ip) :: i_case, error
         logical :: sr1_expected, scheme_right, owned
-        character(len=41), parameter :: case_names(4) = &
+        character(len=41), parameter :: case_names(3) = &
             [character(len=41) :: "for settings selecting SR1 in uppercase", &
-             "for settings selecting BFGS in uppercase", "without settings", &
-             "for settings that were not initialized"]
+             "for settings selecting BFGS in uppercase", "without settings"]
 
         ! assume tests pass
         test_qn_factory = .true.
@@ -157,16 +154,14 @@ contains
         transport_funptr => mock_transport
         init_hess_funptr => mock_init_hess
 
-        ! create objects for settings selecting either updating scheme, for no settings
-        ! and for settings that were not initialized, which are initialized after a
-        ! warning through their logging function, each of which has to be the object of
-        ! the selected scheme, initialized with the settings after their sanity check
+        ! create objects for settings selecting either updating scheme and for no
+        ! settings, each of which has to be the object of the selected scheme,
+        ! initialized with the settings after their sanity check
         ! and the host's transport and initial Hessian functions, and to wire the
         ! solver settings, which own it, with the host's orbital update and objective
         ! function and the record of the state
         do i_case = 1, size(case_names)
             allocate(solver_settings)
-            solver_settings%solver_settings_type = default_solver_settings
             select case (i_case)
             case (1)
                 settings = ref_qn_settings
@@ -180,10 +175,6 @@ contains
                 settings%hess_update_scheme = "BFGS"
                 expected_settings = ref_qn_settings
             case (3)
-                expected_settings = default_qn_settings
-            case (4)
-                call setup_settings(settings, context)
-                settings%initialized = .false.
                 expected_settings = default_qn_settings
             end select
             sr1_expected = expected_settings%hess_update_scheme == "sr1"
@@ -268,20 +259,12 @@ contains
                     trim(case_names(i_case))//"."
                 test_qn_factory = .false.
             end if
-            if (i_case == 4 .and. index( &
-                context%log_message, " "//qn_settings_uninitialized_warning_msg) == 0) &
-                then
-                write(stderr, *) "test_qn_factory failed: Warning not printed for "// &
-                    "settings that were not initialized."
-                test_qn_factory = .false.
-            end if
             deallocate(solver_settings)
         end do
 
         ! create an object for parameters the sanity check rejects, which has to return
         ! its error without functions and leave the solver settings untouched
         allocate(solver_settings)
-        solver_settings%solver_settings_type = default_solver_settings
         call setup_settings(settings, context)
         update_orbs_qn_funptr => update_orbs_callback
         obj_func_qn_funptr => obj_func_callback
@@ -311,7 +294,6 @@ contains
         ! which the wiring refuses, so that the factory has to return its error without
         ! functions and leave the settings wired with the first object only
         allocate(solver_settings)
-        solver_settings%solver_settings_type = default_solver_settings
         call setup_settings(settings, context)
         call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                         transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
@@ -345,8 +327,6 @@ contains
         ! objects reading their own record of the state, so that calculations with
         ! separate settings can be used alternately
         allocate(solver_settings, other_settings)
-        solver_settings%solver_settings_type = default_solver_settings
-        other_settings%solver_settings_type = default_solver_settings
         settings = ref_qn_settings
         call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                         transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
@@ -551,47 +531,6 @@ contains
         end do
 
     end function test_update_orbs_qn
-
-    logical(c_bool) function test_init_qn_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the quasi-Newton
-        ! settings
-        !
-        use otr_qn, only: qn_settings_type, default_qn_settings
-        use otr_qn_test_reference, only: operator(/=)
-
-        type, extends(qn_settings_type) :: extended_settings_type
-        end type
-
-        type(qn_settings_type) :: settings
-        type(extended_settings_type) :: extended_settings
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_qn_settings = .true.
-
-        ! initialize settings, which have to be set to the default values
-        call settings%init(error)
-        if (error /= 0) then
-            write(stderr, *) "test_init_qn_settings failed: Produced error."
-            test_init_qn_settings = .false.
-        end if
-        if (settings /= default_qn_settings) then
-            write(stderr, *) "test_init_qn_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_qn_settings = .false.
-        end if
-
-        ! initialize settings of a type extending these settings, which cannot be set to
-        ! the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_qn_settings failed: No error returned for "// &
-                "extended settings type."
-            test_init_qn_settings = .false.
-        end if
-
-    end function test_init_qn_settings
 
     logical(c_bool) function test_init_qn() bind(C)
         !

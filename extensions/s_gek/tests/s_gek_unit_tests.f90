@@ -77,8 +77,7 @@ contains
         ! change of reference function and wires the solver settings with it and the
         ! record of the state
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type, &
-                                   default_solver_settings
+        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
         use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
         use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
@@ -86,8 +85,7 @@ contains
         use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_s_gek, only: s_gek_factory, s_gek_settings_type, s_gek_type, &
-                             default_s_gek_settings, &
-                             s_gek_settings_uninitialized_warning_msg
+                             default_s_gek_settings
         use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
@@ -102,9 +100,8 @@ contains
         type(extension_level_type), pointer :: level, other_level
         integer(ip) :: i_case, error
         logical :: owned
-        character(len=38), parameter :: case_names(3) = &
-            [character(len=38) :: "for settings", "without settings", &
-             "for settings that were not initialized"]
+        character(len=16), parameter :: case_names(2) = &
+            [character(len=16) :: "for settings", "without settings"]
 
         ! assume tests pass
         test_s_gek_factory = .true.
@@ -114,15 +111,13 @@ contains
         obj_func_funptr => mock_obj_func
         change_reference_funptr => mock_change_reference
 
-        ! create objects for settings, for no settings and for settings that were not
-        ! initialized, which are initialized after a warning through their logging
-        ! function, each of which has to be initialized with the settings and the
+        ! create objects for settings and for no settings, each of which has to be
+        ! initialized with the settings and the
         ! host's change of reference function and to wire the solver settings, which
         ! own it, with the host's orbital update and objective function and the record
         ! of the state
         do i_case = 1, size(case_names)
             allocate(solver_settings)
-            solver_settings%solver_settings_type = default_solver_settings
             select case (i_case)
             case (1)
                 settings = ref_s_gek_settings
@@ -130,10 +125,6 @@ contains
                 settings%context => context
                 expected_settings = settings
             case (2)
-                expected_settings = default_s_gek_settings
-            case (3)
-                call setup_settings(settings, context)
-                settings%initialized = .false.
                 expected_settings = default_s_gek_settings
             end select
             if (i_case == 2) then
@@ -207,20 +198,12 @@ contains
                     trim(case_names(i_case))//"."
                 test_s_gek_factory = .false.
             end if
-            if (i_case == 3 .and. &
-                index(context%log_message, &
-                      " "//s_gek_settings_uninitialized_warning_msg) == 0) then
-                write(stderr, *) "test_s_gek_factory failed: Warning not printed "// &
-                    "for settings that were not initialized."
-                test_s_gek_factory = .false.
-            end if
             deallocate(solver_settings)
         end do
 
         ! create an object for parameters the sanity check rejects, which has to return
         ! its error without functions and leave the solver settings untouched
         allocate(solver_settings)
-        solver_settings%solver_settings_type = default_solver_settings
         call setup_settings(settings, context)
         update_orbs_s_gek_funptr => update_orbs_callback
         obj_func_s_gek_funptr => obj_func_callback
@@ -252,7 +235,6 @@ contains
         ! which the wiring refuses, so that the factory has to return its error without
         ! functions and leave the settings wired with the first object only
         allocate(solver_settings)
-        solver_settings%solver_settings_type = default_solver_settings
         call setup_settings(settings, context)
         call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                            change_reference_funptr, update_orbs_s_gek_funptr, &
@@ -289,8 +271,6 @@ contains
         ! objects reading their own record of the state, so that calculations with
         ! separate settings can be used alternately
         allocate(solver_settings, other_settings)
-        solver_settings%solver_settings_type = default_solver_settings
-        other_settings%solver_settings_type = default_solver_settings
         settings = ref_s_gek_settings
         call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
                            change_reference_funptr, update_orbs_s_gek_funptr, &
@@ -490,46 +470,6 @@ contains
         end do
 
     end function test_update_orbs_s_gek
-
-    logical(c_bool) function test_init_s_gek_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the S-GEK settings
-        !
-        use otr_s_gek, only: s_gek_settings_type, default_s_gek_settings
-        use otr_s_gek_test_reference, only: operator(/=)
-
-        type, extends(s_gek_settings_type) :: extended_settings_type
-        end type
-
-        type(s_gek_settings_type) :: settings
-        type(extended_settings_type) :: extended_settings
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_s_gek_settings = .true.
-
-        ! initialize settings, which have to be set to the default values
-        call settings%init(error)
-        if (error /= 0) then
-            write(stderr, *) "test_init_s_gek_settings failed: Produced error."
-            test_init_s_gek_settings = .false.
-        end if
-        if (settings /= default_s_gek_settings) then
-            write(stderr, *) "test_init_s_gek_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_s_gek_settings = .false.
-        end if
-
-        ! initialize settings of a type extending these settings, which cannot be set to
-        ! the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_s_gek_settings failed: No error returned "// &
-                "for extended settings type."
-            test_init_s_gek_settings = .false.
-        end if
-
-    end function test_init_s_gek_settings
 
     logical(c_bool) function test_init_s_gek() bind(C)
         !

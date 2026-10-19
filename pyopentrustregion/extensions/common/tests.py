@@ -65,8 +65,6 @@ fortran_tests = {
         "get_extra_trial_vectors_extension",
         "hess_x_callback",
         "hess_x_extension",
-        "init_extension_solver_settings",
-        "init_orbital_settings",
         "level_shifted_divisors",
         "logger_callback",
         "matrix_exponential",

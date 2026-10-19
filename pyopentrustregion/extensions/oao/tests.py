@@ -52,7 +52,6 @@ fortran_tests = {
         "get_hess_eigval_pairs_oao",
         "hess_x_oao",
         "hess_x_static_oao",
-        "init_oao_settings",
         "oao_factory_common",
         "oao_factory_cs",
         "oao_factory_os",

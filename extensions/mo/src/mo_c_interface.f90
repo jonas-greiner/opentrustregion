@@ -107,16 +107,12 @@ contains
             local_settings_c = default_mo_settings
         end if
 
-        ! convert the settings and initialize them if they were not, after printing a
-        ! warning, as the factory would, which would otherwise discard the context
-        ! through which the wrappers of the host's callback functions find them; the
-        ! initialization cannot fail for settings of this type
+        ! convert the settings, which replaces settings that were not initialized by the
+        ! default settings, and print the warning for these on stderr, since they
+        ! provide no logging function
         settings = local_settings_c
-        if (.not. settings%initialized) then
-            call warn_uninitialized_settings(settings, &
-                                             mo_settings_uninitialized_warning_msg)
-            call settings%init(error)
-        end if
+        if (.not. local_settings_c%initialized) call warn_uninitialized_settings( &
+            settings, mo_settings_uninitialized_warning_msg)
 
         ! convert the irreps of the MOs of every particle channel if they are given and
         ! the dimensions are valid, since the conversion would otherwise read out of
@@ -223,7 +219,7 @@ contains
         !
         ! this subroutine converts MO settings from C to Fortran
         !
-        use otr_mo, only: mo_settings_type
+        use otr_mo, only: mo_settings_type, default_mo_settings
         use c_interface, only: logger_f_wrapper
 
         type(mo_settings_type), intent(out) :: settings
@@ -239,9 +235,10 @@ contains
 
             ! convert integers
             settings%verbose = int(settings_c%verbose, kind=ip)
-
-            ! set settings to initialized
-            settings%initialized = .true.
+        else
+            ! C settings that were not initialized hold no values and are converted
+            ! as the default settings
+            settings = default_mo_settings
         end if
 
     end subroutine assign_mo_f_c
@@ -255,19 +252,17 @@ contains
         type(mo_settings_type_c), intent(out) :: settings_c
         type(mo_settings_type), intent(in) :: settings
 
-        if (settings%initialized) then
-            ! callback functions cannot be converted
-            settings_c%logger = c_null_funptr
+        ! callback functions cannot be converted
+        settings_c%logger = c_null_funptr
 
-            ! convert integers
-            settings_c%verbose = int(settings%verbose, kind=c_ip)
+        ! convert integers
+        settings_c%verbose = int(settings%verbose, kind=c_ip)
 
-            ! the host context cannot be converted
-            settings_c%context = c_null_ptr
+        ! the host context cannot be converted
+        settings_c%context = c_null_ptr
 
-            ! set settings to initialized
-            settings_c%initialized = .true._c_bool
-        end if
+        ! Fortran settings are always initialized
+        settings_c%initialized = .true._c_bool
 
     end subroutine assign_mo_c_f
 

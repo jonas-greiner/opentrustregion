@@ -19,13 +19,12 @@ module otr_s_gek_test_reference
     ! number of stored points the change of reference checkers pass
     integer(ip), parameter :: n_points = 4_ip
 
-    ! reference S-GEK settings, every field but the initialization flag, the logging
-    ! function and the host context differing from its default and every integer from
-    ! the other, the use of the subspace false unlike the initialization flag, so that
-    ! the two logicals cannot be swapped unnoticed
-    type(s_gek_settings_type), parameter :: ref_s_gek_settings = &
-        s_gek_settings_type(logger=null(), initialized=.true., use_subspace=.false., &
-                            verbose=3, max_points=10)
+    ! reference S-GEK settings, every field but the logging function and the host
+    ! context differing from its default and every integer from the other, the use of
+    ! the subspace false unlike the initialization flag of the C settings, so that the
+    ! two logicals cannot be swapped unnoticed
+    type(s_gek_settings_type), parameter :: ref_s_gek_settings = s_gek_settings_type( &
+        logger=null(), use_subspace=.false., verbose=3, max_points=10)
 
     interface operator(==)
         module procedure equal_s_gek
@@ -220,7 +219,7 @@ contains
         values_out%context = transfer(2_c_intptr_t, c_null_ptr)
 
         ! set logicals and integers
-        values_out%initialized = ref_s_gek_settings%initialized
+        values_out%initialized = .true.
         values_out%use_subspace = ref_s_gek_settings%use_subspace
         values_out%verbose = int(ref_s_gek_settings%verbose, kind=c_ip)
         values_out%max_points = int(ref_s_gek_settings%max_points, kind=c_ip)
@@ -302,8 +301,7 @@ contains
         !
         type(s_gek_settings_type), intent(in) :: lhs, rhs
 
-        equal_s_gek = (lhs%initialized .eqv. rhs%initialized) .and. &
-                      (lhs%use_subspace .eqv. rhs%use_subspace) .and. &
+        equal_s_gek = (lhs%use_subspace .eqv. rhs%use_subspace) .and. &
                       lhs%verbose == rhs%verbose .and. lhs%max_points == rhs%max_points
 
     end function equal_s_gek
@@ -331,7 +329,7 @@ contains
         type(s_gek_settings_type), intent(in) :: rhs
 
         equal_s_gek_c = &
-            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
+            lhs_c%initialized .and. &
             (lhs_c%use_subspace .eqv. logical(rhs%use_subspace, kind=c_bool)) .and. &
             lhs_c%verbose == rhs%verbose .and. lhs_c%max_points == rhs%max_points
 

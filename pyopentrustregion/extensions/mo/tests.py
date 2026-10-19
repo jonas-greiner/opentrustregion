@@ -58,7 +58,6 @@ fortran_tests = {
         "get_hess_eigval_pairs_mo",
         "hess_x_mo",
         "hess_x_static_mo",
-        "init_mo_settings",
         "mo_factory_common",
         "mo_factory_cs",
         "mo_factory_os",

@@ -59,22 +59,21 @@ module test_reference
         stability_settings_type( &
             precond=null(), project=null(), approx_hess_x=null(), &
             get_extra_trial_vectors=null(), conv_check=null(), logger=null(), &
-            hess_symm=.false., stop_on_instability=.true., initialized=.true., &
-            conv_tol=5e-6_rp, n_random_trial_vectors=6, n_extra_trial_vectors=14, &
-            n_iter=60, jacobi_davidson_start=13, seed=34, verbose=2, &
-            diag_solver="jacobi-davidson")
+            hess_symm=.false., stop_on_instability=.true., conv_tol=5e-6_rp, &
+            n_random_trial_vectors=6, n_extra_trial_vectors=14, n_iter=60, &
+            jacobi_davidson_start=13, seed=34, verbose=2, diag_solver="jacobi-davidson")
     type(solver_settings_type), parameter :: ref_solver_settings = &
-        solver_settings_type( &
-            precond=null(), precond_pd=null(), project=null(), &
-            get_extra_trial_vectors=null(), conv_check=null(), &
-            stability_hess_x=null(), logger=null(), stability=.true., &
-            line_search=.false., refresh_hess=.true., grad_noise=.false., &
-            hess_symm=.false., initialized=.true., conv_tol=2e-3_rp, &
-            start_trust_radius=0.3_rp, global_red_factor=3e-2_rp, &
-            local_red_factor=4e-3_rp, n_random_trial_vectors=5, &
-            n_extra_trial_vectors=4, n_macro=300, n_micro=200, &
-            jacobi_davidson_start=10, seed=33, verbose=3, subsystem_solver="tcg", &
-            trust_region_shape="spherical", stability_settings=ref_stability_settings)
+        solver_settings_type(precond=null(), precond_pd=null(), project=null(), &
+                             get_extra_trial_vectors=null(), conv_check=null(), &
+                             stability_hess_x=null(), logger=null(), stability=.true., &
+                             line_search=.false., refresh_hess=.true., &
+                             grad_noise=.false., hess_symm=.false., conv_tol=2e-3_rp, &
+                             start_trust_radius=0.3_rp, global_red_factor=3e-2_rp, &
+                             local_red_factor=4e-3_rp, n_random_trial_vectors=5, &
+                             n_extra_trial_vectors=4, n_macro=300, n_micro=200, &
+                             jacobi_davidson_start=10, seed=33, verbose=3, &
+                             subsystem_solver="tcg", trust_region_shape="spherical", &
+                             stability_settings=ref_stability_settings)
 
     ! reference states, every field with a value distinct from every other field of
     ! the same kind in either state and from its default value, so that a field read
@@ -370,7 +369,7 @@ contains
             values_out%refresh_hess = ref_solver_settings%refresh_hess
             values_out%grad_noise = ref_solver_settings%grad_noise
             values_out%hess_symm = ref_solver_settings%hess_symm
-            values_out%initialized = ref_solver_settings%initialized
+            values_out%initialized = .true.
         else
             values_out%stability = name == "stability"
             values_out%line_search = name == "line_search"
@@ -437,7 +436,7 @@ contains
         ! set logicals, real and integers
         values_out%hess_symm = ref_stability_settings%hess_symm
         values_out%stop_on_instability = ref_stability_settings%stop_on_instability
-        values_out%initialized = ref_stability_settings%initialized
+        values_out%initialized = .true.
         values_out%conv_tol = ref_stability_settings%conv_tol
         values_out%n_random_trial_vectors = &
             ref_stability_settings%n_random_trial_vectors
@@ -858,7 +857,6 @@ contains
             (lhs%refresh_hess .eqv. rhs%refresh_hess) .and. &
             (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
-            (lhs%initialized .eqv. rhs%initialized) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
@@ -895,7 +893,6 @@ contains
         equal_stability = &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             (lhs%stop_on_instability .eqv. rhs%stop_on_instability) .and. &
-            (lhs%initialized .eqv. rhs%initialized) .and. &
             abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
@@ -934,8 +931,7 @@ contains
             (lhs_c%refresh_hess .eqv. logical(rhs%refresh_hess, kind=c_bool)) .and. &
             (lhs_c%grad_noise .eqv. logical(rhs%grad_noise, kind=c_bool)) .and. &
             (lhs_c%hess_symm .eqv. logical(rhs%hess_symm, kind=c_bool)) .and. &
-            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
-            abs(lhs_c%conv_tol - rhs%conv_tol) <= tol .and. &
+            lhs_c%initialized .and. abs(lhs_c%conv_tol - rhs%conv_tol) <= tol .and. &
             abs(lhs_c%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
             abs(lhs_c%global_red_factor - rhs%global_red_factor) <= tol .and. &
             abs(lhs_c%local_red_factor - rhs%local_red_factor) <= tol .and. &
@@ -981,8 +977,7 @@ contains
             (lhs_c%hess_symm .eqv. logical(rhs%hess_symm, kind=c_bool)) .and. &
             (lhs_c%stop_on_instability .eqv. &
              logical(rhs%stop_on_instability, kind=c_bool)) .and. &
-            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
-            abs(lhs_c%conv_tol - rhs%conv_tol) <= tol .and. &
+            lhs_c%initialized .and. abs(lhs_c%conv_tol - rhs%conv_tol) <= tol .and. &
             lhs_c%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs_c%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs_c%n_iter == rhs%n_iter .and. &

@@ -2131,7 +2131,7 @@ contains
         use test_reference, only: ref_solver_settings, operator(/=), same_callbacks, &
                                   unset_callbacks, get_reference_solver_values
 
-        type(solver_settings_type) :: settings, expected
+        type(solver_settings_type) :: settings
         type(solver_settings_type_c) :: settings_c, no_callbacks_c
         integer(ip) :: i
         character(len=12), parameter :: logical_names(5) = &
@@ -2186,24 +2186,9 @@ contains
             test_assign_solver_c_f = .false.
         end if
 
-        ! convert settings with the reference values that were not initialized, which
-        ! hold no values the conversion may read and have to be converted as the
-        ! default settings marked as not initialized
-        settings = ref_solver_settings
-        settings%initialized = .false.
-        expected = default_solver_settings
-        expected%initialized = .false.
-        settings_c = settings
-        if (settings_c /= expected) then
-            write(stderr, *) "test_assign_solver_c_f failed: Settings that were "// &
-                "not initialized not converted as the default settings."
-            test_assign_solver_c_f = .false.
-        end if
-
-        ! convert again with only one of the logicals other than initialized set at a
-        ! time, since the logicals cannot all differ from each other and from their
-        ! default values, so that a logical that is swapped with another or not
-        ! converted is detected
+        ! convert again with only one of the logicals set at a time, since the logicals
+        ! cannot all differ from each other and from their default values, so that a
+        ! logical that is swapped with another or not converted is detected
         do i = 1, size(logical_names)
             settings = ref_solver_settings
             settings%stability = logical_names(i) == "stability"
@@ -2232,7 +2217,7 @@ contains
                                   same_callbacks, unset_callbacks, &
                                   get_reference_stability_values
 
-        type(stability_settings_type) :: settings, expected
+        type(stability_settings_type) :: settings
         type(stability_settings_type_c) :: settings_c, no_callbacks_c
         integer(ip) :: i
         character(len=19), parameter :: logical_names(2) = &
@@ -2281,23 +2266,9 @@ contains
             test_assign_stability_c_f = .false.
         end if
 
-        ! convert settings with the reference values that were not initialized, which
-        ! hold no values the conversion may read and have to be converted as the default
-        ! settings marked as not initialized
-        settings = ref_stability_settings
-        settings%initialized = .false.
-        expected = default_stability_settings
-        expected%initialized = .false.
-        settings_c = settings
-        if (settings_c /= expected) then
-            write(stderr, *) "test_assign_stability_c_f failed: Settings that were "// &
-                "not initialized not converted as the default settings."
-            test_assign_stability_c_f = .false.
-        end if
-
-        ! convert again with only one of the logicals other than initialized set at a
-        ! time, so that a logical that is swapped with another or not converted is
-        ! detected
+        ! convert again with only one of the logicals set at a time, since the logicals
+        ! cannot all differ from each other and from their default values, so that a
+        ! logical that is swapped with another or not converted is detected
         do i = 1, size(logical_names)
             settings = ref_stability_settings
             settings%hess_symm = logical_names(i) == "hess_symm"

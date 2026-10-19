@@ -356,24 +356,6 @@ contains
 
     end function generate_random_psd_matrix
 
-    subroutine setup_basis_solver_settings(solver_settings, basis)
-        !
-        ! this subroutine sets up solver settings the way a factory of an orbital basis
-        ! leaves them, owning the given object, whose level of the solver is their
-        ! context
-        !
-        use opentrustregion, only: default_solver_settings
-        use otr_common, only: extension_type, extension_solver_settings_type
-        use otr_common_unit_tests, only: setup_owning_solver_settings
-
-        type(extension_solver_settings_type), intent(out), target :: solver_settings
-        class(extension_type), allocatable, intent(inout), target :: basis
-
-        solver_settings%solver_settings_type = default_solver_settings
-        call setup_owning_solver_settings(solver_settings, basis)
-
-    end subroutine setup_basis_solver_settings
-
     subroutine setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
         !
         ! this subroutine sets up the given MO and ARH objects for orbitals
@@ -1090,6 +1072,7 @@ contains
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback, error_arh
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use otr_common_unit_tests, only: setup_owning_solver_settings
         use otr_arh_test_reference, only: operator(==)
 
         type(test_context_type), target :: context
@@ -1112,7 +1095,7 @@ contains
         type is (mo_type)
             basis%n_particle = 1
         end select
-        call setup_basis_solver_settings(solver_settings, basis)
+        call setup_owning_solver_settings(solver_settings, basis)
         call setup_settings(settings, context)
         evaluate_dm_funptr => mock_evaluate_dm_cs
 
@@ -1200,6 +1183,7 @@ contains
         use otr_common, only: extension_type, extension_solver_settings_type, &
                               update_orbs_callback, obj_func_callback, error_arh
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
+        use otr_common_unit_tests, only: setup_owning_solver_settings
         use otr_arh_test_reference, only: operator(==)
 
         type(test_context_type), target :: context
@@ -1222,7 +1206,7 @@ contains
         type is (oao_type)
             basis%n_particle = 2
         end select
-        call setup_basis_solver_settings(solver_settings, basis)
+        call setup_owning_solver_settings(solver_settings, basis)
         call setup_settings(settings, context)
         evaluate_dm_funptr => mock_evaluate_dm_os
 
@@ -1308,14 +1292,14 @@ contains
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
         use otr_arh, only: arh_factory_common, arh_type, arh_mo_type, arh_oao_type, &
                            arh_settings_type, default_arh_settings, arh_n_micro, &
-                           arh_settings_uninitialized_warning_msg, &
                            arh_evaluate_dm_cs_type, arh_evaluate_dm_os_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_level_type, &
                               extension_solver_settings_type, orbital_basis_type, &
                               update_orbs_callback, obj_func_callback, error_arh
-        use otr_common_unit_tests, only: mock_extension_type
+        use otr_common_unit_tests, only: mock_extension_type, &
+                                         setup_owning_solver_settings
         use otr_common_test_reference, only: same_logger_and_context
         use opentrustregion_unit_tests, only: setup_settings, setup_error_logging, &
                                               test_context_type
@@ -1334,10 +1318,9 @@ contains
         procedure(obj_func_type), pointer :: obj_func_arh_funptr
         integer(ip) :: i_case, error
         logical :: mo_basis, right_type, built, stored
-        character(len=41), parameter :: case_names(4) = &
+        character(len=41), parameter :: case_names(3) = &
             [character(len=41) :: "for the closed-shell case in the MO basis", &
-             "for the open-shell case in the OAO basis", "without settings", &
-             "for settings that were not initialized"]
+             "for the open-shell case in the OAO basis", "without settings"]
         character(len=74), parameter :: refusal_names(7) = [ &
             character(len=74) :: "an unknown ARH type", "solver settings no "// &
             "factory wired", "solver settings another extension wired", "an "// &
@@ -1349,10 +1332,9 @@ contains
         ! assume tests pass
         test_arh_factory_common = .true.
 
-        ! create objects on a closed-shell MO object, on an open-shell OAO object, for
-        ! no settings and for settings that were not initialized, which are initialized
-        ! after a warning through their logging function, each of which has to be the
-        ! ARH object of the basis of the orbital basis object, built on it, with the
+        ! create objects on a closed-shell MO object, on an open-shell OAO object and
+        ! for no settings, each of which has to be the ARH object of the basis of the
+        ! orbital basis object, built on it, with the
         ! settings and the density matrix evaluating function, and to wire the solver
         ! settings, which own it after the orbital basis object, with the record of the
         ! state and adjust them to the approximate Hessian of its ARH type, which
@@ -1365,8 +1347,7 @@ contains
             settings%arh_type = "ARH"
             expected_settings = settings
             expected_settings%arh_type = "arh"
-            if (i_case >= 3) expected_settings = default_arh_settings
-            if (i_case == 4) settings%initialized = .false.
+            if (i_case == 3) expected_settings = default_arh_settings
             evaluate_dm_cs_funptr => null()
             evaluate_dm_os_funptr => null()
             if (i_case == 2) then
@@ -1474,13 +1455,6 @@ contains
                     trim(case_names(i_case))//"."
                 test_arh_factory_common = .false.
             end if
-            if (i_case == 4 .and. index(context%log_message, " "// &
-                                        arh_settings_uninitialized_warning_msg) == 0) &
-                then
-                write(stderr, *) "test_arh_factory_common failed: Warning not "// &
-                    "printed for settings that were not initialized."
-                test_arh_factory_common = .false.
-            end if
             deallocate(solver_settings)
         end do
 
@@ -1503,7 +1477,8 @@ contains
                 level => null()
             case (3)
                 allocate(mock_extension_type :: basis)
-                call setup_basis_solver_settings(solver_settings, basis)
+                solver_settings = extension_solver_settings_type()
+                call setup_owning_solver_settings(solver_settings, basis)
                 level => solver_settings%extensions(1)%object%solver_level
             case (4)
                 evaluate_dm_cs_funptr => null()
@@ -1600,7 +1575,7 @@ contains
                 basis%settings%verbose = 7
             end select
             allocate(solver_settings)
-            call setup_basis_solver_settings(solver_settings, basis)
+            call setup_owning_solver_settings(solver_settings, basis)
 
         end subroutine setup_basis
 
@@ -2881,50 +2856,6 @@ contains
         end if
 
     end function test_project_arh_oao
-
-    logical(c_bool) function test_init_arh_settings() bind(C)
-        !
-        ! this function tests the subroutine which initializes the ARH settings
-        !
-        use otr_arh, only: arh_settings_type, default_settings => default_arh_settings
-        use otr_arh_test_reference, only: operator(==)
-
-        type, extends(arh_settings_type) :: extended_settings_type
-        end type
-
-        type(arh_settings_type) :: settings
-        type(extended_settings_type) :: extended_settings
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_init_arh_settings = .true.
-
-        ! initialize settings
-        call settings%init(error)
-
-        ! check for error
-        if (error /= 0) then
-            write(stderr, *) "test_init_arh_settings failed: Function raised error."
-            test_init_arh_settings = .false.
-        end if
-
-        ! check settings
-        if (.not. (settings == default_settings)) then
-            write(stderr, *) "test_init_arh_settings failed: Settings not "// &
-                "initialized correctly."
-            test_init_arh_settings = .false.
-        end if
-
-        ! initialize settings of a type extending these settings, which cannot be set
-        ! to the default values, and check that an error is returned
-        call extended_settings%init(error)
-        if (error /= 1) then
-            write(stderr, *) "test_init_arh_settings failed: No error returned for "// &
-                "extended settings type."
-            test_init_arh_settings = .false.
-        end if
-
-    end function test_init_arh_settings
 
     logical(c_bool) function test_construct_arh_mo() bind(C)
         !

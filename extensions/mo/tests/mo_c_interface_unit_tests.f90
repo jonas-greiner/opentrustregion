@@ -381,7 +381,7 @@ contains
         ! Fortran correctly perform this conversion
         !
         use otr_mo_c_interface, only: mo_settings_type_c, assignment(=)
-        use otr_mo, only: mo_settings_type
+        use otr_mo, only: mo_settings_type, default_mo_settings
         use otr_mo_test_reference, only: get_reference_mo_values, ref_mo_settings, &
                                          operator(/=)
         use c_interface, only: c_callbacks_type
@@ -429,21 +429,14 @@ contains
             test_assign_mo_f_c = .false.
         end if
 
-        ! check initialization flag
-        if (.not. settings%initialized) then
-            write(stderr, *) "test_assign_mo_f_c failed: Settings not marked as "// &
-                "initialized."
-            test_assign_mo_f_c = .false.
-        end if
-
-        ! convert C settings that were not initialized and check that they are left
-        ! uninitialized without a logging function, so that the factory initializes
-        ! them after its warning
+        ! convert C settings with a logging function that were not initialized, the
+        ! custom values and logging function they still carry have to be replaced by the
+        ! default settings
         settings_c%initialized = .false.
         settings = settings_c
-        if (settings%initialized .or. associated(settings%logger)) then
+        if (associated(settings%logger) .or. settings /= default_mo_settings) then
             write(stderr, *) "test_assign_mo_f_c failed: Settings that were not "// &
-                "initialized converted."
+                "initialized not converted to default values."
             test_assign_mo_f_c = .false.
         end if
 

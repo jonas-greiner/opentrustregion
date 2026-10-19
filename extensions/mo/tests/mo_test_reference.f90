@@ -117,7 +117,7 @@ contains
         values_out%context = transfer(2_c_intptr_t, c_null_ptr)
 
         ! set logical and integer
-        values_out%initialized = ref_mo_settings%initialized
+        values_out%initialized = .true.
         values_out%verbose = int(ref_mo_settings%verbose, kind=c_ip)
 
     end subroutine get_reference_mo_values
@@ -221,9 +221,7 @@ contains
         type(mo_settings_type_c), intent(in) :: lhs_c
         type(mo_settings_type), intent(in) :: rhs
 
-        equal_mo_c = &
-            (lhs_c%initialized .eqv. logical(rhs%initialized, kind=c_bool)) .and. &
-            lhs_c%verbose == rhs%verbose
+        equal_mo_c = lhs_c%initialized .and. lhs_c%verbose == rhs%verbose
 
     end function equal_mo_c
 

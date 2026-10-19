@@ -87,7 +87,6 @@ fortran_tests = {
         "history_dm_arh_oao",
         "history_step_mask",
         "history_window",
-        "init_arh_settings",
         "inv_hess_x_arh",
         "obj_func_arh",
         "packed_channel_rows_arh_mo",
