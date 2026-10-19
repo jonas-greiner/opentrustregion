@@ -785,9 +785,11 @@ contains
 
     end subroutine precond_pd_f_wrapper
 
-    subroutine project_f_wrapper(vector, error, context)
+    recursive subroutine project_f_wrapper(vector, error, context)
         !
-        ! this subroutine exposes a C-implemented projection function to Fortran
+        ! this subroutine exposes a C-implemented projection function to Fortran,
+        ! recursively since the projection of an extension object the solver calls
+        ! through it for C hosts can call the host's through it too
         !
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error

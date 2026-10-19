@@ -480,13 +480,18 @@ contains
         !
         ! this subroutine discards the redundant occupied-occupied and virtual-virtual
         ! rotations from a vector describing an orbital rotation in-place, retaining
-        ! only its occupied-virtual and virtual-occupied contributions
+        ! only its occupied-virtual and virtual-occupied contributions, and then
+        ! applies the host's projection saved in the level of the object it receives as
+        ! context, if the host set one
         !
+        use otr_common, only: extension_level_type, extension_level
+
         class(oao_type), intent(inout) :: self
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
+        type(extension_level_type), pointer :: level
         real(rp), allocatable :: vector_full(:, :, :), projected_vector_full(:, :, :)
 
         ! initialize error flag
@@ -502,6 +507,14 @@ contains
         ! pack vector
         vector = pack_asymm(projected_vector_full, size(vector, kind=ip))
         deallocate(projected_vector_full)
+
+        ! apply the host's projection (e.g. onto the rotations a symmetry allows) last,
+        ! so that its constraints hold exactly; the result lies in both subspaces where
+        ! the two projections commute, as a symmetry projection does with this one for
+        ! a density matrix of that symmetry
+        level => extension_level(context)
+        if (associated(level%host%project)) &
+            call level%host%project(vector, error, level%host%context)
 
     end subroutine project_oao
 

@@ -14,6 +14,24 @@ module otr_oao_unit_tests
 
 contains
 
+    subroutine mock_host_project(vector, error, context)
+        !
+        ! this subroutine is a mock host projection, which records its call, checks the
+        ! host context it receives, returns the error code set in it and discards the
+        ! first element of the vector, so that it does not commute with the OAO
+        ! projection
+        !
+        use otr_common_mock, only: record_host_call
+
+        real(rp), intent(inout), target :: vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = record_host_call("project", context)
+        vector(1) = 0.0_rp
+
+    end subroutine mock_host_project
+
     function ref_unpack_asymm(matrix_nonred, n_particle_in, n_ao_in) result(matrix)
         !
         ! this function unpacks an antisymmetric matrix, reproducing the corresponding
@@ -1722,17 +1740,20 @@ contains
         !
         ! this function tests the subroutine which discards the redundant
         ! occupied-occupied and virtual-virtual rotations from a vector, retaining only
-        ! its occupied-virtual and virtual-occupied contributions
+        ! its occupied-virtual and virtual-occupied contributions, and then applies the
+        ! host's projection saved in the level it receives as context
         !
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
         use otr_common_unit_tests, only: level_context, generate_random_density_matrix
+        use test_reference, only: host_context, reset_host_context, host_context_reached
 
         type(test_context_type), target :: context
         type(oao_type), target :: oao
-        real(rp) :: dm_oao(n_ao, n_ao, n_particle), vector(n_param), expected(n_param)
+        real(rp) :: dm_oao(n_ao, n_ao, n_particle), vector(n_param), &
+                    projected(n_param), expected(n_param)
         integer(ip) :: error
 
         ! assume tests pass
@@ -1743,24 +1764,64 @@ contains
         dm_oao(:, :, 2) = generate_random_density_matrix(n_ao, n_occ(2))
         call random_number(vector)
 
-        ! set up the OAO object
+        ! set up the OAO object, whose levels point back at it, as the factory sets
+        ! them up, and whose level of the solver holds a host projection with the host
+        ! context, which does not commute with the OAO projection, so that the order of
+        ! the two shows, while the level of the stability check holds none
         call setup_settings(oao%settings, context)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
         oao%dm_oao = dm_oao
+        oao%solver_level%extension => oao
+        oao%stability_level%extension => oao
+        oao%solver_level%host%project => mock_host_project
+        oao%solver_level%host%context => host_context
 
         ! initialize expected vector
         expected = ref_pack_asymm(ref_project_asymm( &
             ref_unpack_asymm(vector, n_particle, n_ao), dm_oao), n_param)
 
-        ! call routine and determine if values of resulting vector match
-        call oao%project(vector, error, level_context(oao, 1_ip))
+        ! call routine with the level of the stability check and determine if values of
+        ! resulting vector match without a projection of the host
+        projected = vector
+        call oao%project(projected, error, level_context(oao, 2_ip))
         if (error /= 0) then
-            write(stderr, *) "test_project_oao failed: Produced error."
+            write(stderr, *) "test_project_oao failed: Produced error without a "// &
+                "projection of the host."
             test_project_oao = .false.
         end if
-        if (norm2(vector - expected) > tol) then
-            write(stderr, *) "test_project_oao failed: Incorrect vector."
+        if (norm2(projected - expected) > tol) then
+            write(stderr, *) "test_project_oao failed: Incorrect vector without a "// &
+                "projection of the host."
+            test_project_oao = .false.
+        end if
+
+        ! call routine with the level of the solver and determine if the host's
+        ! projection is applied after the OAO projection with the host context
+        call reset_host_context()
+        projected = vector
+        call oao%project(projected, error, level_context(oao, 1_ip))
+        expected(1) = 0.0_rp
+        if (error /= 0) then
+            write(stderr, *) "test_project_oao failed: Produced error with a "// &
+                "projection of the host."
+            test_project_oao = .false.
+        end if
+        if (norm2(projected - expected) > tol) then
+            write(stderr, *) "test_project_oao failed: Projection of the host not "// &
+                "applied after the OAO projection."
+            test_project_oao = .false.
+        end if
+        if (.not. host_context_reached("project_oao")) test_project_oao = .false.
+
+        ! call routine with a failing projection of the host and determine if its error
+        ! is passed on
+        call reset_host_context()
+        host_context%mock_error = 3
+        call oao%project(projected, error, level_context(oao, 1_ip))
+        if (error /= 3) then
+            write(stderr, *) "test_project_oao failed: Error of the projection of "// &
+                "the host not passed on."
             test_project_oao = .false.
         end if
 

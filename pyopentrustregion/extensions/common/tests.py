@@ -496,13 +496,13 @@ def toy_model():
 class ToyRun:
     """
     this class prepares a solve of the toy model through the Python interface in the
-    given orbital basis and shell, with solver settings requesting a stability check,
-    the solver state and the orbitals the orbital basis moves, MO coefficients, the
-    closed-shell ones row-major, so that the library rotates a copy of them, and the
-    open-shell ones column-major, so that it rotates them in place, or density
-    matrices, together with the density matrix evaluating functions of the orbital
-    basis and density QN, which count their calls and record whether the solver state
-    was current in them
+    given orbital basis and shell, with solver settings requesting a stability check
+    and holding a projection of the host, which counts its calls, the solver state and
+    the orbitals the orbital basis moves, MO coefficients, the closed-shell ones
+    row-major, so that the library rotates a copy of them, and the open-shell ones
+    column-major, so that it rotates them in place, or density matrices, together with
+    the density matrix evaluating functions of the orbital basis and density QN, which
+    count their calls and record whether the solver state was current in them
     """
 
     def __init__(self, mo_basis, n_particle):
@@ -512,8 +512,14 @@ class ToyRun:
         self.n_occ = model.n_occ[:n_particle]
         self.settings = SolverSettings()
         self.settings.stability = True
+        self.settings.project = self.project
         self.state = SolverState()
-        self.calls = {"evaluate_dm": 0, "get_response": 0, "density_qn_evaluate_dm": 0}
+        self.calls = {
+            "evaluate_dm": 0,
+            "get_response": 0,
+            "density_qn_evaluate_dm": 0,
+            "project": 0,
+        }
         self.n_updates_seen = {"evaluate_dm": 0, "density_qn_evaluate_dm": 0}
         self.state_not_current = False
 
@@ -613,6 +619,14 @@ class ToyRun:
 
         return energy, response
 
+    def project(self, vector):
+        """
+        this function is the projection of the host, the identity, which counts its
+        calls, so that the orbital bases are seen to apply it, the OAO object after its
+        own
+        """
+        self.called("project")
+
     def density_qn_evaluate_dm(self, dm, fock, v_coulomb, v_exchange, v_nonlinear):
         """
         this function is the density matrix evaluating function of density QN
@@ -626,7 +640,8 @@ class ToyRun:
         checks that the solve converged, that the density matrix evaluating functions
         were called with the current solver state, that the exact Hessian of the
         orbital basis and, with density QN, its density matrix evaluating function were
-        used and that the orbitals of the caller moved and stayed orthonormal
+        used, that the projection of the host was applied and that the orbitals of the
+        caller moved and stayed orthonormal
         """
         try:
             solver(update_orbs, obj_func, self.n_param, self.settings, self.state)
@@ -644,8 +659,9 @@ class ToyRun:
             test_passed = False
 
         # the exact Hessian of the orbital basis is used for the solve or, with density
-        # QN, for the stability check, so the response function is called
-        names = ["evaluate_dm", "get_response"] + (
+        # QN, for the stability check, so the response function is called, and the
+        # projection of the host is applied, also behind the OAO projection
+        names = ["evaluate_dm", "get_response", "project"] + (
             ["density_qn_evaluate_dm"] if density_qn else []
         )
         for name in names:

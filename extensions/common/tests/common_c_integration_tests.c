@@ -222,6 +222,17 @@ c_int toy_density_qn_evaluate_dm(const c_real *dm, c_real *energy, c_real *fock,
   return 0;
 }
 
+/* the host's projection, the identity, which counts its calls, so that the orbital
+ * bases are seen to apply it, the OAO object after its own */
+static c_int toy_project(c_real *vector, void *context) {
+  (void)vector;
+  toy_host *host = host_of(context);
+  if (!host)
+    return 1;
+  host->n_project++;
+  return 0;
+}
+
 void toy_logger(const char *message, void *context) {
   toy_host *host = host_of(context);
   if (host)
@@ -246,6 +257,8 @@ void toy_run_init(toy_run *run, bool mo_basis, c_int n_particle) {
   run->n_particle = n_particle;
   run->settings = solver_settings_init();
   run->settings.stability = true;
+  run->settings.project = toy_project;
+  run->settings.context = &run->host;
   init_host(&run->host, n_particle, &run->state);
   init_host(&run->density_qn_host, n_particle, &run->state);
   current_hosts[0] = &run->host;
@@ -352,6 +365,13 @@ bool toy_run_solve(toy_run *run, const char *test_name, const char *case_name) {
     fprintf(stderr,
             "%s failed: Response function of the orbital basis not called for "
             "the %s case.\n",
+            test_name, case_name);
+    ok = false;
+  }
+
+  /* the projection of the host is applied, also behind the OAO projection */
+  if (run->host.n_project == 0) {
+    fprintf(stderr, "%s failed: Projection of the host not called for the %s case.\n",
             test_name, case_name);
     ok = false;
   }

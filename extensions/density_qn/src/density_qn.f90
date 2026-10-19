@@ -194,7 +194,6 @@ module otr_density_qn
         procedure :: history_channel_rows => history_channel_rows_density_qn_oao
         procedure :: packed_channel_rows => packed_channel_rows_density_qn_oao
         procedure :: hess_x_static => hess_x_static_density_qn_oao
-        procedure :: project => project_density_qn_oao
     end type
 
     ! define the constructors for these types
@@ -283,8 +282,9 @@ contains
         ! of its orbitals, wires the solver settings with it and returns its orbital
         ! updating function and objective function; the object moves the orbitals of
         ! the orbital basis object, whose positive-definite preconditioner and extra
-        ! trial vectors and, in the OAO basis, whose projection it uses, while the
-        ! projection in the MO basis is left to the caller, since the parameters are
+        ! trial vectors it uses, leaves the projection to the settings the orbital
+        ! basis object wired, which apply that of the OAO object followed by the host's
+        ! in the OAO basis and only the host's in the MO basis, whose parameters are
         ! non-redundant, and reads the state of the solver from the record the host
         ! also passes to the solver; the settings are also asked to rebuild the Hessian
         ! information of the subsystem solver after rejected steps and told whether the
@@ -1180,20 +1180,6 @@ contains
 
     end subroutine get_extra_trial_vectors_density_qn
 
-    subroutine project_density_qn_oao(self, vector, error, context)
-        !
-        ! this subroutine applies the projection of the orbitals in the OAO basis onto
-        ! their non-redundant rotations
-        !
-        class(density_qn_oao_type), intent(inout) :: self
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        call self%orbitals%project(vector, error, context)
-
-    end subroutine project_density_qn_oao
-
     function construct_density_qn_mo(mo) result(density_qn)
         !
         ! this function returns the density QN object for the MO basis pointing to the
@@ -1230,12 +1216,12 @@ contains
         type(density_qn_oao_type) :: density_qn
 
         ! point to the orbitals, whose parameters are those of the object, which
-        ! performs every role itself
+        ! performs every role but the projection itself
         density_qn%orbitals => oao
         density_qn%n_param = oao%n_param
         density_qn%provides = provided_roles_type( &
             update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
-            precond_pd=.true., project=.true., get_extra_trial_vectors=.true.)
+            precond_pd=.true., get_extra_trial_vectors=.true.)
 
         ! associate matrices
         if (allocated(oao%s_inv_sqrt)) density_qn%s_inv_sqrt => oao%s_inv_sqrt

@@ -97,7 +97,6 @@ fortran_tests = {
         "precond_density_qn",
         "precond_pd_density_qn",
         "prepend",
-        "project_density_qn_oao",
         "rebase_dirs",
         "rebuild_stale_hess_model",
         "response_gram",

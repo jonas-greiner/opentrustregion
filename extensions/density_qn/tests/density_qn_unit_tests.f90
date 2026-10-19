@@ -42,7 +42,6 @@ module otr_density_qn_unit_tests
         integer(ip) :: error = 0
     contains
         procedure :: precond_pd => recording_basis_precond_pd
-        procedure :: project => recording_basis_project
         procedure :: get_extra_trial_vectors => recording_basis_extra_trial_vectors
     end type
 
@@ -219,23 +218,6 @@ contains
         error = self%error
 
     end subroutine recording_basis_precond_pd
-
-    subroutine recording_basis_project(self, vector, error, context)
-        !
-        ! this subroutine records the vector and the context the projection of the
-        ! recording orbital basis receives
-        !
-        class(recording_basis_type), intent(inout) :: self
-        real(rp), intent(inout), target :: vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        self%received = vector
-        self%received_context => context
-        vector = 3.0_rp * vector
-        error = self%error
-
-    end subroutine recording_basis_project
 
     subroutine recording_basis_extra_trial_vectors(self, trial_vectors, error, context)
         !
@@ -2833,67 +2815,6 @@ contains
 
     end function test_get_extra_trial_vectors_density_qn
 
-    logical(c_bool) function test_project_density_qn_oao() bind(C)
-        !
-        ! this function tests the subroutine which applies the projection of the
-        ! orbitals in the OAO basis, which hands the vector and the context to the
-        ! projection of the orbital basis and passes on what it returns
-        !
-        use otr_density_qn, only: density_qn_oao_type
-        use otr_common_unit_tests, only: level_context
-        use otr_oao_test_reference, only: n_param
-
-        type(density_qn_oao_type), target :: density_qn
-        type(recording_basis_type), target :: basis
-        class(*), pointer :: context
-        real(rp) :: vector(n_param), original(n_param)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_project_density_qn_oao = .true.
-
-        ! point the density QN object at a recording orbital basis whose projection
-        ! fails
-        density_qn%orbitals => basis
-        basis%error = 1
-        context => level_context(density_qn, 1_ip)
-        call random_number(vector)
-        original = vector
-
-        ! call routine and determine if the vector and the context are handed to the
-        ! orbital basis and its projected vector and error are passed on
-        call density_qn%project(vector, error, context)
-        if (.not. allocated(basis%received)) then
-            write(stderr, *) "test_project_density_qn_oao failed: Projection of "// &
-                "the orbital basis not called."
-            test_project_density_qn_oao = .false.
-        else if (any(shape(basis%received) /= [n_param])) then
-            write(stderr, *) "test_project_density_qn_oao failed: Vector not "// &
-                "handed to the orbital basis."
-            test_project_density_qn_oao = .false.
-        else if (norm2(basis%received - original) > tol) then
-            write(stderr, *) "test_project_density_qn_oao failed: Vector not "// &
-                "handed to the orbital basis."
-            test_project_density_qn_oao = .false.
-        end if
-        if (.not. associated(basis%received_context, context)) then
-            write(stderr, *) "test_project_density_qn_oao failed: Context not "// &
-                "handed to the orbital basis."
-            test_project_density_qn_oao = .false.
-        end if
-        if (norm2(vector - 3.0_rp * original) > tol) then
-            write(stderr, *) "test_project_density_qn_oao failed: Projected vector "// &
-                "of the orbital basis not passed on."
-            test_project_density_qn_oao = .false.
-        end if
-        if (error /= 1) then
-            write(stderr, *) "test_project_density_qn_oao failed: Error of the "// &
-                "orbital basis not passed on."
-            test_project_density_qn_oao = .false.
-        end if
-
-    end function test_project_density_qn_oao
-
     logical(c_bool) function test_construct_density_qn_mo() bind(C)
         !
         ! this function tests the function which returns the density QN object for the
@@ -3029,7 +2950,7 @@ contains
         end if
 
         ! determine if the number of parameters is taken over and the roles the object
-        ! performs itself are set, including the projection
+        ! performs itself are set, without a projection
         if (density_qn%n_param /= n_param) then
             write(stderr, *) "test_construct_density_qn_oao failed: Number of "// &
                 "parameters not taken over."
@@ -3037,10 +2958,11 @@ contains
         end if
         if (.not. all([density_qn%provides%update_orbs, density_qn%provides%obj_func, &
                        density_qn%provides%hess_x, density_qn%provides%precond, &
-                       density_qn%provides%precond_pd, density_qn%provides%project, &
-                       density_qn%provides%get_extra_trial_vectors])) then
+                       density_qn%provides%precond_pd, &
+                       density_qn%provides%get_extra_trial_vectors]) .or. &
+            density_qn%provides%project) then
             write(stderr, *) "test_construct_density_qn_oao failed: Roles the "// &
-                "object performs itself not set."
+                "object performs itself set wrongly."
             test_construct_density_qn_oao = .false.
         end if
 

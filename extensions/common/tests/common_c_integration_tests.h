@@ -79,6 +79,7 @@ typedef struct {
   const solver_state_type *state;
   c_int n_evaluate_dm;
   c_int n_get_response;
+  c_int n_project;
   c_int n_updates_seen;
   bool state_not_current;
   c_real response_dm[TOY_MAX_SIZE];
