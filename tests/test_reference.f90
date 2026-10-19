@@ -483,8 +483,6 @@ contains
         ! this subroutine exports the reference solver state as a C state whose fields
         ! are set one by one without the conversion routines under test
         !
-        use c_interface, only: solver_state_type_c
-
         type(solver_state_type_c), intent(out) :: values_out
 
         ! set logical
@@ -521,8 +519,11 @@ contains
 
         type(stability_state_type_c), intent(out) :: values_out
 
+        ! set reals
         values_out%min_eigval = ref_stability_state%min_eigval
         values_out%residual_rms = ref_stability_state%residual_rms
+
+        ! set integers
         values_out%iteration = ref_stability_state%iteration
         values_out%n_hess_x = ref_stability_state%n_hess_x
 
@@ -533,8 +534,6 @@ contains
         ! this function returns the size of the C solver state, so that the layout
         ! tests detect a field missing from the C or Python state
         !
-        use c_interface, only: solver_state_type_c
-
         type(solver_state_type_c) :: state_c
 
         solver_state_size = c_sizeof(state_c)
@@ -713,8 +712,6 @@ contains
         ! compare what they read through their own declarations with what the Fortran
         ! declaration reads
         !
-        use c_interface, only: solver_state_type_c
-
         character(kind=c_char), intent(in) :: name_c(*)
 
         type(solver_state_type_c) :: values
@@ -1015,8 +1012,6 @@ contains
         ! to a Fortran solver state field by field, independently of the conversion
         ! routines under test
         !
-        use c_interface, only: solver_state_type_c
-
         type(solver_state_type_c), intent(in) :: lhs_c
         type(solver_state_type), intent(in) :: rhs
 
@@ -1044,8 +1039,6 @@ contains
         ! this function overloads the negated comparison operator to compare a C
         ! solver state to a Fortran solver state
         !
-        use c_interface, only: solver_state_type_c
-
         type(solver_state_type_c), intent(in) :: lhs_c
         type(solver_state_type), intent(in) :: rhs
 

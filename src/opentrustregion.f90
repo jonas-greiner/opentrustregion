@@ -538,39 +538,37 @@ contains
                                             obj_func, hess_x_funptr, local_settings, &
                                             local_region, current_state, kappa, &
                                             kappa_norm, mu, error)
+                call add_error_origin(error, error_solver, local_settings)
+                if (error /= 0) return
+
+                ! remember the region the subproblem was solved in, which sets the size
+                ! of the gradient perturbation of the next one, and record the level
+                ! shift of the step, the negated eigenvalue of the augmented Hessian, a
+                ! positive rather than a negative zero if it vanishes, truncated
+                ! conjugate gradient applies none and leaves the default of 0
+                local_region = abs(mu) < level_shift_local_thres
+                current_state%level_shift = merge(-mu, 0.0_rp, abs(mu) > 0.0_rp)
             else if (local_settings%subsystem_solver == "tcg") then
                 ! solve trust region subproblem with truncated conjugate gradient
                 call truncated_conjugate_gradient( &
                     func, grad, h_diag, n_param, obj_func, hess_x_funptr, &
                     local_settings, current_state, kappa, kappa_norm, error)
+                call add_error_origin(error, error_solver, local_settings)
+                if (error /= 0) return
             else if (local_settings%subsystem_solver == "gltr") then
                 ! solve trust region subproblem with generalized Lanczos
                 call generalized_lanczos_trust_region( &
                     func, grad, h_diag, n_param, obj_func, hess_x_funptr, &
                     local_settings, local_region, current_state, kappa, kappa_norm, &
                     lambda, error)
-            end if
-            call add_error_origin(error, error_solver, local_settings)
-            if (error /= 0) return
+                call add_error_origin(error, error_solver, local_settings)
+                if (error /= 0) return
 
-            ! remember the region the subproblem was solved in, which sets the size of
-            ! the gradient perturbation of the next one
-            if (string_in("davidson", local_settings%subsystem_solver)) then
-                local_region = abs(mu) < level_shift_local_thres
-            else if (local_settings%subsystem_solver == "gltr") then
+                ! remember the region the subproblem was solved in and record the
+                ! Lagrange multiplier of the trust-region constraint as the level shift
+                ! of the step
                 local_region = abs(lambda) < level_shift_local_thres
-            end if
-
-            ! record the level shift of the step, for (Jacobi-)Davidson the negated
-            ! eigenvalue of the augmented Hessian, a positive rather than a negative
-            ! zero if it vanishes, for generalized Lanczos the Lagrange multiplier and
-            ! none for truncated conjugate gradient
-            if (string_in("davidson", local_settings%subsystem_solver)) then
-                current_state%level_shift = merge(-mu, 0.0_rp, abs(mu) > 0.0_rp)
-            else if (local_settings%subsystem_solver == "gltr") then
                 current_state%level_shift = lambda
-            else
-                current_state%level_shift = 0.0_rp
             end if
 
             ! perform line search
